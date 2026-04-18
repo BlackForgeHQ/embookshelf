@@ -131,7 +131,7 @@ Readers with large digital book collections face fragmented tooling: separate ap
 ### 6.2 System Requirements
 
 - Docker + Docker Compose
-- MariaDB 11.4+
+- PostgreSQL 16+
 - Minimum 512MB RAM (recommended 1GB+)
 - Port 6060 (configurable)
 
@@ -154,9 +154,10 @@ Readers with large digital book collections face fragmented tooling: separate ap
 
 ## 7. Internationalization
 
-- Full i18n support via Weblate
+- Full i18n support planned via Weblate
 - Community-driven translations
-- Frontend uses Transloco for runtime language switching
+- Server-rendered Templ templates allow drop-in locale files once the string
+  catalog stabilizes; no client-side framework dependency
 
 ---
 
@@ -188,3 +189,48 @@ Readers with large digital book collections face fragmented tooling: separate ap
 - Format conversion (e.g., EPUB to PDF)
 - Social features beyond multi-user sharing (no public profiles, no activity feeds)
 - Mobile native apps (web-only, responsive)
+
+---
+
+## 11. Current Delivery Status
+
+This PRD describes the full product intent. The roadmap below tracks what is
+live vs. what's still planned. See [Architecture.md](Architecture.md) for the
+technical shape of the implementation.
+
+### Built
+
+- Multi-library model with `bookdrop_items` review queue + filesystem scanner
+- EPUB ingest: metadata + cover extraction via a `fileproc.Processor`
+  interface; EPUB-only today, other formats stubbed out
+- EPUB reader (epub.js) with per-user progress + CFI resume
+- PDF reader (PDF.js) with per-user progress + `page:N` resume
+- Per-user reading progress and shelves
+- Library browser with full-text search (`tsvector`+GIN) and format filters
+- Book detail + metadata editor (HTMX-swapped)
+- Cover image extraction + on-disk storage
+- Metadata enrichment via Google Books + Open Library (concurrent fan-out,
+  confidence-sorted matches, allow-listed cover import)
+- Local auth: session cookies backed by a `sessions` table; first-run signup
+  creates the admin; CSRF via SameSite + Origin/Referer check
+- OPDS 1.2 catalog (`/opds/*`) with Basic Auth — root nav, All / Library /
+  Recent / Search acquisition feeds, OpenSearch description, per-book
+  download + cover
+- SSE hub for real-time BookDrop progress (plain EventSource + HTMX)
+- river background queue with workers for `bookdrop.ingest` + `library.scan`
+- Schema migrations auto-applied on boot (`MIGRATE_ON_START`, default on)
+
+### Planned
+
+- OIDC + remote/forward auth
+- Kobo cloud sync, KOReader progress sync, Hardcover.app integration, Komga import
+- CBX/CBR/CBZ comic reader, audiobook player, MOBI/AZW3/FB2 readers
+- Bookmarks, highlights, annotations, notebook view
+- Smart/Magic shelves (rule-based dynamic)
+- Email delivery (send-to-Kindle, SMTP/SendGrid)
+- Reading-session analytics (time spent, streaks)
+- Parental controls / content restrictions
+- Library statistics dashboard
+- Amazon + DuckDuckGo metadata/cover fallbacks
+- Self-hosted fonts (remove Google Fonts CDN dependency)
+- i18n string catalog + Weblate integration
