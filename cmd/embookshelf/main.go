@@ -19,6 +19,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/handler"
 	"github.com/blackforge/embookshelf/internal/ingest"
+	"github.com/blackforge/embookshelf/internal/migrator"
 	"github.com/blackforge/embookshelf/internal/provider"
 	"github.com/blackforge/embookshelf/internal/queue"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -48,6 +49,15 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+
+	// Apply app schema migrations before any repo runs queries. River's own
+	// migrations are applied separately inside queue.New().
+	if cfg.MigrateOnStart {
+		if err := runAppMigrations(ctx, pool); err != nil {
+			slog.Error("migrate", "err", err)
+			os.Exit(1)
+		}
+	}
 
 	// Repositories.
 	libRepo := repo.NewLibraryRepo(pool)
@@ -147,6 +157,34 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown", "err", err)
 	}
+}
+
+// runAppMigrations applies every pending schema migration using the embedded
+// migration files. Idempotent — a no-op when the DB is already up-to-date.
+func runAppMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+	m, err := migrator.New(migrator.FS, migrator.Subpath, pool)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		srcErr, dbErr := m.Close()
+		if srcErr != nil {
+			slog.Warn("migrate source close", "err", srcErr)
+		}
+		if dbErr != nil {
+			slog.Warn("migrate db close", "err", dbErr)
+		}
+	}()
+	v, dirty, _ := m.Version()
+	if err := migrator.Up(m); err != nil {
+		return err
+	}
+	newV, _, _ := m.Version()
+	if newV != v {
+		slog.Info("migrations applied", "from", v, "to", newV, "dirty", dirty)
+	}
+	_ = ctx
+	return nil
 }
 
 func newPool(ctx context.Context, cfg config.Config) (*pgxpool.Pool, error) {

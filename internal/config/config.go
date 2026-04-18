@@ -20,6 +20,7 @@ type Config struct {
 	BookDropPath     string
 	BookDropInterval time.Duration
 	DataPath         string
+	MigrateOnStart   bool
 }
 
 func Load() (Config, error) {
@@ -35,6 +36,7 @@ func Load() (Config, error) {
 		BookDropPath:     envStr("BOOKDROP_PATH", "./bookdrop"),
 		BookDropInterval: time.Duration(envInt("BOOKDROP_POLL_SECONDS", 5)) * time.Second,
 		DataPath:         envStr("DATA_PATH", "./data"),
+		MigrateOnStart:   envBool("MIGRATE_ON_START", true),
 	}
 
 	if cfg.DiskType != "LOCAL" && cfg.DiskType != "NETWORK" {
@@ -54,6 +56,18 @@ func envInt(key string, def int) int {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
+		}
+	}
+	return def
+}
+
+func envBool(key string, def bool) bool {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "yes", "on":
+			return true
+		case "0", "false", "no", "off":
+			return false
 		}
 	}
 	return def

@@ -18,19 +18,20 @@ Self-hosted, multi-user digital library. This repo currently contains the bootst
 # 1. Start Postgres
 make db-up
 
-# 2. Run migrations
-make migrate
-
-# 3. (optional) load seed data so the library page isn't empty
-make seed
-
-# 4. Fetch htmx + compile Tailwind
+# 2. Fetch htmx + compile Tailwind
 npm install
 make assets
 
-# 5. Generate Templ code, build, and run
+# 3. Generate Templ code, build, and run — migrations apply on boot
+#    (disable with MIGRATE_ON_START=false if you prefer to run them manually)
 make run
+
+# 4. (optional) in another shell: load seed data so the library page isn't empty
+make seed
 ```
+
+Migrations can still be run manually via `make migrate` / `go run ./cmd/migrate up`
+when `MIGRATE_ON_START=false`.
 
 Open http://localhost:6060/app/library.
 
