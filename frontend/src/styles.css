@@ -662,9 +662,28 @@
   .cover .c-top { display: flex; flex-direction: column; gap: 8px; }
   .cover .c-ornament { width: 30%; height: 1px; background: currentColor; opacity: 0.5; }
 
-  .cover.md { width: 130px; height: 195px; }
+  .cover.xs { width: 44px;  height: 66px;  padding: 10% 10%; }
+  .cover.xs .c-title  { font-size: 8px; }
+  .cover.xs .c-author { font-size: 6px; }
   .cover.sm { width: 80px;  height: 120px; }
+  .cover.sm .c-title  { font-size: 10px; }
+  .cover.sm .c-author { font-size: 7px; }
+  .cover.md { width: 130px; height: 195px; }
   .cover.lg { width: 180px; height: 270px; }
+  .cover.lg .c-title  { font-size: 20px; }
+  .cover.lg .c-author { font-size: 10px; }
+  .cover.hero { width: 240px; height: 360px; }
+  .cover.hero .c-title  { font-size: 26px; line-height: 1.1; }
+  .cover.hero .c-author { font-size: 11px; }
+
+  .cover.placeholder {
+    background: repeating-linear-gradient(135deg, var(--color-paper-3) 0 8px, var(--color-paper-2) 8px 16px);
+    color: var(--color-ink-2);
+    box-shadow: inset 0 0 0 1px var(--color-rule);
+  }
+  .cover.placeholder::before { display: none; }
+  .cover.placeholder .c-title  { color: var(--color-ink-2); font-style: italic; }
+  .cover.placeholder .c-author { color: var(--color-ink-3); }
 
   .cov-olive  { background: var(--color-cov-olive); }
   .cov-teal   { background: var(--color-cov-teal); }
@@ -690,4 +709,57 @@
   }
   .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-accent); }
   .status-dot.green { background: oklch(0.58 0.12 140); }
+
+  /* Shelf plank (wooden bookshelf visual beneath a row of covers) */
+  .shelf-row { position: relative; padding-bottom: 18px; }
+  .shelf-plank {
+    position: absolute; left: -12px; right: -12px; bottom: 0;
+    height: 8px;
+    background: linear-gradient(to bottom, oklch(0.58 0.05 50), oklch(0.42 0.05 45));
+    box-shadow: 0 2px 6px oklch(0.2 0.02 60 / 0.2);
+    border-radius: 1px;
+  }
+  .shelf-plank::before {
+    content: ''; position: absolute; inset: 0;
+    background: repeating-linear-gradient(90deg, transparent 0 40px, oklch(0 0 0 / 0.05) 40px 41px);
+  }
+
+  /* Progress bar */
+  .progress {
+    height: 3px;
+    background: var(--color-paper-3);
+    border-radius: 2px;
+    overflow: hidden;
+    width: 100%;
+  }
+  .progress > div {
+    height: 100%;
+    background: var(--color-accent);
+    border-radius: 2px;
+  }
+
+  /* Keyboard hint */
+  .kbd {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px;
+    padding: 0 5px;
+    border: 1px solid var(--color-rule);
+    background: var(--color-paper-0);
+    font-family: var(--font-mono); font-size: 10px;
+    color: var(--color-ink-2);
+    border-radius: 3px;
+  }
+
+  /* View transitions */
+  .fade-in { animation: fadeIn 200ms ease both; }
+
+  .t-italic { font-style: italic; }
+
+  /* Alignment helpers used by ported JSX */
+  .center { align-items: center; justify-content: center; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
