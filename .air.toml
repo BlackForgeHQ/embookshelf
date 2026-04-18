@@ -2,11 +2,10 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-  cmd = "go tool templ generate && go build -o ./tmp/embookshelf ./cmd/embookshelf"
+  cmd = "go build -o ./tmp/embookshelf ./cmd/embookshelf"
   bin = "./tmp/embookshelf"
-  include_ext = ["go", "templ", "sql"]
-  exclude_dir = ["tmp", "internal/staticfs/static", "node_modules", ".git", "internal/repo/generated"]
-  exclude_regex = [".*_templ\\.go$"]
+  include_ext = ["go", "sql"]
+  exclude_dir = ["tmp", "frontend", "node_modules", ".git", "internal/repo/generated", "internal/staticfs/dist"]
   kill_delay = "1s"
   stop_on_error = true
   delay = 500

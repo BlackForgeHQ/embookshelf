@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"io"
 	"io/fs"
 	"net/http"
+	"path"
+	"strings"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -18,82 +21,19 @@ func (h *Handler) Engine() *gin.Engine {
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     h.cfg.AllowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Accept", "Content-Type", "HX-Request", "HX-Target", "HX-Current-URL", "HX-Boosted"},
+		AllowHeaders:     []string{"Accept", "Content-Type", "X-Requested-With"},
 		AllowCredentials: true,
 	}))
 
-	// CSRF / origin check applies to every state-changing request globally.
 	r.Use(auth.CSRFGuard())
 
-	// Embedded static assets (Tailwind output, htmx).
-	if staticFS, err := fs.Sub(h.static, "static"); err == nil {
-		r.StaticFS("/static", http.FS(staticFS))
-	}
-
-	r.GET("/", func(c *gin.Context) {
-		c.Redirect(http.StatusFound, "/app")
-	})
-
-	// Public routes.
-	r.GET("/login", h.LoginPage)
-	r.POST("/login", h.Login)
-	r.POST("/logout", h.Logout)
-	r.GET("/signup", h.SignupPage)
-	r.POST("/signup", h.Signup)
-
-	// Protected HTML app.
-	app := r.Group("/app")
-	app.Use(auth.RequireAuth(h.auth))
-	{
-		app.GET("", h.Home)
-		app.GET("/", h.Home)
-		app.GET("/library", h.Library)
-
-		app.GET("/book/:id", h.BookDetail)
-		app.GET("/book/:id/edit", h.BookEdit)
-		app.POST("/book/:id", h.BookUpdate)
-		app.POST("/book/:id/progress", h.BookProgress)
-		app.POST("/book/:id/shelf/:slug", h.BookToggleShelf)
-
-		app.GET("/read/:id", h.BookRead)
-		app.GET("/read/:id/file", h.BookFile)
-
-		app.GET("/book/:id/enrich", h.EnrichSearch)
-		app.POST("/book/:id/cover-from-url", h.EnrichApplyCover)
-
-		app.GET("/shelf/:slug", h.ShelfView)
-		app.POST("/shelves", h.ShelfCreate)
-		app.POST("/shelf/:slug/delete", h.ShelfDelete)
-
-		app.GET("/bookdrop", h.BookDrop)
-		app.GET("/bookdrop/row/:id", h.BookDropRow)
-		app.GET("/bookdrop/:id/cover", h.BookDropCover)
-		app.POST("/bookdrop/:id/approve", h.BookDropApprove)
-		app.POST("/bookdrop/:id/reject", h.BookDropReject)
-
-		app.GET("/cover/:id", h.BookCover)
-
-		app.GET("/settings", h.SettingsHome)
-		app.GET("/settings/libraries", h.SettingsLibraries)
-		app.POST("/settings/libraries/paths", h.LibraryPathCreate)
-		app.POST("/settings/libraries/paths/:id/delete", h.LibraryPathDelete)
-		app.POST("/settings/libraries/paths/:id/scan", h.LibraryPathScan)
-	}
-
-	// SSE stream (also protected).
-	events := r.Group("/events")
-	events.Use(auth.RequireAuth(h.auth))
-	events.GET("", h.Events)
-
-	// Public JSON API (healthcheck is unauthenticated on purpose).
 	api := r.Group("/api/v1")
 	{
 		api.GET("/healthcheck", h.Healthcheck)
 	}
 
-	// OPDS catalog for e-reader apps. Basic Auth instead of the cookie
-	// session — clients (KOReader, Moon+ Reader, FBReader, ...) don't
-	// maintain session state.
+	// OPDS catalog for e-reader apps. Basic Auth — clients (KOReader,
+	// Moon+ Reader, FBReader, ...) don't maintain session state.
 	opds := r.Group("/opds")
 	opds.Use(auth.BasicAuth(h.auth, "embookshelf"))
 	{
@@ -108,5 +48,42 @@ func (h *Handler) Engine() *gin.Engine {
 		opds.GET("/cover/:id", h.OPDSCover)
 	}
 
+	h.mountSPA(r)
+
 	return r
+}
+
+// mountSPA serves the compiled React bundle from the embedded filesystem.
+// Static assets are served directly; any unmatched GET under a non-API
+// prefix falls back to index.html so the client-side router can resolve it.
+func (h *Handler) mountSPA(r *gin.Engine) {
+	dist, err := fs.Sub(h.static, "dist")
+	if err != nil {
+		return
+	}
+	fileServer := http.FileServer(http.FS(dist))
+
+	r.NoRoute(func(c *gin.Context) {
+		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+			c.Status(http.StatusMethodNotAllowed)
+			return
+		}
+		p := strings.TrimPrefix(c.Request.URL.Path, "/")
+		if p == "" {
+			p = "index.html"
+		}
+		if f, err := dist.Open(path.Clean(p)); err == nil {
+			_ = f.Close()
+			fileServer.ServeHTTP(c.Writer, c.Request)
+			return
+		}
+		index, err := dist.Open("index.html")
+		if err != nil {
+			c.String(http.StatusNotFound, "frontend bundle not built — run `npm run build` in web/")
+			return
+		}
+		defer index.Close()
+		c.Writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.Copy(c.Writer, index)
+	})
 }

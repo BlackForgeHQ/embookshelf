@@ -11,38 +11,17 @@ help: ## List targets
 tidy: ## go mod tidy
 	go mod tidy
 
-.PHONY: generate
-generate: templ ## Run all code generators
+.PHONY: frontend-install
+frontend-install: ## Install frontend deps
+	cd frontend && npm install
 
-.PHONY: templ
-templ: ## Generate *_templ.go files
-	go tool templ generate
+.PHONY: frontend-dev
+frontend-dev: ## Vite dev server (proxies /api, /opds → Go)
+	cd frontend && npm run dev
 
-.PHONY: css
-css: ## Build Tailwind CSS once
-	npx @tailwindcss/cli -i web/src/styles.css -o internal/staticfs/static/app.css --minify
-
-.PHONY: css-watch
-css-watch: ## Watch & rebuild Tailwind CSS
-	npx @tailwindcss/cli -i web/src/styles.css -o internal/staticfs/static/app.css --watch
-
-.PHONY: htmx
-htmx: ## Download htmx.min.js into internal/staticfs/static
-	curl -fsSL https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js -o internal/staticfs/static/htmx.min.js
-
-.PHONY: epubjs
-epubjs: ## Download epub.js + jszip for the EPUB reader
-	curl -fsSL https://unpkg.com/jszip@3.10.1/dist/jszip.min.js -o internal/staticfs/static/jszip.min.js
-	curl -fsSL https://unpkg.com/epubjs@0.3.93/dist/epub.min.js -o internal/staticfs/static/epub.min.js
-
-.PHONY: pdfjs
-pdfjs: ## Download pdf.js for the PDF reader
-	mkdir -p internal/staticfs/static/pdfjs
-	curl -fsSL https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.min.js -o internal/staticfs/static/pdfjs/pdf.min.js
-	curl -fsSL https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js -o internal/staticfs/static/pdfjs/pdf.worker.min.js
-
-.PHONY: assets
-assets: htmx epubjs pdfjs css ## Fetch + build all static assets
+.PHONY: frontend-build
+frontend-build: ## Build frontend + sync shell into internal/staticfs/dist/
+	cd frontend && npm run build
 
 .PHONY: db-up
 db-up: ## Start Postgres via compose
@@ -70,16 +49,23 @@ seed: ## Load dev seed data (runs psql inside the postgres container)
 		psql -U embookshelf -d embookshelf < scripts/seed.sql
 
 .PHONY: build
-build: generate ## Build the server binary
+build: frontend-build ## Build the server binary (includes embedded SPA)
 	go build -o ./tmp/embookshelf ./cmd/embookshelf
 
 .PHONY: run
-run: generate ## Run the server
+run: ## Run the server (expects SPA already built)
 	go run ./cmd/embookshelf
 
 .PHONY: dev
-dev: ## Live-reload dev loop (air via go tool)
+dev: ## Live-reload backend via `go tool air`
 	go tool air
+
+.PHONY: up
+up: ## Run backend (air) + frontend (Vite) together — Ctrl-C stops both
+	@trap 'kill 0' EXIT INT TERM; \
+	$(MAKE) --no-print-directory dev & \
+	$(MAKE) --no-print-directory frontend-dev & \
+	wait
 
 .PHONY: test
 test: ## Run Go tests

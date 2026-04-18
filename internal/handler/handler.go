@@ -2,12 +2,7 @@ package handler
 
 import (
 	"embed"
-	"net/http"
 
-	"github.com/a-h/templ"
-	"github.com/gin-gonic/gin"
-
-	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/queue"
@@ -16,18 +11,18 @@ import (
 )
 
 type Handler struct {
-	cfg       config.Config
-	static    embed.FS
-	lib       *service.LibraryService
-	shelf     *service.ShelfService
-	auth      *service.AuthService
-	bookdrop  *service.BookDropService
-	progress  *service.ProgressService
-	enrich    *service.EnrichmentService
-	libPath   *service.LibraryPathService
-	covers    *coverstore.Store
-	hub       *sse.Hub
-	queue     queue.Client
+	cfg      config.Config
+	static   embed.FS
+	lib      *service.LibraryService
+	shelf    *service.ShelfService
+	auth     *service.AuthService
+	bookdrop *service.BookDropService
+	progress *service.ProgressService
+	enrich   *service.EnrichmentService
+	libPath  *service.LibraryPathService
+	covers   *coverstore.Store
+	hub      *sse.Hub
+	queue    queue.Client
 }
 
 type Deps struct {
@@ -57,24 +52,3 @@ func New(d Deps) *Handler {
 
 // Secure reports whether the session cookie should be marked Secure.
 func (h *Handler) Secure() bool { return false }
-
-func currentUserID(c *gin.Context) string {
-	u := auth.UserFromContext(c.Request.Context())
-	if u == nil {
-		return ""
-	}
-	return u.ID
-}
-
-func requireUser(c *gin.Context) string {
-	id := currentUserID(c)
-	if id == "" {
-		c.AbortWithStatus(http.StatusUnauthorized)
-	}
-	return id
-}
-
-func render(c *gin.Context, component templ.Component) {
-	c.Writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = component.Render(c.Request.Context(), c.Writer)
-}

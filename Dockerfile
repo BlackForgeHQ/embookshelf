@@ -1,26 +1,24 @@
 # syntax=docker/dockerfile:1.7
-# ---------- Stage 1: Tailwind CSS build ----------
+# ---------- Stage 1: React build ----------
 FROM node:22-alpine AS assets
 WORKDIR /app
-COPY package.json ./
-RUN npm install --no-audit --no-fund
-COPY web ./web
-COPY internal ./internal
-RUN mkdir -p internal/staticfs/static && \
-    npx @tailwindcss/cli -i web/src/styles.css -o internal/staticfs/static/app.css --minify && \
-    wget -qO internal/staticfs/static/htmx.min.js https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js
+COPY frontend/package.json frontend/package-lock.json* ./frontend/
+RUN cd frontend && npm ci --no-audit --no-fund
+COPY frontend ./frontend
+# sync-dist.mjs writes to ../internal/staticfs/dist — ensure the parent
+# exists before it runs.
+RUN mkdir -p internal/staticfs && cd frontend && npm run build
 
 # ---------- Stage 2: Go build ----------
-FROM golang:1.24-alpine AS gobuild
+FROM golang:1.25-alpine AS gobuild
 WORKDIR /src
 RUN apk add --no-cache git
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
-COPY --from=assets /app/internal/staticfs/static ./internal/staticfs/static
+COPY --from=assets /app/internal/staticfs/dist ./internal/staticfs/dist
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go tool templ generate && \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
         -o /out/embookshelf ./cmd/embookshelf
 

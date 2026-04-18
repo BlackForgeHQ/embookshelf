@@ -1,8 +1,8 @@
-// Package staticfs embeds the compiled frontend assets (Tailwind output, htmx)
-// so the production binary ships self-contained.
+// Package staticfs embeds the compiled React bundle so the production binary
+// ships self-contained. Files land under dist/ via `npm run build`.
 package staticfs
 
 import "embed"
 
-//go:embed all:static
+//go:embed all:dist
 var FS embed.FS
