@@ -1,0 +1,36 @@
+package page
+
+import "github.com/blackforge/embookshelf/internal/view/layout"
+
+templ Signup(email, name, errorMsg string) {
+	@layout.Auth("Create admin") {
+		<section class="auth-card">
+			<div class="col gap-2">
+				<div class="t-micro">embookshelf — first run</div>
+				<h1 class="t-h1 italic">Create admin account</h1>
+				<p class="t-small">This instance has no users yet. The first account becomes the administrator.</p>
+			</div>
+			<form method="post" action="/signup" class="col gap-4 mt-4">
+				if errorMsg != "" {
+					<div class="flash error">{ errorMsg }</div>
+				}
+				<div class="col gap-1">
+					<label class="t-label">Name</label>
+					<input class="input" name="name" value={ name }/>
+				</div>
+				<div class="col gap-1">
+					<label class="t-label">Email</label>
+					<input class="input" name="email" type="email" required autofocus value={ email }/>
+				</div>
+				<div class="col gap-1">
+					<label class="t-label">Password (min 8 characters)</label>
+					<input class="input" name="password" type="password" required minlength="8"/>
+				</div>
+				<button type="submit" class="btn primary">Create account</button>
+			</form>
+			<div class="t-small mt-4">
+				<a href="/login" class="link">Already have an account? Sign in</a>
+			</div>
+		</section>
+	}
+}

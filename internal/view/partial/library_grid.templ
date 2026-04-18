@@ -1,0 +1,21 @@
+package partial
+
+import (
+	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/view/component"
+)
+
+templ LibraryGrid(books []model.Book) {
+	<div id="library-grid" class="library-grid">
+		if len(books) == 0 {
+			<div class="empty-state">
+				<div class="t-h2 italic">No matches</div>
+				<p class="t-small mt-2">Try a broader search or clear a filter.</p>
+			</div>
+		} else {
+			for _, b := range books {
+				@component.Cover(b, "md")
+			}
+		}
+	</div>
+}

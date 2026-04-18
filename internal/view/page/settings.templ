@@ -1,0 +1,52 @@
+package page
+
+import (
+	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/view/component"
+	"github.com/blackforge/embookshelf/internal/view/layout"
+)
+
+// Settings is the landing for /app/settings. It just links into sub-pages
+// for now; more sections (users, metadata providers, email, etc.) will hang
+// off the same nav later.
+templ Settings(libraries []model.Library, shelves []model.Shelf, diskMode string) {
+	@layout.App("Settings") {
+		<div class="app-shell">
+			@component.Sidebar(libraries, shelves, "", "", component.NavSettings)
+			<main class="main">
+				@component.TopBar("Settings", "Instance configuration.")
+				<div class="p-8 grow">
+					<div class="settings-shell">
+						@settingsNav("home")
+						<section class="settings-panel">
+							<h2 class="t-h2">Settings</h2>
+							<p class="t-small mt-2">Pick a section on the left.</p>
+						</section>
+					</div>
+				</div>
+				@component.StatusBar(len(libraries), 0, diskMode)
+			</main>
+		</div>
+	}
+}
+
+templ settingsNav(active string) {
+	<nav class="settings-nav">
+		<a href="/app/settings/libraries" class={ "settings-nav-item", templ.KV("active", active == "libraries") }>
+			<span>Libraries</span>
+			<span class="t-micro">paths &amp; scans</span>
+		</a>
+		<a href="#" class={ "settings-nav-item", "disabled" } aria-disabled="true">
+			<span>Users &amp; roles</span>
+			<span class="t-micro">coming later</span>
+		</a>
+		<a href="#" class={ "settings-nav-item", "disabled" } aria-disabled="true">
+			<span>Metadata providers</span>
+			<span class="t-micro">coming later</span>
+		</a>
+		<a href="#" class={ "settings-nav-item", "disabled" } aria-disabled="true">
+			<span>Email delivery</span>
+			<span class="t-micro">coming later</span>
+		</a>
+	</nav>
+}

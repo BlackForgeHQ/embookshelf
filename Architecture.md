@@ -42,19 +42,19 @@ Embookshelf is a monolithic full-stack application built in Go. The server rende
 | Layer | Technology | Version |
 |-------|-----------|---------|
 | **Runtime** | Go | 1.23+ |
-| **HTTP Router** | chi | 5.x |
+| **HTTP Router** | Gin ([gin-gonic/gin](https://github.com/gin-gonic/gin)) | 1.x |
 | **Templating** | Templ | 0.3+ |
 | **Interactivity** | HTMX | 4.x |
 | **Styling** | Tailwind CSS | 4.x |
 | **Database** | PostgreSQL | 16+ |
 | **DB Driver** | pgx (v5) | 5.x |
 | **Query Codegen** | sqlc | 1.x |
-| **Migrations** | goose | 3.x |
+| **Migrations** | [golang-migrate/migrate](https://github.com/golang-migrate/migrate) | 4.x |
 | **Auth** | golang-jwt + coreos/go-oidc | — |
 | **Sessions** | alexedwards/scs + scs/pgxstore | — |
 | **Background Jobs** | river (Postgres-backed queue) | 0.x |
 | **Cache** | ristretto | 1.x |
-| **Real-time** | Server-Sent Events via chi handler | — |
+| **Real-time** | Server-Sent Events via Gin handler | — |
 | **Validation** | go-playground/validator | 10.x |
 | **Testing (backend)** | testing + testify + pgtest | — |
 | **Testing (e2e)** | Playwright | 1.x |
@@ -106,7 +106,7 @@ embookshelf/
 │   ├── sse/                        # Server-Sent Events hub
 │   └── config/                     # env + yaml loading
 │
-├── migrations/                     # goose SQL migrations (*.sql)
+├── migrations/                     # golang-migrate SQL migrations (NNN_name.up.sql / .down.sql)
 ├── web/
 │   ├── src/
 │   │   ├── styles.css              # Tailwind 4 entry (@import "tailwindcss")
@@ -138,7 +138,7 @@ Handler → Service → Repository → PostgreSQL
       External APIs (Google Books, Open Library, Amazon)
 ```
 
-- **Handlers** — HTTP endpoints under `/app/*` (HTML) and `/api/v1/*` (JSON, used by external clients and e-reader protocols). HTMX requests are detected via the `HX-Request` header; handlers return full pages on direct navigation and partials on HTMX swaps.
+- **Handlers** — Gin `HandlerFunc`s mounted under `/app/*` (HTML) and `/api/v1/*` (JSON). HTMX requests are detected via the `HX-Request` header; handlers return full pages on direct navigation and partials on HTMX swaps.
 - **Services** — Business logic. Plain Go structs wired with constructor functions in `cmd/embookshelf/main.go`.
 - **Repositories** — `pgx` + `sqlc`-generated query methods. Raw SQL lives in `internal/repo/queries/*.sql`.
 - **Views** — Templ components render responses. A page handler composes a layout + page component; a partial handler returns a fragment targeting a specific HTMX swap.
@@ -203,7 +203,7 @@ Background work (library scans, metadata fetches, BookDrop processing) uses **ri
                            │
                   ┌────────┴────────┐
                   │  auth middleware│
-                  │ (chi.Middleware)│
+                  │ (gin.HandlerFunc)│
                   └────────┬────────┘
                            │
                   ┌────────┴────────┐
@@ -219,7 +219,7 @@ Background work (library scans, metadata fetches, BookDrop processing) uses **ri
 ### 4.6 Error Handling
 
 - `apierr` package defines domain errors with matching HTTP status codes.
-- Central `errorMiddleware` converts errors into either JSON (for `/api/*`) or an inline Templ error component targeting `#flash` (for HTMX responses).
+- A Gin middleware converts errors into either JSON (for `/api/*`) or an inline Templ error component targeting `#flash` (for HTMX responses); Gin's `Context.Error` is used to attach errors to the request-scoped error list.
 - Panics are recovered and logged with `log/slog`.
 
 ---
@@ -245,11 +245,11 @@ Each feature directory in `internal/view/` exposes:
 Handlers decide which variant to return based on the `HX-Request` header:
 
 ```go
-if htmx.IsRequest(r) {
-    view.partial.LibraryGrid(books).Render(r.Context(), w)
+if htmx.IsRequest(c.Request) {
+    view.partial.LibraryGrid(books).Render(c.Request.Context(), c.Writer)
     return
 }
-view.page.Library(state, books).Render(r.Context(), w)
+view.page.Library(state, books).Render(c.Request.Context(), c.Writer)
 ```
 
 ### 5.3 Styling: Tailwind 4
@@ -326,9 +326,10 @@ Postgres-specific features used across the schema:
 
 ### 6.2 Database Management
 
-- **goose** manages schema evolution (numbered SQL files in `migrations/`).
+- **golang-migrate/migrate** manages schema evolution. Each migration is a pair of numbered SQL files in `migrations/` (`NNNNNN_name.up.sql` and `NNNNNN_name.down.sql`). The driver used is `postgres` via `pgx/v5`.
 - Migrations are idempotent (guards: `CREATE ... IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS` via `DO $$` blocks).
 - Released migrations are never modified; new migrations are created for changes.
+- The app embeds the migration files (`//go:embed migrations/*.sql`) and can run `migrate.Up()` on boot behind a `MIGRATE_ON_START` flag; CI also runs a dry-run against an ephemeral Postgres.
 - Connection timezone forced to UTC (`TimeZone=UTC` in `DATABASE_URL`).
 - `sqlc` generates typed query methods from the SQL in `internal/repo/queries/`.
 
@@ -351,9 +352,9 @@ All providers implement a common `metadata.Provider` interface and are called co
 
 | Protocol/Device | Integration Pattern |
 |-----------------|-------------------|
-| Kobo | REST API compatibility layer emulating Kobo's cloud endpoints |
-| KOReader | REST sync API for reading progress |
-| OPDS | Atom/XML feed protocol for e-reader app compatibility |
+| Kobo | REST API compatibility layer emulating Kobo's cloud endpoints *(deferred — undocumented proprietary protocol)* |
+| KOReader | REST sync API for reading progress *(deferred)* |
+| OPDS | Atom/XML feed protocol; served at `/opds/*` with HTTP Basic Auth. Root nav + All / Library / Recent / Search acquisition feeds + OpenSearch description. Clients: KOReader, Moon+ Reader, FBReader, Aldiko, Marvin, etc. |
 | Hardcover.app | REST API integration for reading status sync |
 | Komga | REST API for comic library import |
 
@@ -439,7 +440,7 @@ Static assets (compiled Tailwind CSS, `htmx.min.js`, reader bundles) are embedde
 ```
 develop-pipeline.yml
 ├── go vet && staticcheck
-├── goose migration dry-run against throwaway Postgres
+├── golang-migrate dry-run against throwaway Postgres
 ├── Backend tests (go test ./...)
 ├── E2E tests (Playwright against ephemeral server)
 └── Build verification (go build)
@@ -470,10 +471,10 @@ Local iteration loop: `air` rebuilds the Go binary on any `.go` change; `templ g
 | Concern | Implementation |
 |---------|---------------|
 | Authentication | JWT + OIDC + Remote Auth (see Section 4.5) |
-| Authorization | `chi.Middleware` guards per route group; per-book ACL checked inside services via `auth.CanAccessBook(ctx, bookID)` |
+| Authorization | Gin middleware (`gin.HandlerFunc`) guards per route group; per-book ACL checked inside services via `auth.CanAccessBook(ctx, bookID)` |
 | Password storage | `golang.org/x/crypto/bcrypt` |
 | Token management | Short-lived access tokens + rotating refresh tokens |
-| CORS | `go-chi/cors`, allowed origins via `ALLOWED_ORIGINS` env var |
+| CORS | `gin-contrib/cors`, allowed origins via `ALLOWED_ORIGINS` env var |
 | CSRF | `gorilla/csrf` on every state-changing form; HTMX sends the token via `hx-headers` |
 | Audit trail | `audit_logs` table records user actions |
 | Content restriction | `user_content_restrictions` table for parental controls |
@@ -511,7 +512,8 @@ All configuration flows through environment variables (optionally sourced from a
 | **Tailwind 4 CSS-first config** | Design tokens live in one `@theme` block that both CSS and Templ components reference — no JS config, no PostCSS plugin drift |
 | **PostgreSQL over MariaDB/SQLite** | `jsonb`, `tsvector` full-text search, and a mature job-queue ecosystem (river) more than earn the operational overhead |
 | **sqlc over ORM** | Typed, compile-time-checked SQL keeps the query surface explicit and avoids N+1 surprises |
-| **goose over dbmate/liquibase** | Simple numbered SQL files; tooling ships as a single Go binary that can be run in CI and in the app itself |
+| **golang-migrate over goose/dbmate** | Paired `.up.sql`/`.down.sql` files are unambiguous; the library is small, pgx-friendly, and can be embedded into the app binary so a single artifact can run its own migrations in any environment |
+| **Gin over chi/echo** | Rich built-in middleware (logger, recovery, CORS via `gin-contrib`), well-known binding/validation story, and ergonomic `gin.Context` for streaming Templ output into the response writer |
 | **river over custom worker pool** | Jobs live in the same Postgres transaction boundary as the mutations that enqueue them; exactly-once semantics without extra infrastructure |
 | **Format-specific processors** | Strategy pattern allows adding new formats without modifying existing code |
 | **NETWORK storage mode** | Safe degradation for NAS users rather than risking file corruption |

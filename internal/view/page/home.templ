@@ -1,0 +1,30 @@
+package page
+
+import (
+	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/view/component"
+	"github.com/blackforge/embookshelf/internal/view/layout"
+)
+
+templ Home(libraries []model.Library, shelves []model.Shelf, bookCount int, diskMode string) {
+	@layout.App("Dashboard") {
+		<div class="app-shell">
+			@component.Sidebar(libraries, shelves, "", "", component.NavDashboard)
+			<main class="main">
+				@component.TopBar("Dashboard", "Welcome back.")
+				<div class="p-8 grow">
+					<section class="panel">
+						<h2 class="t-h2">Quick stats</h2>
+						<ul class="mt-4 col gap-2">
+							<li class="t-body">{ component.IntStr(len(libraries)) } libraries</li>
+							<li class="t-body">{ component.IntStr(bookCount) } volumes indexed</li>
+							<li class="t-body">{ component.IntStr(len(shelves)) } shelves</li>
+							<li class="t-body">Storage mode: { diskMode }</li>
+						</ul>
+					</section>
+				</div>
+				@component.StatusBar(len(libraries), bookCount, diskMode)
+			</main>
+		</div>
+	}
+}

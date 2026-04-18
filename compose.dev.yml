@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: embookshelf
+      POSTGRES_PASSWORD: embookshelf
+      POSTGRES_DB: embookshelf
+      TZ: UTC
+    ports:
+      - "5432:5432"
+    volumes:
+      - embookshelf_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U embookshelf"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: golang:1.24-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /src
+    volumes:
+      - .:/src
+    environment:
+      GOMODCACHE: /go/pkg/mod
+      DATABASE_URL: postgres://embookshelf:embookshelf@postgres:5432/embookshelf?sslmode=disable
+    command: ["go", "run", "./cmd/migrate", "up"]
+
+volumes:
+  embookshelf_pg:

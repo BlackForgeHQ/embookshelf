@@ -1,0 +1,124 @@
+package page
+
+import (
+	"strings"
+
+	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/view/component"
+	"github.com/blackforge/embookshelf/internal/view/layout"
+)
+
+// palettes is the cover palette picker list — matches the Tailwind .cov-* classes.
+var palettes = []string{"navy", "teal", "olive", "rust", "plum", "ochre", "forest", "cream", "brick", "ink"}
+
+templ BookEdit(libraries []model.Library, shelves []model.Shelf, book model.Book, diskMode string) {
+	@layout.App("Edit · " + book.Title) {
+		<div class="app-shell">
+			@component.Sidebar(libraries, shelves, "", "", component.NavLibrary)
+			<main class="main">
+				@component.TopBar("Edit metadata", book.Title)
+				<div class="p-8 grow">
+					<div class="row between mb-4">
+						<a href={ templ.SafeURL("/app/book/" + book.ID) } class="link t-small">← Back to book</a>
+						<button
+							type="button"
+							class="btn small"
+							hx-get={ "/app/book/" + book.ID + "/enrich" }
+							hx-target="#enrich-results"
+							hx-swap="outerHTML"
+							hx-include="form.book-edit [name='title'], form.book-edit [name='author'], form.book-edit [name='isbn']"
+							hx-indicator=".enrich-indicator"
+						>Find metadata online</button>
+					</div>
+					<div class="enrich-indicator t-small italic">Searching providers…</div>
+					<div id="enrich-results"></div>
+					<form
+						class="book-edit"
+						method="post"
+						action={ templ.SafeURL("/app/book/" + book.ID) }
+						hx-post={ "/app/book/" + book.ID }
+						hx-target="#book-detail"
+						hx-swap="outerHTML"
+					>
+						<div class="book-edit-left col gap-3">
+							<div class="col gap-1">
+								<label class="t-label">Title</label>
+								<input class="input" name="title" required value={ book.Title }/>
+							</div>
+							<div class="col gap-1">
+								<label class="t-label">Author</label>
+								<input class="input" name="author" value={ book.Author }/>
+							</div>
+							<div class="row gap-3">
+								<div class="col gap-1 grow">
+									<label class="t-label">Format</label>
+									<select class="input" name="format">
+										for _, f := range append([]string{book.Format}, model.Formats...) {
+											if f != "" {
+												<option value={ f } selected?={ f == book.Format }>{ f }</option>
+											}
+										}
+									</select>
+								</div>
+								<div class="col gap-1">
+									<label class="t-label">Year</label>
+									<input class="input" name="year" type="number" min="0" value={ component.IntStr(book.Year) }/>
+								</div>
+								<div class="col gap-1">
+									<label class="t-label">Rating (0-5)</label>
+									<input class="input" name="rating" type="number" min="0" max="5" value={ component.IntStr(book.Rating) }/>
+								</div>
+							</div>
+							<div class="row gap-3">
+								<div class="col gap-1 grow">
+									<label class="t-label">Series</label>
+									<input class="input" name="series" value={ book.Series }/>
+								</div>
+								<div class="col gap-1">
+									<label class="t-label">Vol.</label>
+									<input class="input" name="series_index" type="number" min="0" value={ component.IntStr(book.SeriesIndex) }/>
+								</div>
+							</div>
+							<div class="col gap-1">
+								<label class="t-label">Publisher</label>
+								<input class="input" name="publisher" value={ book.Publisher }/>
+							</div>
+							<div class="col gap-1">
+								<label class="t-label">ISBN</label>
+								<input class="input" name="isbn" value={ book.ISBN }/>
+							</div>
+							<div class="col gap-1">
+								<label class="t-label">Tags (comma-separated)</label>
+								<input class="input" name="tags" value={ strings.Join(book.Tags, ", ") }/>
+							</div>
+							<div class="col gap-1">
+								<label class="t-label">Description</label>
+								<textarea class="input book-edit-desc" name="description" rows="6">{ book.Description }</textarea>
+							</div>
+							<div class="col gap-1">
+								<label class="t-label">Cover palette</label>
+								<div class="palette-grid">
+									for _, p := range palettes {
+										<label class={ "palette-swatch", "cov-" + p, templ.KV("active", p == book.CoverPalette) }>
+											<input type="radio" name="cover_palette" value={ p } checked?={ p == book.CoverPalette }/>
+											<span class="sr-only">{ p }</span>
+										</label>
+									}
+								</div>
+							</div>
+							<div class="row gap-2 mt-4">
+								<button class="btn primary" type="submit">Save</button>
+								<a class="btn" href={ templ.SafeURL("/app/book/" + book.ID) }>Cancel</a>
+							</div>
+						</div>
+						<aside class="book-edit-right">
+							@component.Cover(book, "lg")
+							<div class="t-small mt-4 italic">Preview reflects the current form state after save.</div>
+						</aside>
+					</form>
+				</div>
+				@component.StatusBar(len(libraries), 1, diskMode)
+			</main>
+		</div>
+	}
+}

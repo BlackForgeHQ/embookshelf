@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS shelf_books;
+DROP TABLE IF EXISTS shelves;

@@ -1,0 +1,11 @@
+DROP INDEX IF EXISTS idx_books_format;
+DROP INDEX IF EXISTS idx_books_tsv;
+
+ALTER TABLE books
+    DROP COLUMN IF EXISTS tsv,
+    DROP COLUMN IF EXISTS tags,
+    DROP COLUMN IF EXISTS series_index,
+    DROP COLUMN IF EXISTS series,
+    DROP COLUMN IF EXISTS publisher,
+    DROP COLUMN IF EXISTS isbn,
+    DROP COLUMN IF EXISTS description;

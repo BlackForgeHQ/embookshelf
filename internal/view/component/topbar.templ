@@ -1,0 +1,17 @@
+package component
+
+templ TopBar(title, subtitle string) {
+	<header class="topbar">
+		<div class="col gap-1">
+			<h1 class="t-h1">{ title }</h1>
+			if subtitle != "" {
+				<span class="t-small italic">{ subtitle }</span>
+			}
+		</div>
+		<div class="grow"></div>
+		<div class="row gap-2">
+			<input class="input" style="width:260px" placeholder="Search library…" name="q"/>
+			<button class="btn primary">Add book</button>
+		</div>
+	</header>
+}

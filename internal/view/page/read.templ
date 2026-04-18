@@ -1,0 +1,91 @@
+package page
+
+import (
+	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/view/component"
+)
+
+// Read is a standalone, full-screen page. It skips layout.App (no sidebar)
+// so the reader owns the viewport. Format-specific scripts and chrome tweaks
+// branch off the book's Format tag.
+templ Read(book model.Book) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width,initial-scale=1"/>
+			<title>{ book.Title } · embookshelf</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+		</head>
+		<body class={ "reader-body", "reader-" + readerKind(book.Format) }
+			data-book-id={ book.ID }
+			data-resume-cfi={ book.ResumeCFI }
+			data-progress={ component.IntStr(book.Progress) }
+			data-format={ book.Format }
+		>
+			<header class="reader-topbar">
+				<a href={ templ.SafeURL("/app/book/" + book.ID) } class="btn ghost small" title="Close reader (Esc)">← Close</a>
+				<div class="col">
+					<div class="t-h3">{ book.Title }</div>
+					if book.Author != "" {
+						<div class="t-small italic">{ book.Author }</div>
+					}
+				</div>
+				<div class="grow"></div>
+				if book.Format == "EPUB" {
+					<div class="reader-settings row gap-2">
+						<div class="t-label">Size</div>
+						<button class="btn small ghost" type="button" data-font-size="85%">A-</button>
+						<button class="btn small ghost" type="button" data-font-size="100%">A</button>
+						<button class="btn small ghost" type="button" data-font-size="120%">A+</button>
+					</div>
+				}
+			</header>
+			<main id="reader-area" class="reader-area">
+				if book.Path == "" {
+					<div class="reader-empty">
+						<div class="t-h2 italic">No file on disk</div>
+						<p class="t-small mt-2">This book has no attached file yet. Drop the file into the <span class="mono">bookdrop</span> folder and approve it, or add a library path in Settings → Libraries and scan.</p>
+					</div>
+				} else if !isReadable(book.Format) {
+					<div class="reader-empty">
+						<div class="t-h2 italic">{ book.Format } reader coming later</div>
+						<p class="t-small mt-2">For now only EPUB and PDF are wired up. CBX / audiobook readers are future slices.</p>
+					</div>
+				}
+			</main>
+			<footer class="reader-footer">
+				<button id="reader-prev" class="btn ghost" type="button" title="Previous (←)">‹</button>
+				<div class="reader-progress">
+					<div class="progress"><div id="reader-progress-bar" style={ "width:" + component.IntStr(book.Progress) + "%" }></div></div>
+					<span class="mono" id="reader-percent">{ component.IntStr(book.Progress) }%</span>
+				</div>
+				<button id="reader-next" class="btn ghost" type="button" title="Next (→ or space)">›</button>
+			</footer>
+			if book.Path != "" && book.Format == "EPUB" {
+				<script src="/static/jszip.min.js"></script>
+				<script src="/static/epub.min.js"></script>
+				<script src="/static/reader_epub.js" defer></script>
+			}
+			if book.Path != "" && book.Format == "PDF" {
+				<script src="/static/pdfjs/pdf.min.js"></script>
+				<script src="/static/reader_pdf.js" defer></script>
+			}
+		</body>
+	</html>
+}
+
+func isReadable(format string) bool {
+	return format == "EPUB" || format == "PDF"
+}
+
+// readerKind returns the CSS modifier tag — "reader-epub" vs "reader-pdf".
+func readerKind(format string) string {
+	switch format {
+	case "EPUB":
+		return "epub"
+	case "PDF":
+		return "pdf"
+	}
+	return "unknown"
+}

@@ -1,0 +1,3 @@
+ALTER TABLE bookdrop_items DROP COLUMN IF EXISTS cover_mime;
+ALTER TABLE books DROP COLUMN IF EXISTS cover_mime;
+ALTER TABLE books DROP COLUMN IF EXISTS has_cover;

@@ -1,0 +1,153 @@
+package partial
+
+import (
+	"strings"
+
+	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/view/component"
+)
+
+// BookDetailPanel is the swap target after any mutation on a book (metadata
+// edit, progress update, shelf toggle). The caller passes:
+//   - b:           the book with Progress populated for the current user
+//   - shelfSlugs:  slugs of shelves (belonging to the current user) that
+//                  already contain this book
+//   - userShelves: every shelf the current user owns, used to render toggles
+templ BookDetailPanel(b model.Book, shelfSlugs []string, userShelves []model.Shelf) {
+	<section id="book-detail" class="book-detail fade-in">
+		<aside class="book-detail-cover">
+			@component.Cover(b, "hero")
+		</aside>
+		<div class="book-detail-meta">
+			<div class="col gap-2">
+				<div class="t-micro">{ b.Format }
+					if b.Year > 0 {
+						· { component.IntStr(b.Year) }
+					}
+					if b.Publisher != "" {
+						· { b.Publisher }
+					}
+				</div>
+				<h1 class="t-display italic">{ b.Title }</h1>
+				if b.Author != "" {
+					<div class="t-h3">{ b.Author }</div>
+				}
+				if b.Series != "" {
+					<div class="t-small italic">
+						{ b.Series }
+						if b.SeriesIndex > 0 {
+							· vol. { component.IntStr(b.SeriesIndex) }
+						}
+					</div>
+				}
+			</div>
+			<div class="row gap-4 mt-4 book-detail-actions">
+				<a href={ templ.SafeURL("/app/book/" + b.ID + "/edit") } class="btn">Edit metadata</a>
+				<a href={ templ.SafeURL("/app/read/" + b.ID) } class="btn primary">Read</a>
+				<div class="grow"></div>
+				<div class="rating">
+					<span class="t-label">Rating</span>
+					<span class="mono">{ strings.Repeat("\u2605", b.Rating) + strings.Repeat("\u2606", 5-b.Rating) }</span>
+				</div>
+			</div>
+			@progressForm(b)
+			if len(userShelves) > 0 {
+				<div class="shelf-toggles mt-4">
+					<div class="t-label mb-2">Your shelves</div>
+					<div class="row gap-2">
+						for _, s := range userShelves {
+							@shelfToggle(b.ID, s, containsString(shelfSlugs, s.Slug))
+						}
+					</div>
+				</div>
+			}
+			if b.Description != "" {
+				<hr class="rule mt-4"/>
+				<p class="t-body mt-4 book-detail-desc">{ b.Description }</p>
+			}
+			if len(b.Tags) > 0 {
+				<div class="row gap-2 mt-4 book-detail-tags">
+					for _, t := range b.Tags {
+						<span class="chip ghost">{ t }</span>
+					}
+				</div>
+			}
+			if b.ISBN != "" {
+				<div class="t-micro mt-4">ISBN { b.ISBN }</div>
+			}
+		</div>
+	</section>
+}
+
+// progressForm renders the per-user progress slider + clear button. POSTs
+// target the book-detail panel so a successful update swaps the whole
+// section back in with the new progress bar.
+templ progressForm(b model.Book) {
+	<form
+		class="progress-form mt-4"
+		method="post"
+		action={ templ.SafeURL("/app/book/" + b.ID + "/progress") }
+		hx-post={ "/app/book/" + b.ID + "/progress" }
+		hx-target="#book-detail"
+		hx-swap="outerHTML"
+	>
+		<div class="row between">
+			<span class="t-label">Your progress</span>
+			<span class="mono"><span data-progress-label>{ component.IntStr(b.Progress) }</span>%</span>
+		</div>
+		<input
+			type="range"
+			name="percent"
+			min="0" max="100" step="1"
+			value={ component.IntStr(b.Progress) }
+			oninput="this.closest('form').querySelector('[data-progress-label]').textContent=this.value"
+		/>
+		<div class="row gap-2 mt-2">
+			<button class="btn small primary" type="submit">Save progress</button>
+			if b.Progress > 0 {
+				<button
+					class="btn small"
+					type="submit"
+					name="action"
+					value="clear"
+					formnovalidate
+				>Mark unread</button>
+			}
+		</div>
+	</form>
+}
+
+templ shelfToggle(bookID string, s model.Shelf, on bool) {
+	<form
+		method="post"
+		action={ templ.SafeURL("/app/book/" + bookID + "/shelf/" + s.Slug) }
+		hx-post={ "/app/book/" + bookID + "/shelf/" + s.Slug }
+		hx-target="#book-detail"
+		hx-swap="outerHTML"
+	>
+		<input type="hidden" name="action" value={ toggleAction(on) }/>
+		<button type="submit" class={ "chip", templ.KV("active", on) }>
+			if on {
+				✓ { s.Name }
+			} else {
+				{ s.Name }
+			}
+		</button>
+	</form>
+}
+
+func containsString(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+func toggleAction(on bool) string {
+	if on {
+		return "remove"
+	}
+	return "add"
+}

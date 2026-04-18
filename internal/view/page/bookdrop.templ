@@ -1,0 +1,46 @@
+package page
+
+import (
+	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/view/component"
+	"github.com/blackforge/embookshelf/internal/view/layout"
+	"github.com/blackforge/embookshelf/internal/view/partial"
+)
+
+templ BookDrop(libraries []model.Library, shelves []model.Shelf, items []model.BookDropItem, watchedPath, diskMode string) {
+	@layout.App("BookDrop") {
+		<div class="app-shell">
+			@component.Sidebar(libraries, shelves, "", "", component.NavBookdrop)
+			<main class="main">
+				@component.TopBar("BookDrop", "Files land here from " + watchedPath)
+				<div class="p-8 grow" data-live-region="bookdrop">
+					if len(items) == 0 {
+						<div class="empty-state">
+							<div class="t-h2 italic">The chute is empty</div>
+							<p class="t-small mt-2">Drop a file into <span class="mono">{ watchedPath }</span> and it will appear here within a few seconds.</p>
+						</div>
+					} else {
+						<table class="bdrop-table" id="bdrop-table">
+							<thead>
+								<tr>
+									<th></th>
+									<th>File / Title</th>
+									<th>Author</th>
+									<th>Format</th>
+									<th>State</th>
+									<th></th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, it := range items {
+									@partial.BookDropRow(it)
+								}
+							</tbody>
+						</table>
+					}
+				</div>
+				@component.StatusBar(len(libraries), len(items), diskMode)
+			</main>
+		</div>
+	}
+}

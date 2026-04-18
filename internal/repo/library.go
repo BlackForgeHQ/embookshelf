@@ -1,0 +1,266 @@
+package repo
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/blackforge/embookshelf/internal/model"
+)
+
+// bookCols is the SELECT column list shared by every book-returning query.
+// The trailing `COALESCE(ubp.progress, 0)` comes from a LEFT JOIN on
+// user_book_progress; callers must alias that join as `ubp` and bind the
+// user id as $1.
+const bookCols = `
+	b.id, b.library_id, b.title, b.author, b.format, b.year,
+	COALESCE(ubp.progress, 0) AS progress,
+	b.rating, b.cover_palette,
+	b.description, b.isbn, b.publisher, b.series, b.series_index, b.tags,
+	b.created_at, b.path,
+	b.has_cover, b.cover_mime,
+	COALESCE(ubp.resume_cfi, '') AS resume_cfi
+`
+
+const bookFrom = `
+	FROM books b
+	LEFT JOIN user_book_progress ubp ON ubp.book_id = b.id AND ubp.user_id = $1
+`
+
+// ErrNotFound is returned when a lookup by id/slug returns no rows.
+var ErrNotFound = errors.New("not found")
+
+type LibraryRepo struct {
+	pool *pgxpool.Pool
+}
+
+func NewLibraryRepo(pool *pgxpool.Pool) *LibraryRepo {
+	return &LibraryRepo{pool: pool}
+}
+
+func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, name, slug, created_at
+		FROM libraries
+		ORDER BY created_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var libs []model.Library
+	for rows.Next() {
+		var l model.Library
+		if err := rows.Scan(&l.ID, &l.Name, &l.Slug, &l.CreatedAt); err != nil {
+			return nil, err
+		}
+		libs = append(libs, l)
+	}
+	return libs, rows.Err()
+}
+
+// Search lists books in a library, scoped to a specific user's progress. An
+// empty librarySlug returns [], matching the UI expectation that a library
+// must be chosen before results render.
+func (r *LibraryRepo) Search(ctx context.Context, userID, librarySlug string, p model.SearchParams) ([]model.Book, error) {
+	if librarySlug == "" {
+		return nil, nil
+	}
+
+	// $1 is always the user id (driven by the LEFT JOIN); the library slug is $2.
+	var (
+		where = []string{"l.slug = $2", "b.deleted_at IS NULL"}
+		args  = []any{userID, librarySlug}
+	)
+
+	if q := strings.TrimSpace(p.Query); q != "" {
+		args = append(args, q)
+		where = append(where, fmt.Sprintf("b.tsv @@ websearch_to_tsquery('english', $%d)", len(args)))
+	}
+	if len(p.Format) > 0 {
+		args = append(args, p.Format)
+		where = append(where, fmt.Sprintf("b.format = ANY($%d::text[])", len(args)))
+	}
+
+	orderBy := "b.title ASC"
+	switch p.Sort {
+	case "author":
+		orderBy = "b.author ASC, b.title ASC"
+	case "recent":
+		orderBy = "b.created_at DESC"
+	case "year":
+		orderBy = "b.year DESC, b.title ASC"
+	case "rating":
+		orderBy = "b.rating DESC, b.title ASC"
+	}
+
+	query := `
+		SELECT ` + bookCols + `
+		` + bookFrom + `
+		JOIN libraries l ON l.id = b.library_id
+		WHERE ` + strings.Join(where, " AND ") + `
+		ORDER BY ` + orderBy + `
+		LIMIT 500
+	`
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectBooks(rows)
+}
+
+// BooksByLibrarySlug is retained for the home dashboard's simple count.
+func (r *LibraryRepo) BooksByLibrarySlug(ctx context.Context, userID, slug string) ([]model.Book, error) {
+	return r.Search(ctx, userID, slug, model.SearchParams{})
+}
+
+// Create inserts a new book row. Progress is not a column anymore — callers
+// that want to record progress for the creator should call ProgressRepo.Set.
+func (r *LibraryRepo) Create(ctx context.Context, b model.Book) (model.Book, error) {
+	if b.Tags == nil {
+		b.Tags = []string{}
+	}
+	if b.CoverPalette == "" {
+		b.CoverPalette = "navy"
+	}
+	if b.Format == "" {
+		b.Format = "EPUB"
+	}
+	// We don't have a user context on book creation itself — return with
+	// Progress=0 and no resume CFI. The next user-scoped query will re-
+	// populate those via the LEFT JOIN.
+	row := r.pool.QueryRow(ctx, `
+		WITH inserted AS (
+			INSERT INTO books (library_id, title, author, format, year, rating, cover_palette,
+			                   description, isbn, publisher, series, series_index, tags, path,
+			                   has_cover, cover_mime)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+			RETURNING *
+		)
+		SELECT b.id, b.library_id, b.title, b.author, b.format, b.year,
+		       0 AS progress,
+		       b.rating, b.cover_palette,
+		       b.description, b.isbn, b.publisher, b.series, b.series_index, b.tags,
+		       b.created_at, b.path,
+		       b.has_cover, b.cover_mime,
+		       '' AS resume_cfi
+		FROM inserted b
+	`,
+		b.LibraryID, b.Title, b.Author, b.Format, b.Year, b.Rating, b.CoverPalette,
+		b.Description, b.ISBN, b.Publisher, b.Series, b.SeriesIndex, b.Tags, b.Path,
+		b.HasCover, b.CoverMime,
+	)
+	return scanBook(row)
+}
+
+func (r *LibraryRepo) GetBookByID(ctx context.Context, userID, id string) (model.Book, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT `+bookCols+`
+		`+bookFrom+`
+		WHERE b.id = $2 AND b.deleted_at IS NULL
+	`, userID, id)
+	b, err := scanBook(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.Book{}, ErrNotFound
+		}
+		return model.Book{}, err
+	}
+	return b, nil
+}
+
+// BookExistsByPath reports whether a non-deleted book already points at
+// this file. Used by the library scanner to skip files we've already
+// imported.
+func (r *LibraryRepo) BookExistsByPath(ctx context.Context, path string) (bool, error) {
+	var n int
+	err := r.pool.QueryRow(ctx,
+		`SELECT count(*) FROM books WHERE path = $1 AND deleted_at IS NULL`,
+		path,
+	).Scan(&n)
+	return n > 0, err
+}
+
+// SetCover flips the cover flags on a book. The coverstore is expected to
+// have the bytes on disk already (SaveBook); this just records that fact.
+func (r *LibraryRepo) SetCover(ctx context.Context, bookID string, hasCover bool, mime string) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE books SET has_cover = $2, cover_mime = $3, updated_at = now()
+		WHERE id = $1 AND deleted_at IS NULL
+	`, bookID, hasCover, mime)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateMetadata applies the user-editable metadata fields for a book.
+func (r *LibraryRepo) UpdateMetadata(ctx context.Context, b model.Book) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE books SET
+			title         = $1,
+			author        = $2,
+			format        = $3,
+			year          = $4,
+			rating        = $5,
+			cover_palette = $6,
+			description   = $7,
+			isbn          = $8,
+			publisher     = $9,
+			series        = $10,
+			series_index  = $11,
+			tags          = $12,
+			updated_at    = now()
+		WHERE id = $13 AND deleted_at IS NULL
+	`,
+		b.Title, b.Author, b.Format, b.Year, b.Rating, b.CoverPalette,
+		b.Description, b.ISBN, b.Publisher, b.Series, b.SeriesIndex, b.Tags,
+		b.ID,
+	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// scanner lets us reuse scanBook for both Row and Rows.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanBook(s scanner) (model.Book, error) {
+	var b model.Book
+	err := s.Scan(
+		&b.ID, &b.LibraryID, &b.Title, &b.Author, &b.Format, &b.Year,
+		&b.Progress, &b.Rating, &b.CoverPalette,
+		&b.Description, &b.ISBN, &b.Publisher, &b.Series, &b.SeriesIndex, &b.Tags,
+		&b.CreatedAt, &b.Path,
+		&b.HasCover, &b.CoverMime,
+		&b.ResumeCFI,
+	)
+	return b, err
+}
+
+func collectBooks(rows pgx.Rows) ([]model.Book, error) {
+	var books []model.Book
+	for rows.Next() {
+		b, err := scanBook(rows)
+		if err != nil {
+			return nil, err
+		}
+		books = append(books, b)
+	}
+	return books, rows.Err()
+}

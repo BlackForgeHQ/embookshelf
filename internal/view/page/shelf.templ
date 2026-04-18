@@ -1,0 +1,23 @@
+package page
+
+import (
+	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/view/component"
+	"github.com/blackforge/embookshelf/internal/view/layout"
+	"github.com/blackforge/embookshelf/internal/view/partial"
+)
+
+templ ShelfView(libraries []model.Library, shelves []model.Shelf, shelf model.Shelf, books []model.Book, diskMode string) {
+	@layout.App(shelf.Name) {
+		<div class="app-shell">
+			@component.Sidebar(libraries, shelves, "", shelf.Slug, component.NavNone)
+			<main class="main">
+				@component.TopBar(shelf.Name, component.IntStr(shelf.BookCount) + " books on this shelf")
+				<div class="p-8 grow">
+					@partial.LibraryGrid(books)
+				</div>
+				@component.StatusBar(len(libraries), len(books), diskMode)
+			</main>
+		</div>
+	}
+}

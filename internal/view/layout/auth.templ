@@ -1,0 +1,20 @@
+package layout
+
+// Auth is the minimal shell used for pre-login screens (login/signup). It
+// intentionally omits the app sidebar so the page doesn't appear authenticated.
+templ Auth(title string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width,initial-scale=1"/>
+			<title>{ title } · embookshelf</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+		</head>
+		<body class="auth-body">
+			<main class="auth-shell">
+				{ children... }
+			</main>
+		</body>
+	</html>
+}
