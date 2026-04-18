@@ -1,0 +1,3 @@
+ALTER TABLE shelves DROP CONSTRAINT IF EXISTS shelves_rule_presence;
+ALTER TABLE shelves DROP COLUMN IF EXISTS rule;
+ALTER TABLE shelves DROP COLUMN IF EXISTS is_smart;

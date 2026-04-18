@@ -1,53 +1,211 @@
-import { Fragment, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 
+import {
+  annotationKind,
+  bookAnnotationsQueryKey,
+  createAnnotation,
+  deleteAnnotation,
+  fetchBookAnnotations,
+  recentAnnotationsQueryKey,
+  type Annotation,
+} from '@/api/annotations';
+import {
+  bookQueryKey,
+  fetchBook,
+  updateProgress,
+  type BookDetail,
+} from '@/api/books';
+import {
+  EpubReader,
+  type EpubHighlight,
+  type EpubProgress,
+  type EpubReaderHandle,
+  type EpubTocEntry,
+} from '@/components/EpubReader';
 import { Icon } from '@/components/Icon';
-import { findBook, NOTES, READER_CONTENT } from '@/data/mock';
+import {
+  PdfReader,
+  type PdfProgress,
+  type PdfReaderHandle,
+} from '@/components/PdfReader';
 
 export const Route = createFileRoute('/read/$id')({
   component: Reader,
 });
 
-// Rough chapter labels + first-page offsets, keyed to the prototype design.
-const TOC = [
-  { title: 'Prologue', page: 1 },
-  { title: "1. The Surveyor's House", page: 8 },
-  { title: '2. Northlight', page: 24 },
-  { title: '3. Instrument of Rain', page: 45 },
-  { title: '4. The Inlet', page: 68 },
-  { title: '5. Ingrid', page: 92 },
-  { title: '6. A Map of Absence', page: 118 },
-  { title: "7. The Mapmaker's Return", page: 138 },
-  { title: '8. Ledgers', page: 164 },
-  { title: '9. The Watermark', page: 191 },
-  { title: 'Epilogue', page: 220 },
-];
+type TocItem = { label: string; href: string };
+
+// parseResumeToken separates the two resume-token shapes we store in the
+// database: raw CFI strings (EPUB) and page:N tokens (PDF). Unknown tokens
+// fall back to "start from the beginning".
+function parseResumeToken(raw?: string): { cfi?: string; page?: number } {
+  if (!raw) return {};
+  if (raw.startsWith('page:')) {
+    const page = Number.parseInt(raw.slice(5), 10);
+    return Number.isFinite(page) ? { page } : {};
+  }
+  return { cfi: raw };
+}
 
 function Reader() {
   const { id } = Route.useParams();
   const navigate = useNavigate();
-  const book = findBook(id);
 
-  const totalPages = book?.pages ?? 412;
-  const [page, setPage] = useState(138);
+  const book = useQuery({ queryKey: bookQueryKey(id), queryFn: () => fetchBook(id) });
+
+  if (book.isLoading) {
+    return <FullScreenMessage>Loading…</FullScreenMessage>;
+  }
+  if (book.isError || !book.data) {
+    return <FullScreenMessage>Book not found.</FullScreenMessage>;
+  }
+  const b = book.data;
+  if (b.format !== 'EPUB' && b.format !== 'PDF') {
+    return (
+      <FullScreenMessage>
+        Reader not implemented for <code>{b.format}</code> yet.
+        <div style={{ marginTop: 16 }}>
+          <button
+            className="btn"
+            onClick={() => void navigate({ to: '/book/$id', params: { id } })}
+          >
+            <Icon name="arrow-left" size={14} /> Back
+          </button>
+        </div>
+      </FullScreenMessage>
+    );
+  }
+
+  return <ReaderShell book={b} />;
+}
+
+function ReaderShell({ book }: { book: BookDetail }) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { cfi: resumeCfi, page: resumePage } = parseResumeToken(book.resumeCfi);
+
   const [chromeVisible, setChromeVisible] = useState(true);
   const [tocOpen, setTocOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [typePanelOpen, setTypePanelOpen] = useState(false);
+  const [toc, setToc] = useState<TocItem[]>([]);
 
-  const pct = page / totalPages;
+  // Progress state mirrors what the reader reports. Used for the bottom
+  // scrubber and to compose the token we persist on unmount.
+  const [percent, setPercent] = useState(0);
+  const [pageState, setPageState] = useState<{ current: number; total: number } | null>(null);
+  const [cfiState, setCfiState] = useState<string>(resumeCfi ?? '');
 
-  // Reader typography — bound to the design's Tweaks defaults. Wire these
-  // to a user-preferences backend once JSON endpoints land.
-  const readerFont = 'Literata, Georgia, serif';
-  const readerSize = 19;
-  const readerLine = 1.65;
+  // Pending EPUB selection — set by rendition.on('selected'), cleared
+  // when the user saves or dismisses it. Absence hides the selection
+  // toolbar, so this doubles as the toolbar's visibility switch.
+  const [pendingSelection, setPendingSelection] = useState<
+    { cfiRange: string; text: string } | null
+  >(null);
+
+  const epubRef = useRef<EpubReaderHandle>(null);
+  const pdfRef = useRef<PdfReaderHandle>(null);
+
+  const progressMut = useMutation({
+    mutationFn: (args: { progress: number; resumeCfi: string }) =>
+      updateProgress(book.id, args.progress, args.resumeCfi),
+  });
+
+  // Annotations for this book — drives the side panel AND the EPUB
+  // highlight overlay.
+  const annotations = useQuery({
+    queryKey: bookAnnotationsQueryKey(book.id),
+    queryFn: () => fetchBookAnnotations(book.id),
+  });
+
+  const invalidateAnnotations = () => {
+    queryClient.invalidateQueries({ queryKey: bookAnnotationsQueryKey(book.id) });
+    queryClient.invalidateQueries({ queryKey: recentAnnotationsQueryKey });
+  };
+
+  const createAnnotationMut = useMutation({
+    mutationFn: (body: { locator?: string; selectedText?: string; note?: string }) =>
+      createAnnotation(book.id, body),
+    onSuccess: () => {
+      invalidateAnnotations();
+      setPendingSelection(null);
+    },
+  });
+
+  const deleteAnnotationMut = useMutation({
+    mutationFn: (a: Annotation) => deleteAnnotation(a.id),
+    onSuccess: invalidateAnnotations,
+  });
+
+  // EPUB highlights for the rendition overlay. Stable reference when the
+  // annotation list hasn't changed, so the effect in EpubReader doesn't
+  // churn add/remove on every render.
+  const epubHighlights = useMemo<EpubHighlight[]>(() => {
+    if (book.format !== 'EPUB') return [];
+    return (annotations.data ?? [])
+      .filter((a) => !!a.selectedText && !!a.locator?.startsWith('epubcfi'))
+      .map((a) => ({ cfiRange: a.locator!, color: 'oklch(0.92 0.07 85)' }));
+  }, [book.format, annotations.data]);
+
+  // Debounce + latest-wins: reader events fire every page turn; we hold
+  // the newest tick for 600 ms and ship it, plus force a flush on unmount
+  // so a short reading session still records progress.
+  const pendingRef = useRef<{ progress: number; resumeCfi: string } | null>(null);
+  const timerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) window.clearTimeout(timerRef.current);
+      if (pendingRef.current) {
+        // Fire-and-forget — the component is already unmounting.
+        void updateProgress(book.id, pendingRef.current.progress, pendingRef.current.resumeCfi);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const queueProgress = (progress: number, resumeCfi: string) => {
+    pendingRef.current = { progress, resumeCfi };
+    if (timerRef.current) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => {
+      const snapshot = pendingRef.current;
+      pendingRef.current = null;
+      timerRef.current = null;
+      if (snapshot) {
+        progressMut.mutate(snapshot);
+      }
+    }, 600);
+  };
+
+  const onEpubProgress = (p: EpubProgress) => {
+    setPercent(p.percent);
+    setCfiState(p.cfi);
+    queueProgress(p.percent, p.cfi);
+  };
+  const onPdfProgress = (p: PdfProgress) => {
+    setPercent(p.percent);
+    setPageState({ current: p.page, total: p.totalPages });
+    queueProgress(p.percent, `page:${p.page}`);
+  };
 
   const closePanels = () => {
     setTocOpen(false);
     setNotesOpen(false);
     setTypePanelOpen(false);
   };
+
+  const exit = () => void navigate({ to: '/book/$id', params: { id: book.id } });
+
+  // Derived footer values — keep both reader shapes on one code path.
+  const footerPageLabel =
+    book.format === 'PDF' && pageState
+      ? `p.${pageState.current}`
+      : book.format === 'EPUB' && percent
+        ? `${Math.round(percent * 100)}%`
+        : '—';
+  const footerTotalLabel =
+    book.format === 'PDF' && pageState ? `p.${pageState.total}` : '';
 
   return (
     <div
@@ -72,28 +230,28 @@ function Reader() {
             background: 'var(--color-paper-1)',
           }}
         >
-          <button
-            className="btn ghost small"
-            onClick={() => void navigate({ to: '/book/$id', params: { id } })}
-          >
+          <button className="btn ghost small" onClick={exit}>
             <Icon name="arrow-left" size={14} /> Library
           </button>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            <div style={{ fontSize: 13, fontWeight: 500, fontStyle: 'italic' }}>{book?.title}</div>
+            <div style={{ fontSize: 13, fontWeight: 500, fontStyle: 'italic' }}>{book.title}</div>
             <div className="t-micro" style={{ fontSize: 10 }}>
-              {book?.author} · p.{page} / {totalPages}
+              {book.author} · {footerPageLabel}
+              {footerTotalLabel ? ` / ${footerTotalLabel}` : ''}
             </div>
           </div>
-          <button
-            className={`btn ghost small ${tocOpen ? 'primary' : ''}`}
-            onClick={() => {
-              const next = !tocOpen;
-              closePanels();
-              setTocOpen(next);
-            }}
-          >
-            <Icon name="contents" size={14} />
-          </button>
+          {book.format === 'EPUB' && (
+            <button
+              className={`btn ghost small ${tocOpen ? 'primary' : ''}`}
+              onClick={() => {
+                const next = !tocOpen;
+                closePanels();
+                setTocOpen(next);
+              }}
+            >
+              <Icon name="contents" size={14} />
+            </button>
+          )}
           <button
             className={`btn ghost small ${typePanelOpen ? 'primary' : ''}`}
             onClick={() => {
@@ -124,7 +282,8 @@ function Reader() {
       )}
 
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
-        {tocOpen && (
+        {/* Left TOC (EPUB only) */}
+        {tocOpen && book.format === 'EPUB' && (
           <aside
             style={{
               width: 280,
@@ -132,40 +291,39 @@ function Reader() {
               background: 'var(--color-paper-1)',
               overflow: 'auto',
               padding: '18px 0',
+              flexShrink: 0,
             }}
           >
             <div className="t-label" style={{ padding: '0 20px 10px' }}>Contents</div>
-            {TOC.map((c, i) => {
-              const active = i === 7;
-              return (
-                <button
-                  key={c.title}
-                  onClick={() => setPage(c.page)}
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'baseline',
-                    padding: '8px 20px',
-                    width: '100%',
-                    textAlign: 'left',
-                    border: 'none',
-                    background: active ? 'var(--color-paper-3)' : 'transparent',
-                    fontFamily: 'var(--font-serif)',
-                    fontSize: 13.5,
-                    color: active ? 'var(--color-ink-1)' : 'var(--color-ink-2)',
-                    cursor: 'pointer',
-                    borderLeft: active ? '2px solid var(--color-accent)' : '2px solid transparent',
-                  }}
-                >
-                  <span style={{ fontStyle: i === 0 || i === TOC.length - 1 ? 'italic' : 'normal' }}>
-                    {c.title}
-                  </span>
-                  <span className="mono" style={{ fontSize: 10.5, color: 'var(--color-ink-3)' }}>
-                    p.{c.page}
-                  </span>
-                </button>
-              );
-            })}
+            {toc.length === 0 && (
+              <div className="t-small" style={{ padding: '0 20px', fontStyle: 'italic' }}>
+                Table of contents not available.
+              </div>
+            )}
+            {toc.map((c, i) => (
+              <button
+                key={`${c.href}-${i}`}
+                onClick={() => {
+                  epubRef.current?.goTo(c.href);
+                  setTocOpen(false);
+                }}
+                style={{
+                  display: 'block',
+                  padding: '8px 20px',
+                  width: '100%',
+                  textAlign: 'left',
+                  border: 'none',
+                  background: 'transparent',
+                  fontFamily: 'var(--font-serif)',
+                  fontSize: 13.5,
+                  color: 'var(--color-ink-2)',
+                  cursor: 'pointer',
+                  borderLeft: '2px solid transparent',
+                }}
+              >
+                {c.label}
+              </button>
+            ))}
           </aside>
         )}
 
@@ -174,140 +332,93 @@ function Reader() {
           onClick={() => setChromeVisible(true)}
           style={{
             flex: 1,
-            overflow: 'auto',
-            padding: '64px 40px 80px',
-            display: 'flex',
-            justifyContent: 'center',
-            background: 'var(--color-paper-0)',
+            overflow: 'hidden',
+            position: 'relative',
+            background: book.format === 'EPUB' ? 'var(--color-paper-0)' : 'var(--color-paper-2)',
           }}
         >
-          <div style={{ maxWidth: 640, width: '100%' }}>
-            <div className="t-label" style={{ textAlign: 'center', marginBottom: 8 }}>
-              {READER_CONTENT.chapter}
-            </div>
-            <h1
+          {book.format === 'EPUB' ? (
+            <EpubReader
+              ref={epubRef}
+              url={`/api/v1/books/${book.id}/file`}
+              initialCfi={resumeCfi}
+              highlights={epubHighlights}
+              onReady={({ toc: t }) => setToc(t.map(flatten).flat())}
+              onProgress={onEpubProgress}
+              onSelect={(sel) => setPendingSelection(sel)}
+            />
+          ) : (
+            <PdfReader
+              ref={pdfRef}
+              url={`/api/v1/books/${book.id}/file`}
+              initialPage={resumePage}
+              onReady={({ totalPages }) => setPageState({ current: resumePage ?? 1, total: totalPages })}
+              onProgress={onPdfProgress}
+            />
+          )}
+
+          {/* Selection toolbar — shown whenever the user drags across
+              EPUB text and epub.js emits a `selected` event. Pending
+              selection is cleared on save or dismiss. */}
+          {pendingSelection && (
+            <div
               style={{
-                fontFamily: readerFont,
-                textAlign: 'center',
-                fontSize: 28,
-                fontWeight: 500,
-                marginBottom: 48,
-                letterSpacing: '-0.01em',
+                position: 'absolute',
+                top: 16,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 10,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '8px 14px',
+                background: 'var(--color-paper-0)',
+                border: '1px solid var(--color-ink-3)',
+                borderRadius: 3,
+                boxShadow: '0 6px 20px -4px oklch(0.2 0.02 60 / 0.22)',
               }}
             >
-              {READER_CONTENT.title}
-            </h1>
-            {READER_CONTENT.paragraphs.map((p, i) => {
-              const style = {
-                fontFamily: readerFont,
-                fontSize: readerSize,
-                lineHeight: readerLine,
-                marginBottom: 18,
-                textIndent: i === 0 ? 0 : '2em',
-                color: 'var(--color-ink-1)',
-                textAlign: 'justify' as const,
-                hyphens: 'auto' as const,
-                textWrap: 'pretty' as const,
-              };
-              if (i === 0) {
-                return (
-                  <p key={i} style={style}>
-                    <span
-                      style={{
-                        fontSize: readerSize * 3.2,
-                        fontWeight: 500,
-                        float: 'left',
-                        lineHeight: 0.9,
-                        marginRight: 6,
-                        marginTop: 6,
-                        fontFamily: readerFont,
-                      }}
-                    >
-                      {p[0]}
-                    </span>
-                    {p.slice(1)}
-                  </p>
-                );
-              }
-              if (i === 6) {
-                const phrase = 'she had come six hundred miles north';
-                const idx = p.indexOf(phrase);
-                if (idx < 0) return <p key={i} style={style}>{p}</p>;
-                return (
-                  <p key={i} style={style}>
-                    {p.slice(0, idx)}
-                    <span
-                      style={{
-                        background: 'oklch(0.92 0.07 85)',
-                        padding: '0 2px',
-                        borderBottom: '1px solid oklch(0.65 0.12 85)',
-                      }}
-                    >
-                      {p.slice(idx, idx + phrase.length)}
-                    </span>
-                    {p.slice(idx + phrase.length)}
-                  </p>
-                );
-              }
-              return (
-                <Fragment key={i}>
-                  <p style={style}>{p}</p>
-                </Fragment>
-              );
-            })}
-            <div
-              style={{ textAlign: 'center', margin: '40px 0', color: 'var(--color-ink-4)', letterSpacing: '1em' }}
-            >
-              · · ·
-            </div>
-          </div>
-        </div>
-
-        {/* Right notes panel */}
-        {notesOpen && (
-          <aside
-            style={{
-              width: 300,
-              borderLeft: '1px solid var(--color-rule-soft)',
-              background: 'var(--color-paper-1)',
-              overflow: 'auto',
-              padding: '18px 16px',
-            }}
-          >
-            <div className="t-label" style={{ marginBottom: 12 }}>Notes on this book</div>
-            {NOTES.filter((n) => n.bookId === id).map((n) => (
-              <div
-                key={n.id}
-                style={{
-                  borderLeft: '3px solid var(--color-accent-soft)',
-                  padding: '4px 12px',
-                  marginBottom: 14,
-                  background: 'var(--color-paper-0)',
+              <span className="t-micro">Selection</span>
+              <button
+                type="button"
+                className="btn primary small"
+                disabled={createAnnotationMut.isPending}
+                onClick={() =>
+                  createAnnotationMut.mutate({
+                    locator: pendingSelection.cfiRange,
+                    selectedText: pendingSelection.text,
+                  })
+                }
+              >
+                <Icon name="highlight" size={12} /> Highlight
+              </button>
+              <button
+                type="button"
+                className="btn small"
+                disabled={createAnnotationMut.isPending}
+                onClick={() => {
+                  const note = window.prompt('Add a note for this selection:');
+                  if (!note || !note.trim()) return;
+                  createAnnotationMut.mutate({
+                    locator: pendingSelection.cfiRange,
+                    selectedText: pendingSelection.text,
+                    note: note.trim(),
+                  });
                 }}
               >
-                <div className="t-micro" style={{ fontSize: 10, marginBottom: 4 }}>
-                  Page {n.page}
-                  {n.highlight ? ' · Highlight' : ''}
-                </div>
-                <p
-                  style={{
-                    fontSize: 13,
-                    lineHeight: 1.5,
-                    fontStyle: n.highlight ? 'italic' : 'normal',
-                  }}
-                >
-                  {n.text}
-                </p>
-              </div>
-            ))}
-            <button
-              className="btn small"
-              style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
-            >
-              <Icon name="plus" size={12} /> New note
-            </button>
-          </aside>
-        )}
+                <Icon name="note" size={12} /> Note
+              </button>
+              <button
+                type="button"
+                className="btn ghost small"
+                onClick={() => setPendingSelection(null)}
+                aria-label="Dismiss"
+              >
+                <Icon name="close" size={12} />
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* Type panel (floating) */}
         {typePanelOpen && (
@@ -327,9 +438,133 @@ function Reader() {
           >
             <div className="t-label" style={{ marginBottom: 10 }}>Reader type</div>
             <div style={{ fontSize: 12, color: 'var(--color-ink-3)', fontStyle: 'italic' }}>
-              Font + size controls land once user preferences sync from the backend.
+              Font + size controls land once per-user reader preferences sync from the backend.
             </div>
           </div>
+        )}
+
+        {notesOpen && (
+          <aside
+            style={{
+              width: 320,
+              borderLeft: '1px solid var(--color-rule-soft)',
+              background: 'var(--color-paper-1)',
+              overflow: 'auto',
+              padding: '18px 16px',
+              flexShrink: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+            }}
+          >
+            <div className="t-label">Notes on this book</div>
+
+            {book.format === 'PDF' && pageState && (
+              <button
+                type="button"
+                className="btn small"
+                style={{ justifyContent: 'center' }}
+                disabled={createAnnotationMut.isPending}
+                onClick={() => {
+                  const note = window.prompt(`Note on page ${pageState.current}:`);
+                  if (!note || !note.trim()) return;
+                  createAnnotationMut.mutate({
+                    locator: `page:${pageState.current}`,
+                    note: note.trim(),
+                  });
+                }}
+              >
+                <Icon name="plus" size={12} /> New note on page {pageState.current}
+              </button>
+            )}
+
+            {annotations.isLoading && (
+              <div className="t-small" style={{ fontStyle: 'italic' }}>Loading…</div>
+            )}
+            {!annotations.isLoading && (annotations.data ?? []).length === 0 && (
+              <div className="t-small" style={{ fontStyle: 'italic' }}>
+                {book.format === 'EPUB'
+                  ? 'Select text in the page to highlight or annotate.'
+                  : 'No notes yet.'}
+              </div>
+            )}
+
+            {(annotations.data ?? []).map((a) => {
+              const kind = annotationKind(a);
+              return (
+                <div
+                  key={a.id}
+                  style={{
+                    borderLeft: '3px solid var(--color-accent-soft)',
+                    padding: '6px 10px',
+                    background: 'var(--color-paper-0)',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span className="t-micro" style={{ fontSize: 9.5 }}>
+                      {kind === 'highlight' ? 'Highlight' : kind === 'highlight+note' ? 'Highlight · Note' : 'Note'}
+                      {a.locator && a.locator.startsWith('page:') && ` · p.${a.locator.slice(5)}`}
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {a.locator?.startsWith('epubcfi') && book.format === 'EPUB' && (
+                        <button
+                          type="button"
+                          className="btn ghost small"
+                          onClick={() => epubRef.current?.goTo(a.locator!)}
+                          title="Go to highlight"
+                          style={{ padding: 2 }}
+                        >
+                          <Icon name="arrow-right" size={10} />
+                        </button>
+                      )}
+                      {a.locator?.startsWith('page:') && book.format === 'PDF' && (
+                        <button
+                          type="button"
+                          className="btn ghost small"
+                          onClick={() => {
+                            const page = Number.parseInt(a.locator!.slice(5), 10);
+                            if (Number.isFinite(page)) pdfRef.current?.goTo(page);
+                          }}
+                          title="Go to page"
+                          style={{ padding: 2 }}
+                        >
+                          <Icon name="arrow-right" size={10} />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn ghost small"
+                        onClick={() => deleteAnnotationMut.mutate(a)}
+                        disabled={deleteAnnotationMut.isPending}
+                        aria-label="Delete"
+                        title="Delete"
+                        style={{ padding: 2 }}
+                      >
+                        <Icon name="close" size={10} />
+                      </button>
+                    </div>
+                  </div>
+                  {a.selectedText && (
+                    <p
+                      style={{
+                        fontSize: 12.5,
+                        lineHeight: 1.5,
+                        fontStyle: 'italic',
+                        background: 'oklch(0.94 0.04 85)',
+                        padding: '4px 6px',
+                        marginBottom: a.note ? 6 : 0,
+                      }}
+                    >
+                      {a.selectedText}
+                    </p>
+                  )}
+                  {a.note && (
+                    <p style={{ fontSize: 13, lineHeight: 1.5 }}>{a.note}</p>
+                  )}
+                </div>
+              );
+            })}
+          </aside>
         )}
       </div>
 
@@ -344,12 +579,15 @@ function Reader() {
           background: 'var(--color-paper-1)',
         }}
       >
-        <button className="btn ghost small" onClick={() => setPage((p) => Math.max(1, p - 1))}>
+        <button
+          className="btn ghost small"
+          onClick={() => (book.format === 'EPUB' ? epubRef.current?.prev() : pdfRef.current?.prev())}
+        >
           <Icon name="chevron-left" size={14} /> Prev
         </button>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12 }}>
           <span className="mono" style={{ fontSize: 10.5, color: 'var(--color-ink-3)' }}>
-            p.{page}
+            {footerPageLabel}
           </span>
           <div
             style={{
@@ -363,40 +601,72 @@ function Reader() {
             <div
               style={{
                 height: 4,
-                width: `${pct * 100}%`,
+                width: `${Math.round(percent * 100)}%`,
                 background: 'var(--color-accent)',
                 borderRadius: 2,
-              }}
-            />
-            <input
-              type="range"
-              min={1}
-              max={totalPages}
-              value={page}
-              onChange={(e) => setPage(Number(e.target.value))}
-              style={{
-                position: 'absolute',
-                inset: 0,
-                width: '100%',
-                opacity: 0,
-                cursor: 'pointer',
+                transition: 'width 120ms ease',
               }}
             />
           </div>
           <span className="mono" style={{ fontSize: 10.5, color: 'var(--color-ink-3)' }}>
-            p.{totalPages}
+            {footerTotalLabel || `${Math.round(percent * 100)}%`}
           </span>
         </div>
-        <span className="mono" style={{ fontSize: 10.5, color: 'var(--color-ink-3)' }}>
-          {Math.round(pct * 100)}% · 23 min left in chapter
-        </span>
         <button
           className="btn ghost small"
-          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          onClick={() => (book.format === 'EPUB' ? epubRef.current?.next() : pdfRef.current?.next())}
         >
           Next <Icon name="chevron-right" size={14} />
         </button>
       </div>
+
+      {!chromeVisible && (
+        <button
+          onClick={() => setChromeVisible(true)}
+          className="btn ghost"
+          style={{
+            position: 'absolute',
+            top: 8,
+            right: 8,
+            zIndex: 10,
+            background: 'var(--color-paper-0)',
+            border: '1px solid var(--color-rule-soft)',
+          }}
+        >
+          <Icon name="menu" size={14} />
+        </button>
+      )}
+
+      {/* Intentional reference — keeps cfiState alive for the bookmark
+          feature once annotations land. */}
+      <span hidden>{cfiState}</span>
     </div>
   );
+}
+
+function FullScreenMessage({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'var(--color-paper-0)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <div className="t-small" style={{ textAlign: 'center', maxWidth: 360 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// flatten walks the EPUB TOC tree into a flat list for the simple linear
+// Contents panel. Full-tree rendering is a future visual polish.
+function flatten(node: EpubTocEntry): TocItem[] {
+  const self: TocItem = { label: node.label, href: node.href };
+  const sub = (node.subitems ?? []).flatMap(flatten);
+  return [self, ...sub];
 }

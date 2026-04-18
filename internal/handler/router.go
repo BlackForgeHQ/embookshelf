@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/blackforge/embookshelf/internal/auth"
+	"github.com/blackforge/embookshelf/internal/model"
 )
 
 func (h *Handler) Engine() *gin.Engine {
@@ -30,6 +31,77 @@ func (h *Handler) Engine() *gin.Engine {
 	api := r.Group("/api/v1")
 	{
 		api.GET("/healthcheck", h.Healthcheck)
+
+		// Auth surface — cookie-based sessions. Login/signup/logout stay
+		// public; /me requires a valid session.
+		api.POST("/auth/login", h.Login)
+		api.POST("/auth/logout", h.Logout)
+		api.GET("/auth/signup", h.SignupStatus)
+		api.POST("/auth/signup", h.Signup)
+
+		authed := api.Group("")
+		authed.Use(auth.RequireAuth(h.auth))
+		{
+			authed.GET("/me", h.Me)
+
+			// Library + catalog
+			authed.GET("/libraries", h.Libraries)
+			authed.GET("/books", h.Books)
+			authed.GET("/books/:id", h.BookDetail)
+			authed.GET("/books/:id/cover", h.BookCover)
+			authed.GET("/books/:id/file", h.BookFile)
+			authed.PATCH("/books/:id", h.BookPatch)
+			authed.POST("/books/:id/progress", h.BookProgressUpdate)
+			authed.POST("/books/:id/shelves/:slug", h.BookAddShelf)
+			authed.DELETE("/books/:id/shelves/:slug", h.BookRemoveShelf)
+
+			// Per-user shelves (regular + smart)
+			authed.GET("/shelves", h.Shelves)
+			authed.POST("/shelves", h.ShelfCreate)
+			authed.PATCH("/shelves/:slug", h.ShelfUpdate)
+			authed.DELETE("/shelves/:slug", h.ShelfDelete)
+
+			// BookDrop ingest queue
+			authed.GET("/bookdrop", h.BookDropList)
+			authed.GET("/bookdrop/:id/cover", h.BookDropCover)
+			authed.POST("/bookdrop/:id/approve", h.BookDropApprove)
+			authed.POST("/bookdrop/:id/reject", h.BookDropReject)
+
+			// Metadata enrichment
+			authed.GET("/books/:id/enrich", h.EnrichSearch)
+			authed.POST("/books/:id/cover-from-url", h.EnrichApplyCover)
+
+			// Library statistics dashboard
+			authed.GET("/stats", h.Stats)
+
+			// Annotations (highlights + notes)
+			authed.GET("/annotations", h.AnnotationsRecent)
+			authed.GET("/books/:id/annotations", h.AnnotationsForBook)
+			authed.POST("/books/:id/annotations", h.AnnotationCreate)
+			authed.PATCH("/annotations/:id", h.AnnotationPatch)
+			authed.DELETE("/annotations/:id", h.AnnotationDelete)
+
+			// Settings — instance-wide config surfaces. RequireRole
+			// stacks on top of RequireAuth so non-admins get 403 cleanly
+			// instead of the whole API returning 401.
+			admin := authed.Group("/settings")
+			admin.Use(auth.RequireRole(model.RoleAdmin))
+			{
+				admin.GET("/libraries", h.SettingsLibraries)
+				admin.POST("/libraries/paths", h.SettingsLibraryPathCreate)
+				admin.DELETE("/libraries/paths/:id", h.SettingsLibraryPathDelete)
+				admin.POST("/libraries/paths/:id/scan", h.SettingsLibraryPathScan)
+			}
+		}
+	}
+
+	// Server-Sent Events stream — cookie-authed, but mounted off /api/v1
+	// because browsers don't carry trailing-slash semantics through
+	// EventSource reliably and the TS client expects a bare `/events`.
+	events := r.Group("/events")
+	events.Use(auth.RequireAuth(h.auth))
+	{
+		events.GET("", h.Events)
 	}
 
 	// OPDS catalog for e-reader apps. Basic Auth — clients (KOReader,

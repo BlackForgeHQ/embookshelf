@@ -1,10 +1,19 @@
 import { useMemo, useState, type CSSProperties } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 
+import {
+  booksQueryKey,
+  fetchBooks,
+  fetchLibraries,
+  fetchShelves,
+  librariesQueryKey,
+  shelvesQueryKey,
+  type Book,
+} from '@/api/books';
 import { Cover, StarRating } from '@/components/Cover';
 import { Icon } from '@/components/Icon';
 import { TopBar } from '@/components/TopBar';
-import { BOOKS, type Book, type BookFormat } from '@/data/mock';
 
 type Layout = 'shelf' | 'grid' | 'list';
 type SortKey = 'added' | 'title' | 'author' | 'rating';
@@ -27,47 +36,73 @@ export const Route = createFileRoute('/_app/library')({
   component: LibraryView,
 });
 
+// sortKeyToApi maps our local UI sort terms onto the backend's vocabulary.
+// The backend uses "recent" for created_at DESC; the UI calls it "added".
+function sortKeyToApi(k: SortKey): 'title' | 'author' | 'recent' | 'rating' {
+  return k === 'added' ? 'recent' : k;
+}
+
 function LibraryView() {
   const navigate = useNavigate();
-  const { shelf: activeShelf, layout: layoutSearch } = Route.useSearch();
+  const { shelf: activeShelf, library: activeLibrary, layout: layoutSearch } =
+    Route.useSearch();
   const layout: Layout = layoutSearch ?? 'grid';
 
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<SortKey>('added');
-  const [filterFormat, setFilterFormat] = useState<BookFormat | null>(null);
+  const [filterFormat, setFilterFormat] = useState<string | null>(null);
 
-  const filtered = useMemo(() => {
-    let list = [...BOOKS];
-    if (activeShelf === 'reading')  list = list.filter((b) => b.shelf?.includes('Reading Now'));
-    else if (activeShelf === 'new')      list = list.filter((b) => b.shelf?.includes('New'));
-    else if (activeShelf === 'finished') list = list.filter((b) => b.shelf?.includes('Finished'));
-    else if (activeShelf === 'tofinish') list = list.filter((b) => b.shelf?.includes('To Finish'));
-    if (search) {
-      const q = search.toLowerCase();
-      list = list.filter(
-        (b) =>
-          b.title.toLowerCase().includes(q) || b.author.toLowerCase().includes(q),
-      );
+  // Shelf filter takes precedence on the server; library + q + format are
+  // merged as additional filters otherwise.
+  const queryParams = {
+    shelf: activeShelf || undefined,
+    library: activeLibrary || undefined,
+    q: search || undefined,
+    format: filterFormat ? [filterFormat] : undefined,
+    sort: sortKeyToApi(sortBy),
+  };
+
+  const books = useQuery({
+    queryKey: booksQueryKey(queryParams),
+    queryFn: () => fetchBooks(queryParams),
+    placeholderData: (prev) => prev,
+  });
+
+  const libraries = useQuery({ queryKey: librariesQueryKey, queryFn: fetchLibraries });
+  const shelves = useQuery({ queryKey: shelvesQueryKey, queryFn: fetchShelves });
+
+  const rows = books.data?.books ?? [];
+
+  const { shelfTitle, subtitle } = useMemo(() => {
+    if (activeShelf) {
+      const s = shelves.data?.find((x) => x.slug === activeShelf);
+      if (s) {
+        return {
+          shelfTitle: s.name,
+          subtitle:
+            activeShelf === 'reading'
+              ? 'Books with a ribbon still in them.'
+              : activeShelf === 'finished'
+                ? 'Shelved, loved, occasionally revisited.'
+                : `${s.bookCount} volumes on this shelf.`,
+        };
+      }
+      return { shelfTitle: 'Shelf', subtitle: '' };
     }
-    if (filterFormat) list = list.filter((b) => b.format === filterFormat);
-    if (sortBy === 'title') list.sort((a, b) => a.title.localeCompare(b.title));
-    else if (sortBy === 'author') list.sort((a, b) => a.author.localeCompare(b.author));
-    else if (sortBy === 'rating') list.sort((a, b) => b.rating - a.rating);
-    else list.sort((a, b) => (b.addedAt ?? '').localeCompare(a.addedAt ?? ''));
-    return list;
-  }, [search, sortBy, filterFormat, activeShelf]);
-
-  const shelfTitle =
-    activeShelf === 'reading' ? 'Reading Now'
-      : activeShelf === 'new' ? 'Recently Added'
-      : activeShelf === 'finished' ? 'Finished'
-      : activeShelf === 'tofinish' ? 'To Finish'
-      : 'All Books';
-
-  const subtitle =
-    activeShelf === 'reading' ? 'Books with a ribbon still in them.'
-      : activeShelf === 'finished' ? 'Shelved, loved, occasionally revisited.'
-      : 'Your complete collection across all libraries.';
+    if (activeLibrary) {
+      const lib = libraries.data?.find((x) => x.slug === activeLibrary);
+      if (lib) {
+        return {
+          shelfTitle: lib.name,
+          subtitle: `${lib.bookCount} volumes in this library.`,
+        };
+      }
+    }
+    return {
+      shelfTitle: 'All Books',
+      subtitle: 'Your complete collection across every library.',
+    };
+  }, [activeShelf, activeLibrary, shelves.data, libraries.data]);
 
   const setLayout = (next: Layout) => {
     void navigate({ to: '/library', search: (prev) => ({ ...prev, layout: next }) });
@@ -118,7 +153,7 @@ function LibraryView() {
           <button
             key={f ?? 'all'}
             className={`chip ${filterFormat === f ? 'active' : ''}`}
-            onClick={() => setFilterFormat(f as BookFormat | null)}
+            onClick={() => setFilterFormat(f)}
             style={{ cursor: 'pointer', border: 'none' }}
           >
             {f ?? 'All formats'}
@@ -138,27 +173,35 @@ function LibraryView() {
           <option value="rating">Rating</option>
         </select>
         <span className="mono" style={{ fontSize: 11, color: 'var(--color-ink-3)', marginLeft: 8 }}>
-          {filtered.length} volumes
+          {books.isLoading ? 'loading…' : `${rows.length} volumes`}
         </span>
       </div>
 
       {/* Content */}
       <div style={{ padding: '28px 32px 80px', flex: 1 }}>
-        {layout === 'shelf' && <ShelfLayout books={filtered} onOpen={openBook} />}
-        {layout === 'grid' && <GridLayout books={filtered} onOpen={openBook} />}
-        {layout === 'list' && <ListLayout books={filtered} onOpen={openBook} />}
+        {books.isError ? (
+          <ErrorPanel message="Failed to load books." />
+        ) : rows.length === 0 && !books.isLoading ? (
+          <EmptyPanel />
+        ) : layout === 'shelf' ? (
+          <ShelfLayout books={rows} onOpen={openBook} />
+        ) : layout === 'grid' ? (
+          <GridLayout books={rows} onOpen={openBook} />
+        ) : (
+          <ListLayout books={rows} onOpen={openBook} />
+        )}
       </div>
     </div>
   );
 }
 
 function ShelfLayout({ books, onOpen }: { books: Book[]; onOpen: (id: string) => void }) {
-  const rows: Book[][] = [];
+  const chunks: Book[][] = [];
   const perRow = 8;
-  for (let i = 0; i < books.length; i += perRow) rows.push(books.slice(i, i + perRow));
+  for (let i = 0; i < books.length; i += perRow) chunks.push(books.slice(i, i + perRow));
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 42 }}>
-      {rows.map((row, ri) => (
+      {chunks.map((row, ri) => (
         <div key={ri} className="shelf-row">
           <div
             style={{
@@ -196,7 +239,7 @@ function GridLayout({ books, onOpen }: { books: Book[]; onOpen: (id: string) => 
   );
 }
 
-const LIST_GRID = '46px 2fr 1.2fr 80px 90px 80px 60px';
+const LIST_GRID = '46px 2fr 1.2fr 80px 80px 60px';
 
 function ListLayout({ books, onOpen }: { books: Book[]; onOpen: (id: string) => void }) {
   return (
@@ -215,7 +258,6 @@ function ListLayout({ books, onOpen }: { books: Book[]; onOpen: (id: string) => 
         <span className="t-label">Title</span>
         <span className="t-label">Author</span>
         <span className="t-label">Format</span>
-        <span className="t-label">Pages</span>
         <span className="t-label">Rating</span>
         <span className="t-label">Year</span>
       </div>
@@ -249,13 +291,13 @@ function BookCard({ book, onOpen, layout }: { book: Book; onOpen: (id: string) =
           <div style={{ fontWeight: 500, fontSize: 14 }}>{book.title}</div>
           {book.series && (
             <div className="t-small" style={{ fontStyle: 'italic' }}>
-              {book.series} #{book.seriesNum}
+              {book.series}
+              {book.seriesNum ? ` #${book.seriesNum}` : ''}
             </div>
           )}
         </div>
         <div style={{ fontSize: 13, color: 'var(--color-ink-2)' }}>{book.author}</div>
         <div className="mono" style={{ fontSize: 11, color: 'var(--color-ink-3)' }}>{book.format}</div>
-        <div className="mono" style={{ fontSize: 11, color: 'var(--color-ink-3)' }}>{book.pages} pp</div>
         <StarRating rating={book.rating} size={11} />
         <div className="mono" style={{ fontSize: 11, color: 'var(--color-ink-3)' }}>{book.year}</div>
       </div>
@@ -270,12 +312,48 @@ function BookCard({ book, onOpen, layout }: { book: Book; onOpen: (id: string) =
       <div>
         <div style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.3, textWrap: 'balance' }}>{book.title}</div>
         <div className="t-small" style={{ fontSize: 12, fontStyle: 'italic' }}>{book.author}</div>
-        {book.progress != null && book.progress > 0 && book.progress < 1 && (
+        {book.progress > 0 && book.progress < 1 && (
           <div className="progress" style={{ marginTop: 6, height: 2 }}>
             <div style={{ width: `${book.progress * 100}%` }} />
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function EmptyPanel() {
+  return (
+    <div
+      style={{
+        padding: '48px 24px',
+        textAlign: 'center',
+        border: '1px dashed var(--color-rule)',
+        borderRadius: 2,
+        background: 'var(--color-paper-0)',
+      }}
+    >
+      <div className="t-h3" style={{ marginBottom: 8 }}>Nothing to show yet.</div>
+      <div className="t-small" style={{ fontStyle: 'italic' }}>
+        Drop an EPUB into <span className="mono">/bookdrop</span> or register a library path in Settings.
+      </div>
+    </div>
+  );
+}
+
+function ErrorPanel({ message }: { message: string }) {
+  return (
+    <div
+      style={{
+        padding: 16,
+        border: '1px solid var(--color-accent-soft)',
+        background: 'var(--color-accent-soft)',
+        color: 'var(--color-accent-ink)',
+        borderRadius: 2,
+        fontSize: 13,
+      }}
+    >
+      {message}
     </div>
   );
 }

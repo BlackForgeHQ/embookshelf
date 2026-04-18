@@ -1,9 +1,29 @@
 import { useState, type ReactNode } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 
+import {
+  annotationKind,
+  bookAnnotationsQueryKey,
+  createAnnotation,
+  deleteAnnotation,
+  fetchBookAnnotations,
+  recentAnnotationsQueryKey,
+  type Annotation,
+} from '@/api/annotations';
+import {
+  addBookToShelf,
+  bookQueryKey,
+  booksQueryKey,
+  fetchBook,
+  fetchShelves,
+  removeBookFromShelf,
+  shelvesQueryKey,
+  type BookDetail as BookDetailPayload,
+} from '@/api/books';
 import { Cover, StarRating } from '@/components/Cover';
 import { Icon } from '@/components/Icon';
-import { findBook, NOTES } from '@/data/mock';
+import type { ApiError } from '@/api/client';
 
 type Tab = 'overview' | 'notes' | 'annotations' | 'versions' | 'activity';
 
@@ -14,19 +34,34 @@ export const Route = createFileRoute('/_app/book/$id')({
 function BookDetail() {
   const { id } = Route.useParams();
   const navigate = useNavigate();
-  const book = findBook(id);
   const [tab, setTab] = useState<Tab>('overview');
 
-  if (!book) {
+  const book = useQuery({
+    queryKey: bookQueryKey(id),
+    queryFn: () => fetchBook(id),
+  });
+
+  if (book.isLoading) {
     return (
       <div style={{ padding: 40 }}>
-        <p className="t-small">Book not found.</p>
+        <p className="t-small">Loading…</p>
       </div>
     );
   }
+  if (book.isError) {
+    const err = book.error as unknown as ApiError;
+    return (
+      <div style={{ padding: 40 }}>
+        <p className="t-small" style={{ color: 'var(--color-accent-ink)' }}>
+          {err?.status === 404 ? 'Book not found.' : 'Failed to load book.'}
+        </p>
+      </div>
+    );
+  }
+  if (!book.data) return null;
 
-  const bookNotes = NOTES.filter((n) => n.bookId === id);
-  const progress = book.progress ?? 0;
+  const b = book.data;
+  const progress = b.progress ?? 0;
 
   return (
     <div className="fade-in">
@@ -63,7 +98,7 @@ function BookDetail() {
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 48, padding: '40px 48px' }}>
         {/* Left — cover & actions */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          <Cover book={book} size="hero" />
+          <Cover book={b} size="hero" />
           <button
             className="btn primary"
             style={{ justifyContent: 'center', padding: '10px 14px', fontSize: 14 }}
@@ -76,7 +111,7 @@ function BookDetail() {
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                 <span className="t-micro">Progress</span>
                 <span className="mono" style={{ fontSize: 11 }}>
-                  {Math.round(progress * 100)}% · p.{Math.round(book.pages * progress)}/{book.pages}
+                  {Math.round(progress * 100)}%
                 </span>
               </div>
               <div className="progress">
@@ -84,50 +119,31 @@ function BookDetail() {
               </div>
             </div>
           )}
-          <div
-            style={{
-              border: '1px solid var(--color-rule-soft)',
-              padding: 16,
-              background: 'var(--color-paper-0)',
-              borderRadius: 2,
-            }}
-          >
-            <div className="t-label" style={{ marginBottom: 10 }}>Shelves</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {(book.shelf ?? []).map((s) => (
-                <span key={s} className="chip accent">
-                  {s}
-                </span>
-              ))}
-              <button className="chip" style={{ cursor: 'pointer' }}>
-                <Icon name="plus" size={10} /> Add
-              </button>
-            </div>
-          </div>
+          <ShelfCard book={b} />
         </div>
 
         {/* Right — info */}
         <div>
           <div className="t-micro" style={{ marginBottom: 8 }}>
-            {book.format} · {book.year} · {book.pages} pages
+            {b.format} · {b.year}
           </div>
-          <h1 className="t-display" style={{ marginBottom: 6, textWrap: 'balance' }}>{book.title}</h1>
+          <h1 className="t-display" style={{ marginBottom: 6, textWrap: 'balance' }}>{b.title}</h1>
           <div style={{ fontSize: 17, color: 'var(--color-ink-2)', fontStyle: 'italic', marginBottom: 16 }}>
-            by {book.author}
+            by {b.author}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28 }}>
-            <StarRating rating={book.rating} size={15} />
+            <StarRating rating={b.rating} size={15} />
             <span className="mono" style={{ fontSize: 12, color: 'var(--color-ink-2)' }}>
-              {book.rating.toFixed(1)}
+              {b.rating.toFixed(1)}
             </span>
             <span style={{ color: 'var(--color-rule)' }}>·</span>
-            {(book.tags ?? []).map((t) => (
+            {(b.tags ?? []).map((t) => (
               <span key={t} className="chip">{t}</span>
             ))}
           </div>
 
-          {book.description && (
+          {b.description && (
             <p
               style={{
                 fontSize: 16,
@@ -138,11 +154,10 @@ function BookDetail() {
                 textWrap: 'pretty',
               }}
             >
-              {book.description}
+              {b.description}
             </p>
           )}
 
-          {/* Tabs */}
           <div style={{ borderBottom: '1px solid var(--color-rule-soft)', display: 'flex', gap: 0, marginBottom: 24 }}>
             {(['overview', 'notes', 'annotations', 'versions', 'activity'] as Tab[]).map((t) => (
               <button
@@ -162,77 +177,34 @@ function BookDetail() {
                 }}
               >
                 {t}
-                {t === 'notes' && bookNotes.length ? ` · ${bookNotes.length}` : ''}
               </button>
             ))}
           </div>
 
           {tab === 'overview' && (
             <div style={{ maxWidth: 640 }}>
-              <Meta label="Title">{book.title}</Meta>
-              <Meta label="Author">{book.author}</Meta>
-              {book.series && (
+              <Meta label="Title">{b.title}</Meta>
+              <Meta label="Author">{b.author}</Meta>
+              {b.series && (
                 <Meta label="Series">
-                  {book.series}, Book {book.seriesNum}
+                  {b.series}
+                  {b.seriesNum ? `, Book ${b.seriesNum}` : ''}
                 </Meta>
               )}
-              <Meta label="Published">{book.year}</Meta>
-              <Meta label="Format">
-                {book.format} · {book.pages} pages
-              </Meta>
-              <Meta label="Categories">{(book.tags ?? []).join(' · ')}</Meta>
-              <Meta label="Added">{book.addedAt}</Meta>
-              <Meta label="File path">
-                <span className="mono" style={{ fontSize: 11.5, color: 'var(--color-ink-2)' }}>
-                  /books/main/{book.author.replace(/\W+/g, '_').toLowerCase()}/
-                  {book.title.replace(/\W+/g, '_').toLowerCase()}.{book.format.toLowerCase()}
-                </span>
-              </Meta>
-              <Meta label="Identifiers">
-                <span className="mono" style={{ fontSize: 11.5 }}>
-                  ISBN · 978-1-{book.id.charCodeAt(1) * 7 + 24000}-
-                  {book.id.charCodeAt(1) * 3 + 100}-{book.id.charCodeAt(1) % 10}
-                </span>
-              </Meta>
+              <Meta label="Published">{b.year}</Meta>
+              <Meta label="Format">{b.format}</Meta>
+              {b.publisher && <Meta label="Publisher">{b.publisher}</Meta>}
+              <Meta label="Categories">{(b.tags ?? []).join(' · ') || '—'}</Meta>
+              <Meta label="Added">{new Date(b.addedAt).toLocaleDateString()}</Meta>
+              {b.isbn && (
+                <Meta label="ISBN">
+                  <span className="mono" style={{ fontSize: 11.5 }}>{b.isbn}</span>
+                </Meta>
+              )}
             </div>
           )}
 
-          {tab === 'notes' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 640 }}>
-              {bookNotes.length === 0 && (
-                <div className="t-small" style={{ fontStyle: 'italic' }}>
-                  No notes yet. Highlights and margin notes you take while reading will appear here.
-                </div>
-              )}
-              {bookNotes.map((n) => (
-                <div
-                  key={n.id}
-                  style={{
-                    borderLeft: '3px solid var(--color-accent-soft)',
-                    padding: '6px 14px',
-                    background: 'var(--color-paper-0)',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <span className="t-micro">
-                      Page {n.page}
-                      {n.highlight ? ' · Highlight' : ''}
-                    </span>
-                    <span className="t-micro">{n.date}</span>
-                  </div>
-                  <p
-                    style={{
-                      fontSize: 14.5,
-                      lineHeight: 1.55,
-                      fontStyle: n.highlight ? 'italic' : 'normal',
-                    }}
-                  >
-                    {n.text}
-                  </p>
-                </div>
-              ))}
-            </div>
-          )}
+          {tab === 'notes' && <NotesPanel bookId={id} />}
 
           {tab === 'annotations' && (
             <div className="t-small" style={{ fontStyle: 'italic' }}>
@@ -255,10 +227,10 @@ function BookDetail() {
                 <Icon name="book" size={16} />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13.5, fontWeight: 500 }}>
-                    {book.title}.{book.format.toLowerCase()}
+                    {b.title}.{b.format.toLowerCase()}
                   </div>
                   <div className="mono" style={{ fontSize: 11, color: 'var(--color-ink-3)' }}>
-                    Primary · {book.format} · {(Math.random() * 3 + 1).toFixed(1)} MB
+                    Primary · {b.format}
                   </div>
                 </div>
                 <button className="btn small">Replace</button>
@@ -267,19 +239,8 @@ function BookDetail() {
           )}
 
           {tab === 'activity' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 640 }}>
-              {[
-                'Started reading · Apr 12, 2026',
-                'Reached 25% · Apr 15',
-                'Note added on page 138 · Apr 15',
-                'Reached 50% · Apr 17',
-                'Note added on page 142 · Apr 15',
-              ].map((e, i) => (
-                <div key={i} style={{ display: 'flex', gap: 14, fontSize: 13 }}>
-                  <Icon name="dot" size={10} style={{ marginTop: 5, color: 'var(--color-accent)' }} />
-                  <span style={{ color: 'var(--color-ink-2)' }}>{e}</span>
-                </div>
-              ))}
+            <div className="t-small" style={{ fontStyle: 'italic' }}>
+              Per-book activity timeline lands once reading sessions are tracked server-side.
             </div>
           )}
         </div>
@@ -302,4 +263,282 @@ function Meta({ label, children }: { label: string; children: ReactNode }) {
       <div style={{ fontSize: 13.5, color: 'var(--color-ink-1)' }}>{children}</div>
     </div>
   );
+}
+
+// ShelfCard renders the book's current shelf memberships as chips and lets
+// the user add/remove via a tiny picker. Optimistic on add/remove so the
+// chip feedback lands immediately without waiting for the round trip.
+function ShelfCard({ book }: { book: BookDetailPayload }) {
+  const queryClient = useQueryClient();
+  const shelves = useQuery({ queryKey: shelvesQueryKey, queryFn: fetchShelves });
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: bookQueryKey(book.id) });
+    queryClient.invalidateQueries({ queryKey: shelvesQueryKey });
+    queryClient.invalidateQueries({ queryKey: booksQueryKey() });
+  };
+
+  const addMut = useMutation({
+    mutationFn: (slug: string) => addBookToShelf(book.id, slug),
+    onSuccess: () => {
+      invalidate();
+      setPickerOpen(false);
+    },
+  });
+  const removeMut = useMutation({
+    mutationFn: (slug: string) => removeBookFromShelf(book.id, slug),
+    onSuccess: invalidate,
+  });
+
+  const currentSlugs = new Set(book.shelves);
+  // Smart shelves are excluded — their membership is derived from the
+  // rule, so a book is either matched or it isn't. The backend rejects
+  // direct adds with 409, but hiding them in the picker avoids the
+  // user having to discover that the hard way.
+  const availableToAdd = (shelves.data ?? []).filter(
+    (s) => !currentSlugs.has(s.slug) && !s.isSmart,
+  );
+
+  const shelfLabel = (slug: string): string =>
+    shelves.data?.find((s) => s.slug === slug)?.name ?? slug;
+
+  return (
+    <div
+      style={{
+        border: '1px solid var(--color-rule-soft)',
+        padding: 16,
+        background: 'var(--color-paper-0)',
+        borderRadius: 2,
+      }}
+    >
+      <div className="t-label" style={{ marginBottom: 10 }}>Shelves</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {book.shelves.length === 0 && !pickerOpen && (
+          <span className="t-small" style={{ fontStyle: 'italic' }}>
+            Not on any shelves yet.
+          </span>
+        )}
+        {book.shelves.map((s) => (
+          <button
+            key={s}
+            type="button"
+            className="chip accent"
+            onClick={() => removeMut.mutate(s)}
+            disabled={removeMut.isPending}
+            title="Remove from shelf"
+            style={{ cursor: 'pointer' }}
+          >
+            {shelfLabel(s)}
+            <Icon name="close" size={10} />
+          </button>
+        ))}
+        {!pickerOpen && (
+          <button
+            type="button"
+            className="chip"
+            style={{ cursor: 'pointer' }}
+            onClick={() => setPickerOpen(true)}
+          >
+            <Icon name="plus" size={10} /> Add
+          </button>
+        )}
+      </div>
+
+      {pickerOpen && (
+        <div
+          style={{
+            marginTop: 10,
+            paddingTop: 10,
+            borderTop: '1px dashed var(--color-rule-soft)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+          }}
+        >
+          <div className="t-micro">Add to shelf</div>
+          {availableToAdd.length === 0 ? (
+            <div className="t-small" style={{ fontStyle: 'italic' }}>
+              Already on every shelf. Create one from the sidebar first.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {availableToAdd.map((s) => (
+                <button
+                  key={s.slug}
+                  type="button"
+                  className="chip"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => addMut.mutate(s.slug)}
+                  disabled={addMut.isPending}
+                >
+                  {s.name}
+                </button>
+              ))}
+            </div>
+          )}
+          <button
+            type="button"
+            className="btn ghost small"
+            onClick={() => setPickerOpen(false)}
+            style={{ alignSelf: 'flex-end', marginTop: 4 }}
+          >
+            Done
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// NotesPanel renders every annotation on this book + an inline "new
+// note" composer. The composer always creates a margin note
+// (`selectedText` stays empty) — highlights come from the EPUB reader's
+// selection flow, not from typing here.
+function NotesPanel({ bookId }: { bookId: string }) {
+  const queryClient = useQueryClient();
+  const annotations = useQuery({
+    queryKey: bookAnnotationsQueryKey(bookId),
+    queryFn: () => fetchBookAnnotations(bookId),
+  });
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: bookAnnotationsQueryKey(bookId) });
+    queryClient.invalidateQueries({ queryKey: recentAnnotationsQueryKey });
+  };
+
+  const createMut = useMutation({
+    mutationFn: (note: string) => createAnnotation(bookId, { note }),
+    onSuccess: invalidate,
+  });
+  const deleteMut = useMutation({
+    mutationFn: (a: Annotation) => deleteAnnotation(a.id),
+    onSuccess: invalidate,
+  });
+
+  const [draft, setDraft] = useState('');
+  const rows = annotations.data ?? [];
+  const error = (createMut.error ?? deleteMut.error) as unknown as ApiError | null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 640 }}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          const value = draft.trim();
+          if (!value) return;
+          createMut.mutate(value);
+          setDraft('');
+        }}
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+          background: 'var(--color-paper-0)',
+          border: '1px solid var(--color-rule-soft)',
+          padding: 12,
+          borderRadius: 2,
+        }}
+      >
+        <textarea
+          className="input"
+          rows={3}
+          placeholder="Add a note about this book…"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          style={{ fontFamily: 'var(--font-serif)', lineHeight: 1.5, resize: 'vertical' }}
+        />
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            type="submit"
+            className="btn primary small"
+            disabled={createMut.isPending || draft.trim() === ''}
+          >
+            <Icon name="plus" size={12} /> {createMut.isPending ? 'Saving…' : 'Add note'}
+          </button>
+        </div>
+      </form>
+
+      {error && (
+        <div
+          style={{
+            padding: '10px 14px',
+            border: '1px solid var(--color-accent-soft)',
+            background: 'var(--color-accent-soft)',
+            color: 'var(--color-accent-ink)',
+            borderRadius: 2,
+            fontSize: 13,
+          }}
+        >
+          {error.message}
+        </div>
+      )}
+
+      {annotations.isLoading && (
+        <div className="t-small" style={{ fontStyle: 'italic' }}>Loading notes…</div>
+      )}
+      {!annotations.isLoading && rows.length === 0 && (
+        <div className="t-small" style={{ fontStyle: 'italic' }}>
+          No notes yet. Highlights and margin notes you take while reading will appear here.
+        </div>
+      )}
+      {rows.map((a) => {
+        const kind = annotationKind(a);
+        return (
+          <div
+            key={a.id}
+            style={{
+              borderLeft: '3px solid var(--color-accent-soft)',
+              padding: '8px 14px',
+              background: 'var(--color-paper-0)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+              <span className="t-micro">
+                {kind === 'highlight' ? 'Highlight' : kind === 'highlight+note' ? 'Highlight · Note' : 'Note'}
+                {a.locator && ` · ${shortLocator(a.locator)}`}
+              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span className="t-micro">{new Date(a.createdAt).toLocaleDateString()}</span>
+                <button
+                  type="button"
+                  className="btn ghost small"
+                  onClick={() => deleteMut.mutate(a)}
+                  disabled={deleteMut.isPending}
+                  aria-label="Delete"
+                  title="Delete"
+                  style={{ padding: 4 }}
+                >
+                  <Icon name="close" size={11} />
+                </button>
+              </div>
+            </div>
+            {a.selectedText && (
+              <p
+                style={{
+                  fontSize: 14.5,
+                  lineHeight: 1.55,
+                  fontStyle: 'italic',
+                  background: 'oklch(0.94 0.04 85)',
+                  padding: '4px 8px',
+                  marginBottom: a.note ? 8 : 0,
+                }}
+              >
+                {a.selectedText}
+              </p>
+            )}
+            {a.note && (
+              <p style={{ fontSize: 14.5, lineHeight: 1.55 }}>{a.note}</p>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function shortLocator(locator: string): string {
+  if (locator.startsWith('page:')) return `p.${locator.slice(5)}`;
+  if (locator.startsWith('epubcfi')) return 'EPUB';
+  return locator;
 }

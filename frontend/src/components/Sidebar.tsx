@@ -1,8 +1,45 @@
-import type { CSSProperties, MouseEventHandler, ReactNode } from 'react';
-import { Link, useRouterState } from '@tanstack/react-router';
+import { useState, type CSSProperties, type MouseEventHandler, type ReactNode } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 
-import { CURRENT_USER, LIBRARIES, MAGIC_SHELVES, SHELVES } from '@/data/mock';
+import type { ApiError } from '@/api/client';
+import {
+  fetchMe,
+  logout as apiLogout,
+  meQueryKey,
+  type AuthUser,
+} from '@/api/auth';
+import {
+  createShelf,
+  createSmartShelf,
+  deleteShelf,
+  fetchLibraries,
+  fetchShelves,
+  librariesQueryKey,
+  shelvesQueryKey,
+  updateShelf,
+  type Shelf,
+  type ShelfRule,
+} from '@/api/books';
+import { CURRENT_USER } from '@/data/mock';
 import { Icon, type IconName } from './Icon';
+import { RuleEditor } from './RuleEditor';
+
+// Library colors are a design concern (no DB column backs them) so we key
+// a stable palette by library slug. Unknown slugs fall back to the accent.
+const LIBRARY_COLORS: Record<string, string> = {
+  main: 'oklch(0.48 0.09 35)',
+  academic: 'oklch(0.42 0.06 110)',
+  comics: 'oklch(0.38 0.05 200)',
+};
+
+const BUILTIN_SHELF_ICONS: Record<string, IconName> = {
+  reading: 'book-open',
+  new: 'sparkle',
+  finished: 'check',
+  tofinish: 'flag',
+  wishlist: 'bookmark',
+};
 
 // Sidebar is a pure navigation element — every item is a real router Link
 // so browser back/forward, right-click, and deep-link all work.
@@ -10,6 +47,84 @@ export function Sidebar() {
   const state = useRouterState();
   const pathname = state.location.pathname;
   const search = state.location.search as { shelf?: string; library?: string };
+
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const me = useQuery({
+    queryKey: meQueryKey,
+    queryFn: fetchMe,
+    staleTime: 60_000,
+  });
+  const libraries = useQuery({
+    queryKey: librariesQueryKey,
+    queryFn: fetchLibraries,
+  });
+  const shelves = useQuery({
+    queryKey: shelvesQueryKey,
+    queryFn: fetchShelves,
+  });
+  const logoutMut = useMutation({
+    mutationFn: apiLogout,
+    onSuccess: () => {
+      queryClient.setQueryData(meQueryKey, null);
+      void navigate({ to: '/login', replace: true });
+    },
+  });
+
+  // Regular shelf creation still goes through a native prompt — single
+  // text input, not worth a modal. Smart shelves open the RuleEditor.
+  const createShelfMut = useMutation({
+    mutationFn: (name: string) => createShelf(name),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: shelvesQueryKey });
+    },
+  });
+  const createSmartMut = useMutation({
+    mutationFn: (args: { name: string; rule: ShelfRule }) =>
+      createSmartShelf(args.name, args.rule),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: shelvesQueryKey });
+      setSmartDraft(null);
+    },
+  });
+  const updateSmartMut = useMutation({
+    mutationFn: (args: { slug: string; name: string; rule: ShelfRule }) =>
+      updateShelf(args.slug, { name: args.name, rule: args.rule, ruleSet: true }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: shelvesQueryKey });
+      setSmartDraft(null);
+    },
+  });
+  const deleteShelfMut = useMutation({
+    mutationFn: (slug: string) => deleteShelf(slug),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: shelvesQueryKey });
+    },
+  });
+
+  // smartDraft drives the RuleEditor modal. `null` means closed; a
+  // payload with slug === null opens in create mode, otherwise edit.
+  const [smartDraft, setSmartDraft] = useState<
+    | { mode: 'create' }
+    | { mode: 'edit'; shelf: Shelf }
+    | null
+  >(null);
+
+  const promptCreateShelf = () => {
+    const name = window.prompt('Name the new shelf');
+    if (name && name.trim()) {
+      createShelfMut.mutate(name.trim());
+    }
+  };
+
+  const libs = libraries.data ?? [];
+  const allShelves = shelves.data ?? [];
+  const shelfList = allShelves.filter((s) => !s.isSmart);
+  const smartList = allShelves.filter((s) => s.isSmart);
+  const totalBooks = libs.reduce((n, lib) => n + lib.bookCount, 0);
+
+  const smartMutError =
+    (createSmartMut.error ?? updateSmartMut.error) as ApiError | null;
 
   const isLibrary = pathname.startsWith('/library');
   const activeShelf = isLibrary ? search.shelf ?? null : null;
@@ -55,7 +170,7 @@ export function Sidebar() {
           to="/library"
           icon="library"
           label="All Books"
-          count={1202}
+          count={totalBooks || undefined}
           active={isLibrary && !activeShelf && !activeLibrary}
         />
         <NavItem
@@ -63,11 +178,12 @@ export function Sidebar() {
           search={{ shelf: 'reading' }}
           icon="book-open"
           label="Reading Now"
-          count={3}
+          count={shelfList.find((s) => s.slug === 'reading')?.bookCount}
           active={activeShelf === 'reading'}
         />
-        <NavItem to="/notebook" icon="note" label="Notebook" count={84} active={pathname === '/notebook'} />
-        <NavItem to="/bookdrop" icon="upload" label="BookDrop" count={5} active={pathname === '/bookdrop'} />
+        <NavItem to="/notebook" icon="note" label="Notebook" active={pathname === '/notebook'} />
+        <NavItem to="/stats" icon="chart" label="Stats" active={pathname === '/stats'} />
+        <NavItem to="/bookdrop" icon="upload" label="BookDrop" active={pathname === '/bookdrop'} />
       </Section>
 
       <Section
@@ -78,15 +194,15 @@ export function Sidebar() {
           </button>
         }
       >
-        {LIBRARIES.map((lib) => (
+        {libs.map((lib) => (
           <NavItem
             key={lib.id}
             to="/library"
-            search={{ library: lib.id }}
+            search={{ library: lib.slug }}
             label={lib.name}
-            count={lib.count}
-            color={lib.color}
-            active={activeLibrary === lib.id}
+            count={lib.bookCount}
+            color={LIBRARY_COLORS[lib.slug] ?? 'var(--color-accent)'}
+            active={activeLibrary === lib.slug}
           />
         ))}
       </Section>
@@ -94,77 +210,232 @@ export function Sidebar() {
       <Section
         title="Shelves"
         action={
-          <button className="btn ghost small" style={{ padding: '2px 4px' }} aria-label="New shelf">
+          <button
+            type="button"
+            className="btn ghost small"
+            style={{ padding: '2px 4px' }}
+            aria-label="New shelf"
+            onClick={promptCreateShelf}
+            disabled={createShelfMut.isPending}
+          >
             <Icon name="plus" size={12} />
           </button>
         }
       >
-        {SHELVES.map((s) => (
+        {shelfList.map((s) => (
           <NavItem
             key={s.id}
             to="/library"
-            search={{ shelf: s.id }}
-            icon={s.icon as IconName}
+            search={{ shelf: s.slug }}
+            icon={BUILTIN_SHELF_ICONS[s.slug] ?? 'folder'}
             label={s.name}
-            count={s.count}
+            count={s.bookCount}
             indent={4}
-            active={activeShelf === s.id}
+            active={activeShelf === s.slug}
           />
         ))}
       </Section>
 
-      <Section title="Magic Shelves">
-        {MAGIC_SHELVES.map((s) => (
-          <NavItem
+      <Section
+        title="Magic Shelves"
+        action={
+          <button
+            type="button"
+            className="btn ghost small"
+            style={{ padding: '2px 4px' }}
+            aria-label="New smart shelf"
+            onClick={() => setSmartDraft({ mode: 'create' })}
+          >
+            <Icon name="plus" size={12} />
+          </button>
+        }
+      >
+        {smartList.length === 0 && (
+          <div className="t-small" style={{ padding: '4px 20px 8px', fontStyle: 'italic', color: 'var(--color-ink-3)' }}>
+            No smart shelves yet.
+          </div>
+        )}
+        {smartList.map((s) => (
+          <SmartShelfRow
             key={s.id}
-            to="/library"
-            search={{ shelf: s.id }}
-            icon="sparkle"
-            label={s.name}
-            count={s.count}
-            indent={4}
-            active={activeShelf === s.id}
+            shelf={s}
+            active={activeShelf === s.slug}
+            onEdit={() => setSmartDraft({ mode: 'edit', shelf: s })}
+            onDelete={() => {
+              if (window.confirm(`Delete smart shelf "${s.name}"?`)) {
+                deleteShelfMut.mutate(s.slug);
+              }
+            }}
           />
         ))}
       </Section>
 
       <div style={{ flex: 1 }} />
 
-      <div
-        style={{
-          padding: '12px 16px',
-          borderTop: '1px solid var(--color-rule-soft)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-        }}
-      >
+      <UserBadge user={me.data ?? null} onLogout={() => logoutMut.mutate()} loggingOut={logoutMut.isPending} />
+
+      {smartDraft && (
+        <RuleEditor
+          title={smartDraft.mode === 'create' ? 'New smart shelf' : `Edit ${smartDraft.shelf.name}`}
+          submitLabel={smartDraft.mode === 'create' ? 'Create' : 'Save'}
+          initialName={smartDraft.mode === 'edit' ? smartDraft.shelf.name : ''}
+          initialRule={smartDraft.mode === 'edit' ? smartDraft.shelf.rule : undefined}
+          busy={createSmartMut.isPending || updateSmartMut.isPending}
+          error={smartMutError?.message ?? null}
+          onSubmit={({ name, rule }) => {
+            if (smartDraft.mode === 'create') {
+              createSmartMut.mutate({ name, rule });
+            } else {
+              updateSmartMut.mutate({ slug: smartDraft.shelf.slug, name, rule });
+            }
+          }}
+          onCancel={() => {
+            createSmartMut.reset();
+            updateSmartMut.reset();
+            setSmartDraft(null);
+          }}
+        />
+      )}
+    </aside>
+  );
+}
+
+// SmartShelfRow is a NavItem with inline edit/delete affordances — the
+// extra buttons reveal on hover so the sidebar stays quiet when the
+// user isn't targeting them.
+function SmartShelfRow({
+  shelf,
+  active,
+  onEdit,
+  onDelete,
+}: {
+  shelf: Shelf;
+  active: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{ position: 'relative' }}
+    >
+      <NavItem
+        to="/library"
+        search={{ shelf: shelf.slug }}
+        icon="sparkle"
+        label={shelf.name}
+        count={hovered ? undefined : shelf.bookCount}
+        indent={4}
+        active={active}
+      />
+      {hovered && (
         <div
           style={{
-            width: 28,
-            height: 28,
-            borderRadius: '50%',
-            background: 'var(--color-accent)',
-            color: 'var(--color-paper-0)',
+            position: 'absolute',
+            right: 6,
+            top: '50%',
+            transform: 'translateY(-50%)',
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontFamily: 'var(--font-serif)',
-            fontSize: 12,
-            fontWeight: 500,
+            gap: 2,
+            background: 'var(--color-paper-3)',
+            padding: 2,
+            borderRadius: 2,
           }}
         >
-          {CURRENT_USER.initials}
+          <button
+            type="button"
+            className="btn ghost small"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onEdit();
+            }}
+            style={{ padding: 2 }}
+            aria-label={`Edit ${shelf.name}`}
+            title="Edit rule"
+          >
+            <Icon name="edit" size={11} />
+          </button>
+          <button
+            type="button"
+            className="btn ghost small"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onDelete();
+            }}
+            style={{ padding: 2 }}
+            aria-label={`Delete ${shelf.name}`}
+            title="Delete"
+          >
+            <Icon name="close" size={11} />
+          </button>
         </div>
-        <div style={{ flex: 1, overflow: 'hidden' }}>
-          <div style={{ fontSize: 13, fontWeight: 500 }}>{CURRENT_USER.name}</div>
-          <div className="t-micro" style={{ fontSize: 10 }}>{CURRENT_USER.role}</div>
-        </div>
-        <Link to="/settings" className="btn ghost icon-only" title="Settings">
-          <Icon name="settings" size={14} />
-        </Link>
+      )}
+    </div>
+  );
+}
+
+type UserBadgeProps = {
+  user: AuthUser | null;
+  onLogout: () => void;
+  loggingOut: boolean;
+};
+
+function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
+  // Fall back to the prototype's mock identity while the /me query is still
+  // warming up — keeps the sidebar from flickering on first paint. Cleared
+  // automatically once a real AuthUser resolves.
+  const display = user ? user.display : CURRENT_USER.name;
+  const role = user ? user.role : CURRENT_USER.role;
+  const initials = user ? user.initials : CURRENT_USER.initials;
+
+  return (
+    <div
+      style={{
+        padding: '12px 16px',
+        borderTop: '1px solid var(--color-rule-soft)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+      }}
+    >
+      <div
+        style={{
+          width: 28,
+          height: 28,
+          borderRadius: '50%',
+          background: 'var(--color-accent)',
+          color: 'var(--color-paper-0)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontFamily: 'var(--font-serif)',
+          fontSize: 12,
+          fontWeight: 500,
+        }}
+      >
+        {initials}
       </div>
-    </aside>
+      <div style={{ flex: 1, overflow: 'hidden' }}>
+        <div style={{ fontSize: 13, fontWeight: 500 }}>{display}</div>
+        <div className="t-micro" style={{ fontSize: 10 }}>{role}</div>
+      </div>
+      <Link to="/settings" className="btn ghost icon-only" title="Settings">
+        <Icon name="settings" size={14} />
+      </Link>
+      <button
+        type="button"
+        className="btn ghost icon-only"
+        title="Sign out"
+        onClick={onLogout}
+        disabled={loggingOut}
+      >
+        <Icon name="arrow-right" size={14} />
+      </button>
+    </div>
   );
 }
 

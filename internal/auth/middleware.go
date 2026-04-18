@@ -14,6 +14,12 @@ import (
 	"github.com/blackforge/embookshelf/internal/repo"
 )
 
+// unauthorizedBody mirrors the shape the handler package writes for errors.
+// Kept inline (not imported) so this package stays free of handler deps.
+type unauthorizedBody struct {
+	Error string `json:"error"`
+}
+
 // SessionCookieName is the cookie that carries the session ID.
 const SessionCookieName = "embookshelf_session"
 
@@ -23,7 +29,8 @@ type SessionResolver interface {
 }
 
 // RequireAuth ensures a valid session exists and attaches the current user
-// to the request context; otherwise it unauthorizes the request (redirect or 401).
+// to the request context. On failure the JSON API gets a plain 401 — the
+// React SPA decides how to react (typically `navigate('/login?next=...')`).
 func RequireAuth(resolver SessionResolver) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cookie, err := c.Cookie(SessionCookieName)
@@ -110,19 +117,5 @@ func ClearSessionCookie(c *gin.Context) {
 }
 
 func unauthorized(c *gin.Context) {
-	path := c.Request.URL.Path
-	// JSON API: plain 401.
-	if strings.HasPrefix(path, "/api/") {
-		c.AbortWithStatus(http.StatusUnauthorized)
-		return
-	}
-	// HTMX partial request: tell the client to redirect.
-	if c.Request.Header.Get("HX-Request") == "true" {
-		c.Header("HX-Redirect", "/login?next="+url.QueryEscape(path))
-		c.AbortWithStatus(http.StatusUnauthorized)
-		return
-	}
-	// Full page navigation: redirect.
-	c.Redirect(http.StatusFound, "/login?next="+url.QueryEscape(path))
-	c.Abort()
+	c.AbortWithStatusJSON(http.StatusUnauthorized, unauthorizedBody{Error: "authentication required"})
 }

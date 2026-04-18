@@ -1,6 +1,6 @@
-// Package auth contains the local-JWT/session authentication primitives:
+// Package auth contains the session-based authentication primitives:
 // password hashing, session cookie management, Gin middleware, and the
-// request-scoped "current user" helper used throughout handlers and views.
+// request-scoped "current user" helper used throughout handlers.
 package auth
 
 import (

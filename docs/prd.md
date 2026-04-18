@@ -109,14 +109,15 @@ Readers with large digital book collections face fragmented tooling: separate ap
 
 | Method | Description |
 |--------|-------------|
-| **Local JWT** | Username/password with JWT access + refresh tokens |
+| **Local session** | Username/password, bcrypt-hashed, server-side `sessions` table, `HttpOnly; SameSite=Lax` cookie, 7-day sliding TTL |
 | **OIDC** | External identity providers (Authentik, PocketID, Keycloak, etc.) with group-to-role mapping |
 | **Remote/Forward Auth** | Reverse proxy auth headers (Authentik Forward Auth, Authelia, Caddy) |
+| **Basic Auth (OPDS only)** | E-reader apps authenticate against the same `users` table over HTTPS; no session is created |
 
 - Backchannel logout support for OIDC
 - OIDC group-to-role mapping (auto-assign admin/user based on IdP groups)
-- CSRF protection
-- Book-level access control (`@CheckBookAccess`)
+- CSRF protection via Origin/Referer matching on every non-safe method
+- Book-level access control (planned) — single-tenant permissiveness today
 
 ---
 
@@ -156,8 +157,10 @@ Readers with large digital book collections face fragmented tooling: separate ap
 
 - Full i18n support planned via Weblate
 - Community-driven translations
-- Server-rendered Templ templates allow drop-in locale files once the string
-  catalog stabilizes; no client-side framework dependency
+- Strings live in the React SPA; plan is to adopt a lightweight
+  runtime (e.g. `@formatjs/intl` or `lingui`) once the string catalog
+  stabilizes. Backend JSON responses stay locale-neutral — any
+  user-facing copy is rendered on the client.
 
 ---
 
@@ -175,9 +178,9 @@ Readers with large digital book collections face fragmented tooling: separate ap
 
 - **Self-contained** — No external service dependencies for core functionality (metadata providers are optional enrichment)
 - **Privacy-first** — All data stays on the user's server; optional telemetry is opt-out
-- **Performance** — Virtual threads (Java 25) for high-concurrency I/O; HikariCP connection pooling; Caffeine caching
+- **Performance** — Go runtime (lightweight goroutines, single static binary); pgx connection pooling; HTTP `Cache-Control` for cover / static assets. In-memory cache (ristretto) reserved for a specific hot spot rather than blanket-applied.
 - **Responsive UI** — Mobile and desktop layouts
-- **Real-time updates** — WebSocket notifications for background task progress
+- **Real-time updates** — Server-Sent Events stream (`/events`) for background task progress
 - **Health monitoring** — `/api/v1/healthcheck` endpoint for orchestrators
 
 ---
@@ -194,41 +197,79 @@ Readers with large digital book collections face fragmented tooling: separate ap
 
 ## 11. Current Delivery Status
 
-This PRD describes the full product intent. The roadmap below tracks what is
-live vs. what's still planned. See [Architecture.md](Architecture.md) for the
-technical shape of the implementation.
+This PRD describes the full product intent. The roadmap below tracks
+what is live vs. what's still planned. See
+[Architecture.md](architecture.md) for the technical shape.
 
-### Built
+> The mid-project refactor from Go + Templ/HTMX to Go + React SPA
+> (TanStack Start) is complete. Every core feature that used to live on
+> the Templ stack is live on the SPA, backed by the `/api/v1/*` JSON
+> API. What's left is greenfield — features that were never built on
+> either stack.
 
-- Multi-library model with `bookdrop_items` review queue + filesystem scanner
-- EPUB ingest: metadata + cover extraction via a `fileproc.Processor`
-  interface; EPUB-only today, other formats stubbed out
-- EPUB reader (epub.js) with per-user progress + CFI resume
-- PDF reader (PDF.js) with per-user progress + `page:N` resume
-- Per-user reading progress and shelves
-- Library browser with full-text search (`tsvector`+GIN) and format filters
-- Book detail + metadata editor (HTMX-swapped)
-- Cover image extraction + on-disk storage
-- Metadata enrichment via Google Books + Open Library (concurrent fan-out,
-  confidence-sorted matches, allow-listed cover import)
-- Local auth: session cookies backed by a `sessions` table; first-run signup
-  creates the admin; CSRF via SameSite + Origin/Referer check
-- OPDS 1.2 catalog (`/opds/*`) with Basic Auth — root nav, All / Library /
-  Recent / Search acquisition feeds, OpenSearch description, per-book
-  download + cover
-- SSE hub for real-time BookDrop progress (plain EventSource + HTMX)
-- river background queue with workers for `bookdrop.ingest` + `library.scan`
-- Schema migrations auto-applied on boot (`MIGRATE_ON_START`, default on)
+### Built — core reading experience (live end-to-end)
 
-### Planned
+- **Library model** — multi-library + `library_paths` + `bookdrop_items`
+  queue + filesystem scanner
+- **EPUB ingest** — metadata + cover extraction via `fileproc.Processor`
+  (EPUB-only today; other formats stubbed)
+- **Cover storage** — atomic writes under `coverstore/`, promoted from
+  the bookdrop namespace to `books/` on approval
+- **Metadata enrichment** — Google Books + Open Library concurrent
+  fan-out, confidence-sorted matches, allow-listed cover import (SSRF
+  protection baked in)
+- **OPDS 1.2 catalog** at `/opds/*` (Basic Auth) — root nav, All /
+  Library / Recent / Search acquisition feeds, OpenSearch description,
+  per-book download + cover
+- **`river` background queue** with workers for `bookdrop.ingest` +
+  `library.scan`
+- **Schema migrations** auto-applied on boot (`MIGRATE_ON_START`,
+  default on)
+
+### Built — web app (JSON API + React SPA)
+
+- **Auth** — session cookies, bcrypt passwords, first-run signup,
+  CSRF via SameSite + Origin/Referer (`/api/v1/auth/{login,logout,signup}`,
+  `/api/v1/me`)
+- **Libraries + shelves** — list, counts, per-user shelf CRUD,
+  book-to-shelf toggle (`/api/v1/libraries`, `/api/v1/shelves`,
+  `/api/v1/books/:id/shelves/:slug`)
+- **Books** — list (search / sort / filter / library / shelf), detail,
+  metadata PATCH, cover streaming, file streaming (path-sandboxed),
+  per-user progress update (`/api/v1/books`, `/api/v1/books/:id`,
+  `/api/v1/books/:id/{cover,file,progress}`)
+- **Metadata enrichment flow** — `/api/v1/books/:id/enrich` (provider
+  fan-out) + `/api/v1/books/:id/cover-from-url` (allow-list-protected
+  cover import), wired into the metadata editor as live match cards
+- **BookDrop queue** — list, pre-approval cover, approve, reject
+  (`/api/v1/bookdrop/*`)
+- **Settings → Libraries** (admin-only) — register/remove filesystem
+  roots, trigger scans (`/api/v1/settings/libraries*`)
+- **Realtime** — `/events` SSE stream; browser `EventSource` reuses the
+  session cookie and invalidates react-query caches on each published
+  event (`bookdrop.updated` today)
+- **Readers**
+  - EPUB — epub.js, paginated, chapter TOC, typography overrides,
+    progress as `epubcfi(...)` + percent
+  - PDF — pdfjs-dist with per-page lazy canvas rendering, progress as
+    `page:N` + percent
+- **React SPA shell** — auth-gated layout, typed file-based routing
+  (TanStack Router), server-state cache (TanStack Query), realtime-driven
+  cache invalidation, Tailwind 4 design tokens
+- **Healthcheck** — `/api/v1/healthcheck`
+
+### Planned (greenfield — not yet built on any stack)
 
 - OIDC + remote/forward auth
-- Kobo cloud sync, KOReader progress sync, Hardcover.app integration, Komga import
+- Kobo cloud sync, KOReader progress sync, Hardcover.app integration,
+  Komga import
 - CBX/CBR/CBZ comic reader, audiobook player, MOBI/AZW3/FB2 readers
-- Bookmarks, highlights, annotations, notebook view
-- Smart/Magic shelves (rule-based dynamic)
+- Bookmarks, highlights, annotations (the Notebook view already exists
+  for read-only display)
+- Smart/Magic shelves (rule-based dynamic — visuals ready in the sidebar)
 - Email delivery (send-to-Kindle, SMTP/SendGrid)
-- Reading-session analytics (time spent, streaks)
+- Reading-session analytics (time spent, streaks — heatmap visuals ready
+  and fed with mock data today)
 - Parental controls / content restrictions
 - Library statistics dashboard
 - Amazon + DuckDuckGo metadata/cover fallbacks

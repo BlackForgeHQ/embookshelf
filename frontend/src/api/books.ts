@@ -1,0 +1,243 @@
+import { api } from './client';
+
+// Mirrors internal/handler/library.go libraryDTO.
+export type Library = {
+  id: string;
+  name: string;
+  slug: string;
+  bookCount: number;
+  createdAt: string;
+};
+
+// Mirrors internal/model/shelf_rule.go on the wire.
+export type RuleMatch = 'all' | 'any';
+export type RuleField =
+  | 'title'
+  | 'author'
+  | 'year'
+  | 'rating'
+  | 'format'
+  | 'series'
+  | 'tags'
+  | 'progress';
+export type RuleOp =
+  | 'eq'
+  | 'ne'
+  | 'lt'
+  | 'lte'
+  | 'gt'
+  | 'gte'
+  | 'contains'
+  | 'starts_with';
+
+export type ShelfPredicate = {
+  field: RuleField;
+  op: RuleOp;
+  value: string | number;
+};
+
+export type ShelfRule = {
+  match: RuleMatch;
+  predicates: ShelfPredicate[];
+};
+
+// Mirrors internal/handler/shelves.go shelfDTO. `rule` is only present
+// on smart shelves; the UI keys off `isSmart` when deciding whether to
+// surface the shelf in the "Magic Shelves" section and which
+// mutation flows to expose.
+export type Shelf = {
+  id: string;
+  name: string;
+  slug: string;
+  accent: string;
+  bookCount: number;
+  isSmart: boolean;
+  rule?: ShelfRule;
+  createdAt: string;
+};
+
+// Mirrors internal/handler/library.go bookDTO. Progress is 0..1 on the wire.
+export type Book = {
+  id: string;
+  libraryId: string;
+  title: string;
+  author: string;
+  format: string;
+  year: number;
+  progress: number;
+  resumeCfi?: string;
+  rating: number;
+  palette: string;
+  description?: string;
+  isbn?: string;
+  publisher?: string;
+  series?: string;
+  seriesNum?: number;
+  tags: string[];
+  hasCover: boolean;
+  coverMime?: string;
+  addedAt: string;
+};
+
+export type BookDetail = Book & { shelves: string[] };
+
+export type BooksQuery = {
+  library?: string;
+  shelf?: string;
+  q?: string;
+  format?: string[]; // joined with commas on the wire
+  sort?: 'title' | 'author' | 'recent' | 'year' | 'rating';
+};
+
+function buildBooksPath(params: BooksQuery): string {
+  const qs = new URLSearchParams();
+  if (params.library) qs.set('library', params.library);
+  if (params.shelf) qs.set('shelf', params.shelf);
+  if (params.q) qs.set('q', params.q);
+  if (params.format && params.format.length > 0) {
+    qs.set('format', params.format.join(','));
+  }
+  if (params.sort) qs.set('sort', params.sort);
+  const query = qs.toString();
+  return query ? `/api/v1/books?${query}` : '/api/v1/books';
+}
+
+export async function fetchLibraries(): Promise<Library[]> {
+  const { libraries } = await api<{ libraries: Library[] }>('/api/v1/libraries');
+  return libraries;
+}
+
+export async function fetchShelves(): Promise<Shelf[]> {
+  const { shelves } = await api<{ shelves: Shelf[] }>('/api/v1/shelves');
+  return shelves;
+}
+
+export async function fetchBooks(params: BooksQuery = {}): Promise<{
+  books: Book[];
+  total: number;
+}> {
+  return api<{ books: Book[]; total: number }>(buildBooksPath(params));
+}
+
+export async function fetchBook(id: string): Promise<BookDetail> {
+  const { book } = await api<{ book: BookDetail }>(`/api/v1/books/${id}`);
+  return book;
+}
+
+// All fields optional — missing fields preserve the existing row.
+export type BookPatch = {
+  title?: string;
+  author?: string;
+  format?: string;
+  year?: number;
+  rating?: number;
+  palette?: string;
+  description?: string;
+  isbn?: string;
+  publisher?: string;
+  series?: string;
+  seriesNum?: number;
+  tags?: string[];
+};
+
+export async function patchBook(
+  id: string,
+  patch: BookPatch,
+): Promise<BookDetail> {
+  const { book } = await api<{ book: BookDetail }>(`/api/v1/books/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+  return book;
+}
+
+export async function updateProgress(
+  id: string,
+  progress: number,
+  resumeCfi?: string,
+): Promise<void> {
+  await api<void>(`/api/v1/books/${id}/progress`, {
+    method: 'POST',
+    body: JSON.stringify({ progress, resumeCfi }),
+  });
+}
+
+export async function addBookToShelf(
+  bookId: string,
+  shelfSlug: string,
+): Promise<void> {
+  await api<void>(
+    `/api/v1/books/${bookId}/shelves/${encodeURIComponent(shelfSlug)}`,
+    { method: 'POST' },
+  );
+}
+
+export async function removeBookFromShelf(
+  bookId: string,
+  shelfSlug: string,
+): Promise<void> {
+  await api<void>(
+    `/api/v1/books/${bookId}/shelves/${encodeURIComponent(shelfSlug)}`,
+    { method: 'DELETE' },
+  );
+}
+
+export async function createShelf(
+  name: string,
+  accent?: string,
+): Promise<Shelf> {
+  const { shelf } = await api<{ shelf: Shelf }>('/api/v1/shelves', {
+    method: 'POST',
+    body: JSON.stringify({ name, accent }),
+  });
+  return shelf;
+}
+
+// createSmartShelf attaches a rule on creation — the backend switches on
+// `rule` being present to flip is_smart and validate the payload.
+export async function createSmartShelf(
+  name: string,
+  rule: ShelfRule,
+  accent?: string,
+): Promise<Shelf> {
+  const { shelf } = await api<{ shelf: Shelf }>('/api/v1/shelves', {
+    method: 'POST',
+    body: JSON.stringify({ name, accent, rule }),
+  });
+  return shelf;
+}
+
+// updateShelf lets callers rename + recolor + (for smart shelves) edit
+// the rule. ruleSet disambiguates "don't touch the rule" from a rule
+// payload — see internal/handler/shelves.go patchShelfReq.
+export async function updateShelf(
+  slug: string,
+  body: { name?: string; accent?: string; rule?: ShelfRule; ruleSet?: boolean },
+): Promise<Shelf> {
+  const { shelf } = await api<{ shelf: Shelf }>(
+    `/api/v1/shelves/${encodeURIComponent(slug)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    },
+  );
+  return shelf;
+}
+
+export async function deleteShelf(slug: string): Promise<void> {
+  await api<void>(`/api/v1/shelves/${encodeURIComponent(slug)}`, {
+    method: 'DELETE',
+  });
+}
+
+// Stable query keys — share them across components so a mutation can
+// invalidate a list and the detail view in one call.
+export const librariesQueryKey = ['libraries'] as const;
+export const shelvesQueryKey = ['shelves'] as const;
+export const booksQueryKey = (params: BooksQuery = {}) =>
+  ['books', params] as const;
+export const bookQueryKey = (id: string) => ['book', id] as const;
+
+// Cover URL helper — the <img> tag fetches directly from this path; no
+// TanStack Query wrapper needed.
+export const bookCoverUrl = (id: string) => `/api/v1/books/${id}/cover`;

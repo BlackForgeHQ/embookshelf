@@ -1,8 +1,18 @@
+import { useQueries } from '@tanstack/react-query';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 
+import { fetchMe, meQueryKey } from '@/api/auth';
+import {
+  booksQueryKey,
+  fetchBooks,
+  fetchLibraries,
+  librariesQueryKey,
+  type Book,
+  type Library,
+} from '@/api/books';
 import { Cover } from '@/components/Cover';
 import { TopBar } from '@/components/TopBar';
-import { ACTIVITY, BOOKS, LIBRARIES } from '@/data/mock';
+import { ACTIVITY } from '@/data/mock';
 
 export const Route = createFileRoute('/_app/')({
   component: Dashboard,
@@ -20,8 +30,29 @@ function Dashboard() {
   const navigate = useNavigate();
   const openBook = (id: string) => void navigate({ to: '/book/$id', params: { id } });
 
-  const reading = BOOKS.filter((b) => b.shelf?.includes('Reading Now'));
-  const recent = BOOKS.filter((b) => b.shelf?.includes('New'));
+  const [me, libraries, reading, recent] = useQueries({
+    queries: [
+      { queryKey: meQueryKey, queryFn: fetchMe, staleTime: 60_000 },
+      { queryKey: librariesQueryKey, queryFn: fetchLibraries },
+      {
+        queryKey: booksQueryKey({ shelf: 'reading' }),
+        queryFn: () => fetchBooks({ shelf: 'reading' }),
+      },
+      {
+        queryKey: booksQueryKey({ sort: 'recent' }),
+        queryFn: () => fetchBooks({ sort: 'recent' }),
+      },
+    ],
+  });
+
+  const greeting = timeOfDayGreeting();
+  const displayName = me.data?.name?.split(' ')[0] ?? me.data?.display ?? 'there';
+
+  const readingList = reading.data?.books ?? [];
+  // The recent endpoint returns every book sorted by creation time; cap the
+  // horizontal strip at 12 so the layout doesn't stretch indefinitely.
+  const recentList = (recent.data?.books ?? []).slice(0, 12);
+  const libraryList: Library[] = libraries.data ?? [];
 
   const weeks: number[][] = [];
   for (let w = 0; w < 12; w++) weeks.push(ACTIVITY.slice(w * 7, (w + 1) * 7));
@@ -32,7 +63,7 @@ function Dashboard() {
   return (
     <div className="fade-in">
       <TopBar
-        title="Good afternoon, Rowan."
+        title={`${greeting}, ${displayName}.`}
         subtitle={`You've been reading for ${Math.round(totalMin / 60)} hours this quarter across ${readDays} sessions.`}
       />
 
@@ -41,55 +72,26 @@ function Dashboard() {
         <section>
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 16 }}>
             <h2 className="t-h2">Currently reading</h2>
-            <span className="t-micro">{reading.length} open books</span>
+            <span className="t-micro">
+              {reading.isLoading ? 'loading…' : `${readingList.length} open books`}
+            </span>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
-            {reading.map((b) => (
-              <div
-                key={b.id}
-                onClick={() => openBook(b.id)}
-                style={{
-                  display: 'flex',
-                  gap: 18,
-                  padding: 18,
-                  background: 'var(--color-paper-0)',
-                  border: '1px solid var(--color-rule-soft)',
-                  borderRadius: 2,
-                  cursor: 'pointer',
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--color-ink-3)')}
-                onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--color-rule-soft)')}
-              >
-                <Cover book={b} size="sm" />
-                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 500, textWrap: 'balance', marginBottom: 2 }}>{b.title}</div>
-                    <div className="t-small" style={{ fontStyle: 'italic', fontSize: 12.5 }}>{b.author}</div>
-                  </div>
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <span className="mono" style={{ fontSize: 10, color: 'var(--color-ink-3)' }}>
-                        {Math.round((b.progress ?? 0) * 100)}%
-                      </span>
-                      <span className="mono" style={{ fontSize: 10, color: 'var(--color-ink-3)' }}>
-                        p.{Math.round(b.pages * (b.progress ?? 0))}/{b.pages}
-                      </span>
-                    </div>
-                    <div className="progress">
-                      <div style={{ width: `${(b.progress ?? 0) * 100}%` }} />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+          {readingList.length === 0 && !reading.isLoading ? (
+            <EmptyState message="Nothing on the Reading Now shelf. Open a book and tap “Continue reading” to add it." />
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
+              {readingList.map((b) => (
+                <ReadingCard key={b.id} book={b} onOpen={openBook} />
+              ))}
+            </div>
+          )}
         </section>
 
-        {/* Reading activity */}
+        {/* Reading activity — still mocked until per-user sessions land. */}
         <section>
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 16 }}>
             <h2 className="t-h2">Reading activity</h2>
-            <span className="t-micro">Last 12 weeks</span>
+            <span className="t-micro">Last 12 weeks · mock</span>
           </div>
           <div
             style={{
@@ -101,7 +103,6 @@ function Dashboard() {
               gap: 32,
             }}
           >
-            {/* Heatmap */}
             <div>
               <div style={{ display: 'flex', gap: 4, alignItems: 'flex-start' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginRight: 6, paddingTop: 2 }}>
@@ -132,7 +133,6 @@ function Dashboard() {
               </div>
             </div>
 
-            {/* Stats */}
             <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 20 }}>
               {[
                 { label: 'This week', value: '4h 12m', sub: '+ 38m vs last' },
@@ -159,26 +159,24 @@ function Dashboard() {
           </div>
         </section>
 
-        {/* Recently added & library snapshot */}
+        {/* Recently added + library snapshot */}
         <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 28 }}>
           <section>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 16 }}>
               <h2 className="t-h2">Recently added</h2>
-              <span className="t-micro">9 new this month</span>
+              <span className="t-micro">
+                {recent.isLoading ? 'loading…' : `${recent.data?.total ?? 0} books indexed`}
+              </span>
             </div>
-            <div style={{ display: 'flex', gap: 18, overflowX: 'auto', paddingBottom: 8 }}>
-              {recent.map((b) => (
-                <div
-                  key={b.id}
-                  onClick={() => openBook(b.id)}
-                  style={{ flexShrink: 0, width: 110, cursor: 'pointer' }}
-                >
-                  <Cover book={b} size="sm" style={{ width: 110, height: 165 }} />
-                  <div style={{ fontSize: 12, fontWeight: 500, marginTop: 8, lineHeight: 1.3 }}>{b.title}</div>
-                  <div className="t-small" style={{ fontSize: 11, fontStyle: 'italic' }}>{b.author}</div>
-                </div>
-              ))}
-            </div>
+            {recentList.length === 0 && !recent.isLoading ? (
+              <EmptyState message="Drop a book into /bookdrop to start growing your library." />
+            ) : (
+              <div style={{ display: 'flex', gap: 18, overflowX: 'auto', paddingBottom: 8 }}>
+                {recentList.map((b) => (
+                  <RecentTile key={b.id} book={b} onOpen={openBook} />
+                ))}
+              </div>
+            )}
           </section>
 
           <section>
@@ -192,29 +190,117 @@ function Dashboard() {
                 borderRadius: 2,
               }}
             >
-              {LIBRARIES.map((lib, i) => (
-                <div
-                  key={lib.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 12,
-                    padding: '14px 16px',
-                    borderBottom: i < LIBRARIES.length - 1 ? '1px solid var(--color-rule-soft)' : 'none',
-                  }}
-                >
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: lib.color }} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 500 }}>{lib.name}</div>
-                    <div className="mono" style={{ fontSize: 10.5, color: 'var(--color-ink-3)' }}>{lib.path}</div>
+              {libraryList.length === 0 ? (
+                <div style={{ padding: 16 }}>
+                  <div className="t-small" style={{ fontStyle: 'italic' }}>
+                    {libraries.isLoading ? 'Loading libraries…' : 'No libraries yet.'}
                   </div>
-                  <span className="mono" style={{ fontSize: 11, color: 'var(--color-ink-2)' }}>{lib.count}</span>
                 </div>
-              ))}
+              ) : (
+                libraryList.map((lib, i) => (
+                  <div
+                    key={lib.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      padding: '14px 16px',
+                      borderBottom: i < libraryList.length - 1 ? '1px solid var(--color-rule-soft)' : 'none',
+                    }}
+                  >
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-accent)' }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 500 }}>{lib.name}</div>
+                      <div className="mono" style={{ fontSize: 10.5, color: 'var(--color-ink-3)' }}>
+                        /{lib.slug}
+                      </div>
+                    </div>
+                    <span className="mono" style={{ fontSize: 11, color: 'var(--color-ink-2)' }}>
+                      {lib.bookCount}
+                    </span>
+                  </div>
+                ))
+              )}
             </div>
           </section>
         </div>
       </div>
     </div>
   );
+}
+
+function ReadingCard({ book, onOpen }: { book: Book; onOpen: (id: string) => void }) {
+  const progress = book.progress ?? 0;
+  return (
+    <div
+      onClick={() => onOpen(book.id)}
+      style={{
+        display: 'flex',
+        gap: 18,
+        padding: 18,
+        background: 'var(--color-paper-0)',
+        border: '1px solid var(--color-rule-soft)',
+        borderRadius: 2,
+        cursor: 'pointer',
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--color-ink-3)')}
+      onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--color-rule-soft)')}
+    >
+      <Cover book={book} size="sm" />
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 500, textWrap: 'balance', marginBottom: 2 }}>{book.title}</div>
+          <div className="t-small" style={{ fontStyle: 'italic', fontSize: 12.5 }}>{book.author}</div>
+        </div>
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--color-ink-3)' }}>
+              {Math.round(progress * 100)}%
+            </span>
+          </div>
+          <div className="progress">
+            <div style={{ width: `${progress * 100}%` }} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RecentTile({ book, onOpen }: { book: Book; onOpen: (id: string) => void }) {
+  return (
+    <div
+      onClick={() => onOpen(book.id)}
+      style={{ flexShrink: 0, width: 110, cursor: 'pointer' }}
+    >
+      <Cover book={book} size="sm" style={{ width: 110, height: 165 }} />
+      <div style={{ fontSize: 12, fontWeight: 500, marginTop: 8, lineHeight: 1.3 }}>{book.title}</div>
+      <div className="t-small" style={{ fontSize: 11, fontStyle: 'italic' }}>{book.author}</div>
+    </div>
+  );
+}
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div
+      style={{
+        padding: 24,
+        background: 'var(--color-paper-0)',
+        border: '1px dashed var(--color-rule)',
+        borderRadius: 2,
+        color: 'var(--color-ink-3)',
+        fontStyle: 'italic',
+        fontSize: 13.5,
+      }}
+    >
+      {message}
+    </div>
+  );
+}
+
+function timeOfDayGreeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 18) return 'Good afternoon';
+  return 'Good evening';
 }

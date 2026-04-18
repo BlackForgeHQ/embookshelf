@@ -2,64 +2,100 @@
 
 ## 1. High-Level Architecture
 
-Embookshelf is a monolithic full-stack application built in Go. The server renders HTML on demand with [Templ](https://templ.guide) and drives interactivity via [HTMX 4](https://htmx.org) partial swaps, eliminating the need for a separate SPA. Styling is handled with [Tailwind CSS 4](https://tailwindcss.com). Data lives in PostgreSQL.
+Embookshelf is a Go backend + React SPA, shipped as a single binary. The
+frontend is a [TanStack Start](https://tanstack.com/start) app compiled in
+**SPA mode** ([Vite 7](https://vite.dev) + React 18 + TypeScript +
+[Tailwind 4](https://tailwindcss.com)). The Go server exposes JSON APIs
+under `/api/v1/*`, an OPDS 1.2 catalog under `/opds/*`, an SSE stream at
+`/events`, and serves the compiled SPA shell embedded in the binary via
+`//go:embed`. Data lives in PostgreSQL.
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   Docker Container                   │
-│                                                     │
-│  ┌───────────────────────────────────────────────┐  │
-│  │           Go server (port 6060)                │  │
-│  │                                               │  │
-│  │  ┌──────────┐  ┌──────────┐  ┌────────────┐  │  │
-│  │  │ Templ    │  │ HTTP     │  │    SSE     │  │  │
-│  │  │ pages +  │  │ handlers │  │  /events   │  │  │
-│  │  │ partials │  │ /app/*   │  │ (htmx 4)   │  │  │
-│  │  └──────────┘  └────┬─────┘  └─────┬──────┘  │  │
-│  │                     │              │          │  │
-│  │  ┌──────────────────┴──────────────┴───────┐  │  │
-│  │  │           Service Layer                  │  │  │
-│  │  └──────────────────┬──────────────────────┘  │  │
-│  │                     │                         │  │
-│  │  ┌─────────┐  ┌─────┴─────┐  ┌────────────┐  │  │
-│  │  │  pgx /  │  │ File I/O  │  │ External   │  │  │
-│  │  │  sqlc   │  │ (books)   │  │ APIs       │  │  │
-│  │  └────┬────┘  └───────────┘  └────────────┘  │  │
-│  └───────┼───────────────────────────────────────┘  │
-│          │                                          │
-└──────────┼──────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────┐
+│                       Docker Container                     │
+│                                                           │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │               Go server (port 6060)                  │  │
+│  │                                                     │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────┐ │  │
+│  │  │ /api/v1  │  │  /opds   │  │  /events │  │ SPA │ │  │
+│  │  │  (JSON)  │  │ (Atom    │  │  (SSE)   │  │ /   │ │  │
+│  │  │          │  │  + Basic │  │          │  │ (em │ │  │
+│  │  │          │  │  Auth)   │  │          │  │ bed)│ │  │
+│  │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └──┬──┘ │  │
+│  │       │             │             │            │    │  │
+│  │  ┌────┴─────────────┴─────────────┴────────┐   │    │  │
+│  │  │           Service Layer                  │   │    │  │
+│  │  └────┬─────────────────────────────────┬──┘   │    │  │
+│  │       │                                 │      │    │  │
+│  │  ┌────┴────┐  ┌─────────┐  ┌────────┐   │  ┌───┴──┐ │  │
+│  │  │  pgx    │  │ File IO │  │External│   │  │stati │ │  │
+│  │  │  (repo) │  │ (books) │  │  APIs  │   │  │cfs/  │ │  │
+│  │  └────┬────┘  └─────────┘  └────────┘   │  │dist/ │ │  │
+│  └───────┼──────────────────────────────────┴──┴──────┴──┘
+│          │
+└──────────┼────────────────────────────────────────────────┘
            │
     ┌──────┴──────┐
     │  PostgreSQL │
     │    16+      │
     └─────────────┘
+
+                    ┌─────────────────────┐
+   Browser ───────► │  React SPA (TanStack│
+   (cookies)        │  Start, SPA mode)   │
+                    │                     │
+                    │ @tanstack/react-    │
+                    │   router (file-     │
+                    │   based routes)     │
+                    │ @tanstack/react-    │
+                    │   query (server-    │
+                    │   state cache)      │
+                    └─────────────────────┘
 ```
+
+The browser always loads the embedded `index.html` (TanStack Start's
+`_shell.html` duplicated at that path). Every unmatched GET falls back to
+the shell via Gin's `NoRoute` handler so client-side routing works on
+hard reloads. Data fetches go through `fetch()` with `credentials: 'include'`
+so the session cookie the Go server issues rides along.
 
 ---
 
 ## 2. Technology Stack
 
+### Backend
+
 | Layer | Technology | Version |
 |-------|-----------|---------|
-| **Runtime** | Go | 1.23+ |
+| **Runtime** | Go | 1.25 |
 | **HTTP Router** | Gin ([gin-gonic/gin](https://github.com/gin-gonic/gin)) | 1.x |
-| **Templating** | Templ | 0.3+ |
-| **Interactivity** | HTMX | 4.x |
-| **Styling** | Tailwind CSS | 4.x |
 | **Database** | PostgreSQL | 16+ |
-| **DB Driver** | pgx (v5) | 5.x |
-| **Query Codegen** | sqlc (staged, hand-written pgx today) | 1.x |
+| **DB Driver** | pgx | v5 |
 | **Migrations** | [golang-migrate/migrate](https://github.com/golang-migrate/migrate) | 4.x |
-| **Auth** | golang-jwt + coreos/go-oidc | — |
-| **Sessions** | alexedwards/scs + scs/pgxstore | — |
-| **Background Jobs** | river (Postgres-backed queue) | 0.x |
-| **Cache** | ristretto | 1.x |
+| **Sessions** | Hand-rolled `sessions` table (see §4.5) | — |
+| **Passwords** | `golang.org/x/crypto/bcrypt` | — |
+| **Background Jobs** | [riverqueue](https://riverqueue.com/) — Postgres-backed | 0.34 |
 | **Real-time** | Server-Sent Events via Gin handler | — |
-| **Validation** | go-playground/validator | 10.x |
-| **Testing (backend)** | testing + testify + pgtest | — |
-| **Testing (e2e)** | Playwright | 1.x |
-| **Build (frontend assets)** | Tailwind CLI + `templ generate` | — |
+| **Live reload (dev)** | [air-verse/air](https://github.com/air-verse/air) via `go tool air` | 1.65 |
 | **Containerization** | Docker (multi-stage) | — |
+
+### Frontend
+
+| Layer | Technology | Version |
+|-------|-----------|---------|
+| **Framework** | [TanStack Start](https://tanstack.com/start) (SPA mode) | 1.167+ |
+| **Router** | [@tanstack/react-router](https://tanstack.com/router) (file-based routes) | 1.x |
+| **Server state** | [@tanstack/react-query](https://tanstack.com/query) | 5.59+ |
+| **UI runtime** | React + ReactDOM | 18.3 |
+| **Language** | TypeScript | 5.6 |
+| **Bundler** | [Vite](https://vite.dev) | 7.x |
+| **Styling** | Tailwind CSS 4 (compiled via standalone CLI, not the Vite plugin — see §9.4) | 4.2 |
+| **Dev runner** | `concurrently` (Tailwind CLI watcher + Vite dev server) | 9.x |
+
+Testing stacks for both sides are not yet wired up — planned: Go
+`testing` + `testify` + `pgtest`, Playwright for e2e once the JSON API
+lands.
 
 ---
 
@@ -72,22 +108,14 @@ embookshelf/
 │   └── migrate/                    # CLI around internal/migrator (up/down/version/force)
 │
 ├── internal/
-│   ├── handler/                    # HTTP handlers (HTMX-aware)
-│   │   ├── auth.go                 # login/logout/signup
-│   │   ├── book.go                 # detail / edit / update / progress / shelf-toggle
-│   │   ├── bookdrop.go             # review queue + SSE /events
-│   │   ├── cover.go                # /app/cover/:id, /app/bookdrop/:id/cover
-│   │   ├── enrich.go               # /app/book/:id/enrich, cover-from-url
-│   │   ├── home.go                 # dashboard
-│   │   ├── library.go              # /app/library (search/sort/filter)
-│   │   ├── opds.go                 # /opds/* catalog
-│   │   ├── reader.go               # /app/read/:id + /app/read/:id/file
-│   │   ├── settings.go             # /app/settings, /app/settings/libraries
+│   ├── handler/                    # HTTP handlers (see §4.1)
+│   │   ├── handler.go              # Handler struct + Deps
+│   │   ├── router.go               # gin.Engine assembly + SPA fallback
 │   │   ├── health.go               # /api/v1/healthcheck
-│   │   ├── handler.go              # Deps struct + helpers
-│   │   └── router.go               # gin.Engine assembly + middleware wiring
+│   │   ├── opds.go                 # /opds/* catalog (Atom XML)
+│   │   └── files.go                # mimeForFormat, serveBookFile, parseIntOr, clampInt
 │   │
-│   ├── service/                    # Business logic
+│   ├── service/                    # Business logic (unchanged through the refactor)
 │   │   ├── auth.go                 # Login/Logout/Verify/Signup + session TTL
 │   │   ├── bookdrop.go             # ingest state machine + SSE broadcast
 │   │   ├── enrichment.go           # metadata fan-out + cover-from-URL
@@ -97,48 +125,72 @@ embookshelf/
 │   │   └── shelf.go                # per-user shelves CRUD
 │   │
 │   ├── repo/                       # pgx-backed repositories (hand-written SQL)
-│   │   └── queries/                # *.sql kept ready for a future sqlc pass
+│   │   └── queries/                # *.sql staged for a future sqlc pass
 │   │
 │   ├── model/                      # Domain structs
-│   │
-│   ├── view/                       # .templ files — pages, partials, components
-│   │   ├── layout/                 # shells (app, auth)
-│   │   ├── page/                   # full-page views
-│   │   ├── partial/                # HTMX swap targets
-│   │   └── component/              # reusable (Cover, Sidebar, TopBar, MatchCard, ...)
-│   │
 │   ├── auth/                       # context, password, session cookie, middleware, basic
 │   ├── coverstore/                 # filesystem store for extracted cover images
 │   ├── fileproc/                   # Format processors — EPUB today; PDF/CBX/audio planned
 │   ├── ingest/                     # BookDrop folder watcher (polling)
-│   ├── middleware/                 # htmx-detect helpers
+│   ├── middleware/                 # pagination helpers
 │   ├── migrator/                   # embedded migrations + golang-migrate wrapper
 │   │   └── migrations/             # NNN_name.up.sql / .down.sql
 │   ├── opds/                       # Atom/XML feed types + builder
 │   ├── provider/                   # Google Books + Open Library metadata providers
-│   ├── queue/                      # river client wrapper (EnqueueBookDrop, EnqueueLibraryScan)
-│   ├── sse/                        # Server-Sent Events fan-out hub
-│   ├── staticfs/                   # //go:embed for Tailwind output + htmx/sse/reader JS
+│   ├── queue/                      # river client wrapper
+│   ├── sse/                        # Server-Sent Events fan-out hub (handler not mounted yet)
+│   ├── staticfs/                   # //go:embed all:dist — embeds the compiled React SPA
+│   │   ├── staticfs.go
+│   │   └── dist/                   # Populated by `npm run build` (git-ignored)
 │   ├── task/                       # river workers — BookDropWorker, LibraryScanWorker
 │   └── config/                     # env loading
 │
-├── web/
-│   └── src/styles.css              # Tailwind 4 entry + design tokens
+├── frontend/                       # TanStack Start SPA (Vite + TS + Tailwind 4)
+│   ├── src/
+│   │   ├── routes/                 # File-based routing — routeTree.gen.ts auto-generated
+│   │   │   ├── __root.tsx          # html/body shell (HeadContent + Scripts + QueryClient)
+│   │   │   ├── _app.tsx            # Pathless layout: Sidebar + main + status bar
+│   │   │   ├── _app.index.tsx      # /           — Dashboard
+│   │   │   ├── _app.library.tsx    # /library    — LibraryView (shelf|grid|list)
+│   │   │   ├── _app.book.$id.tsx   # /book/:id   — BookDetail
+│   │   │   ├── _app.book.$id.edit.tsx  # /book/:id/edit — MetadataEditor
+│   │   │   ├── _app.notebook.tsx   # /notebook   — cross-book notes
+│   │   │   ├── _app.bookdrop.tsx   # /bookdrop   — import review queue
+│   │   │   ├── _app.settings.tsx   # /settings
+│   │   │   ├── read.$id.tsx        # /read/:id   — full-screen Reader (no sidebar)
+│   │   │   └── login.tsx           # /login      — stub until auth endpoints land
+│   │   ├── components/
+│   │   │   ├── Icon.tsx            # 46-icon set from the prototype
+│   │   │   ├── Cover.tsx           # Cover + Spine + StarRating
+│   │   │   ├── Sidebar.tsx         # Wired to router Links + useRouterState
+│   │   │   └── TopBar.tsx
+│   │   ├── data/
+│   │   │   └── mock.ts             # Typed mock dataset — replaced per-route by useQuery
+│   │   ├── api/
+│   │   │   └── client.ts           # fetch wrapper with credentials: include
+│   │   ├── router.tsx              # getRouter() — creates the QueryClient + router
+│   │   ├── styles.css              # Tailwind entry (@source globs + @theme tokens)
+│   │   └── generated.css           # Tailwind CLI output (git-ignored)
+│   ├── scripts/
+│   │   └── sync-dist.mjs           # Copies dist/client → ../internal/staticfs/dist
+│   ├── index.html
+│   ├── vite.config.ts              # tanstackStart({ spa: { enabled: true } })
+│   ├── tsconfig.json
+│   └── package.json
 │
-├── scripts/                        # dev tooling (seed.sql)
-├── Dockerfile                      # Multi-stage production build
-├── compose.dev.yml                 # Development environment (Postgres + migrate one-shot)
-├── go.mod                          # Go 1.24; `tool` directives for templ + air
-├── go.sum
-├── sqlc.yaml                       # staged for future generator pass
-├── Makefile                        # dev/build/assets/migrate/seed targets
-├── .air.toml                       # live-reload config (`go tool air`)
-└── package.json                    # Tailwind CLI (npx @tailwindcss/cli)
+├── scripts/seed.sql                # Dev seed — admin@local / changeme
+├── docs/                           # This doc + prd.md
+├── Dockerfile                      # Multi-stage (frontend build → go build → distroless)
+├── compose.dev.yml                 # Development Postgres
+├── go.mod                          # Go 1.25; `tool` directive for air
+├── Makefile                        # db-up, frontend-install, dev, frontend-dev, up, build, ...
+├── .air.toml                       # live-reload config (excludes frontend/ and dist/)
+└── README.md
 ```
 
-Deferred scaffolding (not yet created): `compose.example.yml`, `deploy/helm/`,
-`.github/workflows/` — spelled out in §9 so the shape is documented before
-the folders exist.
+Deferred scaffolding (not yet created): `compose.example.yml`,
+`deploy/helm/`, `.github/workflows/` — spelled out in §9 so the shape is
+documented before the folders exist.
 
 ---
 
@@ -154,11 +206,33 @@ Handler → Service → Repository → PostgreSQL
       External APIs (Google Books, Open Library, Amazon)
 ```
 
-- **Handlers** — Gin `HandlerFunc`s mounted under `/app/*` (HTML), `/opds/*` (Atom/XML), and `/api/v1/*` (JSON, currently just healthcheck). HTMX requests are detected via the `HX-Request` header; handlers return full pages on direct navigation and partials on HTMX swaps. Dependencies are passed in via a `Deps` struct to keep `handler.New`'s signature flat as the app grows.
-- **Services** — Business logic. Plain Go structs wired with constructor functions in `cmd/embookshelf/main.go`.
-- **Repositories** — `pgx/v5` with hand-written SQL. Queries are ready to migrate to `sqlc` once the schema stabilizes; `sqlc.yaml` + `internal/repo/queries/*.sql` are already in place for that pass.
-- **Views** — Templ components render responses. A page handler composes a layout + page component; a partial handler returns a fragment targeting a specific HTMX swap.
-- **DTOs** — Request/response structs are colocated with handlers.
+- **Handlers** — Gin `HandlerFunc`s. Four active surfaces:
+  1. `/api/v1/*` — JSON. Auth, me, libraries, shelves, books (list /
+     detail / PATCH / cover / file / progress / enrich / cover-from-url
+     / shelf membership), bookdrop (list / cover / approve / reject),
+     settings (admin-only library-path CRUD + scan trigger).
+  2. `/opds/*` — Atom XML for e-readers, Basic-Auth-protected.
+  3. `/events` — Server-Sent Events stream, cookie-authed.
+  4. `/` (fall-through) — serves the embedded React SPA.
+
+  Dependencies land in a `Deps` struct so `handler.New`'s signature
+  stays flat as the app grows (11 deps today; positional args would be
+  unreadable). Responses are pure JSON on `/api/v1/*`, XML on OPDS,
+  `text/event-stream` on `/events` — no HTMX-aware content negotiation.
+- **Services** — Business logic. Plain Go structs wired with constructor
+  functions in `cmd/embookshelf/main.go`. The seven services
+  (`AuthService`, `LibraryService`, `ShelfService`, `BookDropService`,
+  `ProgressService`, `EnrichmentService`, `LibraryPathService`) are
+  framework-agnostic — they predated the React rewrite and carried over
+  unchanged.
+- **Repositories** — `pgx/v5` with hand-written SQL. Queries are ready
+  to migrate to `sqlc` once the schema stabilizes; `sqlc.yaml` +
+  `internal/repo/queries/*.sql` are staged for that pass.
+- **DTOs** — Request/response structs live alongside handlers
+  (`userDTO`, `libraryDTO`, `bookDTO`, `bookDetailDTO`, `shelfDTO`,
+  `bookdropDTO`, `enrichMatchDTO`, `settingsLibraryDTO` + pointer-field
+  PATCH types). camelCase on the wire; matching TS types under
+  [frontend/src/api/](../frontend/src/api/).
 
 ### 4.2 Concurrency Model
 
@@ -217,10 +291,14 @@ Background work uses **river**, a Postgres-backed job queue:
   - `LibraryScanWorker` (`library.scan`) — walks a library path and stages
     unseen files into `bookdrop_items`, then enqueues a `bookdrop.ingest`
     job for each.
-- The **SSE hub** (`internal/sse/`) broadcasts per-item updates; the browser
-  subscribes via plain `EventSource` in `staticfs/static/sse.js`, which then
-  calls `htmx.ajax()` to swap the affected row. No htmx `sse` extension
-  required.
+- The **SSE hub** (`internal/sse/`) broadcasts per-item updates.
+  `BookDropService` calls `hub.Broadcast` on every state transition.
+  The [`/events` handler](../internal/handler/events.go) subscribes
+  each connected browser to the hub, sends a 25-second heartbeat
+  (`: ping`) to defeat idle proxy timeouts, and tears down on client
+  disconnect. The React side (`useRealtime`) opens a single
+  `EventSource` inside the authed layout and dispatches each named
+  event into react-query cache invalidations — see §5.7.
 - Current job progress lives on the domain row itself (e.g.
   `bookdrop_items.state`/`progress`/`error_msg`) rather than a generic
   `task_history` table. A dedicated task-history table is deferred until we
@@ -230,14 +308,16 @@ Background work uses **river**, a Postgres-backed job queue:
 
 ```
                     ┌──────────────┐
-                    │   Client     │
+                    │   Browser    │
+                    │ (cookie jar) │
                     └──────┬───────┘
                            │
               ┌────────────┼────────────┐
               │            │            │
        ┌──────┴───┐ ┌─────┴────┐ ┌─────┴──────┐
-       │ JWT Auth │ │   OIDC   │ │  Remote    │
-       │ (local)  │ │ (extern) │ │  Auth      │
+       │ Session  │ │   OIDC   │ │  Remote    │
+       │ cookie   │ │ (extern) │ │  Auth      │
+       │ (local)  │ │ (planned)│ │ (planned)  │
        └──────┬───┘ └─────┬────┘ └─────┬──────┘
               │            │            │
               └────────────┼────────────┘
@@ -248,33 +328,43 @@ Background work uses **river**, a Postgres-backed job queue:
                   └────────┬────────┘
                            │
                   ┌────────┴────────┐
-                  │  ctx.User(...)  │
-                  │ (current user)  │
+                  │ auth.UserFrom-  │
+                  │ Context(ctx)    │
                   └─────────────────┘
 ```
 
-- **Local session auth** *(built)* — `POST /login` verifies the password
-  (bcrypt) and inserts a row into `sessions`. The session id (random UUID)
-  rides in an `HttpOnly; SameSite=Lax` cookie. Every `/app/*` request runs
-  `auth.RequireAuth`, which does a single `UPDATE sessions SET last_used_at =
-  now() WHERE id=$1 AND expires_at > now() RETURNING ...` — sliding-window
-  session in one query. 7-day TTL, slid forward on every request.
+- **Local session auth** *(built)* — `POST /api/v1/auth/login` verifies
+  the password (bcrypt) and inserts a row into `sessions`. The session
+  id (random UUID) rides in an `HttpOnly; SameSite=Lax` cookie. Every
+  `/api/v1/*` request gated by `auth.RequireAuth` runs a single atomic
+  `UPDATE sessions SET last_used_at = now() WHERE id=$1 AND expires_at > now() RETURNING ...`
+  — sliding-window session in one query. 7-day TTL, slid forward on
+  every request. `POST /api/v1/auth/logout` destroys the row + clears
+  the cookie. `GET /api/v1/me` returns the current user for the SPA's
+  auth gate. Expired sessions are purged opportunistically at boot.
 - **Basic Auth for OPDS** *(built)* — `/opds/*` uses HTTP Basic via
-  `auth.BasicAuth`, since e-reader apps don't maintain session cookies.
-  Credentials are verified against the same `users` table per request
+  `auth.BasicAuth`. E-reader apps don't maintain session cookies, so
+  credentials are verified against the `users` table per request
   (`AuthService.Verify` — no session created).
-- **First-run bootstrap** — `POST /signup` is open only while `users` is
-  empty; the first account becomes admin. Afterwards `/signup` redirects to
-  `/login` (admin invites a future slice).
-- **OIDC** *(planned)* — `coreos/go-oidc` for discovery + `golang.org/x/oauth2`
-  for the authorization-code flow. Backchannel logout endpoint to follow.
+- **First-run bootstrap** *(built)* — `POST /api/v1/auth/signup` calls
+  `AuthService.Signup`, which refuses once `users` is non-empty. The
+  first account becomes admin. The SPA's `/login` route checks
+  `GET /api/v1/auth/signup` to decide whether to show the signup form.
+- **CSRF** — `auth.CSRFGuard` middleware runs globally on every
+  non-safe request, asserting `Origin`/`Referer` matches `Host`. Paired
+  with `SameSite=Lax` cookies this is sufficient for a same-origin SPA
+  without per-form tokens. Cross-origin dev is handled via the Vite
+  proxy, which rewrites Origin so the check still passes.
+- **OIDC** *(planned)* — `coreos/go-oidc` for discovery +
+  `golang.org/x/oauth2` for the authorization-code flow. Backchannel
+  logout endpoint to follow.
 - **Remote/Forward Auth** *(planned)* — middleware that trusts
-  `Remote-User` / `Remote-Email` / `Remote-Groups` reverse-proxy headers
-  when `REMOTE_AUTH_ENABLED=true`.
-- **Strict JWT** *(not planned for the web UI)* — server-side sessions fit
-  the HTMX model better (free revocation, no refresh-token rotation
-  ceremony). A JWT access-token layer may be added to `/api/v1/*` later if
-  we ship a JSON API for external clients.
+  `Remote-User` / `Remote-Email` / `Remote-Groups` reverse-proxy
+  headers when `REMOTE_AUTH_ENABLED=true`.
+- **JWT** *(not planned for the web SPA)* — server-side sessions keep
+  revocation free and play well with SameSite cookies. A JWT
+  access-token layer can still be added to `/api/v1/*` later for
+  external API clients without touching the SPA auth.
 
 ### 4.6 Error Handling
 
@@ -292,97 +382,185 @@ Background work uses **river**, a Postgres-backed job queue:
 
 ## 5. Frontend Architecture
 
-### 5.1 Server-Rendered + HTMX
+### 5.1 TanStack Start in SPA mode
 
-The UI is a classic multi-page application enhanced with HTMX 2. There is no
-JavaScript framework on the client; interactivity comes from:
+The frontend is a [TanStack Start](https://tanstack.com/start) app
+configured in **SPA mode** — no SSR, no Node runtime in production. Why
+Start over vanilla `@tanstack/react-router`? File-based routing,
+generated typed routes, `createFileRoute` with loaders and
+`validateSearch`, and a clear upgrade path if we ever need partial
+prerendering. SPA mode is opted in via the Vite plugin:
 
-- HTML attributes (`hx-get`, `hx-post`, `hx-swap`, `hx-target`, `hx-boost`,
-  `hx-trigger`, `hx-push-url`, `hx-include`, `hx-indicator`).
-- Small vanilla-JS modules (each ~40 lines, all in `internal/staticfs/static/`):
-  - `sse.js` — one `EventSource` subscription to `/events`; dispatches
-    `bookdrop.updated` events into `htmx.ajax()` row refreshes.
-  - `enrich.js` — copies provider match fields into the metadata form on
-    click (`[data-apply-match]` button).
-  - `reader_epub.js` — wraps epub.js; reports CFI progress via `fetch` +
-    `navigator.sendBeacon` on unload.
-  - `reader_pdf.js` — wraps PDF.js with `IntersectionObserver`-based lazy
-    page rendering and a `page:N` resume token.
-- HTMX extensions (`sse`, `morph`, `preserve`, `path-deps`) are intentionally
-  *not* wired — the 4 vanilla-JS shims above cover every live-update need
-  without a second JS bundle.
-
-### 5.2 Templ Component Structure
-
-Each feature directory in `internal/view/` exposes:
-
-- A **page** component (full document using the `app` layout) — the canonical full-render response.
-- One or more **partials** (fragments) — targeted by HTMX swaps.
-- Shared **components** (Cover, Sidebar, TopBar, Tweaks panel, etc.) live in `internal/view/component/`.
-
-Handlers decide which variant to return based on the `HX-Request` header:
-
-```go
-if htmx.IsRequest(c.Request) {
-    view.partial.LibraryGrid(books).Render(c.Request.Context(), c.Writer)
-    return
-}
-view.page.Library(state, books).Render(c.Request.Context(), c.Writer)
+```ts
+// frontend/vite.config.ts
+tanstackStart({ spa: { enabled: true } })
 ```
 
-### 5.3 Styling: Tailwind 4
+Start still runs a prerender pass during build to emit `_shell.html`
+(the static entry point); the sync script duplicates that file as
+`index.html` so Go's SPA fallback finds it.
 
-- Tailwind 4's **CSS-first configuration** drives the design system. Tokens live in `web/src/styles.css`:
+The route tree is regenerated on every dev change and build —
+`frontend/src/routeTree.gen.ts` is git-ignored. TypeScript module
+augmentation in `frontend/src/main.tsx` teaches the type system the
+shape of our router so `<Link to>`, `useParams`, `useSearch`, and
+`navigate` are all typed end-to-end.
 
-  ```css
-  @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@...&family=Literata:ital,opsz,wght@...&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
-  @import "tailwindcss";
-  @source "../../internal/view/**/*.templ";
+### 5.2 Route tree
 
-  @theme {
-    /* Archival paper neutrals — warm ivory, never yellow */
-    --color-paper-0: oklch(0.985 0.006 85);
-    --color-paper-1: oklch(0.965 0.010 82);
-    /* Ink — navy-tinted near-black */
-    --color-ink-1:   oklch(0.20 0.018 255);
-    /* Library burgundy accent */
-    --color-accent:  oklch(0.40 0.095 25);
-    /* Library navy — secondary brand for chrome / status */
-    --color-navy:    oklch(0.30 0.045 255);
+Routes are file-based. A leading underscore makes a **pathless layout
+parent** whose children inherit the layout but not a URL segment; dots
+stand in for nested folders.
 
-    --font-serif:  "Source Serif 4", Georgia, serif;  /* UI + display */
-    --font-reader: "Literata",       Georgia, serif;  /* long-form reading body */
-    --font-mono:   "IBM Plex Mono",  ui-monospace, monospace;
-  }
-  ```
+| File | URL | Component |
+|------|-----|-----------|
+| `__root.tsx` | — | html/body shell, HeadContent, Scripts, QueryClientProvider |
+| `_app.tsx` | — | Sidebar + `<main>` + status bar layout, `<Outlet />` in the middle |
+| `_app.index.tsx` | `/` | Dashboard (currently reading, 12-week heatmap, stats, libraries) |
+| `_app.library.tsx` | `/library` | LibraryView — shelf/grid/list, filter, sort; `?shelf=`, `?layout=` in search |
+| `_app.book.$id.tsx` | `/book/:id` | BookDetail — overview / notes / annotations / versions / activity tabs |
+| `_app.book.$id.edit.tsx` | `/book/:id/edit` | MetadataEditor |
+| `_app.notebook.tsx` | `/notebook` | Cross-book notes + highlights |
+| `_app.bookdrop.tsx` | `/bookdrop` | Import review queue (list + detail split) |
+| `_app.settings.tsx` | `/settings` | Settings hub — Account section live, others stubbed |
+| `read.$id.tsx` | `/read/:id` | Full-screen Reader — intentionally outside `_app` so the sidebar is hidden |
+| `login.tsx` | `/login` | Stub until auth endpoints return |
 
-- **Source Serif 4** (Adobe, variable optical-sizing axis `opsz 8..60`) is
-  the UI/display face; **Literata** (commissioned by Google for Play Books)
-  is wired into `.reader-area` and `.book-edit-desc` via `--font-reader`.
-- Utilities are generated at build time by the Tailwind 4 CLI watching
-  `**/*.templ` (via the `@source` directive).
-- A `@layer components` block defines the custom primitives —
-  `.cover` / `.cov-*` palette swatches, `.match-card`, `.bdrop-row.state-*`,
-  `.pdf-page`, `.settings-nav-item`, `.auth-card` — that are awkward to
-  express as pure utilities.
+The Sidebar uses `useRouterState` to determine the active pathname +
+search params so a shelf/library click navigates via `<Link to="/library" search={{ shelf: 'reading' }}>`
+rather than mutating local state. That's the big behavioral shift from
+the prototype's single-component `setView` state machine.
 
-### 5.4 Built-in Readers
+### 5.3 Data flow
 
-| Reader | Status | Implementation |
-|--------|--------|---------------|
-| EPUB | **Built** | epub.js (vendored from pdfjs-dist sister project); server streams raw EPUB bytes; client handles pagination/typography; progress tracked as percent + CFI |
-| PDF | **Built** | PDF.js UMD build (`pdfjs-dist@3.11.174/legacy`); lazy-renders pages via `IntersectionObserver`; progress tracked as percent + `page:N` resume token |
-| CBX (.cbr / .cbz / .cb7) | Deferred | Server returns per-page image URLs; client viewer with keyboard nav + manga mode |
-| Audiobook (MP3/M4B) | Deferred | Native `<audio>` with chapter navigation |
+- **Server state** — `@tanstack/react-query`, one `QueryClient`
+  instance created inside `getRouter()` and injected via the router
+  context so a loader can call `queryClient.ensureQueryData()` if we
+  ever want route-level prefetching. Default `staleTime: 30_000`,
+  `refetchOnWindowFocus: false`.
+- **Fetch wrapper** — `frontend/src/api/client.ts`. Always
+  `credentials: 'include'` (the session cookie must ride along),
+  JSON-body detection, uniform error shape `{ status, message }`.
+- **Search params** — routes that care about URL state declare a
+  `validateSearch` zod-free parser so the types are tight without an
+  extra runtime dep (see [`_app.library.tsx`](../frontend/src/routes/_app.library.tsx)).
+- **Mock data** — every route is currently fed by the mock dataset in
+  [`frontend/src/data/mock.ts`](../frontend/src/data/mock.ts) so the
+  visuals can be exercised before the JSON API lands. Each mock export
+  has a typed counterpart the API will mirror.
+- **Auth state** — intentionally not centralised yet. Once the JSON
+  auth endpoints are back, `useQuery({ queryKey: ['me'] })` against
+  `/api/v1/me` plus route-level loaders calling
+  `router.invalidate()` on login/logout is the expected pattern.
 
-Progress lives in `user_book_progress` per user: `{percent, resume_cfi,
-last_read_at}`. EPUB writes CFI strings (`epubcfi(...)`); PDF writes
-`page:N` tokens. The prefix disambiguates them — one column suffices for
-both reader types.
+### 5.4 Component library
 
-Typography preference (EPUB font-size) is stored in `localStorage` on the
-client today; promoting it to `reader_preferences` is a trivial future
-addition once the preference set grows.
+Shared pieces live in `frontend/src/components/`:
+
+- [`Icon.tsx`](../frontend/src/components/Icon.tsx) — 46 icons from
+  the prototype, typed `IconName` union, stroke 1.5 editorial style.
+- [`Cover.tsx`](../frontend/src/components/Cover.tsx) —
+  `Cover`, `Spine`, `StarRating`. `Cover` takes `{ book, size, onClick, style }`;
+  switches on `book.style` for 5 typographic cover styles, on
+  `book.palette` for 10 bookcloth-inspired colors, and on `size` for
+  xs/sm/md/lg/hero. Placeholder books render as diagonal-stripe paper
+  tile.
+- [`Sidebar.tsx`](../frontend/src/components/Sidebar.tsx) — router-aware
+  navigation.
+- [`TopBar.tsx`](../frontend/src/components/TopBar.tsx) — sticky header
+  with title + subtitle + crumbs + search + right slot, reused across
+  most in-app views.
+
+### 5.5 Styling: Tailwind 4
+
+Tailwind 4's **CSS-first configuration** drives the design system.
+[`frontend/src/styles.css`](../frontend/src/styles.css) holds the
+`@source` glob, `@theme` tokens, and a large `@layer components` block
+for the custom primitives that are awkward as utilities:
+
+```css
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@...&family=Literata:ital,opsz,wght@...&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@source "./**/*.{ts,tsx}";
+
+@theme {
+  /* Archival paper neutrals — warm ivory, never yellow */
+  --color-paper-0: oklch(0.985 0.006 85);
+  --color-paper-1: oklch(0.965 0.010 82);
+  /* Ink — navy-tinted near-black */
+  --color-ink-1:   oklch(0.20 0.018 255);
+  /* Library burgundy accent */
+  --color-accent:  oklch(0.40 0.095 25);
+  /* Library navy — secondary brand for chrome / status */
+  --color-navy:    oklch(0.30 0.045 255);
+
+  --font-serif:  "Source Serif 4", Georgia, serif;   /* UI + display */
+  --font-reader: "Literata",       Georgia, serif;   /* long-form reading */
+  --font-mono:   "IBM Plex Mono",  ui-monospace, monospace;
+}
+
+@layer components {
+  .btn, .chip, .input, .cover, .cov-*, .shelf-plank, .progress, .kbd,
+  .sidebar, .status-bar, .tweaks-panel, .fade-in, .t-h1, .t-h2, .t-label,
+  ... /* ~600 lines */
+}
+```
+
+Typography stack:
+
+- **Source Serif 4** (Adobe, variable `opsz 8..60`) for UI + display.
+- **Literata** (commissioned by Google for Play Books) for the reader
+  body via `--font-reader`.
+- **IBM Plex Mono** for metadata chrome.
+
+Fonts are pulled from Google Fonts today; self-hosting them under
+`internal/staticfs/dist/fonts/` is a planned follow-up to drop the
+network dependency on first paint.
+
+### 5.6 Built-in readers
+
+| Reader | Status | Notes |
+|--------|--------|-------|
+| EPUB | **Built** | [`EpubReader`](../frontend/src/components/EpubReader.tsx) wraps epub.js with an imperative handle (`next` / `prev` / `goTo`). Paginated flow, `book.locations.generate(1024)` powers the percentage scrubber, `relocated` event reports `{percent, cfi}`. Typography overrides via `rendition.themes.default` so font/size changes survive chapter transitions. TOC tree flattened for the Contents panel. |
+| PDF | **Built** | [`PdfReader`](../frontend/src/components/PdfReader.tsx) uses pdfjs-dist 5. Worker URL resolved via `new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url)` so Vite emits a hashed worker. Scroll container with one `<canvas>` per page; only current ± 1 page are rasterized (others cleared) to keep memory flat on large PDFs. |
+| CBX (`.cbr` / `.cbz` / `.cb7`) | Deferred | Server returns per-page image URLs; client viewer with keyboard nav + manga mode. |
+| Audiobook (MP3/M4B) | Deferred | Native `<audio>` with chapter navigation. |
+
+Progress lives in `user_book_progress` per user:
+`{percent, resume_cfi, last_read_at}`. EPUB writes CFI strings
+(`epubcfi(...)`); PDF writes `page:N` tokens. The prefix disambiguates
+them — one column suffices for both reader types.
+[`read.$id.tsx`](../frontend/src/routes/read.$id.tsx) dispatches to
+the right component by `book.format`, debounces progress writes by
+600 ms, and flushes any pending tick via a raw `fetch` inside the
+cleanup effect so a short reading session still records progress.
+
+Reader typography (font, size, line-height) is hard-coded to
+sensible defaults today. Promoting it to `reader_preferences` + a
+React settings pane is a trivial future addition once the preference
+set grows beyond three values.
+
+### 5.7 Realtime (SSE)
+
+[`useRealtime`](../frontend/src/api/realtime.ts) is mounted once inside
+the authed layout (`_app.tsx`). It opens a single
+`EventSource('/events', { withCredentials: true })` per session — the
+browser reuses the same cookie that the JSON API calls carry, so no
+separate handshake is needed.
+
+Event → cache-invalidation dispatch is a typed `Record<RealtimeEvent,
+Handler>` map; TypeScript enforces exhaustive coverage, so adding a
+new event name surfaces missing handlers at build time. Today only
+`bookdrop.updated` is published; it invalidates the bookdrop queue,
+the books list, and the libraries list (for book-count updates after
+approvals).
+
+The native `EventSource` handles reconnection + exponential backoff
+automatically; the hook only wires teardown (`removeEventListener` +
+`es.close()`) on unmount. A future slice could add a connection-status
+indicator for cases where the reverse proxy severs the stream with no
+retry budget left.
 
 ---
 
@@ -490,79 +668,89 @@ protection baked in.
 
 Three surface areas exist side by side:
 
-- **HTML surface** — `/app/*` endpoints return Templ-rendered HTML. HTMX
-  drives navigation via `hx-boost` on the app shell. Auth: cookie session
-  (`auth.RequireAuth`).
-- **OPDS surface** — `/opds/*` returns Atom XML for e-reader apps. Auth:
-  HTTP Basic (`auth.BasicAuth`).
-- **JSON surface** — `/api/v1/*` is healthcheck-only today; reserved for a
-  future JSON API for external clients.
+- **JSON API** — `/api/v1/*`. Auth, library / shelf / book CRUD +
+  cover + file streaming + progress, bookdrop, enrichment, admin
+  settings. Cookie-authed via `auth.RequireAuth` except the auth
+  subtree and healthcheck. Admin-only routes stack `auth.RequireRole`.
+- **OPDS catalog** — `/opds/*` returns Atom XML for e-reader apps.
+  Auth: HTTP Basic (`auth.BasicAuth`). Unchanged through the refactor.
+- **SSE stream** — `/events` streams realtime job / state transitions
+  to the browser; see §5.7.
+- **SPA shell** — any unmatched GET falls back to the embedded
+  `index.html` so the client router can resolve.
 
 Shared concerns:
 
-- **SSE endpoint:** `/events` (cookie-authed) — BookDrop state changes today;
-  extensible for future task kinds.
-- **Health check:** `GET /api/v1/healthcheck` (unauthenticated).
-- **CSRF:** global Origin/Referer check on every state-changing request
-  (`auth.CSRFGuard`) — paired with `SameSite=Lax` cookies.
-- **File serving:** reader/OPDS stream book files through a path sandbox
-  that allows only `BOOKDROP_PATH` + registered `library_paths` roots
+- **CSRF:** global Origin/Referer check on every state-changing
+  request (`auth.CSRFGuard`) paired with `SameSite=Lax` cookies.
+- **File serving:** reader/OPDS stream book files through a path
+  sandbox (`internal/handler/files.go:serveBookFile`) that allows only
+  `BOOKDROP_PATH` + registered `library_paths` roots
   (trailing-separator prefix match).
-- **File uploads:** streamed via `mime/multipart.Part.Read` — no full-body
-  buffering for large archives. (No user-facing upload UI yet; files arrive
-  via the `BOOKDROP_PATH` watcher or a `library.scan` job.)
+- **File uploads:** will stream via `mime/multipart.Part.Read` — no
+  full-body buffering for large archives. (No user-facing upload UI
+  yet; files arrive via the `BOOKDROP_PATH` watcher or a `library.scan`
+  job.)
 
-### HTML Routes (cookie-auth under `/app/*`)
+### 8.1 JSON API
 
-| Route | Notes |
-|-------|-------|
-| `GET /app` / `GET /app/` | Dashboard |
-| `GET /app/library` | Library grid with `?q=`, `?sort=`, `?format=`, `?lib=` HTMX-swapped |
-| `GET /app/book/:id` | Book detail — cover, metadata, progress slider, shelf toggles |
-| `GET /app/book/:id/edit` | Metadata editor + **Find metadata online** enrichment panel |
-| `POST /app/book/:id` | Save metadata edit (returns updated `#book-detail` panel for HTMX) |
-| `POST /app/book/:id/progress` | Per-user progress update (form or JSON) |
-| `POST /app/book/:id/shelf/:slug` | Toggle book on/off a shelf |
-| `GET /app/book/:id/enrich` | Google Books + Open Library search results fragment |
-| `POST /app/book/:id/cover-from-url` | Import a provider cover (allow-listed hosts) |
-| `GET /app/read/:id` | Full-screen EPUB or PDF reader |
-| `GET /app/read/:id/file` | Serves the book bytes (EPUB/PDF) via the path sandbox |
-| `GET /app/cover/:id` | Book cover image |
-| `GET /app/shelf/:slug` | Shelf contents |
-| `POST /app/shelves` | Create shelf |
-| `POST /app/shelf/:slug/delete` | Delete shelf |
-| `GET /app/bookdrop` | Ingest review queue (SSE-live) |
-| `GET /app/bookdrop/row/:id` | Single-row fragment (SSE swap target) |
-| `GET /app/bookdrop/:id/cover` | Pre-approval cover preview |
-| `POST /app/bookdrop/:id/approve\|reject` | Review queue action |
-| `GET /app/settings` / `GET /app/settings/libraries` | Settings hub (admin) |
-| `POST /app/settings/libraries/paths` | Register a new library filesystem root (admin) |
-| `POST /app/settings/libraries/paths/:id/scan\|delete` | Trigger scan / remove path (admin) |
-| `GET /events` | SSE stream |
+All routes below are live. Response bodies are camelCase JSON; error
+envelope is `{ "error": "…" }`. `Auth` column abbreviates the auth
+stack: **Public** = no gate, **Session** = `auth.RequireAuth`, **Admin**
+= `RequireAuth` + `RequireRole(admin)`.
 
-### OPDS Routes (Basic-Auth under `/opds/*`)
+| Method | Route | Auth | Purpose |
+|--------|-------|------|---------|
+| GET | `/api/v1/healthcheck` | Public | `{"status":"ok","diskMode":"LOCAL"}`. Mounted before the CSRF guard for orchestrator probes. |
+| GET | `/api/v1/auth/signup` | Public | `{ "enabled": bool }` — the SPA uses this to decide whether the signup form is visible. |
+| POST | `/api/v1/auth/signup` | Public | First-run admin creation. 403 once `users` is non-empty. |
+| POST | `/api/v1/auth/login` | Public | Create session, set cookie, return user DTO. |
+| POST | `/api/v1/auth/logout` | Public | Destroy session + clear cookie. 204. |
+| GET | `/api/v1/me` | Session | Current user — boot-time auth gate in the SPA. |
+| GET | `/api/v1/libraries` | Session | All libraries with book counts. |
+| GET | `/api/v1/shelves` | Session | Per-user shelves with book counts. |
+| POST | `/api/v1/shelves` | Session | Create shelf (`{ name, accent? }`). Repo slugifies. |
+| DELETE | `/api/v1/shelves/:slug` | Session | Delete shelf. |
+| GET | `/api/v1/books` | Session | List with `?q=&sort=&format=&library=&shelf=`. Cap 500 today. |
+| GET | `/api/v1/books/:id` | Session | Book detail + shelf membership. |
+| PATCH | `/api/v1/books/:id` | Session | Partial metadata update (pointer-field DTO). |
+| GET | `/api/v1/books/:id/cover` | Session | Cover image bytes; 404 falls through to the stylized tile. |
+| GET | `/api/v1/books/:id/file` | Session | EPUB/PDF bytes via the path sandbox. |
+| POST | `/api/v1/books/:id/progress` | Session | `{ progress: 0..1, resumeCfi? }`. |
+| POST | `/api/v1/books/:id/shelves/:slug` | Session | Add to shelf (idempotent). |
+| DELETE | `/api/v1/books/:id/shelves/:slug` | Session | Remove from shelf. |
+| GET | `/api/v1/books/:id/enrich?title=&author=&isbn=` | Session | Provider fan-out; returns `{ query, matches }`. |
+| POST | `/api/v1/books/:id/cover-from-url` | Session | Allow-list-protected cover import. |
+| GET | `/api/v1/bookdrop` | Session | Full ingest queue (every state). |
+| GET | `/api/v1/bookdrop/:id/cover` | Session | Pre-approval cover preview. |
+| POST | `/api/v1/bookdrop/:id/approve` | Session | Optional `{ libraryId }`; returns the freshly-imported book detail. |
+| POST | `/api/v1/bookdrop/:id/reject` | Session | Mark dismissed, delete pre-approval cover. 204. |
+| GET | `/api/v1/settings/libraries` | Admin | Libraries + registered paths + scan stats. |
+| POST | `/api/v1/settings/libraries/paths` | Admin | Register filesystem root `{ libraryId, path }`. |
+| POST | `/api/v1/settings/libraries/paths/:id/scan` | Admin | Enqueue a `library.scan` job. 202. |
+| DELETE | `/api/v1/settings/libraries/paths/:id` | Admin | Remove scan source (books stay). 204. |
+| GET | `/events` | Session | Server-Sent Events stream (bookdrop state transitions today; extensible). |
 
-| Route | Notes |
-|-------|-------|
-| `GET /opds/` | Navigation feed — All / Recent / per-library links |
-| `GET /opds/all` | Acquisition feed (paged 50/page) |
-| `GET /opds/library/:slug` | Per-library acquisition feed |
-| `GET /opds/recent` | Recently added |
-| `GET /opds/search?q=...` | Full-text search results |
-| `GET /opds/search.xml` | OpenSearch description |
-| `GET /opds/book/:id/download` | Book file bytes |
-| `GET /opds/cover/:id` | Book cover image |
+### 8.2 OPDS 1.2 catalog (live today)
 
-### Public Routes
+Basic Auth (`auth.BasicAuth`) under `/opds/*`.
 
-| Route | Notes |
-|-------|-------|
-| `GET /` | 302 → `/app` |
-| `GET /login` / `POST /login` | Session login |
-| `POST /logout` | Destroy session + clear cookie |
-| `GET /signup` / `POST /signup` | First-run bootstrap (admin); closes after the first user |
-| `GET /static/*` | Embedded assets — `app.css`, `htmx.min.js`, readers, covers-from-JS |
-| `GET /api/v1/healthcheck` | `{"status":"ok"}` |
+| Method | Route | Notes |
+|--------|-------|-------|
+| GET | `/opds/` | Navigation feed — All / Recent / per-library links |
+| GET | `/opds/all` | Acquisition feed (paged 50/page) |
+| GET | `/opds/library/:slug` | Per-library acquisition feed |
+| GET | `/opds/recent` | Recently added |
+| GET | `/opds/search?q=...` | Full-text search results |
+| GET | `/opds/search.xml` | OpenSearch description |
+| GET | `/opds/book/:id/download` | Book file bytes |
+| GET | `/opds/cover/:id` | Book cover image |
+
+### 8.3 SPA fallback
+
+| Method | Route | Notes |
+|--------|-------|-------|
+| GET | `/`, `/assets/*`, `/<anything>` | Served from the embedded `internal/staticfs/dist/` via a Gin `NoRoute` handler. Matching files go through `http.FileServer`; unmatched paths return `index.html` so TanStack Router can resolve client-side routes on hard reloads. `/api/*` and `/opds/*` are excluded from the fallback to preserve proper 404s. |
 
 ---
 
@@ -570,11 +758,10 @@ Shared concerns:
 
 ### 9.1 Multi-Stage Docker Build
 
-Three stages: Tailwind build → Go build (with `go tool templ generate`) →
-distroless runtime. See [Dockerfile](Dockerfile) for the authoritative
-recipe. Static assets (compiled Tailwind CSS, `htmx.min.js`, reader JS +
-`epub.js`/`pdf.js` bundles, SSE/enrich shims) are embedded into the binary
-via `//go:embed all:static` inside `internal/staticfs/`.
+Three stages: frontend (npm install + `vite build` + sync script) → Go
+build → distroless runtime. See [Dockerfile](../Dockerfile) for the
+authoritative recipe. The final binary embeds the compiled SPA at
+`internal/staticfs/dist/` via `//go:embed all:dist`.
 
 ### 9.2 CI/CD Pipeline (planned)
 
@@ -604,12 +791,46 @@ services:
   migrate:       # one-shot — `go run ./cmd/migrate up` inside a golang:alpine
 ```
 
-The app itself runs on the host in dev (`make run` or `make dev` for
-live-reload). `air` (via `go tool air`, no global install) rebuilds the Go
-binary on any `.go` / `.templ` / `.sql` change and triggers
-`go tool templ generate` first; `make css-watch` re-emits Tailwind on
-template edits. Schema migrations apply automatically on boot
+Two processes power local development:
+
+- **`make dev`** — Go backend on `:6060` via `go tool air`. Air watches
+  `**/*.go` + `**/*.sql`; it ignores `frontend/` and
+  `internal/staticfs/dist/` so a React edit doesn't trigger a Go
+  rebuild.
+- **`make frontend-dev`** — `cd frontend && npm run dev`. Under the
+  hood that's `concurrently` running the Tailwind CLI watcher
+  (`src/styles.css` → `src/generated.css`) and the Vite dev server on
+  `:5173`. Vite proxies `/api`, `/opds`, and `/events` to `:6060` so
+  session cookies and SSE work against the Go backend.
+
+`make up` runs both in parallel under one `trap 'kill 0'` so Ctrl-C
+tears them down together.
+
+Schema migrations apply automatically on boot
 (`MIGRATE_ON_START=true` by default).
+
+### 9.4 Frontend build quirks
+
+Two pragmatic workarounds exist around TanStack Start's prerender pass;
+they're documented here so nobody "simplifies" them away.
+
+1. **Tailwind via the standalone CLI, not the Vite plugin.**
+   `@tailwindcss/node` installs a Node ESM loader that short-circuits
+   module resolution during the prerender, which breaks on the
+   `h3-v2`/`rou3` aliases that Start's SSR bundle imports. Running
+   `@tailwindcss/cli` as a separate step (`npm run css` /
+   `npm run css:watch`) avoids attaching the loader at all. `__root.tsx`
+   imports the generated file with `?url` so Vite treats it as a
+   stylesheet asset.
+2. **Vite's `build.outDir` stays inside `frontend/`** (defaults to
+   `dist/`). Redirecting it outside the package breaks Node's module
+   resolution during the prerender — the SSR bundle walks up from
+   `dist/server/` looking for `node_modules` and never reaches
+   `frontend/node_modules/`.
+   [`frontend/scripts/sync-dist.mjs`](../frontend/scripts/sync-dist.mjs)
+   is what moves the compiled shell + assets into
+   `internal/staticfs/dist/` after build, duplicating `_shell.html` as
+   `index.html` so Go's SPA fallback finds it.
 
 ---
 
@@ -660,22 +881,25 @@ Library filesystem roots beyond `BOOKDROP_PATH` are managed in the database
 
 | Decision | Rationale |
 |----------|-----------|
-| **Monolith over microservices** | Single deployment unit simplifies self-hosting; no inter-service communication overhead |
-| **Go over JVM** | Lower memory footprint, single static binary, faster cold starts — all meaningful for self-hosters on modest hardware |
-| **Templ + HTMX over SPA** | Server-rendered HTML ships less JavaScript, simplifies auth flows, keeps the entire UI inspectable from the network tab, and eliminates the API/UI type-duplication tax |
-| **HTMX 4 SSE over custom WebSocket protocol** | SSE is one-way (server → client) which matches every real-time need here (task progress, library scan updates); HTMX 4's `sse` extension wires it into the DOM declaratively |
-| **Tailwind 4 CSS-first config** | Design tokens live in one `@theme` block that both CSS and Templ components reference — no JS config, no PostCSS plugin drift |
-| **PostgreSQL over MariaDB/SQLite** | `jsonb`, `tsvector` full-text search, and a mature job-queue ecosystem (river) more than earn the operational overhead |
-| **sqlc over ORM** | Typed, compile-time-checked SQL keeps the query surface explicit and avoids N+1 surprises |
-| **golang-migrate over goose/dbmate** | Paired `.up.sql`/`.down.sql` files are unambiguous; the library is small, pgx-friendly, and can be embedded into the app binary so a single artifact can run its own migrations in any environment |
-| **Gin over chi/echo** | Rich built-in middleware (logger, recovery, CORS via `gin-contrib`), well-known binding/validation story, and ergonomic `gin.Context` for streaming Templ output into the response writer |
-| **river over custom worker pool** | Jobs live in the same Postgres transaction boundary as the mutations that enqueue them; exactly-once semantics without extra infrastructure |
-| **Format-specific processors** | Strategy pattern allows adding new formats without modifying existing code |
-| **NETWORK storage mode** | Safe degradation for NAS users rather than risking file corruption |
-| **Server-side sessions over stateless JWT (for the web UI)** | HTMX + SameSite cookies are the natural fit; revocation is free, no refresh-token rotation ceremony. A JWT layer can still be added to `/api/v1/*` later without touching the web auth. |
+| **Monolith over microservices** | Single deployment unit simplifies self-hosting; no inter-service communication overhead. |
+| **Go over JVM** | Lower memory footprint, single static binary, faster cold starts — all meaningful for self-hosters on modest hardware. |
+| **React SPA (TanStack Start, SPA mode) over server-rendered Templ/HTMX** | The original Templ + HTMX stack worked, but porting rich interactions (the reader chrome, the bookdrop approval split-pane, the metadata editor with live provider matches) turned every screen into a pile of per-fragment endpoints. React gives us one component tree that the designer's prototype maps onto 1:1 and `@tanstack/react-query` handles the "stale/refetch" logic that HTMX partial swaps were manually re-implementing. The tradeoff is a bundle (~270 KB gzipped today) the browser has to parse on first load. |
+| **SPA mode instead of TanStack Start SSR** | The Go binary is already the canonical server. Running a Node SSR runtime alongside it would double operational surface area without paying for itself — SEO isn't a concern for an auth-walled personal library and the first-paint win is small against cached assets. SPA mode emits a static shell + client bundle, keeps file-based routing and `createFileRoute`, and lets Go own request handling. |
+| **TanStack Query over bespoke fetch + cache** | Server-state cache, invalidation, devtools, and a well-worn pattern for SSE-driven cache invalidation (once `/events` is rewired). Free upgrade path to prefetch-on-route-load via loader context. |
+| **Tailwind 4 CSS-first config** | Design tokens live in one `@theme` block that both CSS and TSX components reference — no JS config, no PostCSS plugin drift. |
+| **Tailwind via standalone CLI, not `@tailwindcss/vite`** | The Vite plugin's Node ESM loader collides with TanStack Start's prerender pass (breaks `h3-v2`/`rou3` alias resolution). The CLI is a clean side-process. See §9.4. |
+| **PostgreSQL over MariaDB/SQLite** | `jsonb`, `tsvector` full-text search, and a mature job-queue ecosystem (river) more than earn the operational overhead. |
+| **sqlc-staged over ORM** | Typed, compile-time-checked SQL keeps the query surface explicit and avoids N+1 surprises; hand-written pgx today, `sqlc.yaml` + `internal/repo/queries/*.sql` staged for when schema stabilizes. |
+| **golang-migrate over goose/dbmate** | Paired `.up.sql`/`.down.sql` files are unambiguous; the library is small, pgx-friendly, and can be embedded into the app binary so a single artifact can run its own migrations in any environment. |
+| **Gin over chi/echo** | Rich built-in middleware (logger, recovery, CORS via `gin-contrib`), well-known binding/validation story, ergonomic `gin.Context` for streaming responses. Survived the frontend refactor unchanged. |
+| **river over custom worker pool** | Jobs live in the same Postgres transaction boundary as the mutations that enqueue them; exactly-once semantics without extra infrastructure. |
+| **Format-specific processors** | Strategy pattern allows adding new formats without modifying existing code. |
+| **NETWORK storage mode** | Safe degradation for NAS users rather than risking file corruption. |
+| **Server-side sessions over stateless JWT (for the SPA)** | Revocation is free, no refresh-token rotation ceremony, and `SameSite=Lax` cookies flow naturally through both same-origin requests and the Vite dev-proxy. A JWT layer can still be added to `/api/v1/*` later for external API clients without touching the SPA auth. |
 | **Basic Auth for OPDS** | E-reader apps don't carry session cookies; Basic Auth over TLS is the documented pattern and works with every OPDS client out there. |
-| **Client-side EPUB/PDF readers** | Browser-native pagination + typography + IntersectionObserver-based lazy rendering beats server-side reflow at the implementation-cost/quality tradeoff point. The server's job stays tight: serve bytes, persist position. |
+| **Client-side EPUB/PDF readers (epub.js / PDF.js)** | Browser-native pagination + typography + `IntersectionObserver`-based lazy rendering beats server-side reflow at the implementation-cost/quality tradeoff point. The server's job stays tight: serve bytes, persist position. |
 | **Path-rooted file-serve sandbox** | Single authoritative list (BOOKDROP + registered library paths) beats per-book ACL for a self-hosted single-tenant instance; adding per-book ACLs later is an additive check, not a replacement. |
 | **CFI + `page:N` resume tokens share one DB column** | Unambiguous by prefix (`epubcfi(...)` vs `page:42`); avoids a parallel column or JSONB for a two-format reader today. |
 | **`Deps` struct for `handler.New`** | 11+ dependencies in a positional constructor was unreadable; struct literal makes call sites self-documenting and new deps additive. |
+| **File-based routing with pathless `_app` layout** | The reader is a full-screen takeover with no sidebar; every other screen shares one chrome. A pathless parent expresses that structurally — the alternative (wrapping each route in a `<Layout>` component manually) drifts. |
 | **Source Serif 4 + Literata + IBM Plex Mono** | Research-backed editorial stack: Source Serif 4 (Adobe, variable `opsz 8..60`, screen-tuned) for UI + display; Literata (commissioned by Google for Play Books) for the reader body via `--font-reader`; IBM Plex Mono for metadata chrome. |

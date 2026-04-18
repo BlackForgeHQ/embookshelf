@@ -1,7 +1,19 @@
 import type { CSSProperties, MouseEventHandler } from 'react';
 
-import type { Book, CoverPalette } from '@/data/mock';
+import type { CoverPalette, CoverStyle } from '@/data/mock';
 import { Icon } from './Icon';
+
+// CoverBook is the minimal shape Cover needs to render. Accepting a
+// permissive string for palette + style lets the same component render
+// both the mock-data prototype and live API books without casts — unknown
+// values just fall back to sensible defaults.
+export type CoverBook = {
+  title: string;
+  author: string;
+  palette?: string;
+  style?: string;
+  placeholder?: boolean;
+};
 
 type CoverSize = 'xs' | 'sm' | 'md' | 'lg' | 'hero';
 
@@ -18,7 +30,22 @@ const PALETTES: Record<CoverPalette, { bg: string; ink: string }> = {
   ink:    { bg: 'var(--color-cov-ink)',    ink: 'oklch(0.90 0.03 85)' },
 };
 
-function CoverInner({ book, size }: { book: Book; size: CoverSize }) {
+const VALID_STYLES: ReadonlyArray<CoverStyle> = [
+  'centered-line',
+  'minimal-top',
+  'stacked-serif',
+  'block',
+  'typographic',
+];
+
+function coerceStyle(raw: string | undefined): CoverStyle {
+  if (raw && (VALID_STYLES as readonly string[]).includes(raw)) {
+    return raw as CoverStyle;
+  }
+  return 'centered-line';
+}
+
+function CoverInner({ book, size }: { book: CoverBook; size: CoverSize }) {
   if (book.placeholder) {
     return (
       <>
@@ -29,7 +56,7 @@ function CoverInner({ book, size }: { book: Book; size: CoverSize }) {
       </>
     );
   }
-  const style = book.style || 'centered-line';
+  const style = coerceStyle(book.style);
   switch (style) {
     case 'centered-line':
       return (
@@ -107,14 +134,19 @@ function CoverInner({ book, size }: { book: Book; size: CoverSize }) {
 }
 
 type CoverProps = {
-  book: Book;
+  book: CoverBook;
   size?: CoverSize;
   onClick?: MouseEventHandler<HTMLDivElement>;
   style?: CSSProperties;
 };
 
+function coercePalette(raw: string | undefined): CoverPalette {
+  if (raw && raw in PALETTES) return raw as CoverPalette;
+  return 'navy';
+}
+
 export function Cover({ book, size = 'md', onClick, style }: CoverProps) {
-  const palette = PALETTES[book.palette ?? 'navy'];
+  const palette = PALETTES[coercePalette(book.palette)];
   const isPlaceholder = Boolean(book.placeholder);
   const baseStyle: CSSProperties = isPlaceholder
     ? {}
@@ -134,13 +166,13 @@ const SPINE_WIDTHS = [26, 32, 22, 38, 28, 34, 24, 30];
 const SPINE_HEIGHTS = [210, 230, 200, 220, 240, 215, 205, 225];
 
 type SpineProps = {
-  book: Book;
+  book: CoverBook;
   index?: number;
   onClick?: MouseEventHandler<HTMLDivElement>;
 };
 
 export function Spine({ book, index = 0, onClick }: SpineProps) {
-  const palette = PALETTES[book.palette ?? 'navy'];
+  const palette = PALETTES[coercePalette(book.palette)];
   const isPlaceholder = Boolean(book.placeholder);
   const w = SPINE_WIDTHS[index % SPINE_WIDTHS.length];
   const h = SPINE_HEIGHTS[index % SPINE_HEIGHTS.length];

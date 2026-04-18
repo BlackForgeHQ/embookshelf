@@ -1,5 +1,7 @@
-import { Outlet, createFileRoute } from '@tanstack/react-router';
+import { Outlet, createFileRoute, redirect } from '@tanstack/react-router';
 
+import { fetchMe, meQueryKey } from '@/api/auth';
+import { useRealtime } from '@/api/realtime';
 import { Sidebar } from '@/components/Sidebar';
 
 // Pathless layout: every in-app screen (dashboard, library, book detail,
@@ -7,11 +9,34 @@ import { Sidebar } from '@/components/Sidebar';
 // with the sidebar on the left and the persistent status bar at the bottom.
 // The reader is intentionally OUTSIDE this layout — it's a full-screen
 // takeover.
+//
+// beforeLoad enforces authentication: any in-app route redirects to /login
+// when no session exists. The me query is cached in the router's
+// QueryClient so sibling routes reuse it without refetching.
 export const Route = createFileRoute('/_app')({
+  beforeLoad: async ({ context, location }) => {
+    const me = await context.queryClient.ensureQueryData({
+      queryKey: meQueryKey,
+      queryFn: fetchMe,
+      staleTime: 60_000,
+    });
+    if (!me) {
+      throw redirect({
+        to: '/login',
+        search: { next: location.href },
+      });
+    }
+    return { me };
+  },
   component: AppLayout,
 });
 
 function AppLayout() {
+  // Only runs inside the authed shell — unauth'd visitors hit the
+  // beforeLoad redirect above and never mount this component, so the
+  // EventSource never fires without a valid session cookie.
+  useRealtime();
+
   return (
     <div
       style={{

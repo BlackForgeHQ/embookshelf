@@ -44,9 +44,15 @@ func NewLibraryRepo(pool *pgxpool.Pool) *LibraryRepo {
 
 func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, name, slug, created_at
-		FROM libraries
-		ORDER BY created_at ASC
+		SELECT
+			l.id, l.name, l.slug, l.created_at,
+			COALESCE(
+				(SELECT COUNT(*) FROM books b
+				 WHERE b.library_id = l.id AND b.deleted_at IS NULL),
+				0
+			) AS book_count
+		FROM libraries l
+		ORDER BY l.created_at ASC
 	`)
 	if err != nil {
 		return nil, err
@@ -56,7 +62,7 @@ func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
 	var libs []model.Library
 	for rows.Next() {
 		var l model.Library
-		if err := rows.Scan(&l.ID, &l.Name, &l.Slug, &l.CreatedAt); err != nil {
+		if err := rows.Scan(&l.ID, &l.Name, &l.Slug, &l.CreatedAt, &l.BookCount); err != nil {
 			return nil, err
 		}
 		libs = append(libs, l)
@@ -64,20 +70,22 @@ func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
 	return libs, rows.Err()
 }
 
-// Search lists books in a library, scoped to a specific user's progress. An
-// empty librarySlug returns [], matching the UI expectation that a library
-// must be chosen before results render.
+// Search lists books scoped to a specific user's progress. An empty
+// librarySlug means "across all libraries"; passing a slug filters down.
+// Always capped at 500 rows today — the Library UI renders them all
+// client-side. Server-side pagination is a future slice when library
+// sizes demand it.
 func (r *LibraryRepo) Search(ctx context.Context, userID, librarySlug string, p model.SearchParams) ([]model.Book, error) {
-	if librarySlug == "" {
-		return nil, nil
-	}
-
-	// $1 is always the user id (driven by the LEFT JOIN); the library slug is $2.
+	// $1 is always the user id (driven by the LEFT JOIN on user_book_progress).
 	var (
-		where = []string{"l.slug = $2", "b.deleted_at IS NULL"}
-		args  = []any{userID, librarySlug}
+		where = []string{"b.deleted_at IS NULL"}
+		args  = []any{userID}
 	)
 
+	if librarySlug != "" {
+		args = append(args, librarySlug)
+		where = append(where, fmt.Sprintf("l.slug = $%d", len(args)))
+	}
 	if q := strings.TrimSpace(p.Query); q != "" {
 		args = append(args, q)
 		where = append(where, fmt.Sprintf("b.tsv @@ websearch_to_tsquery('english', $%d)", len(args)))

@@ -6,6 +6,7 @@ type Library struct {
 	ID        string
 	Name      string
 	Slug      string
+	BookCount int
 	CreatedAt time.Time
 }
 
@@ -51,6 +52,21 @@ type Book struct {
 	ResumeCFI string
 }
 
+// Annotation is a single highlight or margin note attached to a book by a
+// specific user. The kind (highlight vs. note) is derived from which
+// string fields are populated — see the migration comment.
+type Annotation struct {
+	ID           string
+	UserID       string
+	BookID       string
+	Locator      string
+	SelectedText string
+	Note         string
+	Color        string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 type Shelf struct {
 	ID        string
 	UserID    string
@@ -58,6 +74,10 @@ type Shelf struct {
 	Slug      string
 	Accent    string
 	BookCount int
+	IsSmart   bool
+	// Rule is non-nil iff IsSmart is true. Marshaled to/from a JSONB
+	// column; compiled to SQL at the repo layer.
+	Rule      *ShelfRule
 	CreatedAt time.Time
 }
 

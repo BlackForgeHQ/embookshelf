@@ -67,6 +67,8 @@ func main() {
 	bdropRepo := repo.NewBookDropRepo(pool)
 	progressRepo := repo.NewProgressRepo(pool)
 	libPathRepo := repo.NewLibraryPathRepo(pool)
+	annotationRepo := repo.NewAnnotationRepo(pool)
+	statsRepo := repo.NewStatsRepo(pool)
 
 	// SSE hub — shared between services that broadcast and the handler that serves /events.
 	hub := sse.NewHub()
@@ -81,6 +83,8 @@ func main() {
 	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, covers, hub)
 	progressSvc := service.NewProgressService(progressRepo)
 	libPathSvc := service.NewLibraryPathService(libPathRepo)
+	annotationSvc := service.NewAnnotationService(annotationRepo)
+	statsSvc := service.NewStatsService(statsRepo)
 	enrichSvc := service.NewEnrichmentService(
 		[]provider.Provider{provider.NewGoogleBooks(), provider.NewOpenLibrary()},
 		libRepo,
@@ -121,18 +125,20 @@ func main() {
 
 	// HTTP.
 	h := handler.New(handler.Deps{
-		Cfg:      cfg,
-		Static:   staticfs.FS,
-		Lib:      libSvc,
-		Shelf:    shelfSvc,
-		Auth:     authSvc,
-		BookDrop: bdropSvc,
-		Progress: progressSvc,
-		Enrich:   enrichSvc,
-		LibPath:  libPathSvc,
-		Covers:   covers,
-		Hub:      hub,
-		Queue:    q,
+		Cfg:         cfg,
+		Static:      staticfs.FS,
+		Lib:         libSvc,
+		Shelf:       shelfSvc,
+		Auth:        authSvc,
+		BookDrop:    bdropSvc,
+		Progress:    progressSvc,
+		Enrich:      enrichSvc,
+		LibPath:     libPathSvc,
+		Annotations: annotationSvc,
+		Stats:       statsSvc,
+		Covers:      covers,
+		Hub:         hub,
+		Queue:       q,
 	})
 
 	srv := &http.Server{
