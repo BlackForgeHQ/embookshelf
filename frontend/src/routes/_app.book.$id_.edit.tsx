@@ -19,7 +19,7 @@ import {
 import { Cover } from '@/components/Cover';
 import { Icon } from '@/components/Icon';
 
-export const Route = createFileRoute('/_app/book/$id/edit')({
+export const Route = createFileRoute('/_app/book/$id_/edit')({
   component: MetadataEditor,
 });
 

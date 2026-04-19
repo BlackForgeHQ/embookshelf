@@ -35,6 +35,17 @@ const shelfCols = `s.id, s.user_id, s.name, s.slug, s.accent, s.created_at,
                     ELSE (SELECT count(*) FROM shelf_books sb WHERE sb.shelf_id = s.id)
                   END AS book_count`
 
+// shelfColsReturning is the same projection for INSERT/UPDATE ... RETURNING
+// clauses, which can't use a table alias — they reference columns on the
+// target table directly. Kept in sync with shelfCols column order so
+// scanShelf handles rows from either.
+const shelfColsReturning = `id, user_id, name, slug, accent, created_at,
+                           is_smart, rule,
+                           CASE
+                             WHEN is_smart THEN 0
+                             ELSE (SELECT count(*) FROM shelf_books sb WHERE sb.shelf_id = shelves.id)
+                           END AS book_count`
+
 func (r *ShelfRepo) ListForUser(ctx context.Context, userID string) ([]model.Shelf, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT `+shelfCols+`
@@ -178,7 +189,7 @@ func (r *ShelfRepo) Create(ctx context.Context, userID, name, accent string, rul
 			INSERT INTO shelves (user_id, name, slug, accent, is_smart, rule)
 			VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT (user_id, slug) DO NOTHING
-			RETURNING `+shelfCols,
+			RETURNING `+shelfColsReturning,
 			userID, name, slug, accent, isSmart, nullOrJSON(ruleJSON))
 		s, err := scanShelf(row)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -239,11 +250,10 @@ func (r *ShelfRepo) Update(ctx context.Context, userID, slug string, name, accen
 		UPDATE shelves
 		SET ` + strings.Join(sets, ", ") + `
 		WHERE user_id = $1 AND slug = $2
-		RETURNING ` + shelfCols + `
 	`
-	// The RETURNING list references s.*, but UPDATE doesn't alias the
-	// target table automatically. Re-fetch via GetBySlugForUser so we
-	// consistently compute book_count through the same CASE expression.
+	// Re-fetch via GetBySlugForUser so we consistently compute book_count
+	// through the same CASE expression. Cheaper than wrestling with a
+	// RETURNING list that can't reference the `s` alias shelfCols uses.
 	if _, err := r.pool.Exec(ctx, query, args...); err != nil {
 		return model.Shelf{}, err
 	}

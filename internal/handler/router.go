@@ -157,6 +157,9 @@ func (h *Handler) mountSPA(r *gin.Engine) {
 		}
 		defer index.Close()
 		c.Writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// Gin seeds NoRoute responses with 404; override to 200 so the SPA
+		// shell is served with a success status on deep links like /login.
+		c.Writer.WriteHeader(http.StatusOK)
 		_, _ = io.Copy(c.Writer, index)
 	})
 }

@@ -45,7 +45,9 @@ func Dispatch(path string) (Processor, string, error) {
 	switch ext {
 	case ".epub":
 		return &EPUBProcessor{}, "EPUB", nil
-	// TODO: pdf, cbz, cbr, mp3, m4b, azw3, mobi, fb2
+	case ".pdf":
+		return &PDFProcessor{}, "PDF", nil
+	// TODO: cbz, cbr, mp3, m4b, azw3, mobi, fb2
 	default:
 		return nil, strings.ToUpper(strings.TrimPrefix(ext, ".")), ErrUnsupportedFormat
 	}

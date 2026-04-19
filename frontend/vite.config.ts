@@ -25,6 +25,10 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Fail loudly if 5173 is taken instead of silently drifting to 5174 —
+    // anything assuming :5173 (e2e tests, browser bookmarks, docs) breaks
+    // in confusing ways otherwise.
+    strictPort: true,
     proxy: {
       '/api': { target: BACKEND, changeOrigin: true },
       '/opds': { target: BACKEND, changeOrigin: true },

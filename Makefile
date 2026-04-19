@@ -70,3 +70,15 @@ up: ## Run backend (air) + frontend (Vite) together — Ctrl-C stops both
 .PHONY: test
 test: ## Run Go tests
 	go test ./...
+
+.PHONY: e2e-install
+e2e-install: ## Install Playwright deps + Chromium
+	cd e2e && npm install && npx playwright install --with-deps chromium
+
+.PHONY: e2e
+e2e: ## Run Playwright specs against the running dev stack (needs `make up`)
+	cd e2e && npm test
+
+.PHONY: e2e-ui
+e2e-ui: ## Playwright UI mode for iterating on specs
+	cd e2e && npm run test:ui
