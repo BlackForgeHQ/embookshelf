@@ -47,8 +47,3 @@ func (s *ProgressService) Set(ctx context.Context, userID, bookID string, percen
 	}
 	return nil
 }
-
-// Clear removes the user's progress for a book (mark unread).
-func (s *ProgressService) Clear(ctx context.Context, userID, bookID string) error {
-	return s.repo.Clear(ctx, userID, bookID)
-}

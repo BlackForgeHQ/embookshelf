@@ -37,12 +37,6 @@ func Build(name Source) Provider {
 	return nil
 }
 
-// AllSources lists every provider id the bootstrap recognizes — handy
-// for logs and the docs that publish the allowed values.
-func AllSources() []Source {
-	return []Source{SourceGoogleBooks, SourceOpenLibrary, SourceAmazon, SourceDuckDuckGo}
-}
-
 // Query is the search input. Empty fields are ignored — providers compose
 // whatever they need from what's populated.
 type Query struct {

@@ -30,11 +30,3 @@ func (r *ProgressRepo) Set(ctx context.Context, userID, bookID string, progress 
 	`, userID, bookID, progress, cfi)
 	return err
 }
-
-// Clear removes a user's progress for a book (equivalent to "mark unread").
-func (r *ProgressRepo) Clear(ctx context.Context, userID, bookID string) error {
-	_, err := r.pool.Exec(ctx, `
-		DELETE FROM user_book_progress WHERE user_id = $1 AND book_id = $2
-	`, userID, bookID)
-	return err
-}

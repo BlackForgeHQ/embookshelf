@@ -38,10 +38,6 @@ func (s *ShelfService) List(ctx context.Context, userID string) ([]model.Shelf, 
 	return shelves, nil
 }
 
-func (s *ShelfService) GetBySlug(ctx context.Context, userID, slug string) (model.Shelf, error) {
-	return s.repo.GetBySlugForUser(ctx, userID, slug)
-}
-
 func (s *ShelfService) Books(ctx context.Context, userID, slug string) ([]model.Book, error) {
 	return s.repo.BooksInShelfForUser(ctx, userID, slug)
 }
