@@ -73,6 +73,7 @@ func (h *Handler) Engine() *gin.Engine {
 
 			// Library statistics dashboard
 			authed.GET("/stats", h.Stats)
+			authed.GET("/stats/reading", h.ReadingStats)
 
 			// Annotations (highlights + notes)
 			authed.GET("/annotations", h.AnnotationsRecent)

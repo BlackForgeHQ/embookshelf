@@ -21,22 +21,28 @@ type Config struct {
 	BookDropInterval time.Duration
 	DataPath         string
 	MigrateOnStart   bool
+	// EnrichmentProviders is the comma-separated list of provider ids
+	// to fan metadata queries across. Default keeps the original two
+	// (google_books, open_library) — operators opt in to amazon and
+	// duckduckgo by overriding ENRICHMENT_PROVIDERS.
+	EnrichmentProviders []string
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		Port:             envInt("EMBOOKSHELF_PORT", 6060),
-		DatabaseURL:      envStr("DATABASE_URL", "postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable"),
-		DatabaseMaxConns: int32(envInt("DATABASE_MAX_CONNS", 20)),
-		DatabaseMinConns: int32(envInt("DATABASE_MIN_CONNS", 5)),
-		DiskType:         envStr("DISK_TYPE", "LOCAL"),
-		AllowedOrigins:   strings.Split(envStr("ALLOWED_ORIGINS", "*"), ","),
-		SessionSecret:    envStr("SESSION_SECRET", ""),
-		LogLevel:         envStr("LOG_LEVEL", "info"),
-		BookDropPath:     envStr("BOOKDROP_PATH", "./bookdrop"),
-		BookDropInterval: time.Duration(envInt("BOOKDROP_POLL_SECONDS", 5)) * time.Second,
-		DataPath:         envStr("DATA_PATH", "./data"),
-		MigrateOnStart:   envBool("MIGRATE_ON_START", true),
+		Port:                envInt("EMBOOKSHELF_PORT", 6060),
+		DatabaseURL:         envStr("DATABASE_URL", "postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable"),
+		DatabaseMaxConns:    int32(envInt("DATABASE_MAX_CONNS", 20)),
+		DatabaseMinConns:    int32(envInt("DATABASE_MIN_CONNS", 5)),
+		DiskType:            envStr("DISK_TYPE", "LOCAL"),
+		AllowedOrigins:      strings.Split(envStr("ALLOWED_ORIGINS", "*"), ","),
+		SessionSecret:       envStr("SESSION_SECRET", ""),
+		LogLevel:            envStr("LOG_LEVEL", "info"),
+		BookDropPath:        envStr("BOOKDROP_PATH", "./bookdrop"),
+		BookDropInterval:    time.Duration(envInt("BOOKDROP_POLL_SECONDS", 5)) * time.Second,
+		DataPath:            envStr("DATA_PATH", "./data"),
+		MigrateOnStart:      envBool("MIGRATE_ON_START", true),
+		EnrichmentProviders: envCSV("ENRICHMENT_PROVIDERS", "google_books,open_library"),
 	}
 
 	if cfg.DiskType != "LOCAL" && cfg.DiskType != "NETWORK" {
@@ -59,6 +65,28 @@ func envInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// envCSV returns a trimmed, deduped list parsed from a comma-separated
+// env value. Empty entries are dropped; falls back to `def` (also
+// comma-separated) when the variable is unset or blank.
+func envCSV(key, def string) []string {
+	raw := envStr(key, def)
+	parts := strings.Split(raw, ",")
+	seen := make(map[string]struct{}, len(parts))
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		v := strings.TrimSpace(p)
+		if v == "" {
+			continue
+		}
+		if _, dup := seen[v]; dup {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
 }
 
 func envBool(key string, def bool) bool {

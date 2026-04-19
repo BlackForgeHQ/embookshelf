@@ -80,9 +80,12 @@ func (s *EnrichmentService) Search(ctx context.Context, q provider.Query) ([]pro
 // Providers hand back URLs; we refuse anything else to keep this endpoint
 // from becoming an open proxy.
 var AllowedCoverHosts = map[string]struct{}{
-	"books.google.com":           {},
-	"books.googleusercontent.com": {},
-	"covers.openlibrary.org":     {},
+	"books.google.com":                {},
+	"books.googleusercontent.com":     {},
+	"covers.openlibrary.org":          {},
+	"images-na.ssl-images-amazon.com": {},
+	"m.media-amazon.com":              {},
+	"duckduckgo.com":                  {},
 }
 
 // ErrBadCoverURL is returned when the URL fails the host/scheme/content checks.

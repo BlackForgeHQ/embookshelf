@@ -69,6 +69,7 @@ func main() {
 	libPathRepo := repo.NewLibraryPathRepo(pool)
 	annotationRepo := repo.NewAnnotationRepo(pool)
 	statsRepo := repo.NewStatsRepo(pool)
+	readingSessionRepo := repo.NewReadingSessionRepo(pool)
 
 	// SSE hub — shared between services that broadcast and the handler that serves /events.
 	hub := sse.NewHub()
@@ -81,15 +82,27 @@ func main() {
 	shelfSvc := service.NewShelfService(shelfRepo)
 	authSvc := service.NewAuthService(userRepo, sessionRepo)
 	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, covers, hub)
-	progressSvc := service.NewProgressService(progressRepo)
+	progressSvc := service.NewProgressService(progressRepo, readingSessionRepo)
 	libPathSvc := service.NewLibraryPathService(libPathRepo)
 	annotationSvc := service.NewAnnotationService(annotationRepo)
 	statsSvc := service.NewStatsService(statsRepo)
-	enrichSvc := service.NewEnrichmentService(
-		[]provider.Provider{provider.NewGoogleBooks(), provider.NewOpenLibrary()},
-		libRepo,
-		covers,
-	)
+	readingStatsSvc := service.NewReadingSessionService(readingSessionRepo)
+	// Resolve provider list from env. Unknown ids are logged and
+	// skipped so a typo never crashes startup; we still want the
+	// server up with whatever subset is recognized.
+	providers := make([]provider.Provider, 0, len(cfg.EnrichmentProviders))
+	for _, name := range cfg.EnrichmentProviders {
+		p := provider.Build(provider.Source(name))
+		if p == nil {
+			slog.Warn("unknown enrichment provider — skipping", "name", name)
+			continue
+		}
+		providers = append(providers, p)
+	}
+	if len(providers) == 0 {
+		slog.Warn("no enrichment providers configured — metadata search will return empty")
+	}
+	enrichSvc := service.NewEnrichmentService(providers, libRepo, covers)
 
 	if n, err := authSvc.PurgeExpiredSessions(ctx); err != nil {
 		slog.Warn("purge sessions", "err", err)
@@ -135,8 +148,9 @@ func main() {
 		Enrich:      enrichSvc,
 		LibPath:     libPathSvc,
 		Annotations: annotationSvc,
-		Stats:       statsSvc,
-		Covers:      covers,
+		Stats:        statsSvc,
+		ReadingStats: readingStatsSvc,
+		Covers:       covers,
 		Hub:         hub,
 		Queue:       q,
 	})

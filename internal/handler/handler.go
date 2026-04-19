@@ -11,37 +11,39 @@ import (
 )
 
 type Handler struct {
-	cfg         config.Config
-	static      embed.FS
-	lib         *service.LibraryService
-	shelf       *service.ShelfService
-	auth        *service.AuthService
-	bookdrop    *service.BookDropService
-	progress    *service.ProgressService
-	enrich      *service.EnrichmentService
-	libPath     *service.LibraryPathService
-	annotations *service.AnnotationService
-	stats       *service.StatsService
-	covers      *coverstore.Store
-	hub         *sse.Hub
-	queue       queue.Client
+	cfg          config.Config
+	static       embed.FS
+	lib          *service.LibraryService
+	shelf        *service.ShelfService
+	auth         *service.AuthService
+	bookdrop     *service.BookDropService
+	progress     *service.ProgressService
+	enrich       *service.EnrichmentService
+	libPath      *service.LibraryPathService
+	annotations  *service.AnnotationService
+	stats        *service.StatsService
+	readingStats *service.ReadingSessionService
+	covers       *coverstore.Store
+	hub          *sse.Hub
+	queue        queue.Client
 }
 
 type Deps struct {
-	Cfg         config.Config
-	Static      embed.FS
-	Lib         *service.LibraryService
-	Shelf       *service.ShelfService
-	Auth        *service.AuthService
-	BookDrop    *service.BookDropService
-	Progress    *service.ProgressService
-	Enrich      *service.EnrichmentService
-	LibPath     *service.LibraryPathService
-	Annotations *service.AnnotationService
-	Stats       *service.StatsService
-	Covers      *coverstore.Store
-	Hub         *sse.Hub
-	Queue       queue.Client
+	Cfg          config.Config
+	Static       embed.FS
+	Lib          *service.LibraryService
+	Shelf        *service.ShelfService
+	Auth         *service.AuthService
+	BookDrop     *service.BookDropService
+	Progress     *service.ProgressService
+	Enrich       *service.EnrichmentService
+	LibPath      *service.LibraryPathService
+	Annotations  *service.AnnotationService
+	Stats        *service.StatsService
+	ReadingStats *service.ReadingSessionService
+	Covers       *coverstore.Store
+	Hub          *sse.Hub
+	Queue        queue.Client
 }
 
 func New(d Deps) *Handler {
@@ -50,8 +52,9 @@ func New(d Deps) *Handler {
 		lib: d.Lib, shelf: d.Shelf, auth: d.Auth,
 		bookdrop: d.BookDrop, progress: d.Progress, enrich: d.Enrich,
 		libPath: d.LibPath, annotations: d.Annotations, stats: d.Stats,
-		covers: d.Covers,
-		hub:    d.Hub, queue: d.Queue,
+		readingStats: d.ReadingStats,
+		covers:       d.Covers,
+		hub:          d.Hub, queue: d.Queue,
 	}
 }
 

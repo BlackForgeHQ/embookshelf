@@ -16,7 +16,32 @@ type Source string
 const (
 	SourceGoogleBooks Source = "google_books"
 	SourceOpenLibrary Source = "open_library"
+	SourceAmazon      Source = "amazon"
+	SourceDuckDuckGo  Source = "duckduckgo"
 )
+
+// Build constructs a provider by name. Returns nil for unknown sources
+// — callers (the bootstrap config in main.go) log + skip those rather
+// than failing startup, so a typo doesn't crash the whole server.
+func Build(name Source) Provider {
+	switch name {
+	case SourceGoogleBooks:
+		return NewGoogleBooks()
+	case SourceOpenLibrary:
+		return NewOpenLibrary()
+	case SourceAmazon:
+		return NewAmazon()
+	case SourceDuckDuckGo:
+		return NewDuckDuckGo()
+	}
+	return nil
+}
+
+// AllSources lists every provider id the bootstrap recognizes — handy
+// for logs and the docs that publish the allowed values.
+func AllSources() []Source {
+	return []Source{SourceGoogleBooks, SourceOpenLibrary, SourceAmazon, SourceDuckDuckGo}
+}
 
 // Query is the search input. Empty fields are ignored — providers compose
 // whatever they need from what's populated.

@@ -10,9 +10,13 @@ import {
   type Book,
   type Library,
 } from '@/api/books';
+import {
+  fetchReadingStats,
+  readingStatsQueryKey,
+  type ReadingStats,
+} from '@/api/reading';
 import { Cover } from '@/components/Cover';
 import { TopBar } from '@/components/TopBar';
-import { ACTIVITY } from '@/data/mock';
 
 export const Route = createFileRoute('/_app/')({
   component: Dashboard,
@@ -30,7 +34,7 @@ function Dashboard() {
   const navigate = useNavigate();
   const openBook = (id: string) => void navigate({ to: '/book/$id', params: { id } });
 
-  const [me, libraries, reading, recent] = useQueries({
+  const [me, libraries, reading, recent, readingStats] = useQueries({
     queries: [
       { queryKey: meQueryKey, queryFn: fetchMe, staleTime: 60_000 },
       { queryKey: librariesQueryKey, queryFn: fetchLibraries },
@@ -41,6 +45,10 @@ function Dashboard() {
       {
         queryKey: booksQueryKey({ sort: 'recent' }),
         queryFn: () => fetchBooks({ sort: 'recent' }),
+      },
+      {
+        queryKey: readingStatsQueryKey(84),
+        queryFn: () => fetchReadingStats(84),
       },
     ],
   });
@@ -54,17 +62,28 @@ function Dashboard() {
   const recentList = (recent.data?.books ?? []).slice(0, 12);
   const libraryList: Library[] = libraries.data ?? [];
 
+  const readingData: ReadingStats | undefined = readingStats.data;
+  // Dashboard renders exactly 12 weeks of cells (84 days). Defensive
+  // fill: if the API hands back fewer, pad with zeros so the grid
+  // stays rectangular — and trim if it somehow returns more.
+  const activity = fillDays(readingData?.heatmapMinutes ?? [], 84);
   const weeks: number[][] = [];
-  for (let w = 0; w < 12; w++) weeks.push(ACTIVITY.slice(w * 7, (w + 1) * 7));
+  for (let w = 0; w < 12; w++) weeks.push(activity.slice(w * 7, (w + 1) * 7));
 
-  const totalMin = ACTIVITY.reduce((a, b) => a + b, 0);
-  const readDays = ACTIVITY.filter((m) => m > 0).length;
+  const quarterHours = Math.round((readingData?.quarterMinutes ?? 0) / 60);
+  const quarterSessions = readingData?.quarterSessions ?? 0;
 
   return (
     <div className="fade-in">
       <TopBar
         title={`${greeting}, ${displayName}.`}
-        subtitle={`You've been reading for ${Math.round(totalMin / 60)} hours this quarter across ${readDays} sessions.`}
+        subtitle={
+          readingStats.isLoading
+            ? 'Pulling your reading session log…'
+            : quarterSessions === 0
+              ? "No reading sessions this quarter yet — open a book and the tracker starts."
+              : `You've been reading for ${quarterHours} hours this quarter across ${quarterSessions} sessions.`
+        }
       />
 
       <div style={{ padding: '28px 32px 80px', display: 'flex', flexDirection: 'column', gap: 40 }}>
@@ -91,7 +110,7 @@ function Dashboard() {
         <section>
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 16 }}>
             <h2 className="t-h2">Reading activity</h2>
-            <span className="t-micro">Last 12 weeks · mock</span>
+            <span className="t-micro">Last 12 weeks</span>
           </div>
           <div
             style={{
@@ -135,10 +154,29 @@ function Dashboard() {
 
             <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 20 }}>
               {[
-                { label: 'This week', value: '4h 12m', sub: '+ 38m vs last' },
-                { label: 'Current streak', value: '6 days', sub: 'longest this year' },
-                { label: 'Books finished', value: '24', sub: '7 this quarter' },
-                { label: 'Pages read', value: '4,812', sub: '~160 / week' },
+                {
+                  label: 'This week',
+                  value: formatMinutes(readingData?.thisWeekMinutes ?? 0),
+                  sub:
+                    (readingData?.thisWeekMinutes ?? 0) === 0
+                      ? 'no activity'
+                      : 'across the last 7 days',
+                },
+                {
+                  label: 'Current streak',
+                  value: `${readingData?.currentStreak ?? 0} day${(readingData?.currentStreak ?? 0) === 1 ? '' : 's'}`,
+                  sub: (readingData?.currentStreak ?? 0) > 0 ? 'keep it going' : 'start one today',
+                },
+                {
+                  label: 'This quarter',
+                  value: `${quarterHours}h`,
+                  sub: `${quarterSessions} ${quarterSessions === 1 ? 'session' : 'sessions'}`,
+                },
+                {
+                  label: 'All time',
+                  value: `${Math.round((readingData?.allTimeMinutes ?? 0) / 60)}h`,
+                  sub: 'total time in readers',
+                },
               ].map((s) => (
                 <div key={s.label} style={{ borderLeft: '2px solid var(--color-accent)', paddingLeft: 14 }}>
                   <div className="t-label" style={{ marginBottom: 6 }}>{s.label}</div>
@@ -303,4 +341,22 @@ function timeOfDayGreeting(): string {
   if (h < 12) return 'Good morning';
   if (h < 18) return 'Good afternoon';
   return 'Good evening';
+}
+
+// fillDays normalizes the heatmap array to exactly `target` entries so
+// the 12×7 grid doesn't warp when the API returns fewer days (new
+// install) or — defensively — more than requested.
+function fillDays(minutes: number[], target: number): number[] {
+  if (minutes.length === target) return minutes;
+  if (minutes.length > target) return minutes.slice(minutes.length - target);
+  return Array(target - minutes.length).fill(0).concat(minutes);
+}
+
+function formatMinutes(m: number): string {
+  if (m <= 0) return '0m';
+  const h = Math.floor(m / 60);
+  const mins = m % 60;
+  if (h === 0) return `${mins}m`;
+  if (mins === 0) return `${h}h`;
+  return `${h}h ${mins}m`;
 }

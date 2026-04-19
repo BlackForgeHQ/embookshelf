@@ -3,6 +3,11 @@ import { useQuery } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
 
 import {
+  fetchReadingStats,
+  readingStatsQueryKey,
+  type ReadingStats,
+} from '@/api/reading';
+import {
   fetchStats,
   statsQueryKey,
   type StatsBucket,
@@ -17,6 +22,10 @@ export const Route = createFileRoute('/_app/stats')({
 
 function StatsPage() {
   const stats = useQuery({ queryKey: statsQueryKey, queryFn: fetchStats });
+  const reading = useQuery({
+    queryKey: readingStatsQueryKey(84),
+    queryFn: () => fetchReadingStats(84),
+  });
 
   // Cover coverage makes more sense as a percentage than a raw count.
   const coverPct = useMemo(() => {
@@ -72,6 +81,13 @@ function StatsPage() {
                 />
               </div>
             </section>
+
+            {/* Reading activity */}
+            <Card title="Reading activity" subtitle="last 12 weeks">
+              {reading.isLoading && <EmptyRow>Loading session log…</EmptyRow>}
+              {reading.isError && <EmptyRow>Failed to load reading sessions.</EmptyRow>}
+              {reading.data && <ReadingActivity data={reading.data} />}
+            </Card>
 
             {/* Two-column: libraries + formats */}
             <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 28 }}>
@@ -319,6 +335,94 @@ function EmptyRow({ children }: { children: ReactNode }) {
       {children}
     </div>
   );
+}
+
+function ReadingActivity({ data }: { data: ReadingStats }) {
+  // Normalize to exactly 84 days so the weekly grid stays rectangular.
+  const days = fillDays(data.heatmapMinutes, 84);
+  const weeks: number[][] = [];
+  for (let w = 0; w < 12; w++) weeks.push(days.slice(w * 7, (w + 1) * 7));
+
+  const totalMin = days.reduce((a, b) => a + b, 0);
+  const readDays = days.filter((m) => m > 0).length;
+
+  return (
+    <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
+      <div>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'flex-start' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginRight: 6, paddingTop: 2 }}>
+            {['Mon', '', 'Wed', '', 'Fri', '', ''].map((d, i) => (
+              <div key={i} className="mono" style={{ fontSize: 9, color: 'var(--color-ink-3)', height: 12 }}>
+                {d}
+              </div>
+            ))}
+          </div>
+          {weeks.map((week, wi) => (
+            <div key={wi} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {week.map((m, di) => (
+                <div
+                  key={di}
+                  title={m === 0 ? 'no activity' : `${m} min`}
+                  style={{
+                    width: 12,
+                    height: 12,
+                    borderRadius: 1,
+                    background: heatColor(m),
+                  }}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14 }}>
+          <span className="t-micro">Less</span>
+          {[0, 15, 30, 45, 60].map((m) => (
+            <div key={m} style={{ width: 10, height: 10, background: heatColor(m), borderRadius: 1 }} />
+          ))}
+          <span className="t-micro">More</span>
+        </div>
+      </div>
+
+      <div style={{ flex: 1, minWidth: 240, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignSelf: 'center' }}>
+        <Tile label="This week" value={formatMinutes(data.thisWeekMinutes)} />
+        <Tile
+          label="Current streak"
+          value={`${data.currentStreak} day${data.currentStreak === 1 ? '' : 's'}`}
+        />
+        <Tile label="12-week total" value={formatMinutes(totalMin)} sub={`${readDays} active days`} />
+        <Tile
+          label="All time"
+          value={formatMinutes(data.allTimeMinutes)}
+          sub={`${data.quarterSessions} sessions this quarter`}
+        />
+      </div>
+    </div>
+  );
+}
+
+// Heatmap color ramp — same thresholds the Dashboard uses so the two
+// views stay visually consistent.
+function heatColor(m: number): string {
+  if (m === 0) return 'var(--color-paper-3)';
+  if (m < 20) return 'oklch(0.78 0.06 35)';
+  if (m < 35) return 'oklch(0.65 0.09 35)';
+  if (m < 50) return 'oklch(0.52 0.11 35)';
+  return 'oklch(0.42 0.11 35)';
+}
+
+function fillDays(minutes: number[], target: number): number[] {
+  if (minutes.length === target) return minutes;
+  if (minutes.length > target) return minutes.slice(minutes.length - target);
+  return Array(target - minutes.length).fill(0).concat(minutes);
+}
+
+function formatMinutes(m: number): string {
+  if (m <= 0) return '0m';
+  const h = Math.floor(m / 60);
+  const mins = m % 60;
+  if (h === 0) return `${mins}m`;
+  if (mins === 0) return `${h}h`;
+  return `${h}h ${mins}m`;
 }
 
 function PanelMessage({ children, error }: { children: ReactNode; error?: boolean }) {
