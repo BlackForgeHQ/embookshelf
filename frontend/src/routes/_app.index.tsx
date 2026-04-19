@@ -98,7 +98,7 @@ function Dashboard() {
           {readingList.length === 0 && !reading.isLoading ? (
             <EmptyState message="Nothing on the Reading Now shelf. Open a book and tap “Continue reading” to add it." />
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: 20 }}>
               {readingList.map((b) => (
                 <ReadingCard key={b.id} book={b} onOpen={openBook} />
               ))}

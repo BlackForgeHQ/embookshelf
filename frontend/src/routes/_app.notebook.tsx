@@ -64,7 +64,7 @@ function Notebook() {
   return (
     <div className="fade-in">
       <TopBar title="Notebook" subtitle="Every highlight and marginalia, across every book." />
-      <div style={{ padding: '28px 32px 80px', maxWidth: 820 }}>
+      <div style={{ padding: '28px 32px 80px' }}>
         {annotations.isLoading && (
           <div className="t-small" style={{ fontStyle: 'italic' }}>Loading notebook…</div>
         )}
