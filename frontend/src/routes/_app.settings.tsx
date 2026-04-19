@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   useMutation,
   useQuery,
@@ -6,44 +6,72 @@ import {
 } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
 
-import { fetchMe, meQueryKey } from '@/api/auth';
+import {
+  changePassword,
+  fetchMe,
+  meQueryKey,
+  updateDisplayName,
+  type AuthUser,
+} from '@/api/auth';
 import type { ApiError } from '@/api/client';
 import {
   createLibraryPath,
+  createSettingsUser,
   deleteLibraryPath,
+  deleteSettingsUser,
+  fetchInstanceInfo,
   fetchSettingsLibraries,
+  fetchSettingsUsers,
+  instanceInfoQueryKey,
   scanLibraryPath,
   settingsLibrariesQueryKey,
+  settingsUsersQueryKey,
+  updateSettingsUserRole,
   type SettingsLibrary,
   type SettingsLibraryPath,
 } from '@/api/settings';
 import { Icon } from '@/components/Icon';
 import { TopBar } from '@/components/TopBar';
+import {
+  defaultReadingPreferences,
+  loadReadingPreferences,
+  saveReadingPreferences,
+  type ReadingPreferences,
+} from '@/lib/readingPreferences';
 
 export const Route = createFileRoute('/_app/settings')({
   component: Settings,
 });
 
-type SectionKey = 'account' | 'libraries' | 'placeholder';
+type SectionKey =
+  | 'account'
+  | 'reading'
+  | 'libraries'
+  | 'providers'
+  | 'devices'
+  | 'email'
+  | 'users'
+  | 'backups'
+  | 'about';
 
-type SectionSpec = { key: SectionKey; label: string; available: boolean };
+type SectionSpec = { key: SectionKey; label: string; adminOnly?: boolean };
 
 const SECTIONS: SectionSpec[] = [
-  { key: 'account', label: 'Account', available: true },
-  { key: 'placeholder', label: 'Reading preferences', available: false },
-  { key: 'libraries', label: 'Libraries', available: true },
-  { key: 'placeholder', label: 'Metadata providers', available: false },
-  { key: 'placeholder', label: 'Device sync', available: false },
-  { key: 'placeholder', label: 'Email delivery', available: false },
-  { key: 'placeholder', label: 'Users & roles', available: false },
-  { key: 'placeholder', label: 'Backups', available: false },
-  { key: 'placeholder', label: 'About', available: false },
+  { key: 'account', label: 'Account' },
+  { key: 'reading', label: 'Reading preferences' },
+  { key: 'libraries', label: 'Libraries', adminOnly: true },
+  { key: 'providers', label: 'Metadata providers', adminOnly: true },
+  { key: 'devices', label: 'Device sync' },
+  { key: 'email', label: 'Email delivery', adminOnly: true },
+  { key: 'users', label: 'Users & roles', adminOnly: true },
+  { key: 'backups', label: 'Backups', adminOnly: true },
+  { key: 'about', label: 'About' },
 ];
 
 function Settings() {
-  const [activeLabel, setActiveLabel] = useState<string>('Account');
-  const activeSection =
-    SECTIONS.find((s) => s.label === activeLabel) ?? SECTIONS[0];
+  const me = useQuery({ queryKey: meQueryKey, queryFn: fetchMe, staleTime: 60_000 });
+  const isAdmin = me.data?.role === 'admin';
+  const [active, setActive] = useState<SectionKey>('account');
 
   return (
     <div className="fade-in">
@@ -59,29 +87,33 @@ function Settings() {
       >
         <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           {SECTIONS.map((s) => {
-            const selected = s.label === activeLabel;
+            const selected = s.key === active;
+            const gated = s.adminOnly && !isAdmin;
             return (
               <button
-                key={s.label}
+                key={s.key}
                 type="button"
-                onClick={() => setActiveLabel(s.label)}
-                disabled={!s.available}
+                onClick={() => setActive(s.key)}
+                disabled={gated}
                 style={{
                   padding: '8px 12px',
                   textAlign: 'left',
                   background: selected ? 'var(--color-paper-3)' : 'transparent',
                   border: 'none',
-                  cursor: s.available ? 'pointer' : 'default',
+                  cursor: gated ? 'default' : 'pointer',
                   fontFamily: 'var(--font-serif)',
                   fontSize: 13.5,
-                  borderLeft: selected ? '2px solid var(--color-accent)' : '2px solid transparent',
-                  color: !s.available
+                  borderLeft: selected
+                    ? '2px solid var(--color-accent)'
+                    : '2px solid transparent',
+                  color: gated
                     ? 'var(--color-ink-4)'
                     : selected
                       ? 'var(--color-ink-1)'
                       : 'var(--color-ink-2)',
-                  opacity: s.available ? 1 : 0.6,
+                  opacity: gated ? 0.6 : 1,
                 }}
+                title={gated ? 'Admin-only' : undefined}
               >
                 {s.label}
               </button>
@@ -90,24 +122,67 @@ function Settings() {
         </nav>
 
         <div style={{ maxWidth: 640 }}>
-          {activeSection.key === 'account' && <AccountPanel />}
-          {activeSection.key === 'libraries' && <LibrariesPanel />}
-          {activeSection.key === 'placeholder' && <PlaceholderPanel label={activeLabel} />}
+          {active === 'account' && <AccountPanel />}
+          {active === 'reading' && <ReadingPreferencesPanel />}
+          {active === 'libraries' && <LibrariesPanel isAdmin={isAdmin} />}
+          {active === 'providers' && <ProvidersPanel isAdmin={isAdmin} />}
+          {active === 'devices' && <DevicesPanel />}
+          {active === 'email' && <EmailPanel isAdmin={isAdmin} />}
+          {active === 'users' && <UsersPanel isAdmin={isAdmin} me={me.data ?? null} />}
+          {active === 'backups' && <BackupsPanel isAdmin={isAdmin} />}
+          {active === 'about' && <AboutPanel isAdmin={isAdmin} />}
         </div>
       </div>
     </div>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Account
+// ---------------------------------------------------------------------------
+
 const AUTH_METHODS: ReadonlyArray<{ n: string; on: boolean; sub: string }> = [
-  { n: 'Local (session)', on: true,  sub: 'Username + password' },
-  { n: 'OIDC',            on: false, sub: 'Pending' },
+  { n: 'Local (session)', on: true, sub: 'Username + password' },
+  { n: 'OIDC', on: false, sub: 'Pending' },
   { n: 'Remote / Forward Auth', on: false, sub: 'Reverse proxy headers' },
 ];
 
 function AccountPanel() {
+  const queryClient = useQueryClient();
   const me = useQuery({ queryKey: meQueryKey, queryFn: fetchMe, staleTime: 60_000 });
   const user = me.data;
+
+  const [editing, setEditing] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [pwOpen, setPwOpen] = useState(false);
+  const [pwCurrent, setPwCurrent] = useState('');
+  const [pwNext, setPwNext] = useState('');
+  const [pwConfirm, setPwConfirm] = useState('');
+  const [notice, setNotice] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
+
+  const nameMut = useMutation({
+    mutationFn: (next: string) => updateDisplayName(next),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: meQueryKey });
+      setEditing(false);
+      setNotice({ kind: 'ok', msg: 'Display name updated.' });
+    },
+    onError: (e) => setNotice({ kind: 'err', msg: (e as unknown as ApiError).message }),
+  });
+
+  const pwMut = useMutation({
+    mutationFn: ({ current, next }: { current: string; next: string }) =>
+      changePassword(current, next),
+    onSuccess: () => {
+      setPwOpen(false);
+      setPwCurrent('');
+      setPwNext('');
+      setPwConfirm('');
+      setNotice({ kind: 'ok', msg: 'Password updated.' });
+    },
+    onError: (e) => setNotice({ kind: 'err', msg: (e as unknown as ApiError).message }),
+  });
+
   const joined = user?.createdAt
     ? new Date(user.createdAt).toLocaleDateString(undefined, {
         month: 'short',
@@ -120,48 +195,144 @@ function AccountPanel() {
     <>
       <h2 className="t-h2" style={{ marginBottom: 24 }}>Account</h2>
 
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 16,
-          padding: 16,
-          border: '1px solid var(--color-rule-soft)',
-          background: 'var(--color-paper-0)',
-          marginBottom: 24,
-        }}
-      >
-        <div
-          style={{
-            width: 48,
-            height: 48,
-            borderRadius: '50%',
-            background: 'var(--color-accent)',
-            color: 'var(--color-paper-0)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontFamily: 'var(--font-serif)',
-            fontSize: 18,
-            fontWeight: 500,
-          }}
-        >
-          {user?.initials ?? '…'}
-        </div>
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 500 }}>{user?.display ?? '…'}</div>
-          <div className="t-small" style={{ fontSize: 12 }}>
-            {user?.email ?? '—'} · {roleLabel} · joined {joined}
-          </div>
-        </div>
-        <div style={{ flex: 1 }} />
-        <button className="btn small" disabled title="Endpoint pending">
-          Change password
-        </button>
-      </div>
+      {notice && <Notice kind={notice.kind} onClose={() => setNotice(null)}>{notice.msg}</Notice>}
 
-      <div className="t-label" style={{ marginBottom: 10 }}>Authentication</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 24 }}>
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <Avatar initials={user?.initials} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {editing ? (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  nameMut.mutate(nameDraft.trim());
+                }}
+                style={{ display: 'flex', gap: 8, alignItems: 'center' }}
+              >
+                <input
+                  autoFocus
+                  className="input"
+                  value={nameDraft}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  placeholder="Display name"
+                  style={{ flex: 1, fontSize: 14 }}
+                />
+                <button type="submit" className="btn small primary" disabled={nameMut.isPending}>
+                  Save
+                </button>
+                <button
+                  type="button"
+                  className="btn small ghost"
+                  onClick={() => setEditing(false)}
+                >
+                  Cancel
+                </button>
+              </form>
+            ) : (
+              <>
+                <div style={{ fontSize: 15, fontWeight: 500 }}>{user?.display ?? '…'}</div>
+                <div className="t-small" style={{ fontSize: 12 }}>
+                  {user?.email ?? '—'} · {roleLabel} · joined {joined}
+                </div>
+              </>
+            )}
+          </div>
+          {!editing && (
+            <>
+              <button
+                className="btn small ghost"
+                onClick={() => {
+                  setNameDraft(user?.name ?? '');
+                  setEditing(true);
+                  setNotice(null);
+                }}
+              >
+                Edit name
+              </button>
+              <button
+                className="btn small"
+                onClick={() => {
+                  setPwOpen((v) => !v);
+                  setNotice(null);
+                }}
+              >
+                Change password
+              </button>
+            </>
+          )}
+        </div>
+
+        {pwOpen && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (pwNext !== pwConfirm) {
+                setNotice({ kind: 'err', msg: 'New passwords do not match.' });
+                return;
+              }
+              pwMut.mutate({ current: pwCurrent, next: pwNext });
+            }}
+            style={{
+              marginTop: 16,
+              paddingTop: 16,
+              borderTop: '1px dashed var(--color-rule-soft)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+            }}
+          >
+            <Field label="Current password">
+              <input
+                type="password"
+                className="input"
+                value={pwCurrent}
+                onChange={(e) => setPwCurrent(e.target.value)}
+                autoComplete="current-password"
+                required
+              />
+            </Field>
+            <Field label="New password">
+              <input
+                type="password"
+                className="input"
+                value={pwNext}
+                onChange={(e) => setPwNext(e.target.value)}
+                autoComplete="new-password"
+                minLength={8}
+                required
+              />
+            </Field>
+            <Field label="Confirm new password">
+              <input
+                type="password"
+                className="input"
+                value={pwConfirm}
+                onChange={(e) => setPwConfirm(e.target.value)}
+                autoComplete="new-password"
+                minLength={8}
+                required
+              />
+            </Field>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn small ghost"
+                onClick={() => setPwOpen(false)}
+              >
+                Cancel
+              </button>
+              <button type="submit" className="btn small primary" disabled={pwMut.isPending}>
+                {pwMut.isPending ? 'Updating…' : 'Update password'}
+              </button>
+            </div>
+          </form>
+        )}
+      </Card>
+
+      <div className="t-label" style={{ marginTop: 24, marginBottom: 10 }}>
+        Authentication
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {AUTH_METHODS.map((a) => (
           <div
             key={a.n}
@@ -194,10 +365,107 @@ function AccountPanel() {
   );
 }
 
-function LibrariesPanel() {
+// ---------------------------------------------------------------------------
+// Reading preferences (client-only, localStorage)
+// ---------------------------------------------------------------------------
+
+function ReadingPreferencesPanel() {
+  const [prefs, setPrefs] = useState<ReadingPreferences>(defaultReadingPreferences);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    setPrefs(loadReadingPreferences());
+  }, []);
+
+  const update = <K extends keyof ReadingPreferences>(key: K, value: ReadingPreferences[K]) => {
+    const next = { ...prefs, [key]: value };
+    setPrefs(next);
+    saveReadingPreferences(next);
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 1200);
+  };
+
+  return (
+    <>
+      <h2 className="t-h2" style={{ marginBottom: 8 }}>Reading preferences</h2>
+      <p className="t-small" style={{ marginBottom: 24, fontStyle: 'italic' }}>
+        Stored locally in this browser. The reader picks them up on next open.
+        {saved && <span style={{ marginLeft: 8, color: 'oklch(0.5 0.12 140)' }}>✓ saved</span>}
+      </p>
+
+      <Card>
+        <Field label="Theme">
+          <Select
+            value={prefs.theme}
+            onChange={(v) => update('theme', v as ReadingPreferences['theme'])}
+            options={[
+              { value: 'light', label: 'Light (paper)' },
+              { value: 'sepia', label: 'Sepia' },
+              { value: 'dark', label: 'Dark' },
+            ]}
+          />
+        </Field>
+
+        <Field label="Font family">
+          <Select
+            value={prefs.fontFamily}
+            onChange={(v) => update('fontFamily', v as ReadingPreferences['fontFamily'])}
+            options={[
+              { value: 'serif', label: 'Serif (default)' },
+              { value: 'sans', label: 'Sans-serif' },
+              { value: 'mono', label: 'Monospace' },
+            ]}
+          />
+        </Field>
+
+        <Field label={`Font size — ${prefs.fontSize}px`}>
+          <input
+            type="range"
+            min={14}
+            max={24}
+            step={1}
+            value={prefs.fontSize}
+            onChange={(e) => update('fontSize', Number(e.target.value))}
+            style={{ width: '100%' }}
+          />
+        </Field>
+
+        <Field label={`Line height — ${prefs.lineHeight.toFixed(2)}`}>
+          <input
+            type="range"
+            min={1.2}
+            max={2.0}
+            step={0.05}
+            value={prefs.lineHeight}
+            onChange={(e) => update('lineHeight', Number(e.target.value))}
+            style={{ width: '100%' }}
+          />
+        </Field>
+
+        <Toggle
+          label="Record reading sessions"
+          hint="Progress ticks feed the Stats dashboard heatmap."
+          checked={prefs.trackSessions}
+          onChange={(v) => update('trackSessions', v)}
+        />
+
+        <Toggle
+          label="Two-page layout on wide screens"
+          hint="Splits EPUB rendering into a spread when width allows."
+          checked={prefs.twoPage}
+          onChange={(v) => update('twoPage', v)}
+        />
+      </Card>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Libraries (existing, lightly tweaked)
+// ---------------------------------------------------------------------------
+
+function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
   const queryClient = useQueryClient();
-  const me = useQuery({ queryKey: meQueryKey, queryFn: fetchMe, staleTime: 60_000 });
-  const isAdmin = me.data?.role === 'admin';
 
   const libraries = useQuery({
     queryKey: settingsLibrariesQueryKey,
@@ -207,8 +475,6 @@ function LibrariesPanel() {
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: settingsLibrariesQueryKey });
-    // Bust the public library list too — adding a path doesn't flip the
-    // book count, but deleting one can, and a scan will.
     queryClient.invalidateQueries({ queryKey: ['libraries'] });
   };
 
@@ -230,16 +496,7 @@ function LibrariesPanel() {
     | ApiError
     | null;
 
-  if (!isAdmin) {
-    return (
-      <>
-        <h2 className="t-h2" style={{ marginBottom: 24 }}>Libraries</h2>
-        <div className="t-small" style={{ fontStyle: 'italic' }}>
-          Library filesystem settings are admin-only.
-        </div>
-      </>
-    );
-  }
+  if (!isAdmin) return <AdminGate label="Libraries" />;
 
   return (
     <>
@@ -249,37 +506,17 @@ function LibrariesPanel() {
         files and enqueue them through the BookDrop review queue.
       </p>
 
-      {error && (
-        <div
-          style={{
-            padding: '10px 14px',
-            border: '1px solid var(--color-accent-soft)',
-            background: 'var(--color-accent-soft)',
-            color: 'var(--color-accent-ink)',
-            borderRadius: 2,
-            fontSize: 13,
-            marginBottom: 20,
-          }}
-        >
-          {error.message}
-        </div>
-      )}
+      {error && <Notice kind="err">{error.message}</Notice>}
 
       {libraries.isLoading && (
-        <div className="t-small" style={{ fontStyle: 'italic' }}>
-          Loading libraries…
-        </div>
+        <div className="t-small" style={{ fontStyle: 'italic' }}>Loading libraries…</div>
       )}
 
       {(libraries.data ?? []).map((lib) => (
         <LibraryCard
           key={lib.id}
           library={lib}
-          busy={
-            createMut.isPending ||
-            deleteMut.isPending ||
-            scanMut.isPending
-          }
+          busy={createMut.isPending || deleteMut.isPending || scanMut.isPending}
           onAddPath={(path) => createMut.mutate({ libraryId: lib.id, path })}
           onDeletePath={(id) => deleteMut.mutate(id)}
           onScanPath={(id) => scanMut.mutate(id)}
@@ -433,12 +670,639 @@ function PathRow({
   );
 }
 
-function PlaceholderPanel({ label }: { label: string }) {
+// ---------------------------------------------------------------------------
+// Metadata providers (read-only — configured via env var)
+// ---------------------------------------------------------------------------
+
+function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
+  const info = useQuery({
+    queryKey: instanceInfoQueryKey,
+    queryFn: fetchInstanceInfo,
+    enabled: isAdmin,
+  });
+
+  if (!isAdmin) return <AdminGate label="Metadata providers" />;
+
+  const providers = info.data?.enrichmentProviders ?? [];
+  const enabled = providers.filter((p) => p.enabled).length;
+
   return (
     <>
-      <h2 className="t-h2" style={{ marginBottom: 8 }}>{label}</h2>
+      <h2 className="t-h2" style={{ marginBottom: 8 }}>Metadata providers</h2>
+      <p className="t-small" style={{ marginBottom: 24, fontStyle: 'italic' }}>
+        Enrichment queries are fanned out across enabled providers. Configure
+        the set with <span className="mono">ENRICHMENT_PROVIDERS</span> and
+        restart the server.
+      </p>
+
+      <div className="t-label" style={{ marginBottom: 10 }}>
+        {enabled} of {providers.length} enabled
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {providers.map((p) => (
+          <div
+            key={p.id}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 14,
+              padding: '10px 14px',
+              border: '1px solid var(--color-rule-soft)',
+              background: 'var(--color-paper-0)',
+            }}
+          >
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: p.enabled ? 'oklch(0.58 0.12 140)' : 'var(--color-ink-4)',
+              }}
+            />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 500 }}>{p.name}</div>
+              <div className="t-small" style={{ fontSize: 11.5 }}>
+                <span className="mono">{p.id}</span>
+                {p.external && ' · external API'}
+              </div>
+            </div>
+            <span className="t-micro">{p.enabled ? 'enabled' : 'disabled'}</span>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Device sync (OPDS endpoint)
+// ---------------------------------------------------------------------------
+
+function DevicesPanel() {
+  const [copied, setCopied] = useState(false);
+  const opdsUrl = useMemo(() => {
+    if (typeof window === 'undefined') return '';
+    return `${window.location.origin}/opds`;
+  }, []);
+
+  const copy = async () => {
+    await navigator.clipboard.writeText(opdsUrl);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <>
+      <h2 className="t-h2" style={{ marginBottom: 8 }}>Device sync</h2>
+      <p className="t-small" style={{ marginBottom: 24, fontStyle: 'italic' }}>
+        Point OPDS-aware readers (KOReader, Moon+ Reader, FBReader, Marvin) at
+        the catalog URL below. Authenticate with your account email and
+        password — sessions aren't used on this surface.
+      </p>
+
+      <Card>
+        <Field label="OPDS catalog URL">
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input className="input mono" readOnly value={opdsUrl} style={{ flex: 1 }} />
+            <button type="button" className="btn" onClick={copy}>
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+        </Field>
+
+        <div className="t-small">
+          <div style={{ marginBottom: 6 }}>
+            <strong>Authentication:</strong> HTTP Basic Auth
+          </div>
+          <div style={{ marginBottom: 6 }}>
+            <strong>Search:</strong> OpenSearch descriptor at{' '}
+            <span className="mono">{opdsUrl}/search</span>
+          </div>
+          <div>
+            <strong>Downloads:</strong> each entry exposes its original file
+            (EPUB, PDF, CBZ, …) via an acquisition link.
+          </div>
+        </div>
+      </Card>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Email delivery (informational)
+// ---------------------------------------------------------------------------
+
+function EmailPanel({ isAdmin }: { isAdmin: boolean }) {
+  if (!isAdmin) return <AdminGate label="Email delivery" />;
+  return (
+    <>
+      <h2 className="t-h2" style={{ marginBottom: 8 }}>Email delivery</h2>
+      <p className="t-small" style={{ marginBottom: 24, fontStyle: 'italic' }}>
+        SMTP is not yet wired. Send-to-Kindle and share-by-email will surface
+        here once the transport is configured.
+      </p>
+
+      <Card>
+        <DefRow label="Transport" value="—" />
+        <DefRow label="From address" value="—" />
+        <DefRow label="Send-to-Kindle" value="disabled" />
+      </Card>
+
+      <p className="t-small" style={{ marginTop: 16, fontStyle: 'italic' }}>
+        Configure via <span className="mono">SMTP_HOST</span>,{' '}
+        <span className="mono">SMTP_USERNAME</span>, and related env vars on
+        the server.
+      </p>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Users & roles (admin CRUD)
+// ---------------------------------------------------------------------------
+
+function UsersPanel({ isAdmin, me }: { isAdmin: boolean; me: AuthUser | null }) {
+  const queryClient = useQueryClient();
+  const users = useQuery({
+    queryKey: settingsUsersQueryKey,
+    queryFn: fetchSettingsUsers,
+    enabled: isAdmin,
+  });
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [draft, setDraft] = useState({
+    email: '',
+    name: '',
+    password: '',
+    role: 'user' as 'user' | 'admin',
+  });
+  const [notice, setNotice] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: settingsUsersQueryKey });
+
+  const createMut = useMutation({
+    mutationFn: () => createSettingsUser(draft),
+    onSuccess: () => {
+      invalidate();
+      setCreateOpen(false);
+      setDraft({ email: '', name: '', password: '', role: 'user' });
+      setNotice({ kind: 'ok', msg: 'User created.' });
+    },
+    onError: (e) => setNotice({ kind: 'err', msg: (e as unknown as ApiError).message }),
+  });
+
+  const roleMut = useMutation({
+    mutationFn: ({ id, role }: { id: string; role: 'admin' | 'user' }) =>
+      updateSettingsUserRole(id, role),
+    onSuccess: invalidate,
+    onError: (e) => setNotice({ kind: 'err', msg: (e as unknown as ApiError).message }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => deleteSettingsUser(id),
+    onSuccess: invalidate,
+    onError: (e) => setNotice({ kind: 'err', msg: (e as unknown as ApiError).message }),
+  });
+
+  if (!isAdmin) return <AdminGate label="Users & roles" />;
+
+  return (
+    <>
+      <div style={{ display: 'flex', alignItems: 'baseline', marginBottom: 8 }}>
+        <h2 className="t-h2" style={{ flex: 1 }}>Users &amp; roles</h2>
+        <button
+          type="button"
+          className="btn small"
+          onClick={() => {
+            setCreateOpen((v) => !v);
+            setNotice(null);
+          }}
+        >
+          <Icon name="plus" size={13} /> New user
+        </button>
+      </div>
+      <p className="t-small" style={{ marginBottom: 24, fontStyle: 'italic' }}>
+        Admins see every settings pane; regular users see only Account,
+        Reading preferences, Device sync, and About.
+      </p>
+
+      {notice && <Notice kind={notice.kind} onClose={() => setNotice(null)}>{notice.msg}</Notice>}
+
+      {createOpen && (
+        <Card>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              createMut.mutate();
+            }}
+            style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+          >
+            <Field label="Email">
+              <input
+                type="email"
+                className="input"
+                value={draft.email}
+                onChange={(e) => setDraft({ ...draft, email: e.target.value })}
+                required
+              />
+            </Field>
+            <Field label="Display name">
+              <input
+                className="input"
+                value={draft.name}
+                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              />
+            </Field>
+            <Field label="Initial password">
+              <input
+                type="password"
+                className="input"
+                value={draft.password}
+                onChange={(e) => setDraft({ ...draft, password: e.target.value })}
+                minLength={8}
+                required
+              />
+            </Field>
+            <Field label="Role">
+              <Select
+                value={draft.role}
+                onChange={(v) => setDraft({ ...draft, role: v as 'user' | 'admin' })}
+                options={[
+                  { value: 'user', label: 'User' },
+                  { value: 'admin', label: 'Admin' },
+                ]}
+              />
+            </Field>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn small ghost"
+                onClick={() => setCreateOpen(false)}
+              >
+                Cancel
+              </button>
+              <button type="submit" className="btn small primary" disabled={createMut.isPending}>
+                {createMut.isPending ? 'Creating…' : 'Create user'}
+              </button>
+            </div>
+          </form>
+        </Card>
+      )}
+
+      {users.isLoading && (
+        <div className="t-small" style={{ fontStyle: 'italic' }}>Loading users…</div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
+        {(users.data ?? []).map((u) => {
+          const isMe = u.id === me?.id;
+          return (
+            <div
+              key={u.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 14,
+                padding: '10px 14px',
+                border: '1px solid var(--color-rule-soft)',
+                background: 'var(--color-paper-0)',
+              }}
+            >
+              <Avatar initials={u.initials} size={32} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500 }}>
+                  {u.display} {isMe && <span className="t-micro">you</span>}
+                </div>
+                <div className="t-small" style={{ fontSize: 11.5 }}>
+                  {u.email} · joined{' '}
+                  {new Date(u.createdAt).toLocaleDateString(undefined, {
+                    month: 'short',
+                    year: 'numeric',
+                  })}
+                  {u.lastSeenAt && ` · last seen ${new Date(u.lastSeenAt).toLocaleDateString()}`}
+                </div>
+              </div>
+              <Select
+                value={u.role}
+                onChange={(v) => roleMut.mutate({ id: u.id, role: v as 'admin' | 'user' })}
+                options={[
+                  { value: 'user', label: 'User' },
+                  { value: 'admin', label: 'Admin' },
+                ]}
+                disabled={isMe || roleMut.isPending}
+              />
+              <button
+                type="button"
+                className="btn ghost small"
+                disabled={isMe || deleteMut.isPending}
+                onClick={() => {
+                  if (window.confirm(`Delete ${u.display}? This cannot be undone.`)) {
+                    deleteMut.mutate(u.id);
+                  }
+                }}
+                style={{ color: 'var(--color-accent-ink)' }}
+                aria-label="Delete user"
+                title={isMe ? "You can't delete yourself" : 'Delete user'}
+              >
+                <Icon name="close" size={12} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Backups (informational)
+// ---------------------------------------------------------------------------
+
+function BackupsPanel({ isAdmin }: { isAdmin: boolean }) {
+  if (!isAdmin) return <AdminGate label="Backups" />;
+  return (
+    <>
+      <h2 className="t-h2" style={{ marginBottom: 8 }}>Backups</h2>
+      <p className="t-small" style={{ marginBottom: 24, fontStyle: 'italic' }}>
+        The on-disk data directory and the PostgreSQL volume hold every
+        durable piece of state. Back them up together.
+      </p>
+
+      <Card>
+        <DefRow
+          label="Database"
+          value={
+            <>
+              <span className="mono">pg_dump embookshelf</span> — ship to your
+              usual blob store on a cron.
+            </>
+          }
+        />
+        <DefRow label="Book files" value={<span className="mono">library paths</span>} />
+        <DefRow label="Covers + BookDrop queue" value={<span className="mono">$DATA_PATH</span>} />
+      </Card>
+
+      <p className="t-small" style={{ marginTop: 16, fontStyle: 'italic' }}>
+        A scheduled-backups surface will land here once the job runner gains
+        an "export" task.
+      </p>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// About
+// ---------------------------------------------------------------------------
+
+function AboutPanel({ isAdmin }: { isAdmin: boolean }) {
+  const info = useQuery({
+    queryKey: instanceInfoQueryKey,
+    queryFn: fetchInstanceInfo,
+    enabled: isAdmin,
+  });
+
+  return (
+    <>
+      <h2 className="t-h2" style={{ marginBottom: 24 }}>About</h2>
+
+      <Card>
+        <DefRow label="Product" value="embookshelf" />
+        <DefRow
+          label="Version"
+          value={<span className="mono">{info.data?.version ?? '—'}</span>}
+        />
+        {isAdmin && (
+          <>
+            <DefRow
+              label="Runtime"
+              value={<span className="mono">{info.data?.goVersion ?? '—'}</span>}
+            />
+            <DefRow
+              label="Disk mode"
+              value={<span className="mono">{info.data?.diskMode ?? '—'}</span>}
+            />
+            <DefRow
+              label="BookDrop path"
+              value={<span className="mono">{info.data?.bookDropPath ?? '—'}</span>}
+            />
+            <DefRow
+              label="Data path"
+              value={<span className="mono">{info.data?.dataPath ?? '—'}</span>}
+            />
+            <DefRow
+              label="Migrate on start"
+              value={info.data ? (info.data.migrateOnStart ? 'yes' : 'no') : '—'}
+            />
+          </>
+        )}
+      </Card>
+
+      {isAdmin && info.data && (
+        <>
+          <div className="t-label" style={{ marginTop: 24, marginBottom: 10 }}>
+            Instance totals
+          </div>
+          <Card>
+            <DefRow label="Users" value={info.data.counts.users} />
+            <DefRow label="Libraries" value={info.data.counts.libraries} />
+            <DefRow label="Books" value={info.data.counts.books.toLocaleString()} />
+          </Card>
+        </>
+      )}
+
+      <p className="t-small" style={{ marginTop: 24, fontStyle: 'italic' }}>
+        embookshelf — self-hosted ebook library. AGPL-3.0.
+      </p>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Shared UI primitives (kept inline — the rest of the codebase uses
+// inline styles in this route)
+// ---------------------------------------------------------------------------
+
+function Card({ children }: { children: ReactNode }) {
+  return (
+    <div
+      style={{
+        padding: 16,
+        border: '1px solid var(--color-rule-soft)',
+        background: 'var(--color-paper-0)',
+        marginBottom: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <span className="t-label">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function Select({
+  value,
+  onChange,
+  options,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  disabled?: boolean;
+}) {
+  return (
+    <select
+      className="input"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+      style={{ fontSize: 13 }}
+    >
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function Toggle({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '8px 0',
+        borderTop: '1px dashed var(--color-rule-soft)',
+        cursor: 'pointer',
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ width: 16, height: 16 }}
+      />
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 13.5 }}>{label}</div>
+        {hint && <div className="t-small" style={{ fontSize: 11.5 }}>{hint}</div>}
+      </div>
+    </label>
+  );
+}
+
+function DefRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        gap: 12,
+        padding: '6px 0',
+        alignItems: 'baseline',
+      }}
+    >
+      <div className="t-label" style={{ width: 160, flexShrink: 0 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 13.5, flex: 1, minWidth: 0, wordBreak: 'break-word' }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function Avatar({ initials, size = 48 }: { initials?: string; size?: number }) {
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: '50%',
+        background: 'var(--color-accent)',
+        color: 'var(--color-paper-0)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontFamily: 'var(--font-serif)',
+        fontSize: Math.round(size * 0.375),
+        fontWeight: 500,
+        flexShrink: 0,
+      }}
+    >
+      {initials ?? '…'}
+    </div>
+  );
+}
+
+function Notice({
+  kind,
+  children,
+  onClose,
+}: {
+  kind: 'ok' | 'err';
+  children: ReactNode;
+  onClose?: () => void;
+}) {
+  const accent = kind === 'ok' ? 'oklch(0.58 0.12 140)' : 'var(--color-accent-ink)';
+  return (
+    <div
+      style={{
+        padding: '10px 14px',
+        border: `1px solid ${accent}`,
+        background: 'var(--color-paper-0)',
+        color: accent,
+        borderRadius: 2,
+        fontSize: 13,
+        marginBottom: 20,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+      }}
+    >
+      <span style={{ flex: 1 }}>{children}</span>
+      {onClose && (
+        <button
+          type="button"
+          className="btn ghost small"
+          onClick={onClose}
+          aria-label="Dismiss"
+        >
+          <Icon name="close" size={11} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function AdminGate({ label }: { label: string }) {
+  return (
+    <>
+      <h2 className="t-h2" style={{ marginBottom: 24 }}>{label}</h2>
       <div className="t-small" style={{ fontStyle: 'italic' }}>
-        This pane will light up when the corresponding backend endpoints land.
+        {label} are admin-only.
       </div>
     </>
   );

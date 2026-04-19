@@ -63,3 +63,20 @@ export async function signupStatus(): Promise<SignupStatus> {
 // Shared react-query key for the current user. Export so every mutation can
 // invalidate it in one line.
 export const meQueryKey = ['me'] as const;
+
+export async function changePassword(
+  current: string,
+  next: string,
+): Promise<void> {
+  await api<void>('/api/v1/me/password', {
+    method: 'POST',
+    body: JSON.stringify({ current, next }),
+  });
+}
+
+export async function updateDisplayName(name: string): Promise<void> {
+  await api<void>('/api/v1/me', {
+    method: 'PATCH',
+    body: JSON.stringify({ name }),
+  });
+}

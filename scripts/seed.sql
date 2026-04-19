@@ -43,11 +43,16 @@ FROM main, (VALUES
 ) AS t(title, author, format, year, rating, palette, descr, isbn, publisher, series, series_index, tags)
 ON CONFLICT DO NOTHING;
 
+-- Rename legacy slug from an earlier seed so re-runs on an existing DB
+-- pick up the canonical "reading" slug the frontend wires to.
+UPDATE shelves SET slug = 'reading', name = 'Reading Now'
+WHERE slug = 'currently-reading';
+
 -- Shelves (now per-user, attached to the admin).
 INSERT INTO shelves (name, slug, accent, user_id)
 SELECT t.name, t.slug, t.accent, u.id
 FROM users u, (VALUES
-  ('Currently reading', 'currently-reading', 'accent'),
+  ('Reading Now', 'reading', 'accent'),
   ('To read',           'to-read',           'teal'),
   ('Favorites',         'favorites',         'rust')
 ) AS t(name, slug, accent)
@@ -60,7 +65,7 @@ SELECT s.id, b.id
 FROM shelves s
 JOIN users u ON u.id = s.user_id AND u.email = 'admin@local'
 JOIN books  b ON
-  (s.slug = 'currently-reading' AND b.title IN ('The Name of the Rose','Gödel, Escher, Bach','The Three-Body Problem')) OR
+  (s.slug = 'reading' AND b.title IN ('The Name of the Rose','Gödel, Escher, Bach','The Three-Body Problem')) OR
   (s.slug = 'favorites'         AND b.title IN ('Piranesi','A Wizard of Earthsea','The Left Hand of Darkness','House of Leaves')) OR
   (s.slug = 'to-read'           AND b.title IN ('Blindsight','The Tombs of Atuan','Annihilation'))
 ON CONFLICT DO NOTHING;

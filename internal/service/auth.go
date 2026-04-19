@@ -132,3 +132,102 @@ func (s *AuthService) Signup(ctx context.Context, email, name, password, userAge
 func (s *AuthService) PurgeExpiredSessions(ctx context.Context) (int64, error) {
 	return s.sessions.PurgeExpired(ctx)
 }
+
+// ChangePassword verifies the current password and replaces the hash.
+// Returns ErrInvalidCredentials when `current` doesn't match so callers can
+// surface a generic message without leaking which half was wrong.
+func (s *AuthService) ChangePassword(ctx context.Context, userID, current, next string) error {
+	u, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if err := auth.VerifyPassword(u.PasswordHash, current); err != nil {
+		return ErrInvalidCredentials
+	}
+	hash, err := auth.HashPassword(next)
+	if err != nil {
+		return err
+	}
+	return s.users.UpdatePassword(ctx, userID, hash)
+}
+
+// UpdateDisplayName lets a user edit their own name. Pass an empty string
+// to clear it (Display() falls back to email).
+func (s *AuthService) UpdateDisplayName(ctx context.Context, userID, name string) error {
+	return s.users.UpdateName(ctx, userID, name)
+}
+
+// ErrLastAdmin guards against removing the only administrator. Both the
+// "demote last admin" and "delete last admin" paths surface this.
+var ErrLastAdmin = errors.New("cannot remove the last administrator")
+
+// ListUsers returns every user. Admin-only.
+func (s *AuthService) ListUsers(ctx context.Context) ([]model.User, error) {
+	return s.users.List(ctx)
+}
+
+// CreateUser is the admin-driven account creation flow. It does NOT issue a
+// session — the new user logs in separately.
+func (s *AuthService) CreateUser(ctx context.Context, email, name, password string, role model.Role) (model.User, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" {
+		return model.User{}, errors.New("email is required")
+	}
+	if role != model.RoleAdmin && role != model.RoleUser {
+		return model.User{}, errors.New("invalid role")
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return model.User{}, err
+	}
+	u, err := s.users.Create(ctx, email, name, hash, role)
+	if err != nil {
+		if strings.Contains(err.Error(), "users_email_key") {
+			return model.User{}, ErrEmailTaken
+		}
+		return model.User{}, err
+	}
+	return u, nil
+}
+
+// SetUserRole flips a user's role. Refuses to demote the last remaining admin.
+func (s *AuthService) SetUserRole(ctx context.Context, userID string, role model.Role) error {
+	if role != model.RoleAdmin && role != model.RoleUser {
+		return errors.New("invalid role")
+	}
+	if role == model.RoleUser {
+		u, err := s.users.GetByID(ctx, userID)
+		if err != nil {
+			return err
+		}
+		if u.Role == model.RoleAdmin {
+			n, err := s.users.CountByRole(ctx, model.RoleAdmin)
+			if err != nil {
+				return err
+			}
+			if n <= 1 {
+				return ErrLastAdmin
+			}
+		}
+	}
+	return s.users.UpdateRole(ctx, userID, role)
+}
+
+// DeleteUser removes a user and all their sessions. Refuses to delete the
+// last remaining admin.
+func (s *AuthService) DeleteUser(ctx context.Context, userID string) error {
+	u, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if u.Role == model.RoleAdmin {
+		n, err := s.users.CountByRole(ctx, model.RoleAdmin)
+		if err != nil {
+			return err
+		}
+		if n <= 1 {
+			return ErrLastAdmin
+		}
+	}
+	return s.users.Delete(ctx, userID)
+}

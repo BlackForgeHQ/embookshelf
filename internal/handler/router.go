@@ -26,7 +26,7 @@ func (h *Handler) Engine() *gin.Engine {
 		AllowCredentials: true,
 	}))
 
-	r.Use(auth.CSRFGuard())
+	r.Use(auth.CSRFGuard(h.cfg.AllowedOrigins))
 
 	api := r.Group("/api/v1")
 	{
@@ -43,6 +43,8 @@ func (h *Handler) Engine() *gin.Engine {
 		authed.Use(auth.RequireAuth(h.auth))
 		{
 			authed.GET("/me", h.Me)
+			authed.PATCH("/me", h.AccountUpdateName)
+			authed.POST("/me/password", h.AccountChangePassword)
 
 			// Library + catalog
 			authed.GET("/libraries", h.Libraries)
@@ -88,10 +90,17 @@ func (h *Handler) Engine() *gin.Engine {
 			admin := authed.Group("/settings")
 			admin.Use(auth.RequireRole(model.RoleAdmin))
 			{
+				admin.GET("/instance", h.InstanceInfo)
+
 				admin.GET("/libraries", h.SettingsLibraries)
 				admin.POST("/libraries/paths", h.SettingsLibraryPathCreate)
 				admin.DELETE("/libraries/paths/:id", h.SettingsLibraryPathDelete)
 				admin.POST("/libraries/paths/:id/scan", h.SettingsLibraryPathScan)
+
+				admin.GET("/users", h.SettingsUsersList)
+				admin.POST("/users", h.SettingsUsersCreate)
+				admin.PATCH("/users/:id/role", h.SettingsUsersUpdateRole)
+				admin.DELETE("/users/:id", h.SettingsUsersDelete)
 			}
 		}
 	}

@@ -33,8 +33,8 @@ func (r *BookDropRepo) Insert(ctx context.Context, path, format string, size int
 		ON CONFLICT (path) DO NOTHING
 		RETURNING `+bdCols, path, size, format)
 	item, err := scanBookDrop(row)
-	if errors.Is(err, pgx.ErrNoRows) {
-		// Row already existed — fetch it.
+	if errors.Is(err, ErrNotFound) {
+		// ON CONFLICT DO NOTHING returned no rows — row already existed, fetch it.
 		existing, gerr := r.GetByPath(ctx, path)
 		if gerr != nil {
 			return existing, gerr

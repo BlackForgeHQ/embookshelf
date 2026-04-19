@@ -71,9 +71,26 @@ func RequireRole(roles ...model.Role) gin.HandlerFunc {
 }
 
 // CSRFGuard rejects state-changing requests whose Origin/Referer does not
-// match the request Host. This is the Lax-SameSite-cookie + origin-check
-// pattern — sufficient for HTML forms and HTMX posts on the same origin.
-func CSRFGuard() gin.HandlerFunc {
+// match the request Host or an entry in `trustedOrigins`. This is the
+// Lax-SameSite-cookie + origin-check pattern. `trustedOrigins` mirrors the
+// CORS allowlist so a split dev setup (Vite on :5173 proxying to the Go
+// backend on :6060, with `changeOrigin: true`) passes without loosening
+// the rule in production.
+func CSRFGuard(trustedOrigins []string) gin.HandlerFunc {
+	allowAny := false
+	trusted := make(map[string]struct{}, len(trustedOrigins))
+	for _, o := range trustedOrigins {
+		o = strings.TrimSpace(o)
+		if o == "" {
+			continue
+		}
+		if o == "*" {
+			allowAny = true
+			continue
+		}
+		trusted[strings.ToLower(o)] = struct{}{}
+	}
+
 	return func(c *gin.Context) {
 		switch c.Request.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
@@ -94,11 +111,20 @@ func CSRFGuard() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "bad origin"})
 			return
 		}
-		if !strings.EqualFold(u.Host, c.Request.Host) {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "origin mismatch"})
+		if strings.EqualFold(u.Host, c.Request.Host) {
+			c.Next()
 			return
 		}
-		c.Next()
+		if allowAny {
+			c.Next()
+			return
+		}
+		key := strings.ToLower(u.Scheme + "://" + u.Host)
+		if _, ok := trusted[key]; ok {
+			c.Next()
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "origin mismatch"})
 	}
 }
 

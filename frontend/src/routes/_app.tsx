@@ -49,7 +49,9 @@ function AppLayout() {
     >
       <Sidebar />
       <main className="main">
-        <Outlet />
+        <div className="main-content">
+          <Outlet />
+        </div>
         <StatusBar />
       </main>
     </div>

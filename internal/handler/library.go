@@ -126,6 +126,13 @@ func (h *Handler) Books(c *gin.Context) {
 	if shelfSlug := strings.TrimSpace(c.Query("shelf")); shelfSlug != "" {
 		books, err := h.shelf.Books(c.Request.Context(), userID, shelfSlug)
 		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				// Unknown shelf slug → treat as empty rather than 500.
+				// The dashboard links to well-known slugs (e.g. "reading")
+				// that may not exist for a fresh user yet.
+				writeBooksPayload(c, nil)
+				return
+			}
 			writeServerError(c, "shelf books", err)
 			return
 		}
