@@ -39,6 +39,11 @@ func (h *Handler) Engine() *gin.Engine {
 		api.GET("/auth/signup", h.SignupStatus)
 		api.POST("/auth/signup", h.Signup)
 
+		// OIDC / SSO
+		api.GET("/auth/oidc/config", h.OIDCConfig)
+		api.GET("/auth/oidc", h.OIDCLogin)
+		api.GET("/auth/oidc/callback", h.OIDCCallback)
+
 		authed := api.Group("")
 		authed.Use(auth.RequireAuth(h.auth))
 		{

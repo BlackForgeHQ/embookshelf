@@ -10,6 +10,8 @@ import (
 	"github.com/blackforge/embookshelf/internal/sse"
 )
 
+// Ensure *service.OIDCService satisfies the nil-safe pattern used in the handler.
+
 type Handler struct {
 	cfg          config.Config
 	static       embed.FS
@@ -24,6 +26,7 @@ type Handler struct {
 	stats        *service.StatsService
 	readingStats *service.ReadingSessionService
 	devices      *service.DeviceService
+	oidc         *service.OIDCService
 	covers       *coverstore.Store
 	hub          *sse.Hub
 	queue        queue.Client
@@ -43,6 +46,7 @@ type Deps struct {
 	Stats        *service.StatsService
 	ReadingStats *service.ReadingSessionService
 	Devices      *service.DeviceService
+	OIDC         *service.OIDCService
 	Covers       *coverstore.Store
 	Hub          *sse.Hub
 	Queue        queue.Client
@@ -56,6 +60,7 @@ func New(d Deps) *Handler {
 		libPath: d.LibPath, annotations: d.Annotations, stats: d.Stats,
 		readingStats: d.ReadingStats,
 		devices:      d.Devices,
+		oidc:         d.OIDC,
 		covers:       d.Covers,
 		hub:          d.Hub, queue: d.Queue,
 	}

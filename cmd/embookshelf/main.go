@@ -109,6 +109,16 @@ func main() {
 		service.NewRemarkableDriver(),
 	)
 
+	// OIDC (optional — nil when not configured).
+	oidcSvc, err := service.NewOIDCService(ctx, cfg, userRepo, sessionRepo)
+	if err != nil {
+		slog.Error("oidc provider discovery", "err", err)
+		os.Exit(1)
+	}
+	if oidcSvc != nil {
+		slog.Info("OIDC enabled", "issuer", cfg.OIDCIssuerURL)
+	}
+
 	if n, err := authSvc.PurgeExpiredSessions(ctx); err != nil {
 		slog.Warn("purge sessions", "err", err)
 	} else if n > 0 {
@@ -156,6 +166,7 @@ func main() {
 		Stats:        statsSvc,
 		ReadingStats: readingStatsSvc,
 		Devices:      deviceSvc,
+		OIDC:         oidcSvc,
 		Covers:       covers,
 		Hub:         hub,
 		Queue:       q,

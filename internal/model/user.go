@@ -14,7 +14,9 @@ type User struct {
 	Email        string
 	Name         string
 	Role         Role
-	PasswordHash string // never rendered; repo populates but handlers don't leak it.
+	PasswordHash string  // never rendered; repo populates but handlers don't leak it.
+	OIDCSubject  *string // OIDC sub claim — non-nil when linked to an external identity.
+	OIDCIssuer   *string // OIDC issuer URL.
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	LastSeenAt   *time.Time

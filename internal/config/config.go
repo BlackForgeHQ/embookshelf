@@ -26,6 +26,13 @@ type Config struct {
 	// (google_books, open_library) — operators opt in to amazon and
 	// duckduckgo by overriding ENRICHMENT_PROVIDERS.
 	EnrichmentProviders []string
+
+	// OIDC configuration. When OIDCIssuerURL and OIDCClientID are both
+	// non-empty the "Sign in with SSO" flow is enabled.
+	OIDCIssuerURL   string
+	OIDCClientID    string
+	OIDCClientSecret string
+	OIDCRedirectURL string
 }
 
 func Load() (Config, error) {
@@ -43,12 +50,28 @@ func Load() (Config, error) {
 		DataPath:            envStr("DATA_PATH", "./data"),
 		MigrateOnStart:      envBool("MIGRATE_ON_START", true),
 		EnrichmentProviders: envCSV("ENRICHMENT_PROVIDERS", "google_books,open_library"),
+
+		OIDCIssuerURL:    envStr("OIDC_ISSUER_URL", ""),
+		OIDCClientID:     envStr("OIDC_CLIENT_ID", ""),
+		OIDCClientSecret: envStr("OIDC_CLIENT_SECRET", ""),
+		OIDCRedirectURL:  envStr("OIDC_REDIRECT_URL", ""),
 	}
 
 	if cfg.DiskType != "LOCAL" && cfg.DiskType != "NETWORK" {
 		return cfg, errors.New("DISK_TYPE must be LOCAL or NETWORK")
 	}
+
+	// Validate OIDC: if issuer is set, client ID is required.
+	if cfg.OIDCIssuerURL != "" && cfg.OIDCClientID == "" {
+		return cfg, errors.New("OIDC_CLIENT_ID is required when OIDC_ISSUER_URL is set")
+	}
+
 	return cfg, nil
+}
+
+// OIDCEnabled reports whether OIDC login is configured.
+func (c Config) OIDCEnabled() bool {
+	return c.OIDCIssuerURL != "" && c.OIDCClientID != ""
 }
 
 func envStr(key, def string) string {

@@ -20,7 +20,7 @@ func NewUserRepo(pool *pgxpool.Pool) *UserRepo {
 	return &UserRepo{pool: pool}
 }
 
-const userCols = `id, email, password_hash, name, role, created_at, updated_at, last_seen_at`
+const userCols = `id, email, password_hash, name, role, oidc_subject, oidc_issuer, created_at, updated_at, last_seen_at`
 
 func (r *UserRepo) GetByEmail(ctx context.Context, email string) (model.User, error) {
 	row := r.pool.QueryRow(ctx, `
@@ -137,12 +137,41 @@ func (r *UserRepo) CountByRole(ctx context.Context, role model.Role) (int, error
 	return n, err
 }
 
+// GetByOIDC looks up a user by their OIDC issuer+subject pair.
+func (r *UserRepo) GetByOIDC(ctx context.Context, issuer, subject string) (model.User, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT `+userCols+`
+		FROM users
+		WHERE oidc_issuer = $1 AND oidc_subject = $2
+	`, issuer, subject)
+	return scanUser(row)
+}
+
+// CreateOIDC creates a user provisioned via OIDC (no local password).
+func (r *UserRepo) CreateOIDC(ctx context.Context, email, name string, role model.Role, issuer, subject string) (model.User, error) {
+	row := r.pool.QueryRow(ctx, `
+		INSERT INTO users (email, name, password_hash, role, oidc_issuer, oidc_subject)
+		VALUES (lower($1), $2, '', $3, $4, $5)
+		RETURNING `+userCols+`
+	`, strings.TrimSpace(email), strings.TrimSpace(name), string(role), issuer, subject)
+	return scanUser(row)
+}
+
+// LinkOIDC sets the OIDC identity on an existing user (e.g. linking a
+// password-based user to their SSO identity on first OIDC login).
+func (r *UserRepo) LinkOIDC(ctx context.Context, userID, issuer, subject string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE users SET oidc_issuer = $2, oidc_subject = $3, updated_at = now() WHERE id = $1`,
+		userID, issuer, subject)
+	return err
+}
+
 func scanUser(s scanner) (model.User, error) {
 	var (
 		u    model.User
 		role string
 	)
-	err := s.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &role, &u.CreatedAt, &u.UpdatedAt, &u.LastSeenAt)
+	err := s.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &role, &u.OIDCSubject, &u.OIDCIssuer, &u.CreatedAt, &u.UpdatedAt, &u.LastSeenAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return u, ErrNotFound

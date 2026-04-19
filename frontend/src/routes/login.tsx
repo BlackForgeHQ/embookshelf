@@ -10,6 +10,8 @@ import {
   fetchMe,
   login,
   meQueryKey,
+  oidcConfig,
+  oidcConfigQueryKey,
   signup,
   signupStatus,
 } from '@/api/auth';
@@ -58,6 +60,12 @@ function LoginPage() {
   const signupOpen = useQuery({
     queryKey: ['signup-status'],
     queryFn: signupStatus,
+    staleTime: 5 * 60_000,
+  });
+
+  const oidc = useQuery({
+    queryKey: oidcConfigQueryKey,
+    queryFn: oidcConfig,
     staleTime: 5 * 60_000,
   });
 
@@ -223,6 +231,34 @@ function LoginPage() {
                   ? 'Create account'
                   : 'Sign in'}
             </button>
+
+            {mode === 'login' && oidc.data?.enabled && (
+              <>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    marginTop: 4,
+                  }}
+                >
+                  <div style={{ flex: 1, height: 1, background: 'var(--color-rule-soft)' }} />
+                  <span className="t-small" style={{ color: 'var(--color-ink-3)' }}>or</span>
+                  <div style={{ flex: 1, height: 1, background: 'var(--color-rule-soft)' }} />
+                </div>
+                <a
+                  href="/api/v1/auth/oidc"
+                  className="btn"
+                  style={{
+                    justifyContent: 'center',
+                    textDecoration: 'none',
+                    display: 'flex',
+                  }}
+                >
+                  Sign in with SSO
+                </a>
+              </>
+            )}
           </form>
         </div>
 

@@ -60,6 +60,14 @@ export async function signupStatus(): Promise<SignupStatus> {
   return api<SignupStatus>('/api/v1/auth/signup');
 }
 
+type OIDCConfig = { enabled: boolean };
+
+export async function oidcConfig(): Promise<OIDCConfig> {
+  return api<OIDCConfig>('/api/v1/auth/oidc/config');
+}
+
+export const oidcConfigQueryKey = ['oidc-config'] as const;
+
 // Shared react-query key for the current user. Export so every mutation can
 // invalidate it in one line.
 export const meQueryKey = ['me'] as const;
