@@ -19,7 +19,7 @@ test.describe('shelves', () => {
 
     const sidebar = page.locator('aside');
     // Seeded shelves from scripts/seed.sql.
-    await expect(sidebar.getByRole('link', { name: /Currently reading/ })).toBeVisible();
+    await expect(sidebar.getByRole('link', { name: /Reading Now/ })).toBeVisible();
     await expect(sidebar.getByRole('link', { name: /To read/ })).toBeVisible();
     await expect(sidebar.getByRole('link', { name: /Favorites/ })).toBeVisible();
 

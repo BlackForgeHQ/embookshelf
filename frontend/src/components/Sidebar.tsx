@@ -119,7 +119,10 @@ export function Sidebar() {
 
   const libs = libraries.data ?? [];
   const allShelves = shelves.data ?? [];
-  const shelfList = allShelves.filter((s) => !s.isSmart);
+  // "reading" is promoted into the Browse section as a first-class nav item,
+  // so drop it from the Shelves list to avoid rendering two links to the
+  // same filtered view.
+  const shelfList = allShelves.filter((s) => !s.isSmart && s.slug !== 'reading');
   const smartList = allShelves.filter((s) => s.isSmart);
   const totalBooks = libs.reduce((n, lib) => n + lib.bookCount, 0);
 
