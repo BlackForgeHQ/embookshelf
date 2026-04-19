@@ -654,13 +654,52 @@ protection baked in.
 
 ### 7.2 Device Sync Protocols
 
+Two integration patterns coexist: **pull-based** (the reader asks the
+server for a catalog and fetches files itself) and **push-based** (the
+server sends a book to a paired device through the vendor's cloud).
+
 | Protocol/Device | Status | Integration Pattern |
 |-----------------|--------|---------------------|
-| OPDS 1.2 | **Built** | Atom/XML served at `/opds/*` with HTTP Basic Auth. Root nav + All / Library / Recent / Search acquisition feeds + OpenSearch description + per-book download/cover. Works with KOReader, Moon+ Reader, FBReader, Aldiko, Marvin, etc. |
+| OPDS 1.2 | **Built** (pull) | Atom/XML served at `/opds/*` with HTTP Basic Auth. Root nav + All / Library / Recent / Search acquisition feeds + OpenSearch description + per-book download/cover. Works with KOReader, Moon+ Reader, FBReader, Aldiko, Marvin, etc. |
+| reMarkable Paper Pro (RM2/RM1/Paper Pro) | **Built** (push) | Cloud-push via `webapp-prod.cloud.remarkable.engineering` (pair) + `internal.cloud.remarkable.com/doc/v2/files` (upload). Users pair once with the 8-char one-time code from `my.remarkable.com/device/desktop/connect`; the server stores the long-lived device token and mints short-lived user tokens per push. EPUB + PDF only. Driver: `internal/service/device_remarkable.go`. |
 | Kobo | Deferred | REST compatibility layer emulating Kobo's cloud endpoints. Deferred because the protocol is undocumented + proprietary; emulating it well is a multi-week reverse-engineering effort per-device. |
 | KOReader | Deferred | REST sync API for reading progress |
 | Hardcover.app | Deferred | REST API integration for reading-status sync |
 | Komga | Deferred | REST API for comic-library import |
+| Kindle (Send-to-Kindle) | Deferred | Uses email delivery (§Email); blocked on SMTP transport. |
+
+#### 7.2.1 Push-to-device architecture
+
+The push path is driver-pluggable. One Go interface covers every future
+device kind:
+
+```go
+type DeviceDriver interface {
+    Kind() model.DeviceKind
+    Pair(ctx, params) (model.Device, error)
+    Send(ctx, device, content, meta) error
+}
+```
+
+- **Storage.** `user_devices` table (migration `000013_devices`) holds
+  one row per registered destination: `user_id`, `kind`, `name`,
+  `secret` (pairing token — never exposed over the API), `config`
+  (JSONB, per-driver knobs), and `last_sent_at` / `last_error` for UI
+  status.
+- **Service.** `service.DeviceService` indexes drivers by `Kind` and
+  mediates pairing + sending. Each successful push updates
+  `last_sent_at`; failures are recorded on the same row so the Settings
+  panel can surface "last error" without querying logs.
+- **Handlers.** `GET/POST /api/v1/devices`, `DELETE /api/v1/devices/:id`,
+  `POST /api/v1/books/:id/send/:deviceId`. All cookie-authed and
+  per-user — a device registered by user A is invisible to user B.
+- **UI.** Settings → Device sync lists registered devices and pairs new
+  ones via a modal form. The book detail page has a "Send to device"
+  dropdown; when no device is paired, the button deep-links into
+  Settings.
+
+Adding a new kind (Kindle, Boox, …) is one file plus a line in
+`main.go` registering the driver.
 
 ---
 

@@ -11,7 +11,7 @@ import (
 
 // Version is the build-time app version. Bumped by hand; the status bar
 // and About panel both read this single source.
-const Version = "1.4.2"
+const Version = "1.0.0"
 
 type instanceInfoDTO struct {
 	Version             string            `json:"version"`
@@ -47,6 +47,23 @@ var providerCatalog = []struct {
 	{ID: string(provider.SourceOpenLibrary), Name: "Open Library"},
 	{ID: string(provider.SourceAmazon), Name: "Amazon"},
 	{ID: string(provider.SourceDuckDuckGo), Name: "DuckDuckGo"},
+}
+
+// instanceSummaryDTO is the subset of instance facts safe to share with
+// every signed-in user — rendered in the persistent status bar.
+type instanceSummaryDTO struct {
+	Version  string `json:"version"`
+	DiskMode string `json:"diskMode"`
+}
+
+// InstanceSummary returns the non-sensitive instance fields (version,
+// disk mode). Session-authed but not admin-gated — the status bar at the
+// bottom of every page reads this.
+func (h *Handler) InstanceSummary(c *gin.Context) {
+	c.JSON(http.StatusOK, instanceSummaryDTO{
+		Version:  Version,
+		DiskMode: h.cfg.DiskType,
+	})
 }
 
 // InstanceInfo returns the server-side facts the settings panels need:

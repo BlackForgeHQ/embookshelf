@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   useMutation,
   useQuery,
@@ -12,8 +12,10 @@ import {
   bookdropQueryKey,
   fetchBookDrop,
   rejectBookDrop,
+  uploadBookDrop,
   type BookDropItem,
   type BookDropState,
+  type BookDropUploadResult,
 } from '@/api/bookdrop';
 import {
   booksQueryKey,
@@ -136,7 +138,11 @@ function BookDrop() {
       <div style={{ display: 'grid', gridTemplateColumns: '440px 1fr', flex: 1, minHeight: 0 }}>
         {/* Left — file list */}
         <div style={{ borderRight: '1px solid var(--color-rule-soft)', overflow: 'auto' }}>
-          <DropZone />
+          <DropZone
+            onUploaded={() => {
+              queryClient.invalidateQueries({ queryKey: bookdropQueryKey });
+            }}
+          />
 
           <div className="t-label" style={{ padding: '4px 20px 10px' }}>
             In queue · {active.length}
@@ -294,27 +300,157 @@ function BookDrop() {
   );
 }
 
-function DropZone() {
+// Formats accepted by the ingest pipeline (mirrors fileproc.SupportedExts).
+const ACCEPT_EXTS = '.epub,.pdf,.cbz,.cbr,.cb7,.mp3,.m4a,.m4b,.mobi,.azw3,.fb2';
+
+function DropZone({ onUploaded }: { onUploaded: () => void }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [results, setResults] = useState<BookDropUploadResult[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const upload = async (files: File[]) => {
+    if (!files.length || uploading) return;
+    setUploading(true);
+    setErr(null);
+    setResults(null);
+    setProgress(0);
+    try {
+      const out = await uploadBookDrop(files, (loaded, total) => {
+        setProgress(total > 0 ? loaded / total : 0);
+      });
+      setResults(out);
+      // Refresh the queue even if some files errored — successful ones
+      // are already in the DB and should surface immediately.
+      onUploaded();
+    } catch (e) {
+      setErr((e as { message?: string })?.message ?? 'upload failed');
+    } finally {
+      setUploading(false);
+      setProgress(0);
+    }
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files ?? []);
+    void upload(files);
+  };
+
+  const failedCount = results?.filter((r) => r.error).length ?? 0;
+  const okCount = results?.filter((r) => r.item).length ?? 0;
+
   return (
-    <div
-      style={{
-        margin: 20,
-        padding: '28px 16px',
-        border: '2px dashed var(--color-rule)',
-        borderRadius: 3,
-        background: 'var(--color-paper-2)',
-        textAlign: 'center',
-      }}
-    >
-      <Icon name="upload" size={20} className="mono" />
-      <div style={{ fontSize: 14, fontWeight: 500, marginTop: 8 }}>Drop files here</div>
-      <div className="t-small" style={{ fontSize: 12 }}>
-        or watch{' '}
-        <span className="mono" style={{ fontSize: 11, color: 'var(--color-accent-ink)' }}>
-          /bookdrop
-        </span>{' '}
-        on the host
+    <div style={{ margin: 20 }}>
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={onDrop}
+        onClick={() => inputRef.current?.click()}
+        style={{
+          padding: '28px 16px',
+          border: `2px dashed ${dragOver ? 'var(--color-accent)' : 'var(--color-rule)'}`,
+          borderRadius: 3,
+          background: dragOver ? 'var(--color-paper-3)' : 'var(--color-paper-2)',
+          textAlign: 'center',
+          cursor: uploading ? 'wait' : 'pointer',
+          transition: 'background 120ms, border-color 120ms',
+        }}
+      >
+        <Icon name="upload" size={20} className="mono" />
+        <div style={{ fontSize: 14, fontWeight: 500, marginTop: 8 }}>
+          {uploading ? 'Uploading…' : 'Drop files here or click to browse'}
+        </div>
+        <div className="t-small" style={{ fontSize: 12 }}>
+          Multi-file supported · EPUB, PDF, CBZ, MOBI, AZW3, FB2, audio
+        </div>
+
+        {uploading && (
+          <div
+            style={{
+              marginTop: 14,
+              height: 4,
+              background: 'var(--color-paper-0)',
+              borderRadius: 2,
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                height: '100%',
+                width: `${Math.round(progress * 100)}%`,
+                background: 'var(--color-accent)',
+                transition: 'width 80ms linear',
+              }}
+            />
+          </div>
+        )}
+
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          accept={ACCEPT_EXTS}
+          onChange={(e) => {
+            const files = Array.from(e.target.files ?? []);
+            void upload(files);
+            // Reset so picking the same file twice still fires change.
+            e.target.value = '';
+          }}
+          style={{ display: 'none' }}
+        />
       </div>
+
+      {err && (
+        <div
+          className="flash error"
+          style={{
+            marginTop: 10,
+            padding: '8px 12px',
+            border: '1px solid var(--color-accent-soft)',
+            background: 'var(--color-accent-soft)',
+            color: 'var(--color-accent-ink)',
+            borderRadius: 2,
+            fontSize: 12.5,
+          }}
+        >
+          {err}
+        </div>
+      )}
+
+      {results && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: '8px 12px',
+            background: 'var(--color-paper-0)',
+            border: '1px solid var(--color-rule-soft)',
+            borderRadius: 2,
+            fontSize: 12.5,
+          }}
+        >
+          <div style={{ marginBottom: failedCount ? 4 : 0 }}>
+            {okCount} queued{failedCount ? ` · ${failedCount} failed` : ''}
+          </div>
+          {results
+            .filter((r) => r.error)
+            .map((r) => (
+              <div
+                key={r.filename}
+                className="mono"
+                style={{ fontSize: 11, color: 'var(--color-accent-ink)' }}
+              >
+                {r.filename}: {r.error}
+              </div>
+            ))}
+        </div>
+      )}
     </div>
   );
 }

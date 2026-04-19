@@ -70,6 +70,7 @@ func main() {
 	annotationRepo := repo.NewAnnotationRepo(pool)
 	statsRepo := repo.NewStatsRepo(pool)
 	readingSessionRepo := repo.NewReadingSessionRepo(pool)
+	deviceRepo := repo.NewDeviceRepo(pool)
 
 	// SSE hub — shared between services that broadcast and the handler that serves /events.
 	hub := sse.NewHub()
@@ -103,6 +104,10 @@ func main() {
 		slog.Warn("no enrichment providers configured — metadata search will return empty")
 	}
 	enrichSvc := service.NewEnrichmentService(providers, libRepo, covers)
+	deviceSvc := service.NewDeviceService(
+		deviceRepo, libRepo,
+		service.NewRemarkableDriver(),
+	)
 
 	if n, err := authSvc.PurgeExpiredSessions(ctx); err != nil {
 		slog.Warn("purge sessions", "err", err)
@@ -150,6 +155,7 @@ func main() {
 		Annotations: annotationSvc,
 		Stats:        statsSvc,
 		ReadingStats: readingStatsSvc,
+		Devices:      deviceSvc,
 		Covers:       covers,
 		Hub:         hub,
 		Queue:       q,

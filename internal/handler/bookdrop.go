@@ -2,14 +2,19 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 )
@@ -175,6 +180,146 @@ func (h *Handler) BookDropApprove(c *gin.Context) {
 			Shelves:  []string{},
 		},
 	})
+}
+
+// maxUploadBytes caps a single BookDrop upload request. Big enough for a
+// handful of PDFs + scanned comics in one shot; restricts runaway memory use
+// when parsing multipart bodies.
+const maxUploadBytes = 1 << 30 // 1 GiB
+
+// bookdropUploadItem is one row of the upload response. Success entries
+// carry the bookdrop item; failed ones carry an error string so the UI can
+// render per-file feedback.
+type bookdropUploadItem struct {
+	Filename string       `json:"filename"`
+	Item     *bookdropDTO `json:"item,omitempty"`
+	Error    string       `json:"error,omitempty"`
+}
+
+// BookDropUpload accepts one or more files via multipart/form-data and
+// enqueues each into the ingest pipeline. Files land in the configured
+// BookDropPath under a unique name so concurrent uploads of "book.epub"
+// don't stomp each other. Unsupported formats are rejected per-file; one
+// bad file never fails the whole batch.
+func (h *Handler) BookDropUpload(c *gin.Context) {
+	userID := requireUserID(c)
+	if userID == "" {
+		return
+	}
+	if h.cfg.BookDropPath == "" {
+		writeError(c, http.StatusServiceUnavailable, "bookdrop is disabled (no BOOKDROP_PATH configured)")
+		return
+	}
+
+	// Cap the whole request body. gin.Context.Request.Body is what
+	// ParseMultipartForm reads from, so this both limits memory + disk
+	// spill and trips a clear 413 on oversize uploads.
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUploadBytes)
+	if err := c.Request.ParseMultipartForm(32 << 20); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid upload: "+err.Error())
+		return
+	}
+	form := c.Request.MultipartForm
+	if form == nil || len(form.File["files"]) == 0 {
+		writeError(c, http.StatusBadRequest, "no files provided (expected multipart field \"files\")")
+		return
+	}
+
+	if err := os.MkdirAll(h.cfg.BookDropPath, 0o755); err != nil {
+		writeServerError(c, "bookdrop mkdir", err)
+		return
+	}
+
+	results := make([]bookdropUploadItem, 0, len(form.File["files"]))
+	for _, fh := range form.File["files"] {
+		orig := filepath.Base(fh.Filename)
+		entry := bookdropUploadItem{Filename: orig}
+
+		if !fileproc.IsSupported(orig) {
+			entry.Error = "unsupported format"
+			results = append(results, entry)
+			continue
+		}
+
+		dest, err := saveUniqueUpload(h.cfg.BookDropPath, orig, fh)
+		if err != nil {
+			slog.Warn("bookdrop upload save", "filename", orig, "err", err)
+			entry.Error = "could not save file"
+			results = append(results, entry)
+			continue
+		}
+
+		format := fileproc.FormatForExt(filepath.Ext(dest))
+		item, _, err := h.bookdrop.Enqueue(c.Request.Context(), dest, format, fh.Size)
+		if err != nil {
+			_ = os.Remove(dest)
+			slog.Warn("bookdrop upload enqueue", "filename", orig, "err", err)
+			entry.Error = "could not enqueue"
+			results = append(results, entry)
+			continue
+		}
+
+		if h.queue != nil {
+			if err := h.queue.EnqueueBookDrop(c.Request.Context(), item.ID); err != nil {
+				// The DB row exists — surface the failure but leave the
+				// row; the next watcher tick re-enqueues.
+				slog.Error("bookdrop upload river job", "item_id", item.ID, "err", err)
+			}
+		}
+
+		dto := toBookDropDTO(item)
+		entry.Item = &dto
+		results = append(results, entry)
+	}
+
+	status := http.StatusCreated
+	succeeded := 0
+	for _, r := range results {
+		if r.Item != nil {
+			succeeded++
+		}
+	}
+	if succeeded == 0 {
+		status = http.StatusBadRequest
+	}
+	c.JSON(status, gin.H{"results": results})
+}
+
+// saveUniqueUpload copies the uploaded file into dir under a non-colliding
+// basename. The uniqueness strategy is `<base>-<unix-nano>.<ext>` — readable
+// and monotonic, good enough under the low concurrency this ingest sees.
+func saveUniqueUpload(dir, originalName string, fh *multipart.FileHeader) (string, error) {
+	// Break up the filename into base + ext, strip leading dots so a
+	// ".epub" upload doesn't become a hidden file.
+	name := strings.TrimLeft(originalName, ".")
+	if name == "" {
+		name = "upload"
+	}
+	ext := strings.ToLower(filepath.Ext(name))
+	base := strings.TrimSuffix(name, ext)
+	stamp := time.Now().UnixNano()
+	candidate := filepath.Join(dir, fmt.Sprintf("%s-%d%s", base, stamp, ext))
+
+	src, err := fh.Open()
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		_ = os.Remove(candidate)
+		return "", err
+	}
+	if err := dst.Close(); err != nil {
+		_ = os.Remove(candidate)
+		return "", err
+	}
+	return candidate, nil
 }
 
 // BookDropReject marks an item as dismissed and cleans up the pre-approval

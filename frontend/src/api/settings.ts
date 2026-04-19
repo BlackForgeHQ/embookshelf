@@ -78,6 +78,20 @@ export async function fetchInstanceInfo(): Promise<InstanceInfo> {
 
 export const instanceInfoQueryKey = ['settings', 'instance'] as const;
 
+// Lightweight, non-admin-gated version of InstanceInfo. Rendered in the
+// status bar at the bottom of every page, so all signed-in users can call
+// it — mirrors /api/v1/instance on the server.
+export type InstanceSummary = {
+  version: string;
+  diskMode: string;
+};
+
+export async function fetchInstanceSummary(): Promise<InstanceSummary> {
+  return api<InstanceSummary>('/api/v1/instance');
+}
+
+export const instanceSummaryQueryKey = ['instance', 'summary'] as const;
+
 // --- Users (admin) ---------------------------------------------------------
 
 export async function fetchSettingsUsers(): Promise<AuthUser[]> {

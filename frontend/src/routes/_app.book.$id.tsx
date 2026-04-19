@@ -21,6 +21,13 @@ import {
   shelvesQueryKey,
   type BookDetail as BookDetailPayload,
 } from '@/api/books';
+import {
+  DEVICE_KIND_LABELS,
+  devicesQueryKey,
+  fetchDevices,
+  sendBookToDevice,
+  type Device,
+} from '@/api/devices';
 import { Cover, StarRating } from '@/components/Cover';
 import { Icon } from '@/components/Icon';
 import type { ApiError } from '@/api/client';
@@ -87,9 +94,7 @@ function BookDetail() {
         <button className="btn small">
           <Icon name="download" size={13} /> Download
         </button>
-        <button className="btn small">
-          <Icon name="device" size={13} /> Send to device
-        </button>
+        <SendToDeviceButton bookId={id} />
         <button className="btn ghost icon-only" aria-label="More">
           <Icon name="more" size={14} />
         </button>
@@ -541,4 +546,122 @@ function shortLocator(locator: string): string {
   if (locator.startsWith('page:')) return `p.${locator.slice(5)}`;
   if (locator.startsWith('epubcfi')) return 'EPUB';
   return locator;
+}
+
+// SendToDeviceButton opens a tiny dropdown of paired devices. If none are
+// paired, the button is a shortcut into Settings → Device sync.
+function SendToDeviceButton({ bookId }: { bookId: string }) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const devices = useQuery({ queryKey: devicesQueryKey, queryFn: fetchDevices });
+  const [open, setOpen] = useState(false);
+  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
+
+  const sendMut = useMutation({
+    mutationFn: (deviceId: string) => sendBookToDevice(bookId, deviceId),
+    onSuccess: (_data, deviceId) => {
+      const target = devices.data?.find((d) => d.id === deviceId);
+      setToast({
+        kind: 'ok',
+        msg: `Sent to ${target?.name ?? 'device'}.`,
+      });
+      queryClient.invalidateQueries({ queryKey: devicesQueryKey });
+      setOpen(false);
+    },
+    onError: (e) => {
+      setToast({ kind: 'err', msg: (e as unknown as ApiError).message });
+    },
+  });
+
+  const list = devices.data ?? [];
+
+  if (list.length === 0) {
+    return (
+      <button
+        className="btn small"
+        onClick={() => void navigate({ to: '/settings' })}
+        title="No devices paired — add one in Settings"
+      >
+        <Icon name="device" size={13} /> Send to device
+      </button>
+    );
+  }
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        className="btn small"
+        onClick={() => setOpen((v) => !v)}
+        disabled={sendMut.isPending}
+      >
+        <Icon name="device" size={13} />{' '}
+        {sendMut.isPending ? 'Sending…' : 'Send to device'}
+      </button>
+      {open && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 4px)',
+            right: 0,
+            minWidth: 220,
+            background: 'var(--color-paper-0)',
+            border: '1px solid var(--color-rule)',
+            boxShadow: '0 8px 24px oklch(0.2 0.02 60 / 0.15)',
+            zIndex: 20,
+          }}
+        >
+          {list.map((d) => (
+            <SendTarget key={d.id} device={d} onPick={() => sendMut.mutate(d.id)} />
+          ))}
+        </div>
+      )}
+      {toast && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            right: 0,
+            padding: '8px 12px',
+            background: 'var(--color-paper-0)',
+            border: `1px solid ${toast.kind === 'ok' ? 'oklch(0.58 0.12 140)' : 'var(--color-accent)'}`,
+            color: toast.kind === 'ok' ? 'oklch(0.45 0.12 140)' : 'var(--color-accent-ink)',
+            fontSize: 12.5,
+            maxWidth: 320,
+            zIndex: 21,
+          }}
+          onClick={() => setToast(null)}
+          role="status"
+        >
+          {toast.msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SendTarget({ device, onPick }: { device: Device; onPick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onPick}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+        padding: '10px 12px',
+        width: '100%',
+        textAlign: 'left',
+        background: 'transparent',
+        border: 'none',
+        borderBottom: '1px solid var(--color-rule-soft)',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+      }}
+    >
+      <span style={{ fontSize: 13.5, fontWeight: 500 }}>{device.name}</span>
+      <span className="t-small" style={{ fontSize: 11 }}>
+        {DEVICE_KIND_LABELS[device.kind]}
+      </span>
+    </button>
+  );
 }

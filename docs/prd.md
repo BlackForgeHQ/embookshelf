@@ -60,12 +60,48 @@ Readers with large digital book collections face fragmented tooling: separate ap
 
 ### 4.4 Device Sync
 
-| Device/Service | Sync Capabilities |
-|----------------|-------------------|
-| **Kobo** | Full library sync, reading progress, shelves, thumbnails |
-| **KOReader** | Reading progress sync |
-| **Hardcover.app** | Reading status, wishlist sync |
-| **OPDS** | Library access from any OPDS-compatible e-reader app (Moon+ Reader, FBReader, etc.) |
+Two flavours: **pull-based** (the reader fetches the catalog) and
+**push-based** (embookshelf sends a book to a paired device).
+
+Users add a device once from **Settings → Device sync**. Each kind has a
+driver that owns its pairing flow and file-transfer protocol; a single
+`Send to device` dropdown on the book detail page uses whichever drivers
+are registered.
+
+| Device/Service | Direction | Status | Sync Capabilities |
+|----------------|-----------|--------|-------------------|
+| **OPDS 1.2** | Pull | **Live** | Library access from any OPDS-compatible e-reader app (KOReader, Moon+ Reader, FBReader, Aldiko, Marvin). HTTP Basic Auth, OpenSearch, per-book acquisition links. |
+| **reMarkable Paper Pro** (RM1/RM2/Paper Pro share a driver) | Push | **Live** | One-time-code pairing via `my.remarkable.com/device/desktop/connect`; one-click push of EPUB/PDF from the book page to the device's cloud inbox. Per-push `last_sent_at` / `last_error` surfaces on the device card. |
+| **Kobo** | Pull | Planned | Full library sync, reading progress, shelves, thumbnails. |
+| **KOReader** | Push | Planned | Reading-progress sync via KOReader's companion protocol. |
+| **Hardcover.app** | Push | Planned | Reading-status + wishlist sync. |
+| **Kindle (Send-to-Kindle)** | Push | Planned | Email delivery, gated on SMTP transport (§4.7). |
+
+#### How pairing works (reMarkable Paper Pro)
+
+1. User opens Settings → Device sync → **Add device** → **reMarkable Paper Pro**.
+2. UI links out to `https://my.remarkable.com/device/desktop/connect`.
+   The user signs in and copies the 8-character one-time code.
+3. User pastes the code; the server exchanges it for a long-lived
+   device token and stores the token (never exposed back to the UI).
+4. The device now appears under "Registered devices" with a green dot.
+
+#### How sending works
+
+- Each push mints a short-lived user token from the stored device
+  token, then uploads the book file (EPUB or PDF) to the reMarkable
+  cloud. The tablet syncs on its next connection.
+- Failures record `last_error` on the device row so the user sees the
+  reason without opening server logs.
+- No background queue — a push is a synchronous API call that returns
+  `202 Accepted` only after the upload completes.
+
+#### Driver-pluggable
+
+Adding a new kind (Kindle, Boox, PocketBook, …) is one Go file
+implementing `DeviceDriver.Pair` + `DeviceDriver.Send`, registered once
+in `main.go`. No migration or schema change is needed — `user_devices`
+stores per-driver config as JSONB.
 
 ### 4.5 BookDrop (Import Pipeline)
 
@@ -245,6 +281,10 @@ what is live vs. what's still planned. See
   (`/api/v1/bookdrop/*`)
 - **Settings → Libraries** (admin-only) — register/remove filesystem
   roots, trigger scans (`/api/v1/settings/libraries*`)
+- **Settings → Device sync** — per-user device registration and push.
+  reMarkable Paper Pro driver: one-time-code pairing + EPUB/PDF push.
+  Extensible via `DeviceDriver` interface
+  (`/api/v1/devices`, `/api/v1/books/:id/send/:deviceId`)
 - **Realtime** — `/events` SSE stream; browser `EventSource` reuses the
   session cookie and invalidates react-query caches on each published
   event (`bookdrop.updated` today)
@@ -261,8 +301,10 @@ what is live vs. what's still planned. See
 ### Planned (greenfield — not yet built on any stack)
 
 - OIDC + remote/forward auth
-- Kobo cloud sync, KOReader progress sync, Hardcover.app integration,
-  Komga import
+- Additional device drivers: Kindle (send-to-kindle via SMTP), Kobo
+  cloud sync, KOReader progress sync, Hardcover.app integration, Komga
+  import. The driver interface exists today; each addition is a single
+  file.
 - CBX/CBR/CBZ comic reader, audiobook player, MOBI/AZW3/FB2 readers
 - Bookmarks, highlights, annotations (the Notebook view already exists
   for read-only display)

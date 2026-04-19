@@ -1,7 +1,12 @@
+import { useQuery } from '@tanstack/react-query';
 import { Outlet, createFileRoute, redirect } from '@tanstack/react-router';
 
 import { fetchMe, meQueryKey } from '@/api/auth';
 import { useRealtime } from '@/api/realtime';
+import {
+  fetchInstanceSummary,
+  instanceSummaryQueryKey,
+} from '@/api/settings';
 import { Sidebar } from '@/components/Sidebar';
 
 // Pathless layout: every in-app screen (dashboard, library, book detail,
@@ -59,10 +64,21 @@ function AppLayout() {
 }
 
 function StatusBar() {
+  // staleTime is generous — version + mode don't change at runtime, so
+  // the first fetch per session is enough.
+  const instance = useQuery({
+    queryKey: instanceSummaryQueryKey,
+    queryFn: fetchInstanceSummary,
+    staleTime: 60 * 60_000,
+  });
+
+  const version = instance.data?.version ?? '…';
+  const mode = instance.data?.diskMode ?? '…';
+
   return (
     <div className="status-bar">
       <span className="status-dot green" />
-      <span>embookshelf 1.4.2 · LOCAL mode</span>
+      <span>embookshelf {version} · {mode} mode</span>
       <span>·</span>
       <span>3 libraries · 1,202 volumes</span>
       <span>·</span>

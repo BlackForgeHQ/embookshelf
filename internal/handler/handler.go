@@ -23,6 +23,7 @@ type Handler struct {
 	annotations  *service.AnnotationService
 	stats        *service.StatsService
 	readingStats *service.ReadingSessionService
+	devices      *service.DeviceService
 	covers       *coverstore.Store
 	hub          *sse.Hub
 	queue        queue.Client
@@ -41,6 +42,7 @@ type Deps struct {
 	Annotations  *service.AnnotationService
 	Stats        *service.StatsService
 	ReadingStats *service.ReadingSessionService
+	Devices      *service.DeviceService
 	Covers       *coverstore.Store
 	Hub          *sse.Hub
 	Queue        queue.Client
@@ -53,6 +55,7 @@ func New(d Deps) *Handler {
 		bookdrop: d.BookDrop, progress: d.Progress, enrich: d.Enrich,
 		libPath: d.LibPath, annotations: d.Annotations, stats: d.Stats,
 		readingStats: d.ReadingStats,
+		devices:      d.Devices,
 		covers:       d.Covers,
 		hub:          d.Hub, queue: d.Queue,
 	}

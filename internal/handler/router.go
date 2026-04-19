@@ -45,6 +45,7 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.GET("/me", h.Me)
 			authed.PATCH("/me", h.AccountUpdateName)
 			authed.POST("/me/password", h.AccountChangePassword)
+			authed.GET("/instance", h.InstanceSummary)
 
 			// Library + catalog
 			authed.GET("/libraries", h.Libraries)
@@ -66,6 +67,7 @@ func (h *Handler) Engine() *gin.Engine {
 			// BookDrop ingest queue
 			authed.GET("/bookdrop", h.BookDropList)
 			authed.GET("/bookdrop/:id/cover", h.BookDropCover)
+			authed.POST("/bookdrop/upload", h.BookDropUpload)
 			authed.POST("/bookdrop/:id/approve", h.BookDropApprove)
 			authed.POST("/bookdrop/:id/reject", h.BookDropReject)
 
@@ -76,6 +78,13 @@ func (h *Handler) Engine() *gin.Engine {
 			// Library statistics dashboard
 			authed.GET("/stats", h.Stats)
 			authed.GET("/stats/reading", h.ReadingStats)
+
+			// Device sync (reMarkable Paper Pro, ...) — per-user
+			// destinations you can push books to.
+			authed.GET("/devices", h.Devices)
+			authed.POST("/devices", h.DevicePair)
+			authed.DELETE("/devices/:id", h.DeviceDelete)
+			authed.POST("/books/:id/send/:deviceId", h.BookSendToDevice)
 
 			// Annotations (highlights + notes)
 			authed.GET("/annotations", h.AnnotationsRecent)
