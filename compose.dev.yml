@@ -30,5 +30,24 @@ services:
       DATABASE_URL: postgres://embookshelf:embookshelf@postgres:5432/embookshelf?sslmode=disable
     command: ["go", "run", "./cmd/migrate", "up"]
 
+  # grafana/otel-lgtm bundles an OTLP collector (OpenTelemetry Collector),
+  # Loki (logs), Grafana Tempo (traces), Grafana Mimir (metrics), and a
+  # pre-provisioned Grafana UI. Point the app at 4317 (gRPC) or 4318
+  # (http/protobuf) via OTEL_EXPORTER_OTLP_ENDPOINT. Grafana UI lives on
+  # :3001 to avoid clashing with the Vite dev server on :3000/:5173.
+  otel-lgtm:
+    image: grafana/otel-lgtm:latest
+    restart: unless-stopped
+    ports:
+      - "3001:3000"   # Grafana UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - embookshelf_otel_lgtm:/data
+
 volumes:
   embookshelf_pg:
+  embookshelf_otel_lgtm:

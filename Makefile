@@ -31,6 +31,18 @@ db-up: ## Start Postgres via compose
 db-down: ## Stop Postgres
 	docker compose -f compose.dev.yml down
 
+.PHONY: obs-up
+obs-up: ## Start grafana/otel-lgtm (OTLP :4317/:4318, Grafana UI :3001)
+	docker compose -f compose.dev.yml up -d otel-lgtm
+
+.PHONY: obs-down
+obs-down: ## Stop grafana/otel-lgtm
+	docker compose -f compose.dev.yml stop otel-lgtm
+
+.PHONY: obs-logs
+obs-logs: ## Tail grafana/otel-lgtm logs
+	docker compose -f compose.dev.yml logs -f otel-lgtm
+
 .PHONY: migrate
 migrate: ## Apply all pending migrations
 	DATABASE_URL="$(DB_URL)" go run ./cmd/migrate up
@@ -64,6 +76,20 @@ dev: ## Live-reload backend via `go tool air`
 up: ## Run backend (air) + frontend (Vite) together — Ctrl-C stops both
 	@trap 'kill 0' EXIT INT TERM; \
 	$(MAKE) --no-print-directory dev & \
+	$(MAKE) --no-print-directory frontend-dev & \
+	wait
+
+.PHONY: up-otlp
+up-otlp: obs-up ## Same as `up` but exports OTLP from backend AND browser to grafana/otel-lgtm (UI on :3001)
+	@trap 'kill 0' EXIT INT TERM; \
+	OTEL_ENABLED=true \
+	OTEL_SERVICE_NAME=embookshelf \
+	OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 \
+	OTEL_EXPORTER_OTLP_PROTOCOL=grpc \
+	OTEL_EXPORTER_OTLP_INSECURE=true \
+	$(MAKE) --no-print-directory dev & \
+	VITE_OTEL_ENABLED=true \
+	VITE_OTEL_SERVICE_NAME=embookshelf-frontend \
 	$(MAKE) --no-print-directory frontend-dev & \
 	wait
 

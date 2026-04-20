@@ -33,6 +33,17 @@ type Config struct {
 	OIDCClientID    string
 	OIDCClientSecret string
 	OIDCRedirectURL string
+
+	// OpenTelemetry / OTLP. When OTELEnabled is true the server exports
+	// traces, metrics, and logs via OTLP to OTELEndpoint. The SDK also
+	// honors standard OTEL_* env vars (OTEL_EXPORTER_OTLP_ENDPOINT,
+	// OTEL_RESOURCE_ATTRIBUTES, ...) if set.
+	OTELEnabled     bool
+	OTELServiceName string
+	OTELEndpoint    string
+	OTELProtocol    string
+	OTELInsecure    bool
+	OTELSampleRatio float64
 }
 
 func Load() (Config, error) {
@@ -55,6 +66,13 @@ func Load() (Config, error) {
 		OIDCClientID:     envStr("OIDC_CLIENT_ID", ""),
 		OIDCClientSecret: envStr("OIDC_CLIENT_SECRET", ""),
 		OIDCRedirectURL:  envStr("OIDC_REDIRECT_URL", ""),
+
+		OTELEnabled:     envBool("OTEL_ENABLED", false),
+		OTELServiceName: envStr("OTEL_SERVICE_NAME", "embookshelf"),
+		OTELEndpoint:    envStr("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		OTELProtocol:    strings.ToLower(envStr("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")),
+		OTELInsecure:    envBool("OTEL_EXPORTER_OTLP_INSECURE", true),
+		OTELSampleRatio: envFloat("OTEL_TRACES_SAMPLER_ARG", 1.0),
 	}
 
 	if cfg.DiskType != "LOCAL" && cfg.DiskType != "NETWORK" {
@@ -64,6 +82,14 @@ func Load() (Config, error) {
 	// Validate OIDC: if issuer is set, client ID is required.
 	if cfg.OIDCIssuerURL != "" && cfg.OIDCClientID == "" {
 		return cfg, errors.New("OIDC_CLIENT_ID is required when OIDC_ISSUER_URL is set")
+	}
+
+	if cfg.OTELEnabled {
+		switch cfg.OTELProtocol {
+		case "grpc", "http/protobuf":
+		default:
+			return cfg, errors.New("OTEL_EXPORTER_OTLP_PROTOCOL must be 'grpc' or 'http/protobuf'")
+		}
 	}
 
 	return cfg, nil
@@ -110,6 +136,15 @@ func envCSV(key, def string) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+func envFloat(key string, def float64) float64 {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return def
 }
 
 func envBool(key string, def bool) bool {

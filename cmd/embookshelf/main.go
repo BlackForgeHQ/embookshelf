@@ -26,6 +26,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sse"
 	"github.com/blackforge/embookshelf/internal/staticfs"
+	"github.com/blackforge/embookshelf/internal/telemetry"
 )
 
 func main() {
@@ -42,6 +43,32 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// OpenTelemetry — must be set up before services start so spans and
+	// metrics from DB, queue, and HTTP paths end up in the pipeline.
+	// No-op when OTEL_ENABLED is false.
+	otelShutdown, err := telemetry.Setup(ctx, telemetry.Config{
+		Enabled:     cfg.OTELEnabled,
+		ServiceName: cfg.OTELServiceName,
+		Endpoint:    cfg.OTELEndpoint,
+		Protocol:    cfg.OTELProtocol,
+		Insecure:    cfg.OTELInsecure,
+		SampleRatio: cfg.OTELSampleRatio,
+	})
+	if err != nil {
+		slog.Error("telemetry setup", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := otelShutdown(shutdownCtx); err != nil {
+			slog.Warn("telemetry shutdown", "err", err)
+		}
+	}()
+	if cfg.OTELEnabled {
+		slog.Info("OpenTelemetry enabled", "endpoint", cfg.OTELEndpoint, "protocol", cfg.OTELProtocol, "service", cfg.OTELServiceName)
+	}
 
 	pool, err := newPool(ctx, cfg)
 	if err != nil {
@@ -178,10 +205,16 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// Track whether ListenAndServe died on its own (bind error, etc.) so
+	// we can propagate a non-zero exit — otherwise air sees exit 0 and
+	// won't flag the failure, and the operator only learns the port is
+	// taken from a silent stop.
+	var serveErr error
 	go func() {
 		slog.Info("server starting", "addr", srv.Addr, "diskMode", cfg.DiskType, "bookdrop", cfg.BookDropPath)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("server failed", "err", err)
+			serveErr = err
 			stop()
 		}
 	}()
@@ -193,6 +226,10 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown", "err", err)
+	}
+
+	if serveErr != nil {
+		os.Exit(1)
 	}
 }
 

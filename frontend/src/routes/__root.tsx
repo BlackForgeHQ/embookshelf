@@ -10,6 +10,13 @@ import {
 } from '@tanstack/react-router';
 
 import stylesUrl from '../generated.css?url';
+import { setupTelemetry } from '../telemetry';
+
+// Initialize browser OTel as early as possible — document-load spans need
+// the provider registered before the 'load' event fires to capture
+// resource timings, and TanStack's SSR prerender ignores the window
+// guard in setupTelemetry().
+setupTelemetry();
 
 type RouterContext = {
   queryClient: QueryClient;

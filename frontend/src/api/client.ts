@@ -27,6 +27,12 @@ export async function api<T>(
     throw { status: res.status, message } satisfies ApiError;
   }
 
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  // Handle every no-body success: 204/205, plus 202 Accepted from
+  // fire-and-forget endpoints like POST /settings/libraries/paths/:id/scan
+  // which return an empty body. Reading text first and only parsing when
+  // it's non-empty avoids "Unexpected end of JSON input" on those.
+  if (res.status === 204 || res.status === 205) return undefined as T;
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text) as T;
 }

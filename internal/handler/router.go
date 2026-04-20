@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/model"
@@ -16,6 +17,12 @@ import (
 
 func (h *Handler) Engine() *gin.Engine {
 	r := gin.New()
+	// otelgin first so the span wrapping every request starts before the
+	// logger/recovery middleware runs. No-op when the global tracer
+	// provider is the default (OTEL_ENABLED=false).
+	if h.cfg.OTELEnabled {
+		r.Use(otelgin.Middleware(h.cfg.OTELServiceName))
+	}
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 
