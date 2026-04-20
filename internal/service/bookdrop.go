@@ -151,6 +151,38 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 	return created, nil
 }
 
+// ClearProcessed drops every bookdrop row in a terminal state from the
+// DB, then best-effort sweeps any pre-approval cover bytes still on disk
+// (Reject already deletes them on the reject path, and Approve promotes
+// them into the book namespace, so this is mostly a belt-and-suspenders
+// cleanup for rows where one of those side effects failed).
+//
+// bookdrop.cleared is broadcast once after the batch — the queue UI
+// refetches a single list, no need for per-row events.
+//
+// Note: the source files under BOOKDROP_PATH are NOT touched. An
+// imported row's path is already referenced by a books row, and a
+// rejected file that the user wants physically removed has to leave
+// through the filesystem. The bookdrop watcher will re-discover any
+// file that's still on disk with a deleted row on its next tick.
+func (s *BookDropService) ClearProcessed(ctx context.Context) (int, error) {
+	ids, err := s.bdrop.DeleteProcessed(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if s.covers != nil {
+		for _, id := range ids {
+			if err := s.covers.DeleteBookDrop(id); err != nil {
+				slog.Warn("clear processed cover", "id", id, "err", err)
+			}
+		}
+	}
+	if len(ids) > 0 && s.hub != nil {
+		s.hub.Broadcast(sse.Event{Name: "bookdrop.cleared", Data: "{}"})
+	}
+	return len(ids), nil
+}
+
 func (s *BookDropService) Reject(ctx context.Context, id string) error {
 	if err := s.bdrop.SetState(ctx, id, model.BookDropRejected, 100, ""); err != nil {
 		return err

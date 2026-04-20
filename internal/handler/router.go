@@ -81,6 +81,7 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.GET("/bookdrop", h.BookDropList)
 			authed.GET("/bookdrop/:id/cover", h.BookDropCover)
 			authed.POST("/bookdrop/upload", h.BookDropUpload)
+			authed.DELETE("/bookdrop/processed", h.BookDropClearProcessed)
 			authed.POST("/bookdrop/:id/approve", h.BookDropApprove)
 			authed.POST("/bookdrop/:id/reject", h.BookDropReject)
 

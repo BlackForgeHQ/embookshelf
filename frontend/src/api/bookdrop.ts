@@ -53,6 +53,16 @@ export async function rejectBookDrop(id: string): Promise<void> {
   await api<void>(`/api/v1/bookdrop/${id}/reject`, { method: 'POST' });
 }
 
+// clearProcessedBookDrop drops every imported/rejected row from the queue
+// so "Recently processed" empties out. In-flight rows are left alone.
+export async function clearProcessedBookDrop(): Promise<number> {
+  const { cleared } = await api<{ cleared: number }>(
+    '/api/v1/bookdrop/processed',
+    { method: 'DELETE' },
+  );
+  return cleared;
+}
+
 export type BookDropUploadResult = {
   filename: string;
   item?: BookDropItem;

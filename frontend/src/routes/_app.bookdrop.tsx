@@ -10,6 +10,7 @@ import {
   approveBookDrop,
   bookdropCoverUrl,
   bookdropQueryKey,
+  clearProcessedBookDrop,
   fetchBookDrop,
   rejectBookDrop,
   uploadBookDrop,
@@ -103,7 +104,14 @@ function BookDrop() {
     },
   });
 
-  const error = (approveMut.error ?? rejectMut.error) as unknown as ApiError | null;
+  const clearMut = useMutation({
+    mutationFn: () => clearProcessedBookDrop(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: bookdropQueryKey });
+    },
+  });
+
+  const error = (approveMut.error ?? rejectMut.error ?? clearMut.error) as unknown as ApiError | null;
 
   return (
     <div className="fade-in">
@@ -173,8 +181,35 @@ function BookDrop() {
 
           {finished.length > 0 && (
             <>
-              <div className="t-label" style={{ padding: '16px 20px 10px' }}>
-                Recently processed · {finished.length}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '16px 20px 10px',
+                }}
+              >
+                <span className="t-label">
+                  Recently processed · {finished.length}
+                </span>
+                <button
+                  type="button"
+                  className="btn ghost small"
+                  disabled={clearMut.isPending}
+                  title="Remove every imported / rejected row from the queue history"
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        `Clear ${finished.length} processed ${finished.length === 1 ? 'item' : 'items'} from the queue history? Imported books and already-dropped files are not affected.`,
+                      )
+                    ) {
+                      clearMut.mutate();
+                    }
+                  }}
+                >
+                  <Icon name="close" size={11} />{' '}
+                  {clearMut.isPending ? 'Clearing…' : 'Clear'}
+                </button>
               </div>
               {finished.map((f) => (
                 <QueueRow

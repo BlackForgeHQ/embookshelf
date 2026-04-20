@@ -6,7 +6,7 @@ import { booksQueryKey, librariesQueryKey } from './books';
 
 // Event names the server publishes. Keep the union narrow so the dispatch
 // map below is exhaustive — TypeScript will catch a typo before it ships.
-type RealtimeEvent = 'bookdrop.updated';
+type RealtimeEvent = 'bookdrop.updated' | 'bookdrop.cleared';
 
 type Handler = () => void;
 
@@ -26,6 +26,11 @@ export function useRealtime() {
         queryClient.invalidateQueries({ queryKey: bookdropQueryKey });
         queryClient.invalidateQueries({ queryKey: booksQueryKey() });
         queryClient.invalidateQueries({ queryKey: librariesQueryKey });
+      },
+      // Bulk clear of imported/rejected rows — only the queue list needs
+      // to refetch; books/libraries are unaffected by history deletion.
+      'bookdrop.cleared': () => {
+        queryClient.invalidateQueries({ queryKey: bookdropQueryKey });
       },
     };
 

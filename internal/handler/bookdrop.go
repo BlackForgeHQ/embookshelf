@@ -322,6 +322,23 @@ func saveUniqueUpload(dir, originalName string, fh *multipart.FileHeader) (strin
 	return candidate, nil
 }
 
+// BookDropClearProcessed drops every bookdrop row in a terminal state
+// ('imported' or 'rejected') so the "Recently processed" list clears.
+// In-flight rows (discovered / processing / ready / failed) are left
+// alone. Returns the count actually deleted for the UI toast.
+func (h *Handler) BookDropClearProcessed(c *gin.Context) {
+	userID := requireUserID(c)
+	if userID == "" {
+		return
+	}
+	n, err := h.bookdrop.ClearProcessed(c.Request.Context())
+	if err != nil {
+		writeServerError(c, "bookdrop clear processed", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"cleared": n})
+}
+
 // BookDropReject marks an item as dismissed and cleans up the pre-approval
 // cover. Idempotent — rejecting a rejected item is a no-op.
 func (h *Handler) BookDropReject(c *gin.Context) {

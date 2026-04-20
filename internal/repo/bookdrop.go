@@ -91,6 +91,32 @@ func (r *BookDropRepo) SetMetadata(ctx context.Context, id, title, author, descr
 	return err
 }
 
+// DeleteProcessed removes every bookdrop row in a terminal state
+// ('imported' or 'rejected'). Returns the ids of the deleted rows so the
+// caller can clean up any lingering cover files off-DB. Active-state rows
+// (discovered/processing/ready/failed) are untouched — clearing those
+// would drop in-flight work.
+func (r *BookDropRepo) DeleteProcessed(ctx context.Context) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `
+		DELETE FROM bookdrop_items
+		WHERE state IN ('imported','rejected')
+		RETURNING id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // MarkImported links the bookdrop item to the newly-created book row.
 func (r *BookDropRepo) MarkImported(ctx context.Context, id, bookID string) error {
 	_, err := r.pool.Exec(ctx, `
