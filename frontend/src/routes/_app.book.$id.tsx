@@ -11,12 +11,15 @@ import {
   recentAnnotationsQueryKey,
   type Annotation,
 } from '@/api/annotations';
+import { fetchMe, meQueryKey } from '@/api/auth';
 import {
   addBookToShelf,
   bookQueryKey,
   booksQueryKey,
+  deleteBook,
   fetchBook,
   fetchShelves,
+  librariesQueryKey,
   removeBookFromShelf,
   shelvesQueryKey,
   type BookDetail as BookDetailPayload,
@@ -41,12 +44,27 @@ export const Route = createFileRoute('/_app/book/$id')({
 function BookDetail() {
   const { id } = Route.useParams();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<Tab>('overview');
 
   const book = useQuery({
     queryKey: bookQueryKey(id),
     queryFn: () => fetchBook(id),
   });
+  const me = useQuery({ queryKey: meQueryKey, queryFn: fetchMe, staleTime: 60_000 });
+  const isAdmin = me.data?.role === 'admin';
+
+  const deleteMut = useMutation({
+    mutationFn: () => deleteBook(id),
+    onSuccess: () => {
+      queryClient.removeQueries({ queryKey: bookQueryKey(id) });
+      queryClient.invalidateQueries({ queryKey: booksQueryKey() });
+      queryClient.invalidateQueries({ queryKey: shelvesQueryKey });
+      queryClient.invalidateQueries({ queryKey: librariesQueryKey });
+      void navigate({ to: '/library' });
+    },
+  });
+  const deleteError = deleteMut.error as unknown as ApiError | null;
 
   if (book.isLoading) {
     return (
@@ -218,7 +236,7 @@ function BookDetail() {
           )}
 
           {tab === 'versions' && (
-            <div style={{ maxWidth: 640 }}>
+            <div style={{ maxWidth: 640, display: 'flex', flexDirection: 'column', gap: 24 }}>
               <div
                 style={{
                   display: 'flex',
@@ -240,6 +258,58 @@ function BookDetail() {
                 </div>
                 <button className="btn small">Replace</button>
               </div>
+
+              {isAdmin && (
+                <div
+                  style={{
+                    padding: 16,
+                    border: '1px solid var(--color-accent-soft)',
+                    background: 'var(--color-paper-0)',
+                  }}
+                >
+                  <div className="t-label" style={{ marginBottom: 6 }}>Danger zone</div>
+                  <p className="t-small" style={{ marginBottom: 10, maxWidth: 520 }}>
+                    Permanently remove this book, its cover, its source file, and every
+                    reader&apos;s progress, notes, and shelf placements for it. This cannot
+                    be undone.
+                  </p>
+                  {deleteError && (
+                    <div
+                      style={{
+                        padding: '8px 12px',
+                        marginBottom: 10,
+                        border: '1px solid var(--color-accent-soft)',
+                        background: 'var(--color-accent-soft)',
+                        color: 'var(--color-accent-ink)',
+                        fontSize: 13,
+                      }}
+                    >
+                      {deleteError.message}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="btn small"
+                    style={{
+                      color: 'var(--color-accent-ink)',
+                      borderColor: 'var(--color-accent)',
+                    }}
+                    disabled={deleteMut.isPending}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `Delete “${b.title}”? This removes the file from disk and everyone’s notes for it.`,
+                        )
+                      ) {
+                        deleteMut.mutate();
+                      }
+                    }}
+                  >
+                    <Icon name="close" size={12} />{' '}
+                    {deleteMut.isPending ? 'Deleting…' : 'Delete book'}
+                  </button>
+                </div>
+              )}
             </div>
           )}
 

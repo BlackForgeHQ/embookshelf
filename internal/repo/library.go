@@ -211,6 +211,22 @@ func (r *LibraryRepo) SetCover(ctx context.Context, bookID string, hasCover bool
 	return nil
 }
 
+// Delete hard-deletes a book row by id. FKs on shelf_books, annotations,
+// user_book_progress, and reading_sessions are ON DELETE CASCADE so those
+// children disappear in the same statement; bookdrop_items.book_id is
+// ON DELETE SET NULL so the import history survives the book going away.
+// Returns ErrNotFound when the id is unknown (or was already deleted).
+func (r *LibraryRepo) Delete(ctx context.Context, id string) error {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM books WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // UpdateMetadata applies the user-editable metadata fields for a book.
 func (r *LibraryRepo) UpdateMetadata(ctx context.Context, b model.Book) error {
 	tag, err := r.pool.Exec(ctx, `

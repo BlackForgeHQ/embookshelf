@@ -35,6 +35,15 @@ func (s *LibraryService) UpdateBookMetadata(ctx context.Context, b model.Book) e
 	return s.repo.UpdateMetadata(ctx, b)
 }
 
+// DeleteBook hard-deletes a book. FKs on shelf_books, annotations,
+// user_book_progress, and reading_sessions cascade in the DB; cover art
+// and the source file on disk are the caller's responsibility — the
+// service stays out of the filesystem to keep this layer testable
+// without a mounted library root.
+func (s *LibraryService) DeleteBook(ctx context.Context, id string) error {
+	return s.repo.Delete(ctx, id)
+}
+
 // BookExistsByPath reports whether any non-deleted book already references
 // this on-disk path. Used by the library scanner to avoid re-queuing files
 // that are already in the library.

@@ -66,6 +66,7 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.GET("/books/:id/cover", h.BookCover)
 			authed.GET("/books/:id/file", h.BookFile)
 			authed.PATCH("/books/:id", h.BookPatch)
+			authed.DELETE("/books/:id", auth.RequireRole(model.RoleAdmin), h.BookDelete)
 			authed.POST("/books/:id/progress", h.BookProgressUpdate)
 			authed.POST("/books/:id/shelves/:slug", h.BookAddShelf)
 			authed.DELETE("/books/:id/shelves/:slug", h.BookRemoveShelf)

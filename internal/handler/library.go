@@ -2,7 +2,10 @@ package handler
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -280,6 +283,96 @@ func (h *Handler) BookAddShelf(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+// BookDelete hard-deletes a book and best-effort removes its cover + source
+// file from disk. Admin-gated at the router; books are a shared instance
+// resource (no per-user ownership), so letting any reader nuke a book
+// everyone else can see is the wrong default.
+//
+// The DB row is authoritative — if that succeeds, we 204 even if the
+// filesystem cleanup hiccups (permission, already-gone, etc.). Leaving
+// orphan bytes on disk is fixable; leaving the row in while lying that
+// we deleted it is not.
+//
+// Source-file unlink is sandboxed to BOOKDROP_PATH + registered library
+// paths, same allowlist BookFile / OPDS download use, so a stray path
+// smuggled into the books row can't escape to somewhere unrelated.
+func (h *Handler) BookDelete(c *gin.Context) {
+	userID := requireUserID(c)
+	if userID == "" {
+		return
+	}
+	id := c.Param("id")
+
+	book, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			writeError(c, http.StatusNotFound, "book not found")
+			return
+		}
+		writeServerError(c, "book delete lookup", err)
+		return
+	}
+
+	if err := h.lib.DeleteBook(c.Request.Context(), id); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			writeError(c, http.StatusNotFound, "book not found")
+			return
+		}
+		writeServerError(c, "book delete", err)
+		return
+	}
+
+	if h.covers != nil {
+		if err := h.covers.DeleteBook(id); err != nil {
+			slog.Warn("book delete: cover cleanup", "id", id, "err", err)
+		}
+	}
+	if book.Path != "" {
+		if err := h.deleteBookFile(c, book.Path); err != nil {
+			slog.Warn("book delete: file cleanup", "id", id, "path", book.Path, "err", err)
+		}
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+// deleteBookFile unlinks the on-disk book bytes, but only when path is
+// rooted under a configured library root — mirrors the serveBookFile
+// sandbox so a malformed books.path can't let delete escape the tree.
+func (h *Handler) deleteBookFile(c *gin.Context, path string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+
+	roots := []string{}
+	if h.cfg.BookDropPath != "" {
+		if r, err := filepath.Abs(h.cfg.BookDropPath); err == nil {
+			roots = append(roots, r)
+		}
+	}
+	if h.libPath != nil {
+		if paths, err := h.libPath.List(c.Request.Context()); err == nil {
+			for _, p := range paths {
+				if r, err := filepath.Abs(p.Path); err == nil {
+					roots = append(roots, r)
+				}
+			}
+		}
+	}
+
+	sep := string(filepath.Separator)
+	for _, root := range roots {
+		if absPath == root || strings.HasPrefix(absPath, root+sep) {
+			if err := os.Remove(absPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			return nil
+		}
+	}
+	return errors.New("path outside allowed roots")
 }
 
 // BookRemoveShelf takes a book off a shelf. No-op when the book isn't on

@@ -151,6 +151,12 @@ export async function patchBook(
   return book;
 }
 
+// deleteBook hard-deletes a book (and its cover + source file). Admin-only
+// on the backend; non-admin callers get 403.
+export async function deleteBook(id: string): Promise<void> {
+  await api<void>(`/api/v1/books/${id}`, { method: 'DELETE' });
+}
+
 export async function updateProgress(
   id: string,
   progress: number,

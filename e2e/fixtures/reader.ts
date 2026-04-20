@@ -11,8 +11,9 @@ type BookLite = { id: string; title: string; format: string };
 // and approves it through the API.
 //
 // Caching by title across runs keeps the shared dev DB from accumulating
-// test rows — there's no DELETE /books endpoint to clean up after
-// ourselves.
+// test rows. DELETE /books exists now but is admin-only and destructive
+// (also unlinks the file); reusing an already-approved row is still the
+// cheaper path for reader fixtures.
 export async function ensureFixtureBook(
   adminApi: APIRequestContext,
   opts: { format: DropFormat; title: string; dropLabel: string },
