@@ -2,12 +2,17 @@ package handler
 
 import (
 	"errors"
+	"io/fs"
+	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 )
@@ -126,6 +131,142 @@ func (h *Handler) SettingsLibraryPathDelete(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+type createLibraryReq struct {
+	Name  string   `json:"name"`
+	Paths []string `json:"paths"`
+	Scan  bool     `json:"scan"`
+}
+
+// SettingsLibraryCreate provisions a new library and (optionally) registers
+// initial filesystem paths under it. Mirrors the "Library Creator" flow from
+// spec/library-creation.spec.md, adapted to embookshelf's simpler model:
+// name + paths only (no icon/watch/format policy — not modeled yet).
+//
+// Layout-wise the response matches SettingsLibraries so the client can drop
+// the new card straight into the admin table without a round trip.
+func (h *Handler) SettingsLibraryCreate(c *gin.Context) {
+	var body createLibraryReq
+	if !bindJSON(c, &body) {
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeError(c, http.StatusBadRequest, "name is required")
+		return
+	}
+	if len(body.Paths) == 0 {
+		writeError(c, http.StatusBadRequest, "at least one path is required")
+		return
+	}
+
+	lib, err := h.lib.Create(c.Request.Context(), name)
+	if err != nil {
+		if errors.Is(err, repo.ErrLibraryNameTaken) {
+			writeError(c, http.StatusConflict, "a library with that name already exists")
+			return
+		}
+		writeServerError(c, "settings library create", err)
+		return
+	}
+
+	// Register paths one-by-one. Dup paths in the same request are silently
+	// collapsed; a DB-level dup (ErrLibraryPathTaken) can't fire here because
+	// the library was just created, but we still handle the sentinel
+	// defensively instead of 500-ing.
+	paths := make([]model.LibraryPath, 0, len(body.Paths))
+	seen := make(map[string]struct{}, len(body.Paths))
+	for _, raw := range body.Paths {
+		cleaned := strings.TrimRight(strings.TrimSpace(raw), "/")
+		if cleaned == "" {
+			continue
+		}
+		if _, dup := seen[cleaned]; dup {
+			continue
+		}
+		seen[cleaned] = struct{}{}
+		p, perr := h.libPath.Create(c.Request.Context(), lib.ID, cleaned)
+		if perr != nil {
+			if errors.Is(perr, repo.ErrLibraryPathTaken) {
+				continue
+			}
+			writeServerError(c, "settings library create path", perr)
+			return
+		}
+		paths = append(paths, p)
+	}
+
+	// Optional async initial scan (spec §3.3 step 4 / §6.1 step 7). River
+	// queue owns the actual work; a missing queue is a deployment smell but
+	// shouldn't block creation — we just skip enqueueing.
+	if body.Scan && h.queue != nil {
+		for _, p := range paths {
+			if err := h.queue.EnqueueLibraryScan(c.Request.Context(), p.ID); err != nil {
+				slog.Warn("enqueue library scan after create failed", "path", p.Path, "err", err)
+			}
+		}
+	}
+
+	pathDTOs := make([]settingsLibraryPathDTO, 0, len(paths))
+	for _, p := range paths {
+		pathDTOs = append(pathDTOs, toLibraryPathDTO(p))
+	}
+	c.JSON(http.StatusCreated, gin.H{
+		"library": settingsLibraryDTO{
+			libraryDTO: toLibraryDTO(lib),
+			Paths:      pathDTOs,
+		},
+	})
+}
+
+type scanLibraryReq struct {
+	Paths []string `json:"paths"`
+}
+
+// SettingsLibraryScan counts processable files under the provided paths
+// *without* creating a library. Spec §5.1 — the UI calls this before submit
+// so it can toggle large-library buffering when the count is ≥ 500.
+//
+// Missing/unreadable paths don't fail the response; they're logged and
+// skipped. The walk only inspects extensions (fileproc.IsSupported), not
+// file contents, so it's cheap enough to run synchronously on the request.
+func (h *Handler) SettingsLibraryScan(c *gin.Context) {
+	var body scanLibraryReq
+	if !bindJSON(c, &body) {
+		return
+	}
+	ctx := c.Request.Context()
+	var total int64
+	seen := make(map[string]struct{}, len(body.Paths))
+	for _, raw := range body.Paths {
+		cleaned := strings.TrimRight(strings.TrimSpace(raw), "/")
+		if cleaned == "" {
+			continue
+		}
+		if _, dup := seen[cleaned]; dup {
+			continue
+		}
+		seen[cleaned] = struct{}{}
+		info, err := os.Stat(cleaned)
+		if err != nil || !info.IsDir() {
+			slog.Warn("prescan skip unreadable path", "path", cleaned, "err", err)
+			continue
+		}
+		_ = filepath.WalkDir(cleaned, func(p string, d fs.DirEntry, werr error) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if werr != nil || d.IsDir() {
+				return nil
+			}
+			if fileproc.IsSupported(p) {
+				total++
+			}
+			return nil
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"count": total})
 }
 
 // SettingsLibraryPathScan enqueues a library.scan job for the given path.

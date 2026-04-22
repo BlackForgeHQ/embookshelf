@@ -24,6 +24,7 @@ import {
   type DeviceKind,
 } from '@/api/devices';
 import {
+  createLibrary,
   createLibraryPath,
   createSettingsUser,
   deleteLibraryPath,
@@ -33,6 +34,7 @@ import {
   fetchSettingsLibraries,
   fetchSettingsUsers,
   instanceInfoQueryKey,
+  prescanLibraryPaths,
   providerSettingsQueryKey,
   scanLibraryPath,
   settingsLibrariesQueryKey,
@@ -50,7 +52,16 @@ import {
   AvatarFallback,
 } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Select as ShadcnSelect,
   SelectContent,
@@ -493,6 +504,7 @@ function ReadingPreferencesPanel() {
 
 function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
   const queryClient = useQueryClient();
+  const [creatorOpen, setCreatorOpen] = useState(false);
 
   const libraries = useQuery({
     queryKey: settingsLibrariesQueryKey,
@@ -525,9 +537,17 @@ function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
 
   if (!isAdmin) return <AdminGate label="Libraries" />;
 
+  const existingNames = (libraries.data ?? []).map((l) => l.name);
+
   return (
     <>
-      <h2 className="t-h2" style={{ marginBottom: 8 }}>Libraries</h2>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 8 }}>
+        <h2 className="t-h2">Libraries</h2>
+        <div style={{ flex: 1 }} />
+        <Button variant="outline" onClick={() => setCreatorOpen(true)}>
+          <Icon name="plus" size={13} /> New library
+        </Button>
+      </div>
       <p className="t-small" style={{ marginBottom: 24, fontStyle: 'italic' }}>
         Register filesystem roots each library scans. Scans discover new
         files and enqueue them through the BookDrop review queue.
@@ -549,7 +569,281 @@ function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
           onScanPath={(id) => scanMut.mutate(id)}
         />
       ))}
+
+      <LibraryCreatorDialog
+        open={creatorOpen}
+        onOpenChange={setCreatorOpen}
+        existingNames={existingNames}
+        onCreated={() => {
+          invalidate();
+          setCreatorOpen(false);
+        }}
+      />
     </>
+  );
+}
+
+type LibraryCreatorDialogProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  existingNames: string[];
+  onCreated: () => void;
+};
+
+// Modeled after spec/library-creation.spec.md §3 + §4. Embookshelf's library
+// model is simpler than BookLore's (no icon/watch/format policy yet), so the
+// form collapses to name + paths + an opt-in "scan immediately" toggle.
+function LibraryCreatorDialog({
+  open,
+  onOpenChange,
+  existingNames,
+  onCreated,
+}: LibraryCreatorDialogProps) {
+  const [name, setName] = useState('');
+  const [paths, setPaths] = useState<string[]>([]);
+  const [pathDraft, setPathDraft] = useState('');
+  const [scanOnCreate, setScanOnCreate] = useState(true);
+  const [prescan, setPrescan] = useState<{ count: number; forPaths: string[] } | null>(null);
+  const [pathError, setPathError] = useState<string | null>(null);
+
+  // Reset local state whenever the dialog closes so re-opening is a blank slate.
+  useEffect(() => {
+    if (open) return;
+    setName('');
+    setPaths([]);
+    setPathDraft('');
+    setScanOnCreate(true);
+    setPrescan(null);
+    setPathError(null);
+  }, [open]);
+
+  const trimmedName = name.trim();
+  const nameCollision = existingNames.some(
+    (existing) => existing.toLowerCase() === trimmedName.toLowerCase(),
+  );
+  const nameValid = trimmedName !== '' && !nameCollision;
+
+  const prescanMut = useMutation({
+    mutationFn: (list: string[]) => prescanLibraryPaths(list),
+    onSuccess: (count, list) => setPrescan({ count, forPaths: list }),
+  });
+
+  const createMut = useMutation({
+    mutationFn: () =>
+      createLibrary({ name: trimmedName, paths, scan: scanOnCreate }),
+    onSuccess: () => onCreated(),
+  });
+
+  const addPath = () => {
+    const cleaned = pathDraft.trim().replace(/\/+$/, '');
+    if (cleaned === '') return;
+    if (paths.includes(cleaned)) {
+      setPathError('that path is already in the list');
+      return;
+    }
+    setPathError(null);
+    setPaths((prev) => [...prev, cleaned]);
+    setPathDraft('');
+    setPrescan(null);
+  };
+
+  const removePath = (value: string) => {
+    setPaths((prev) => prev.filter((p) => p !== value));
+    setPrescan(null);
+  };
+
+  // Prescan is valid only for the exact path list the user is looking at.
+  // If they edit the list, we invalidate the count and they'll need to
+  // re-click "Count files" (spec §3.3 step 2).
+  const prescanFresh =
+    prescan !== null &&
+    prescan.forPaths.length === paths.length &&
+    prescan.forPaths.every((p, i) => p === paths[i]);
+
+  const submitDisabled =
+    !nameValid || paths.length === 0 || createMut.isPending;
+
+  const createError = createMut.error as ApiError | null;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[520px]">
+        <DialogHeader>
+          <DialogTitle>New library</DialogTitle>
+          <DialogDescription>
+            Point embookshelf at one or more folders on disk. On create, the
+            scanner walks each folder and stages new files through BookDrop.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div>
+            <Label htmlFor="lib-name" style={{ display: 'block', marginBottom: 6 }}>
+              Name
+            </Label>
+            <Input
+              id="lib-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Fiction"
+              autoFocus
+            />
+            {trimmedName !== '' && nameCollision && (
+              <div
+                className="t-small"
+                style={{ color: 'var(--color-accent-ink)', marginTop: 6 }}
+              >
+                A library with that name already exists.
+              </div>
+            )}
+          </div>
+
+          <div>
+            <Label style={{ display: 'block', marginBottom: 6 }}>Folders</Label>
+            {paths.length === 0 ? (
+              <div
+                className="t-small"
+                style={{ fontStyle: 'italic', marginBottom: 8 }}
+              >
+                No folders yet — add at least one below.
+              </div>
+            ) : (
+              <div
+                style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}
+              >
+                {paths.map((p) => (
+                  <div
+                    key={p}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '8px 12px',
+                      background: 'var(--color-paper-2)',
+                      borderRadius: 2,
+                    }}
+                  >
+                    <span className="mono" style={{ flex: 1, fontSize: 12.5 }}>
+                      {p}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => removePath(p)}
+                      aria-label={`Remove ${p}`}
+                    >
+                      <Icon name="close" size={13} />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Input
+                value={pathDraft}
+                onChange={(e) => {
+                  setPathDraft(e.target.value);
+                  if (pathError) setPathError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addPath();
+                  }
+                }}
+                placeholder="/absolute/path/to/books"
+                className="mono flex-1 text-[12.5px]"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={addPath}
+                disabled={pathDraft.trim() === ''}
+              >
+                <Icon name="plus" size={13} /> Add
+              </Button>
+            </div>
+            {pathError && (
+              <div
+                className="t-small"
+                style={{ color: 'var(--color-accent-ink)', marginTop: 6 }}
+              >
+                {pathError}
+              </div>
+            )}
+          </div>
+
+          {paths.length > 0 && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '10px 12px',
+                border: '1px dashed var(--color-rule-soft)',
+                borderRadius: 2,
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <div className="t-small" style={{ fontWeight: 500 }}>
+                  Pre-create scan
+                </div>
+                <div className="t-micro" style={{ fontStyle: 'italic' }}>
+                  {prescanFresh
+                    ? `${prescan!.count.toLocaleString()} supported file${prescan!.count === 1 ? '' : 's'} found`
+                    : 'Counts files before creation so you can spot typos in the path.'}
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => prescanMut.mutate(paths)}
+                disabled={prescanMut.isPending}
+              >
+                {prescanMut.isPending ? 'Counting…' : 'Count files'}
+              </Button>
+            </div>
+          )}
+
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              cursor: 'pointer',
+            }}
+          >
+            <Switch
+              checked={scanOnCreate}
+              onCheckedChange={(v) => setScanOnCreate(Boolean(v))}
+            />
+            <span className="t-small">Scan folders immediately after creating</span>
+          </label>
+
+          {createError && <Notice kind="err">{createError.message}</Notice>}
+        </div>
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+            disabled={createMut.isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={() => createMut.mutate()}
+            disabled={submitDisabled}
+          >
+            {createMut.isPending ? 'Creating…' : 'Create library'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

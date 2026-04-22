@@ -7,7 +7,9 @@ import {
   fetchInstanceSummary,
   instanceSummaryQueryKey,
 } from '@/api/settings';
-import { Sidebar } from '@/components/Sidebar';
+import { AppSidebar } from '@/components/Sidebar';
+import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
+import { TooltipProvider } from '@/components/ui/tooltip';
 
 // Pathless layout: every in-app screen (dashboard, library, book detail,
 // bookdrop, settings, notebook, metadata editor) renders inside this shell
@@ -42,24 +44,22 @@ function AppLayout() {
   // EventSource never fires without a valid session cookie.
   useRealtime();
 
+  // SidebarProvider owns the expanded/collapsed state and persists it to
+  // a cookie so the sidebar survives page reloads. TooltipProvider is
+  // required by shadcn's SidebarMenuButton tooltips when the sidebar is
+  // in icon mode.
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '240px 1fr',
-        height: '100vh',
-        overflow: 'hidden',
-        background: 'var(--color-paper-1)',
-      }}
-    >
-      <Sidebar />
-      <main className="main">
-        <div className="main-content">
-          <Outlet />
-        </div>
-        <StatusBar />
-      </main>
-    </div>
+    <TooltipProvider delayDuration={100}>
+      <SidebarProvider className="h-screen overflow-hidden">
+        <AppSidebar />
+        <SidebarInset className="min-h-0 overflow-hidden">
+          <div className="main-content">
+            <Outlet />
+          </div>
+          <StatusBar />
+        </SidebarInset>
+      </SidebarProvider>
+    </TooltipProvider>
   );
 }
 

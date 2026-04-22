@@ -116,6 +116,8 @@ func (h *Handler) Engine() *gin.Engine {
 				admin.GET("/instance", h.InstanceInfo)
 
 				admin.GET("/libraries", h.SettingsLibraries)
+				admin.POST("/libraries", h.SettingsLibraryCreate)
+				admin.POST("/libraries/scan", h.SettingsLibraryScan)
 				admin.POST("/libraries/paths", h.SettingsLibraryPathCreate)
 				admin.DELETE("/libraries/paths/:id", h.SettingsLibraryPathDelete)
 				admin.POST("/libraries/paths/:id/scan", h.SettingsLibraryPathScan)

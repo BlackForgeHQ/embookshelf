@@ -23,6 +23,32 @@ export async function fetchSettingsLibraries(): Promise<SettingsLibrary[]> {
   return libraries;
 }
 
+export async function createLibrary(body: {
+  name: string;
+  paths: string[];
+  scan?: boolean;
+}): Promise<SettingsLibrary> {
+  const { library } = await api<{ library: SettingsLibrary }>(
+    '/api/v1/settings/libraries',
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+  );
+  return library;
+}
+
+export async function prescanLibraryPaths(paths: string[]): Promise<number> {
+  const { count } = await api<{ count: number }>(
+    '/api/v1/settings/libraries/scan',
+    {
+      method: 'POST',
+      body: JSON.stringify({ paths }),
+    },
+  );
+  return count;
+}
+
 export async function createLibraryPath(
   libraryId: string,
   path: string,

@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type MouseEventHandler, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 
@@ -24,8 +24,23 @@ import {
 import { CURRENT_USER } from '@/data/mock';
 import { Icon, type IconName } from './Icon';
 import { RuleEditor } from './RuleEditor';
-import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Button } from '@/components/ui/button';
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupAction,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuBadge,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from '@/components/ui/sidebar';
 
 // Library colors are a design concern (no DB column backs them) so we key
 // a stable palette by library slug. Unknown slugs fall back to the accent.
@@ -43,9 +58,10 @@ const BUILTIN_SHELF_ICONS: Record<string, IconName> = {
   wishlist: 'bookmark',
 };
 
-// Sidebar is a pure navigation element — every item is a real router Link
-// so browser back/forward, right-click, and deep-link all work.
-export function Sidebar() {
+// AppSidebar is mounted once inside the authed shell. Every nav target is a
+// real TanStack Router <Link> so browser back/forward, right-click-open, and
+// deep-link all behave correctly.
+export function AppSidebar() {
   const state = useRouterState();
   const pathname = state.location.pathname;
   const search = state.location.search as { shelf?: string; library?: string };
@@ -104,8 +120,6 @@ export function Sidebar() {
     },
   });
 
-  // smartDraft drives the RuleEditor modal. `null` means closed; a
-  // payload with slug === null opens in create mode, otherwise edit.
   const [smartDraft, setSmartDraft] = useState<
     | { mode: 'create' }
     | { mode: 'edit'; shelf: Shelf }
@@ -136,148 +150,158 @@ export function Sidebar() {
   const activeLibrary = isLibrary ? search.library ?? null : null;
 
   return (
-    <aside className="sidebar">
-      {/* Brand */}
-      <div style={{ padding: '0 18px 20px', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div
-          style={{
-            width: 26,
-            height: 26,
-            background: 'var(--color-ink-1)',
-            color: 'var(--color-paper-0)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontFamily: 'var(--font-serif)',
-            fontWeight: 600,
-            fontSize: 16,
-            fontStyle: 'italic',
-            borderRadius: 2,
-          }}
-        >
-          e
+    <Sidebar collapsible="icon">
+      <SidebarHeader>
+        <div className="flex items-center gap-2.5 px-1.5 py-1">
+          <div
+            className="flex size-6 shrink-0 items-center justify-center rounded-sm bg-(--color-ink-1) font-serif text-base font-semibold italic text-(--color-paper-0)"
+          >
+            e
+          </div>
+          <div className="font-serif text-lg font-medium tracking-tight group-data-[collapsible=icon]:hidden">
+            embookshelf
+          </div>
         </div>
-        <div
-          style={{
-            fontFamily: 'var(--font-serif)',
-            fontSize: 18,
-            fontWeight: 500,
-            letterSpacing: '-0.01em',
-          }}
-        >
-          embookshelf
-        </div>
-      </div>
+      </SidebarHeader>
 
-      <Section title="Browse">
-        <NavItem to="/" icon="home" label="Dashboard" active={pathname === '/'} />
-        <NavItem
-          to="/library"
-          icon="library"
-          label="All Books"
-          count={totalBooks || undefined}
-          active={isLibrary && !activeShelf && !activeLibrary}
-        />
-        <NavItem
-          to="/library"
-          search={{ shelf: 'reading' }}
-          icon="book-open"
-          label="Reading Now"
-          count={shelfList.find((s) => s.slug === 'reading')?.bookCount}
-          active={activeShelf === 'reading'}
-        />
-        <NavItem to="/notebook" icon="note" label="Notebook" active={pathname === '/notebook'} />
-        <NavItem to="/stats" icon="chart" label="Stats" active={pathname === '/stats'} />
-        <NavItem to="/bookdrop" icon="upload" label="BookDrop" active={pathname === '/bookdrop'} />
-      </Section>
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupLabel>Browse</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <NavItem
+                to="/"
+                icon="home"
+                label="Dashboard"
+                active={pathname === '/'}
+              />
+              <NavItem
+                to="/library"
+                icon="library"
+                label="All Books"
+                count={totalBooks || undefined}
+                active={isLibrary && !activeShelf && !activeLibrary}
+              />
+              <NavItem
+                to="/library"
+                search={{ shelf: 'reading' }}
+                icon="book-open"
+                label="Reading Now"
+                count={shelfList.find((s) => s.slug === 'reading')?.bookCount}
+                active={activeShelf === 'reading'}
+              />
+              <NavItem
+                to="/notebook"
+                icon="note"
+                label="Notebook"
+                active={pathname === '/notebook'}
+              />
+              <NavItem
+                to="/stats"
+                icon="chart"
+                label="Stats"
+                active={pathname === '/stats'}
+              />
+              <NavItem
+                to="/bookdrop"
+                icon="upload"
+                label="BookDrop"
+                active={pathname === '/bookdrop'}
+              />
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
 
-      <Section
-        title="Libraries"
-        action={
-          <Button variant="ghost" size="icon-xs" aria-label="New library">
+        <SidebarGroup>
+          <SidebarGroupLabel>Libraries</SidebarGroupLabel>
+          <SidebarGroupAction title="New library" aria-label="New library">
             <Icon name="plus" size={12} />
-          </Button>
-        }
-      >
-        {libs.map((lib) => (
-          <NavItem
-            key={lib.id}
-            to="/library"
-            search={{ library: lib.slug }}
-            label={lib.name}
-            count={lib.bookCount}
-            color={LIBRARY_COLORS[lib.slug] ?? 'var(--color-accent)'}
-            active={activeLibrary === lib.slug}
-          />
-        ))}
-      </Section>
+          </SidebarGroupAction>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {libs.map((lib) => (
+                <NavItem
+                  key={lib.id}
+                  to="/library"
+                  search={{ library: lib.slug }}
+                  label={lib.name}
+                  count={lib.bookCount}
+                  color={LIBRARY_COLORS[lib.slug] ?? 'var(--color-accent)'}
+                  active={activeLibrary === lib.slug}
+                />
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
 
-      <Section
-        title="Shelves"
-        action={
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
+        <SidebarGroup>
+          <SidebarGroupLabel>Shelves</SidebarGroupLabel>
+          <SidebarGroupAction
+            title="New shelf"
             aria-label="New shelf"
             onClick={promptCreateShelf}
             disabled={createShelfMut.isPending}
           >
             <Icon name="plus" size={12} />
-          </Button>
-        }
-      >
-        {shelfList.map((s) => (
-          <NavItem
-            key={s.id}
-            to="/library"
-            search={{ shelf: s.slug }}
-            icon={BUILTIN_SHELF_ICONS[s.slug] ?? 'folder'}
-            label={s.name}
-            count={s.bookCount}
-            indent={4}
-            active={activeShelf === s.slug}
-          />
-        ))}
-      </Section>
+          </SidebarGroupAction>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {shelfList.map((s) => (
+                <NavItem
+                  key={s.id}
+                  to="/library"
+                  search={{ shelf: s.slug }}
+                  icon={BUILTIN_SHELF_ICONS[s.slug] ?? 'folder'}
+                  label={s.name}
+                  count={s.bookCount}
+                  active={activeShelf === s.slug}
+                />
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
 
-      <Section
-        title="Magic Shelves"
-        action={
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
+        <SidebarGroup>
+          <SidebarGroupLabel>Magic Shelves</SidebarGroupLabel>
+          <SidebarGroupAction
+            title="New smart shelf"
             aria-label="New smart shelf"
             onClick={() => setSmartDraft({ mode: 'create' })}
           >
             <Icon name="plus" size={12} />
-          </Button>
-        }
-      >
-        {smartList.length === 0 && (
-          <div className="t-small" style={{ padding: '4px 20px 8px', fontStyle: 'italic', color: 'var(--color-ink-3)' }}>
-            No smart shelves yet.
-          </div>
-        )}
-        {smartList.map((s) => (
-          <SmartShelfRow
-            key={s.id}
-            shelf={s}
-            active={activeShelf === s.slug}
-            onEdit={() => setSmartDraft({ mode: 'edit', shelf: s })}
-            onDelete={() => {
-              if (window.confirm(`Delete smart shelf "${s.name}"?`)) {
-                deleteShelfMut.mutate(s.slug);
-              }
-            }}
-          />
-        ))}
-      </Section>
+          </SidebarGroupAction>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {smartList.length === 0 && (
+                <li className="t-small px-2 py-1 italic text-(--color-ink-3) group-data-[collapsible=icon]:hidden">
+                  No smart shelves yet.
+                </li>
+              )}
+              {smartList.map((s) => (
+                <SmartShelfRow
+                  key={s.id}
+                  shelf={s}
+                  active={activeShelf === s.slug}
+                  onEdit={() => setSmartDraft({ mode: 'edit', shelf: s })}
+                  onDelete={() => {
+                    if (window.confirm(`Delete smart shelf "${s.name}"?`)) {
+                      deleteShelfMut.mutate(s.slug);
+                    }
+                  }}
+                />
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
 
-      <div style={{ flex: 1 }} />
-
-      <UserBadge user={me.data ?? null} onLogout={() => logoutMut.mutate()} loggingOut={logoutMut.isPending} />
+      <SidebarFooter>
+        <UserBadge
+          user={me.data ?? null}
+          onLogout={() => logoutMut.mutate()}
+          loggingOut={logoutMut.isPending}
+        />
+      </SidebarFooter>
 
       {smartDraft && (
         <RuleEditor
@@ -301,13 +325,13 @@ export function Sidebar() {
           }}
         />
       )}
-    </aside>
+    </Sidebar>
   );
 }
 
-// SmartShelfRow is a NavItem with inline edit/delete affordances — the
-// extra buttons reveal on hover so the sidebar stays quiet when the
-// user isn't targeting them.
+// SmartShelfRow is a NavItem with hover-revealed edit/delete affordances.
+// SidebarMenuAction occupies the right gutter and automatically appears on
+// hover/focus (see sidebar.tsx `showOnHover`).
 function SmartShelfRow({
   shelf,
   active,
@@ -319,67 +343,43 @@ function SmartShelfRow({
   onEdit: () => void;
   onDelete: () => void;
 }) {
-  const [hovered, setHovered] = useState(false);
   return (
-    <div
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{ position: 'relative' }}
-    >
-      <NavItem
-        to="/library"
-        search={{ shelf: shelf.slug }}
-        icon="sparkle"
-        label={shelf.name}
-        count={hovered ? undefined : shelf.bookCount}
-        indent={4}
-        active={active}
-      />
-      {hovered && (
-        <div
-          style={{
-            position: 'absolute',
-            right: 6,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            display: 'flex',
-            gap: 2,
-            background: 'var(--color-paper-3)',
-            padding: 2,
-            borderRadius: 2,
-          }}
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onEdit();
-            }}
-            aria-label={`Edit ${shelf.name}`}
-            title="Edit rule"
-          >
-            <Icon name="edit" size={11} />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onDelete();
-            }}
-            aria-label={`Delete ${shelf.name}`}
-            title="Delete"
-          >
-            <Icon name="close" size={11} />
-          </Button>
-        </div>
-      )}
-    </div>
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={active} tooltip={shelf.name}>
+        <Link to="/library" search={{ shelf: shelf.slug } as never}>
+          <Icon name="sparkle" size={15} />
+          <span>{shelf.name}</span>
+        </Link>
+      </SidebarMenuButton>
+      <SidebarMenuBadge className="group-hover/menu-item:hidden group-focus-within/menu-item:hidden">
+        {shelf.bookCount}
+      </SidebarMenuBadge>
+      <SidebarMenuAction
+        showOnHover
+        title="Edit rule"
+        aria-label={`Edit ${shelf.name}`}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onEdit();
+        }}
+      >
+        <Icon name="edit" size={11} />
+      </SidebarMenuAction>
+      <SidebarMenuAction
+        showOnHover
+        className="right-7"
+        title="Delete"
+        aria-label={`Delete ${shelf.name}`}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onDelete();
+        }}
+      >
+        <Icon name="close" size={11} />
+      </SidebarMenuAction>
+    </SidebarMenuItem>
   );
 }
 
@@ -398,25 +398,23 @@ function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
   const initials = user ? user.initials : CURRENT_USER.initials;
 
   return (
-    <div
-      style={{
-        padding: '12px 16px',
-        borderTop: '1px solid var(--color-rule-soft)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-      }}
-    >
+    <div className="flex items-center gap-2.5 px-2 py-1.5">
       <Avatar size="sm">
         <AvatarFallback className="bg-(--color-editorial-accent) text-(--color-paper-0) font-serif font-medium">
           {initials}
         </AvatarFallback>
       </Avatar>
-      <div style={{ flex: 1, overflow: 'hidden' }}>
-        <div style={{ fontSize: 13, fontWeight: 500 }}>{display}</div>
-        <div className="t-micro" style={{ fontSize: 10 }}>{role}</div>
+      <div className="flex-1 overflow-hidden group-data-[collapsible=icon]:hidden">
+        <div className="text-[13px] font-medium leading-tight">{display}</div>
+        <div className="t-micro text-[10px]">{role}</div>
       </div>
-      <Button asChild variant="ghost" size="icon-sm" title="Settings">
+      <Button
+        asChild
+        variant="ghost"
+        size="icon-sm"
+        title="Settings"
+        className="group-data-[collapsible=icon]:hidden"
+      >
         <Link to="/settings">
           <Icon name="settings" size={14} />
         </Link>
@@ -428,30 +426,10 @@ function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
         title="Sign out"
         onClick={onLogout}
         disabled={loggingOut}
+        className="group-data-[collapsible=icon]:hidden"
       >
         <Icon name="arrow-right" size={14} />
       </Button>
-    </div>
-  );
-}
-
-type SectionProps = { title: string; action?: ReactNode; children: ReactNode };
-
-function Section({ title, action, children }: SectionProps) {
-  return (
-    <div style={{ marginBottom: 18 }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0 18px 6px',
-        }}
-      >
-        <div className="t-label">{title}</div>
-        {action}
-      </div>
-      {children}
     </div>
   );
 }
@@ -462,70 +440,31 @@ type NavItemProps = {
   icon?: IconName;
   label: string;
   count?: number;
-  indent?: number;
   color?: string;
   active?: boolean;
-  onClick?: MouseEventHandler<HTMLAnchorElement>;
 };
 
-function NavItem({ to, search, icon, label, count, indent = 0, color, active, onClick }: NavItemProps) {
-  const style: CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    padding: `7px 16px 7px ${16 + indent}px`,
-    background: active ? 'var(--color-paper-3)' : 'transparent',
-    border: 'none',
-    width: '100%',
-    textAlign: 'left',
-    cursor: 'pointer',
-    color: active ? 'var(--color-ink-1)' : 'var(--color-ink-2)',
-    fontFamily: 'var(--font-serif)',
-    fontSize: 14,
-    textDecoration: 'none',
-    borderLeft: active ? '2px solid var(--color-accent)' : '2px solid transparent',
-  };
-
+function NavItem({ to, search, icon, label, count, color, active }: NavItemProps) {
   return (
-    <Link
-      to={to}
-      search={search as never}
-      style={style}
-      onClick={onClick}
-      onMouseEnter={(e) => {
-        if (!active) e.currentTarget.style.background = 'var(--color-paper-3)';
-      }}
-      onMouseLeave={(e) => {
-        if (!active) e.currentTarget.style.background = 'transparent';
-      }}
-    >
-      {color && (
-        <span
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: '50%',
-            background: color,
-            flexShrink: 0,
-          }}
-        />
-      )}
-      {icon && <Icon name={icon} size={15} />}
-      <span
-        style={{
-          flex: 1,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {label}
-      </span>
-      {count != null && (
-        <span className="mono" style={{ fontSize: 10.5, color: 'var(--color-ink-3)' }}>
-          {count}
-        </span>
-      )}
-    </Link>
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={active} tooltip={label}>
+        <Link to={to} search={search as never}>
+          {color && (
+            <span
+              aria-hidden
+              className="size-1.5 shrink-0 rounded-full"
+              style={{ background: color }}
+            />
+          )}
+          {icon && <Icon name={icon} size={15} />}
+          <NavLabel>{label}</NavLabel>
+        </Link>
+      </SidebarMenuButton>
+      {count != null && <SidebarMenuBadge>{count}</SidebarMenuBadge>}
+    </SidebarMenuItem>
   );
+}
+
+function NavLabel({ children }: { children: ReactNode }) {
+  return <span>{children}</span>;
 }

@@ -34,12 +34,37 @@ const bookFrom = `
 // ErrNotFound is returned when a lookup by id/slug returns no rows.
 var ErrNotFound = errors.New("not found")
 
+// ErrLibraryNameTaken is returned by CreateLibrary when the derived slug
+// collides with an existing library. Callers should surface this as a 409
+// so the UI can prompt the user to pick a different name.
+var ErrLibraryNameTaken = errors.New("library name already taken")
+
 type LibraryRepo struct {
 	pool *pgxpool.Pool
 }
 
 func NewLibraryRepo(pool *pgxpool.Pool) *LibraryRepo {
 	return &LibraryRepo{pool: pool}
+}
+
+// CreateLibrary inserts a new library row and returns the persisted record.
+// Uniqueness is enforced on `slug` (UNIQUE constraint from 000001_init); a
+// collision returns ErrLibraryNameTaken so the handler can 409.
+func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug string) (model.Library, error) {
+	row := r.pool.QueryRow(ctx, `
+		INSERT INTO libraries (name, slug)
+		VALUES ($1, $2)
+		ON CONFLICT (slug) DO NOTHING
+		RETURNING id, name, slug, created_at
+	`, name, slug)
+	var l model.Library
+	if err := row.Scan(&l.ID, &l.Name, &l.Slug, &l.CreatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.Library{}, ErrLibraryNameTaken
+		}
+		return model.Library{}, err
+	}
+	return l, nil
 }
 
 func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {

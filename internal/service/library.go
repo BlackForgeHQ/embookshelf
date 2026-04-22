@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -17,6 +18,39 @@ func NewLibraryService(r *repo.LibraryRepo) *LibraryService {
 
 func (s *LibraryService) List(ctx context.Context) ([]model.Library, error) {
 	return s.repo.List(ctx)
+}
+
+// Create inserts a new library row. The slug is derived from the name so the
+// URL space stays predictable; uniqueness is enforced at the DB layer, and
+// the repo surfaces a 409-worthy sentinel (ErrLibraryNameTaken) on collision.
+func (s *LibraryService) Create(ctx context.Context, name string) (model.Library, error) {
+	name = strings.TrimSpace(name)
+	return s.repo.CreateLibrary(ctx, name, slugify(name))
+}
+
+// slugify collapses a human-readable name into a URL-safe slug:
+// lowercase ASCII alphanumerics pass through, everything else (spaces,
+// punctuation, non-ASCII) becomes a single '-'. Leading/trailing dashes are
+// trimmed. Not perfect for non-Latin scripts — admins picking those names
+// will see an empty slug and can retry with something portable.
+func slugify(name string) string {
+	lower := strings.ToLower(name)
+	var b strings.Builder
+	b.Grow(len(lower))
+	dash := true
+	for _, r := range lower {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			dash = false
+		default:
+			if !dash {
+				b.WriteByte('-')
+				dash = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func (s *LibraryService) Books(ctx context.Context, userID, librarySlug string) ([]model.Book, error) {
