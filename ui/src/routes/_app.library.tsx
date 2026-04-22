@@ -14,6 +14,14 @@ import {
 import { Cover, StarRating } from '@/components/Cover';
 import { Icon } from '@/components/Icon';
 import { TopBar } from '@/components/TopBar';
+import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 type Layout = 'shelf' | 'grid' | 'list';
 type SortKey = 'added' | 'title' | 'author' | 'rating';
@@ -111,14 +119,14 @@ function LibraryView() {
   const openBook = (id: string) => void navigate({ to: '/book/$id', params: { id } });
 
   const layoutBtn = (name: Layout, label: string) => (
-    <button
+    <Button
+      variant={layout === name ? 'default' : 'outline'}
+      size="icon-sm"
       onClick={() => setLayout(name)}
-      className={`btn small ${layout === name ? 'primary' : ''}`}
-      style={{ borderRadius: 2 }}
       title={label}
     >
       <Icon name={name === 'shelf' ? 'shelf' : name === 'grid' ? 'grid' : 'list'} size={13} />
-    </button>
+    </Button>
   );
 
   return (
@@ -161,17 +169,17 @@ function LibraryView() {
         ))}
         <div style={{ flex: 1 }} />
         <span className="t-label">Sort</span>
-        <select
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as SortKey)}
-          className="input"
-          style={{ width: 'auto', padding: '5px 10px', fontSize: 12.5, background: 'var(--color-paper-0)' }}
-        >
-          <option value="added">Recently added</option>
-          <option value="title">Title</option>
-          <option value="author">Author</option>
-          <option value="rating">Rating</option>
-        </select>
+        <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
+          <SelectTrigger size="sm" className="w-auto">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="added">Recently added</SelectItem>
+            <SelectItem value="title">Title</SelectItem>
+            <SelectItem value="author">Author</SelectItem>
+            <SelectItem value="rating">Rating</SelectItem>
+          </SelectContent>
+        </Select>
         <span className="mono" style={{ fontSize: 11, color: 'var(--color-ink-3)', marginLeft: 8 }}>
           {books.isLoading ? 'loading…' : `${rows.length} volumes`}
         </span>

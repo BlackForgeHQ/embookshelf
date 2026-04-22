@@ -24,6 +24,8 @@ import {
 import { CURRENT_USER } from '@/data/mock';
 import { Icon, type IconName } from './Icon';
 import { RuleEditor } from './RuleEditor';
+import { Button } from '@/components/ui/button';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 
 // Library colors are a design concern (no DB column backs them) so we key
 // a stable palette by library slug. Unknown slugs fall back to the accent.
@@ -192,9 +194,9 @@ export function Sidebar() {
       <Section
         title="Libraries"
         action={
-          <button className="btn ghost small" style={{ padding: '2px 4px' }} aria-label="New library">
+          <Button variant="ghost" size="icon-xs" aria-label="New library">
             <Icon name="plus" size={12} />
-          </button>
+          </Button>
         }
       >
         {libs.map((lib) => (
@@ -213,16 +215,16 @@ export function Sidebar() {
       <Section
         title="Shelves"
         action={
-          <button
+          <Button
             type="button"
-            className="btn ghost small"
-            style={{ padding: '2px 4px' }}
+            variant="ghost"
+            size="icon-xs"
             aria-label="New shelf"
             onClick={promptCreateShelf}
             disabled={createShelfMut.isPending}
           >
             <Icon name="plus" size={12} />
-          </button>
+          </Button>
         }
       >
         {shelfList.map((s) => (
@@ -242,15 +244,15 @@ export function Sidebar() {
       <Section
         title="Magic Shelves"
         action={
-          <button
+          <Button
             type="button"
-            className="btn ghost small"
-            style={{ padding: '2px 4px' }}
+            variant="ghost"
+            size="icon-xs"
             aria-label="New smart shelf"
             onClick={() => setSmartDraft({ mode: 'create' })}
           >
             <Icon name="plus" size={12} />
-          </button>
+          </Button>
         }
       >
         {smartList.length === 0 && (
@@ -347,34 +349,34 @@ function SmartShelfRow({
             borderRadius: 2,
           }}
         >
-          <button
+          <Button
             type="button"
-            className="btn ghost small"
+            variant="ghost"
+            size="icon-xs"
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
               onEdit();
             }}
-            style={{ padding: 2 }}
             aria-label={`Edit ${shelf.name}`}
             title="Edit rule"
           >
             <Icon name="edit" size={11} />
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="btn ghost small"
+            variant="ghost"
+            size="icon-xs"
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
               onDelete();
             }}
-            style={{ padding: 2 }}
             aria-label={`Delete ${shelf.name}`}
             title="Delete"
           >
             <Icon name="close" size={11} />
-          </button>
+          </Button>
         </div>
       )}
     </div>
@@ -405,39 +407,30 @@ function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
         gap: 10,
       }}
     >
-      <div
-        style={{
-          width: 28,
-          height: 28,
-          borderRadius: '50%',
-          background: 'var(--color-accent)',
-          color: 'var(--color-paper-0)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontFamily: 'var(--font-serif)',
-          fontSize: 12,
-          fontWeight: 500,
-        }}
-      >
-        {initials}
-      </div>
+      <Avatar size="sm">
+        <AvatarFallback className="bg-(--color-editorial-accent) text-(--color-paper-0) font-serif font-medium">
+          {initials}
+        </AvatarFallback>
+      </Avatar>
       <div style={{ flex: 1, overflow: 'hidden' }}>
         <div style={{ fontSize: 13, fontWeight: 500 }}>{display}</div>
         <div className="t-micro" style={{ fontSize: 10 }}>{role}</div>
       </div>
-      <Link to="/settings" className="btn ghost icon-only" title="Settings">
-        <Icon name="settings" size={14} />
-      </Link>
-      <button
+      <Button asChild variant="ghost" size="icon-sm" title="Settings">
+        <Link to="/settings">
+          <Icon name="settings" size={14} />
+        </Link>
+      </Button>
+      <Button
         type="button"
-        className="btn ghost icon-only"
+        variant="ghost"
+        size="icon-sm"
         title="Sign out"
         onClick={onLogout}
         disabled={loggingOut}
       >
         <Icon name="arrow-right" size={14} />
-      </button>
+      </Button>
     </div>
   );
 }

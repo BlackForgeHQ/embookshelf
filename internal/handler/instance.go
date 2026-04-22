@@ -1,12 +1,11 @@
 package handler
 
 import (
+	"log/slog"
 	"net/http"
 	"runtime"
 
 	"github.com/gin-gonic/gin"
-
-	"github.com/blackforge/embookshelf/internal/provider"
 )
 
 // Version is the build-time app version. Bumped by hand; the status bar
@@ -38,17 +37,6 @@ type providerInfoDTO struct {
 	External bool   `json:"external"`
 }
 
-// providerCatalog enumerates every source the binary can build. The Enabled
-// flag is filled in per-request from config; the labels/URLs are static.
-var providerCatalog = []struct {
-	ID, Name string
-}{
-	{ID: string(provider.SourceGoogleBooks), Name: "Google Books"},
-	{ID: string(provider.SourceOpenLibrary), Name: "Open Library"},
-	{ID: string(provider.SourceAmazon), Name: "Amazon"},
-	{ID: string(provider.SourceDuckDuckGo), Name: "DuckDuckGo"},
-}
-
 // instanceSummaryDTO is the subset of instance facts safe to share with
 // every signed-in user — rendered in the persistent status bar.
 type instanceSummaryDTO struct {
@@ -72,18 +60,17 @@ func (h *Handler) InstanceSummary(c *gin.Context) {
 func (h *Handler) InstanceInfo(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	enabled := make(map[string]struct{}, len(h.cfg.EnrichmentProviders))
-	for _, p := range h.cfg.EnrichmentProviders {
-		enabled[p] = struct{}{}
+	infos, err := h.enrich.ListProviders(ctx)
+	if err != nil {
+		slog.Warn("list providers", "err", err)
 	}
-	providers := make([]providerInfoDTO, 0, len(providerCatalog))
-	for _, p := range providerCatalog {
-		_, on := enabled[p.ID]
+	providers := make([]providerInfoDTO, 0, len(infos))
+	for _, p := range infos {
 		providers = append(providers, providerInfoDTO{
-			ID:       p.ID,
+			ID:       string(p.ID),
 			Name:     p.Name,
-			Enabled:  on,
-			External: true,
+			Enabled:  p.Enabled,
+			External: p.External,
 		})
 	}
 

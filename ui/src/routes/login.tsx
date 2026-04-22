@@ -16,6 +16,8 @@ import {
   signupStatus,
 } from '@/api/auth';
 import type { ApiError } from '@/api/client';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 type LoginSearch = {
   next?: string;
@@ -190,8 +192,7 @@ function LoginPage() {
           <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {mode === 'signup' && (
               <Field label="Name">
-                <input
-                  className="input"
+                <Input
                   autoComplete="name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -199,8 +200,7 @@ function LoginPage() {
               </Field>
             )}
             <Field label="Email">
-              <input
-                className="input"
+              <Input
                 type="email"
                 autoComplete="email"
                 required
@@ -209,8 +209,7 @@ function LoginPage() {
               />
             </Field>
             <Field label="Password">
-              <input
-                className="input"
+              <Input
                 type="password"
                 autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
                 required
@@ -219,10 +218,9 @@ function LoginPage() {
               />
             </Field>
 
-            <button
+            <Button
               type="submit"
-              className="btn primary"
-              style={{ justifyContent: 'center', marginTop: 4 }}
+              className="mt-1 w-full"
               disabled={active.isPending}
             >
               {active.isPending
@@ -230,7 +228,7 @@ function LoginPage() {
                 : mode === 'signup'
                   ? 'Create account'
                   : 'Sign in'}
-            </button>
+            </Button>
 
             {mode === 'login' && oidc.data?.enabled && (
               <>
@@ -246,17 +244,9 @@ function LoginPage() {
                   <span className="t-small" style={{ color: 'var(--color-ink-3)' }}>or</span>
                   <div style={{ flex: 1, height: 1, background: 'var(--color-rule-soft)' }} />
                 </div>
-                <a
-                  href="/api/v1/auth/oidc"
-                  className="btn"
-                  style={{
-                    justifyContent: 'center',
-                    textDecoration: 'none',
-                    display: 'flex',
-                  }}
-                >
-                  Sign in with SSO
-                </a>
+                <Button asChild variant="outline" className="w-full">
+                  <a href="/api/v1/auth/oidc">Sign in with SSO</a>
+                </Button>
               </>
             )}
           </form>
@@ -264,9 +254,10 @@ function LoginPage() {
 
         {showSignupToggle && (
           <div style={{ textAlign: 'center', marginTop: 16 }}>
-            <button
+            <Button
               type="button"
-              className="btn ghost small"
+              variant="ghost"
+              size="sm"
               onClick={() => {
                 setMode((m) => (m === 'signup' ? 'login' : 'signup'));
                 loginMut.reset();
@@ -276,7 +267,7 @@ function LoginPage() {
               {mode === 'signup'
                 ? 'I already have an account'
                 : 'First-run? Create the admin account'}
-            </button>
+            </Button>
           </div>
         )}
       </div>

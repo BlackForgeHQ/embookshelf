@@ -1,0 +1,94 @@
+package repo
+
+import (
+	"context"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// ProviderSetting is the per-provider enabled flag (row shape for the
+// provider_settings table). UpdatedAt is handy for audit/debug but the
+// UI doesn't surface it today.
+type ProviderSetting struct {
+	ID        string
+	Enabled   bool
+	UpdatedAt time.Time
+}
+
+type ProviderSettingsRepo struct {
+	pool *pgxpool.Pool
+}
+
+func NewProviderSettingsRepo(pool *pgxpool.Pool) *ProviderSettingsRepo {
+	return &ProviderSettingsRepo{pool: pool}
+}
+
+// List returns every row, in catalog-stable order (ORDER BY id) — callers
+// that care about display order should re-sort against the provider catalog.
+func (r *ProviderSettingsRepo) List(ctx context.Context) ([]ProviderSetting, error) {
+	rows, err := r.pool.Query(ctx, `SELECT id, enabled, updated_at FROM provider_settings ORDER BY id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]ProviderSetting, 0)
+	for rows.Next() {
+		var s ProviderSetting
+		if err := rows.Scan(&s.ID, &s.Enabled, &s.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// EnabledIDs is the hot-path helper — returns id → enabled so the
+// enrichment service can filter its provider fan-out in one query.
+func (r *ProviderSettingsRepo) EnabledIDs(ctx context.Context) (map[string]bool, error) {
+	rows, err := r.pool.Query(ctx, `SELECT id, enabled FROM provider_settings`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		var enabled bool
+		if err := rows.Scan(&id, &enabled); err != nil {
+			return nil, err
+		}
+		out[id] = enabled
+	}
+	return out, rows.Err()
+}
+
+// SetEnabled upserts a single row. Used by the PATCH endpoint when an
+// admin toggles a provider.
+func (r *ProviderSettingsRepo) SetEnabled(ctx context.Context, id string, enabled bool) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO provider_settings (id, enabled, updated_at)
+		VALUES ($1, $2, now())
+		ON CONFLICT (id) DO UPDATE
+		SET enabled = EXCLUDED.enabled,
+		    updated_at = now()
+	`, id, enabled)
+	return err
+}
+
+// SeedIfAbsent inserts any missing rows using the supplied defaults
+// (typically derived from ENRICHMENT_PROVIDERS on first boot). Existing
+// rows are left untouched — that's the whole point: after first boot the
+// DB is authoritative and env changes don't clobber user-made toggles.
+func (r *ProviderSettingsRepo) SeedIfAbsent(ctx context.Context, defaults map[string]bool) error {
+	for id, enabled := range defaults {
+		if _, err := r.pool.Exec(ctx, `
+			INSERT INTO provider_settings (id, enabled)
+			VALUES ($1, $2)
+			ON CONFLICT (id) DO NOTHING
+		`, id, enabled); err != nil {
+			return err
+		}
+	}
+	return nil
+}

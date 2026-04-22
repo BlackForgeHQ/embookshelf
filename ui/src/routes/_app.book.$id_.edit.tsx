@@ -18,6 +18,9 @@ import {
 } from '@/api/enrich';
 import { Cover } from '@/components/Cover';
 import { Icon } from '@/components/Icon';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 
 export const Route = createFileRoute('/_app/book/$id_/edit')({
   component: MetadataEditor,
@@ -150,30 +153,30 @@ function MetadataEditor() {
           gap: 12,
         }}
       >
-        <button
-          className="btn ghost small"
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => void navigate({ to: '/book/$id', params: { id } })}
         >
           <Icon name="arrow-left" size={14} /> Back to book
-        </button>
+        </Button>
         <div style={{ flex: 1 }} />
-        <button className="btn small" disabled title="Metadata enrichment lands in a later slice">
+        <Button variant="outline" size="sm" disabled title="Metadata enrichment lands in a later slice">
           <Icon name="refresh" size={13} /> Refetch from sources
-        </button>
-        <button
-          className="btn"
+        </Button>
+        <Button
+          variant="outline"
           onClick={() => void navigate({ to: '/book/$id', params: { id } })}
           disabled={saveMut.isPending}
         >
           Cancel
-        </button>
-        <button
-          className="btn primary"
+        </Button>
+        <Button
           onClick={() => saveMut.mutate()}
           disabled={saveMut.isPending}
         >
           {saveMut.isPending ? 'Saving…' : 'Save changes'}
-        </button>
+        </Button>
       </div>
 
       {error && (
@@ -199,18 +202,17 @@ function MetadataEditor() {
 
           <Section title="Core">
             <Row label="Title">
-              <input className="input" value={form.title} onChange={(e) => set('title', e.target.value)} />
+              <Input value={form.title} onChange={(e) => set('title', e.target.value)} />
             </Row>
             <Row label="Author">
-              <input className="input" value={form.author} onChange={(e) => set('author', e.target.value)} />
+              <Input value={form.author} onChange={(e) => set('author', e.target.value)} />
             </Row>
             <Row label="Description">
-              <textarea
-                className="input"
+              <Textarea
                 rows={5}
                 value={form.description}
                 onChange={(e) => set('description', e.target.value)}
-                style={{ fontFamily: 'var(--font-serif)', lineHeight: 1.5, resize: 'vertical' }}
+                className="resize-y min-h-[140px]"
               />
             </Row>
           </Section>
@@ -218,19 +220,18 @@ function MetadataEditor() {
           <Section title="Publication">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               <Row label="Year">
-                <input className="input" value={form.year} onChange={(e) => set('year', e.target.value)} />
+                <Input value={form.year} onChange={(e) => set('year', e.target.value)} />
               </Row>
               <Row label="Publisher">
-                <input
-                  className="input"
+                <Input
                   value={form.publisher}
                   onChange={(e) => set('publisher', e.target.value)}
                 />
               </Row>
             </div>
             <Row label="ISBN">
-              <input
-                className="input mono"
+              <Input
+                className="mono"
                 value={form.isbn}
                 onChange={(e) => set('isbn', e.target.value)}
               />
@@ -240,16 +241,14 @@ function MetadataEditor() {
           <Section title="Series">
             <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 14 }}>
               <Row label="Series name">
-                <input
-                  className="input"
+                <Input
                   value={form.series}
                   onChange={(e) => set('series', e.target.value)}
                   placeholder="—"
                 />
               </Row>
               <Row label="Book #">
-                <input
-                  className="input"
+                <Input
                   value={form.seriesNum}
                   onChange={(e) => set('seriesNum', e.target.value)}
                   placeholder="—"
@@ -260,7 +259,7 @@ function MetadataEditor() {
 
           <Section title="Categories & tags">
             <Row label="Tags">
-              <input className="input" value={form.tags} onChange={(e) => set('tags', e.target.value)} />
+              <Input value={form.tags} onChange={(e) => set('tags', e.target.value)} />
             </Row>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
               {['Fiction', 'Literary', 'Essays', 'Poetry', 'Nonfiction', 'History', 'Philosophy', 'Memoir'].map(
@@ -360,19 +359,21 @@ function EnrichmentPanel({
       <div className="t-label" style={{ marginTop: 28, marginBottom: 10 }}>Metadata sources</div>
 
       {!opened ? (
-        <button
+        <Button
           type="button"
-          className="btn small"
-          style={{ width: '100%', justifyContent: 'center' }}
+          variant="outline"
+          size="sm"
+          className="w-full"
           onClick={() => setOpened(true)}
         >
           <Icon name="search" size={12} /> Find metadata online
-        </button>
+        </Button>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <button
+          <Button
             type="button"
-            className="btn ghost small"
+            variant="ghost"
+            size="sm"
             disabled={enrich.isFetching}
             onClick={() =>
               queryClient.invalidateQueries({
@@ -382,7 +383,7 @@ function EnrichmentPanel({
           >
             <Icon name="refresh" size={12} />{' '}
             {enrich.isFetching ? 'Searching…' : 'Re-search with current fields'}
-          </button>
+          </Button>
 
           {error && (
             <div
@@ -477,17 +478,18 @@ function MatchCard({
           </span>
         </div>
         <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-          <button type="button" className="btn small" onClick={applyFields}>
+          <Button type="button" variant="outline" size="sm" onClick={applyFields}>
             Use fields
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="btn small"
+            variant="outline"
+            size="sm"
             onClick={applyCover}
             disabled={!match.coverUrl || coverBusy}
           >
             Use cover
-          </button>
+          </Button>
         </div>
       </div>
     </div>

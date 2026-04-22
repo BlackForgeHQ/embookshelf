@@ -29,18 +29,28 @@ import {
   deleteLibraryPath,
   deleteSettingsUser,
   fetchInstanceInfo,
+  fetchProviderSettings,
   fetchSettingsLibraries,
   fetchSettingsUsers,
   instanceInfoQueryKey,
+  providerSettingsQueryKey,
   scanLibraryPath,
   settingsLibrariesQueryKey,
   settingsUsersQueryKey,
+  updateProviderSetting,
   updateSettingsUserRole,
+  type ProviderInfo,
   type SettingsLibrary,
   type SettingsLibraryPath,
 } from '@/api/settings';
 import { Icon } from '@/components/Icon';
 import { TopBar } from '@/components/TopBar';
+import {
+  Avatar as ShadcnAvatar,
+  AvatarFallback,
+} from '@/components/ui/avatar';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   Select as ShadcnSelect,
   SelectContent,
@@ -226,24 +236,24 @@ function AccountPanel() {
                 }}
                 style={{ display: 'flex', gap: 8, alignItems: 'center' }}
               >
-                <input
+                <Input
                   autoFocus
-                  className="input"
                   value={nameDraft}
                   onChange={(e) => setNameDraft(e.target.value)}
                   placeholder="Display name"
-                  style={{ flex: 1, fontSize: 14 }}
+                  className="flex-1"
                 />
-                <button type="submit" className="btn small primary" disabled={nameMut.isPending}>
+                <Button type="submit" size="sm" disabled={nameMut.isPending}>
                   Save
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className="btn small ghost"
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setEditing(false)}
                 >
                   Cancel
-                </button>
+                </Button>
               </form>
             ) : (
               <>
@@ -256,8 +266,9 @@ function AccountPanel() {
           </div>
           {!editing && (
             <>
-              <button
-                className="btn small ghost"
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => {
                   setNameDraft(user?.name ?? '');
                   setEditing(true);
@@ -265,16 +276,17 @@ function AccountPanel() {
                 }}
               >
                 Edit name
-              </button>
-              <button
-                className="btn small"
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => {
                   setPwOpen((v) => !v);
                   setNotice(null);
                 }}
               >
                 Change password
-              </button>
+              </Button>
             </>
           )}
         </div>
@@ -299,9 +311,8 @@ function AccountPanel() {
             }}
           >
             <Field label="Current password">
-              <input
+              <Input
                 type="password"
-                className="input"
                 value={pwCurrent}
                 onChange={(e) => setPwCurrent(e.target.value)}
                 autoComplete="current-password"
@@ -309,9 +320,8 @@ function AccountPanel() {
               />
             </Field>
             <Field label="New password">
-              <input
+              <Input
                 type="password"
-                className="input"
                 value={pwNext}
                 onChange={(e) => setPwNext(e.target.value)}
                 autoComplete="new-password"
@@ -320,9 +330,8 @@ function AccountPanel() {
               />
             </Field>
             <Field label="Confirm new password">
-              <input
+              <Input
                 type="password"
-                className="input"
                 value={pwConfirm}
                 onChange={(e) => setPwConfirm(e.target.value)}
                 autoComplete="new-password"
@@ -331,16 +340,17 @@ function AccountPanel() {
               />
             </Field>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button
+              <Button
                 type="button"
-                className="btn small ghost"
+                variant="ghost"
+                size="sm"
                 onClick={() => setPwOpen(false)}
               >
                 Cancel
-              </button>
-              <button type="submit" className="btn small primary" disabled={pwMut.isPending}>
+              </Button>
+              <Button type="submit" size="sm" disabled={pwMut.isPending}>
                 {pwMut.isPending ? 'Updating…' : 'Update password'}
-              </button>
+              </Button>
             </div>
           </form>
         )}
@@ -603,16 +613,15 @@ function LibraryCard({ library, busy, onAddPath, onDeletePath, onScanPath }: Lib
         }}
         style={{ display: 'flex', gap: 8, borderTop: '1px dashed var(--color-rule-soft)', paddingTop: 14 }}
       >
-        <input
-          className="input mono"
+        <Input
           placeholder="/absolute/path/to/books"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          style={{ flex: 1, fontSize: 12.5 }}
+          className="mono flex-1 text-[12.5px]"
         />
-        <button type="submit" className="btn" disabled={busy || draft.trim() === ''}>
+        <Button type="submit" variant="outline" disabled={busy || draft.trim() === ''}>
           <Icon name="plus" size={13} /> Add path
-        </button>
+        </Button>
       </form>
     </div>
   );
@@ -660,29 +669,31 @@ function PathRow({
           last scan {lastScanned} · {path.fileCount} files · {path.discoveredCount} discovered
         </div>
       </div>
-      <button
+      <Button
         type="button"
-        className="btn small"
+        variant="outline"
+        size="sm"
         onClick={onScan}
         disabled={busy}
         title="Enqueue a library scan"
       >
         <Icon name="refresh" size={12} /> Scan
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
-        className="btn ghost small"
+        variant="ghost"
+        size="icon-sm"
         onClick={() => {
           if (window.confirm(`Remove ${path.path}?\nImported books stay in the library.`)) {
             onDelete();
           }
         }}
         disabled={busy}
-        style={{ color: 'var(--color-accent-ink)' }}
+        className="text-(--color-accent-ink)"
         aria-label="Remove path"
       >
         <Icon name="close" size={12} />
-      </button>
+      </Button>
     </div>
   );
 }
@@ -692,41 +703,82 @@ function PathRow({
 // ---------------------------------------------------------------------------
 
 function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
-  const info = useQuery({
-    queryKey: instanceInfoQueryKey,
-    queryFn: fetchInstanceInfo,
+  const queryClient = useQueryClient();
+  const providersQuery = useQuery({
+    queryKey: providerSettingsQueryKey,
+    queryFn: fetchProviderSettings,
     enabled: isAdmin,
+  });
+
+  const toggleMut = useMutation({
+    mutationFn: (args: { id: string; enabled: boolean }) =>
+      updateProviderSetting(args.id, args.enabled),
+    // Optimistic: flip the cache immediately so the Switch doesn't wait
+    // on the round trip. Rollback on error using the snapshot.
+    onMutate: async ({ id, enabled }) => {
+      await queryClient.cancelQueries({ queryKey: providerSettingsQueryKey });
+      const prev = queryClient.getQueryData<ProviderInfo[]>(providerSettingsQueryKey);
+      if (prev) {
+        queryClient.setQueryData<ProviderInfo[]>(
+          providerSettingsQueryKey,
+          prev.map((p) => (p.id === id ? { ...p, enabled } : p)),
+        );
+      }
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) {
+        queryClient.setQueryData(providerSettingsQueryKey, ctx.prev);
+      }
+    },
+    onSuccess: (providers) => {
+      // Server returns the canonical post-update list; take it wholesale.
+      queryClient.setQueryData(providerSettingsQueryKey, providers);
+      // Also refresh the instance blob so About / status bar agree.
+      queryClient.invalidateQueries({ queryKey: instanceInfoQueryKey });
+    },
   });
 
   if (!isAdmin) return <AdminGate label="Metadata providers" />;
 
-  const providers = info.data?.enrichmentProviders ?? [];
-  const enabled = providers.filter((p) => p.enabled).length;
+  const providers = providersQuery.data ?? [];
+  const enabledCount = providers.filter((p) => p.enabled).length;
+  const error = toggleMut.error as unknown as ApiError | null;
 
   return (
     <>
       <h2 className="t-h2" style={{ marginBottom: 8 }}>Metadata providers</h2>
       <p className="t-small" style={{ marginBottom: 24, fontStyle: 'italic' }}>
-        Enrichment queries are fanned out across enabled providers. Configure
-        the set with <span className="mono">ENRICHMENT_PROVIDERS</span> and
-        restart the server.
+        Enrichment queries fan out across enabled providers — toggle any row
+        to include or skip it. The initial set is seeded from{' '}
+        <span className="mono">ENRICHMENT_PROVIDERS</span>; after that, this
+        page is authoritative and changes take effect on the next search.
       </p>
 
+      {error && (
+        <Notice kind="err">{error.message}</Notice>
+      )}
+
       <div className="t-label" style={{ marginBottom: 10 }}>
-        {enabled} of {providers.length} enabled
+        {providersQuery.isLoading
+          ? 'Loading providers…'
+          : `${enabledCount} of ${providers.length} enabled`}
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {providers.map((p) => (
-          <div
+          <label
             key={p.id}
+            htmlFor={`provider-${p.id}`}
             style={{
               display: 'flex',
               alignItems: 'center',
               gap: 14,
-              padding: '10px 14px',
+              padding: '12px 14px',
               border: '1px solid var(--color-rule-soft)',
               background: 'var(--color-paper-0)',
+              borderRadius: 2,
+              cursor: 'pointer',
             }}
           >
             <span
@@ -735,17 +787,24 @@ function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
                 height: 8,
                 borderRadius: '50%',
                 background: p.enabled ? 'oklch(0.58 0.12 140)' : 'var(--color-ink-4)',
+                transition: 'background 160ms ease',
               }}
             />
-            <div style={{ flex: 1 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13.5, fontWeight: 500 }}>{p.name}</div>
               <div className="t-small" style={{ fontSize: 11.5 }}>
                 <span className="mono">{p.id}</span>
                 {p.external && ' · external API'}
               </div>
             </div>
-            <span className="t-micro">{p.enabled ? 'enabled' : 'disabled'}</span>
-          </div>
+            <Switch
+              id={`provider-${p.id}`}
+              checked={p.enabled}
+              disabled={toggleMut.isPending}
+              onCheckedChange={(v) => toggleMut.mutate({ id: p.id, enabled: v })}
+              aria-label={`${p.enabled ? 'Disable' : 'Enable'} ${p.name}`}
+            />
+          </label>
         ))}
       </div>
     </>
@@ -787,13 +846,14 @@ function DevicesPanel() {
     <>
       <div style={{ display: 'flex', alignItems: 'baseline', marginBottom: 8 }}>
         <h2 className="t-h2" style={{ flex: 1 }}>Device sync</h2>
-        <button
+        <Button
           type="button"
-          className="btn small"
+          variant="outline"
+          size="sm"
           onClick={() => setAdding('remarkable-paper-pro')}
         >
           <Icon name="plus" size={13} /> Add device
-        </button>
+        </Button>
       </div>
       <p className="t-small" style={{ marginBottom: 24, fontStyle: 'italic' }}>
         Pair a device once; push books from the library with a single click.
@@ -854,10 +914,10 @@ function DevicesPanel() {
       <Card>
         <Field label="Catalog URL">
           <div style={{ display: 'flex', gap: 8 }}>
-            <input className="input mono" readOnly value={opdsUrl} style={{ flex: 1 }} />
-            <button type="button" className="btn" onClick={copy}>
+            <Input readOnly value={opdsUrl} className="mono flex-1" />
+            <Button type="button" variant="outline" onClick={copy}>
               {copied ? 'Copied' : 'Copy'}
-            </button>
+            </Button>
           </div>
         </Field>
 
@@ -927,16 +987,17 @@ function DeviceRow({
           </div>
         )}
       </div>
-      <button
+      <Button
         type="button"
-        className="btn ghost small"
+        variant="ghost"
+        size="icon-sm"
         onClick={onDelete}
         disabled={busy}
-        style={{ color: 'var(--color-accent-ink)' }}
+        className="text-(--color-accent-ink)"
         aria-label="Remove device"
       >
         <Icon name="close" size={12} />
-      </button>
+      </Button>
     </div>
   );
 }
@@ -993,16 +1054,15 @@ function AddDeviceForm({
         style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
       >
         <Field label="Display name">
-          <input
-            className="input"
+          <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
           />
         </Field>
         <Field label="One-time code">
-          <input
-            className="input mono"
+          <Input
+            className="mono"
             value={code}
             onChange={(e) => setCode(e.target.value)}
             placeholder="abcd1234"
@@ -1015,16 +1075,16 @@ function AddDeviceForm({
         {err && <Notice kind="err">{err}</Notice>}
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button type="button" className="btn small ghost" onClick={onClose}>
+          <Button type="button" variant="ghost" size="sm" onClick={onClose}>
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             type="submit"
-            className="btn small primary"
+            size="sm"
             disabled={pairMut.isPending || !code.trim()}
           >
             {pairMut.isPending ? 'Pairing…' : 'Pair device'}
-          </button>
+          </Button>
         </div>
       </form>
     </Card>
@@ -1113,16 +1173,17 @@ function UsersPanel({ isAdmin, me }: { isAdmin: boolean; me: AuthUser | null }) 
     <>
       <div style={{ display: 'flex', alignItems: 'baseline', marginBottom: 8 }}>
         <h2 className="t-h2" style={{ flex: 1 }}>Users &amp; roles</h2>
-        <button
+        <Button
           type="button"
-          className="btn small"
+          variant="outline"
+          size="sm"
           onClick={() => {
             setCreateOpen((v) => !v);
             setNotice(null);
           }}
         >
           <Icon name="plus" size={13} /> New user
-        </button>
+        </Button>
       </div>
       <p className="t-small" style={{ marginBottom: 24, fontStyle: 'italic' }}>
         Admins see every settings pane; regular users see only Account,
@@ -1141,25 +1202,22 @@ function UsersPanel({ isAdmin, me }: { isAdmin: boolean; me: AuthUser | null }) 
             style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
           >
             <Field label="Email">
-              <input
+              <Input
                 type="email"
-                className="input"
                 value={draft.email}
                 onChange={(e) => setDraft({ ...draft, email: e.target.value })}
                 required
               />
             </Field>
             <Field label="Display name">
-              <input
-                className="input"
+              <Input
                 value={draft.name}
                 onChange={(e) => setDraft({ ...draft, name: e.target.value })}
               />
             </Field>
             <Field label="Initial password">
-              <input
+              <Input
                 type="password"
-                className="input"
                 value={draft.password}
                 onChange={(e) => setDraft({ ...draft, password: e.target.value })}
                 minLength={8}
@@ -1177,16 +1235,17 @@ function UsersPanel({ isAdmin, me }: { isAdmin: boolean; me: AuthUser | null }) 
               />
             </Field>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button
+              <Button
                 type="button"
-                className="btn small ghost"
+                variant="ghost"
+                size="sm"
                 onClick={() => setCreateOpen(false)}
               >
                 Cancel
-              </button>
-              <button type="submit" className="btn small primary" disabled={createMut.isPending}>
+              </Button>
+              <Button type="submit" size="sm" disabled={createMut.isPending}>
                 {createMut.isPending ? 'Creating…' : 'Create user'}
-              </button>
+              </Button>
             </div>
           </form>
         </Card>
@@ -1233,22 +1292,24 @@ function UsersPanel({ isAdmin, me }: { isAdmin: boolean; me: AuthUser | null }) 
                   { value: 'admin', label: 'Admin' },
                 ]}
                 disabled={isMe || roleMut.isPending}
+                triggerClassName="w-[110px] shrink-0"
               />
-              <button
+              <Button
                 type="button"
-                className="btn ghost small"
+                variant="ghost"
+                size="icon-sm"
                 disabled={isMe || deleteMut.isPending}
                 onClick={() => {
                   if (window.confirm(`Delete ${u.display}? This cannot be undone.`)) {
                     deleteMut.mutate(u.id);
                   }
                 }}
-                style={{ color: 'var(--color-accent-ink)' }}
+                className="text-(--color-accent-ink)"
                 aria-label="Delete user"
                 title={isMe ? "You can't delete yourself" : 'Delete user'}
               >
                 <Icon name="close" size={12} />
-              </button>
+              </Button>
             </div>
           );
         })}
@@ -1397,15 +1458,19 @@ function Select({
   onChange,
   options,
   disabled,
+  triggerClassName = 'w-full',
 }: {
   value: string;
   onChange: (v: string) => void;
   options: { value: string; label: string }[];
   disabled?: boolean;
+  // Callers in inline rows (e.g. Users & roles) should override to
+  // `w-[110px]` or similar so the trigger doesn't swallow the flex slot.
+  triggerClassName?: string;
 }) {
   return (
     <ShadcnSelect value={value} onValueChange={onChange} disabled={disabled}>
-      <SelectTrigger className="w-full">
+      <SelectTrigger className={triggerClassName}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -1471,25 +1536,23 @@ function DefRow({ label, value }: { label: string; value: ReactNode }) {
 }
 
 function Avatar({ initials, size = 48 }: { initials?: string; size?: number }) {
+  // Map the few call-site sizes (48 for Account header, 32 for user rows)
+  // onto shadcn's `size` variants. Callers that pass an arbitrary number
+  // still get a correctly-sized avatar via the inline style override.
+  const preset = size <= 28 ? 'sm' : size >= 40 ? 'lg' : 'default';
   return (
-    <div
-      style={{
-        width: size,
-        height: size,
-        borderRadius: '50%',
-        background: 'var(--color-accent)',
-        color: 'var(--color-paper-0)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        fontFamily: 'var(--font-serif)',
-        fontSize: Math.round(size * 0.375),
-        fontWeight: 500,
-        flexShrink: 0,
-      }}
+    <ShadcnAvatar
+      size={preset}
+      style={{ width: size, height: size }}
+      className="shrink-0"
     >
-      {initials ?? '…'}
-    </div>
+      <AvatarFallback
+        className="bg-(--color-editorial-accent) text-(--color-paper-0) font-serif font-medium"
+        style={{ fontSize: Math.round(size * 0.375) }}
+      >
+        {initials ?? '…'}
+      </AvatarFallback>
+    </ShadcnAvatar>
   );
 }
 
@@ -1520,14 +1583,15 @@ function Notice({
     >
       <span style={{ flex: 1 }}>{children}</span>
       {onClose && (
-        <button
+        <Button
           type="button"
-          className="btn ghost small"
+          variant="ghost"
+          size="icon-sm"
           onClick={onClose}
           aria-label="Dismiss"
         >
           <Icon name="close" size={11} />
-        </button>
+        </Button>
       )}
     </div>
   );

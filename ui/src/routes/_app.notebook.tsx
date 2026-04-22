@@ -22,6 +22,7 @@ import {
 import { Cover } from '@/components/Cover';
 import { Icon } from '@/components/Icon';
 import { TopBar } from '@/components/TopBar';
+import { Button } from '@/components/ui/button';
 
 export const Route = createFileRoute('/_app/notebook')({
   component: Notebook,
@@ -131,17 +132,17 @@ function Notebook() {
                       {a.locator ? ` · ${locatorLabel(a.locator)}` : ''} ·{' '}
                       {new Date(a.createdAt).toLocaleDateString()}
                     </span>
-                    <button
+                    <Button
                       type="button"
-                      className="btn ghost small"
+                      variant="ghost"
+                      size="icon-xs"
                       onClick={() => deleteMut.mutate(a)}
                       disabled={deleteMut.isPending}
                       aria-label="Delete"
                       title="Delete"
-                      style={{ padding: 4 }}
                     >
                       <Icon name="close" size={11} />
-                    </button>
+                    </Button>
                   </div>
                 </div>
                 {a.selectedText && (

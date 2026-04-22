@@ -29,11 +29,19 @@ import {
   devicesQueryKey,
   fetchDevices,
   sendBookToDevice,
-  type Device,
 } from '@/api/devices';
 import { Cover, StarRating } from '@/components/Cover';
 import { Icon } from '@/components/Icon';
 import type { ApiError } from '@/api/client';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 type Tab = 'overview' | 'notes' | 'annotations' | 'versions' | 'activity';
 
@@ -99,36 +107,37 @@ function BookDetail() {
           gap: 12,
         }}
       >
-        <button className="btn ghost small" onClick={() => void navigate({ to: '/library' })}>
+        <Button variant="ghost" size="sm" onClick={() => void navigate({ to: '/library' })}>
           <Icon name="arrow-left" size={14} /> Back to library
-        </button>
+        </Button>
         <div style={{ flex: 1 }} />
-        <button
-          className="btn small"
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => void navigate({ to: '/book/$id/edit', params: { id } })}
         >
           <Icon name="edit" size={13} /> Edit metadata
-        </button>
-        <button className="btn small">
+        </Button>
+        <Button variant="outline" size="sm">
           <Icon name="download" size={13} /> Download
-        </button>
+        </Button>
         <SendToDeviceButton bookId={id} />
-        <button className="btn ghost icon-only" aria-label="More">
+        <Button variant="ghost" size="icon-sm" aria-label="More">
           <Icon name="more" size={14} />
-        </button>
+        </Button>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 48, padding: '40px 48px' }}>
         {/* Left — cover & actions */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <Cover book={b} size="hero" />
-          <button
-            className="btn primary"
-            style={{ justifyContent: 'center', padding: '10px 14px', fontSize: 14 }}
+          <Button
+            size="lg"
+            className="w-full"
             onClick={() => void navigate({ to: '/read/$id', params: { id } })}
           >
             <Icon name="book-open" size={14} /> {progress > 0 && progress < 1 ? 'Continue reading' : 'Open book'}
-          </button>
+          </Button>
           {progress > 0 && progress < 1 && (
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -181,143 +190,129 @@ function BookDetail() {
             </p>
           )}
 
-          <div style={{ borderBottom: '1px solid var(--color-rule-soft)', display: 'flex', gap: 0, marginBottom: 24 }}>
-            {(['overview', 'notes', 'annotations', 'versions', 'activity'] as Tab[]).map((t) => (
-              <button
-                key={t}
-                onClick={() => setTab(t)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  padding: '10px 16px 12px',
-                  fontFamily: 'var(--font-serif)',
-                  fontSize: 13.5,
-                  color: tab === t ? 'var(--color-ink-1)' : 'var(--color-ink-3)',
-                  borderBottom: tab === t ? '2px solid var(--color-accent)' : '2px solid transparent',
-                  fontWeight: tab === t ? 500 : 400,
-                  textTransform: 'capitalize',
-                }}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
+          <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="mb-6">
+            <TabsList variant="line" className="w-full justify-start border-b border-(--color-rule-soft) rounded-none px-0">
+              <TabsTrigger value="overview" className="capitalize">Overview</TabsTrigger>
+              <TabsTrigger value="notes" className="capitalize">Notes</TabsTrigger>
+              <TabsTrigger value="annotations" className="capitalize">Annotations</TabsTrigger>
+              <TabsTrigger value="versions" className="capitalize">Versions</TabsTrigger>
+              <TabsTrigger value="activity" className="capitalize">Activity</TabsTrigger>
+            </TabsList>
 
-          {tab === 'overview' && (
-            <div style={{ maxWidth: 640 }}>
-              <Meta label="Title">{b.title}</Meta>
-              <Meta label="Author">{b.author}</Meta>
-              {b.series && (
-                <Meta label="Series">
-                  {b.series}
-                  {b.seriesNum ? `, Book ${b.seriesNum}` : ''}
-                </Meta>
-              )}
-              <Meta label="Published">{b.year}</Meta>
-              <Meta label="Format">{b.format}</Meta>
-              {b.publisher && <Meta label="Publisher">{b.publisher}</Meta>}
-              <Meta label="Categories">{(b.tags ?? []).join(' · ') || '—'}</Meta>
-              <Meta label="Added">{new Date(b.addedAt).toLocaleDateString()}</Meta>
-              {b.isbn && (
-                <Meta label="ISBN">
-                  <span className="mono" style={{ fontSize: 11.5 }}>{b.isbn}</span>
-                </Meta>
-              )}
-            </div>
-          )}
-
-          {tab === 'notes' && <NotesPanel bookId={id} />}
-
-          {tab === 'annotations' && (
-            <div className="t-small" style={{ fontStyle: 'italic' }}>
-              No PDF annotations for this book.
-            </div>
-          )}
-
-          {tab === 'versions' && (
-            <div style={{ maxWidth: 640, display: 'flex', flexDirection: 'column', gap: 24 }}>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 16,
-                  padding: '10px 12px',
-                  border: '1px solid var(--color-rule-soft)',
-                  background: 'var(--color-paper-0)',
-                }}
-              >
-                <Icon name="book" size={16} />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 500 }}>
-                    {b.title}.{b.format.toLowerCase()}
-                  </div>
-                  <div className="mono" style={{ fontSize: 11, color: 'var(--color-ink-3)' }}>
-                    Primary · {b.format}
-                  </div>
-                </div>
-                <button className="btn small">Replace</button>
+            <TabsContent value="overview">
+              <div style={{ maxWidth: 640 }}>
+                <Meta label="Title">{b.title}</Meta>
+                <Meta label="Author">{b.author}</Meta>
+                {b.series && (
+                  <Meta label="Series">
+                    {b.series}
+                    {b.seriesNum ? `, Book ${b.seriesNum}` : ''}
+                  </Meta>
+                )}
+                <Meta label="Published">{b.year}</Meta>
+                <Meta label="Format">{b.format}</Meta>
+                {b.publisher && <Meta label="Publisher">{b.publisher}</Meta>}
+                <Meta label="Categories">{(b.tags ?? []).join(' · ') || '—'}</Meta>
+                <Meta label="Added">{new Date(b.addedAt).toLocaleDateString()}</Meta>
+                {b.isbn && (
+                  <Meta label="ISBN">
+                    <span className="mono" style={{ fontSize: 11.5 }}>{b.isbn}</span>
+                  </Meta>
+                )}
               </div>
+            </TabsContent>
 
-              {isAdmin && (
+            <TabsContent value="notes">
+              <NotesPanel bookId={id} />
+            </TabsContent>
+
+            <TabsContent value="annotations">
+              <div className="t-small" style={{ fontStyle: 'italic' }}>
+                No PDF annotations for this book.
+              </div>
+            </TabsContent>
+
+            <TabsContent value="versions">
+              <div style={{ maxWidth: 640, display: 'flex', flexDirection: 'column', gap: 24 }}>
                 <div
                   style={{
-                    padding: 16,
-                    border: '1px solid var(--color-accent-soft)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 16,
+                    padding: '10px 12px',
+                    border: '1px solid var(--color-rule-soft)',
                     background: 'var(--color-paper-0)',
                   }}
                 >
-                  <div className="t-label" style={{ marginBottom: 6 }}>Danger zone</div>
-                  <p className="t-small" style={{ marginBottom: 10, maxWidth: 520 }}>
-                    Permanently remove this book, its cover, its source file, and every
-                    reader&apos;s progress, notes, and shelf placements for it. This cannot
-                    be undone.
-                  </p>
-                  {deleteError && (
-                    <div
-                      style={{
-                        padding: '8px 12px',
-                        marginBottom: 10,
-                        border: '1px solid var(--color-accent-soft)',
-                        background: 'var(--color-accent-soft)',
-                        color: 'var(--color-accent-ink)',
-                        fontSize: 13,
-                      }}
-                    >
-                      {deleteError.message}
+                  <Icon name="book" size={16} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 500 }}>
+                      {b.title}.{b.format.toLowerCase()}
                     </div>
-                  )}
-                  <button
-                    type="button"
-                    className="btn small"
+                    <div className="mono" style={{ fontSize: 11, color: 'var(--color-ink-3)' }}>
+                      Primary · {b.format}
+                    </div>
+                  </div>
+                  <Button variant="outline" size="sm">Replace</Button>
+                </div>
+
+                {isAdmin && (
+                  <div
                     style={{
-                      color: 'var(--color-accent-ink)',
-                      borderColor: 'var(--color-accent)',
-                    }}
-                    disabled={deleteMut.isPending}
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          `Delete “${b.title}”? This removes the file from disk and everyone’s notes for it.`,
-                        )
-                      ) {
-                        deleteMut.mutate();
-                      }
+                      padding: 16,
+                      border: '1px solid var(--color-accent-soft)',
+                      background: 'var(--color-paper-0)',
                     }}
                   >
-                    <Icon name="close" size={12} />{' '}
-                    {deleteMut.isPending ? 'Deleting…' : 'Delete book'}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
+                    <div className="t-label" style={{ marginBottom: 6 }}>Danger zone</div>
+                    <p className="t-small" style={{ marginBottom: 10, maxWidth: 520 }}>
+                      Permanently remove this book, its cover, its source file, and every
+                      reader&apos;s progress, notes, and shelf placements for it. This cannot
+                      be undone.
+                    </p>
+                    {deleteError && (
+                      <div
+                        style={{
+                          padding: '8px 12px',
+                          marginBottom: 10,
+                          border: '1px solid var(--color-accent-soft)',
+                          background: 'var(--color-accent-soft)',
+                          color: 'var(--color-accent-ink)',
+                          fontSize: 13,
+                        }}
+                      >
+                        {deleteError.message}
+                      </div>
+                    )}
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      disabled={deleteMut.isPending}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Delete “${b.title}”? This removes the file from disk and everyone’s notes for it.`,
+                          )
+                        ) {
+                          deleteMut.mutate();
+                        }
+                      }}
+                    >
+                      <Icon name="close" size={12} />{' '}
+                      {deleteMut.isPending ? 'Deleting…' : 'Delete book'}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </TabsContent>
 
-          {tab === 'activity' && (
-            <div className="t-small" style={{ fontStyle: 'italic' }}>
-              Per-book activity timeline lands once reading sessions are tracked server-side.
-            </div>
-          )}
+            <TabsContent value="activity">
+              <div className="t-small" style={{ fontStyle: 'italic' }}>
+                Per-book activity timeline lands once reading sessions are tracked server-side.
+              </div>
+            </TabsContent>
+          </Tabs>
         </div>
       </div>
     </div>
@@ -452,14 +447,15 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
               ))}
             </div>
           )}
-          <button
+          <Button
             type="button"
-            className="btn ghost small"
+            variant="ghost"
+            size="sm"
             onClick={() => setPickerOpen(false)}
-            style={{ alignSelf: 'flex-end', marginTop: 4 }}
+            className="self-end mt-1"
           >
             Done
-          </button>
+          </Button>
         </div>
       )}
     </div>
@@ -515,22 +511,21 @@ function NotesPanel({ bookId }: { bookId: string }) {
           borderRadius: 2,
         }}
       >
-        <textarea
-          className="input"
+        <Textarea
           rows={3}
           placeholder="Add a note about this book…"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          style={{ fontFamily: 'var(--font-serif)', lineHeight: 1.5, resize: 'vertical' }}
+          className="resize-y"
         />
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <button
+          <Button
             type="submit"
-            className="btn primary small"
+            size="sm"
             disabled={createMut.isPending || draft.trim() === ''}
           >
             <Icon name="plus" size={12} /> {createMut.isPending ? 'Saving…' : 'Add note'}
-          </button>
+          </Button>
         </div>
       </form>
 
@@ -575,17 +570,17 @@ function NotesPanel({ bookId }: { bookId: string }) {
               </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span className="t-micro">{new Date(a.createdAt).toLocaleDateString()}</span>
-                <button
+                <Button
                   type="button"
-                  className="btn ghost small"
+                  variant="ghost"
+                  size="icon-xs"
                   onClick={() => deleteMut.mutate(a)}
                   disabled={deleteMut.isPending}
                   aria-label="Delete"
                   title="Delete"
-                  style={{ padding: 4 }}
                 >
                   <Icon name="close" size={11} />
-                </button>
+                </Button>
               </div>
             </div>
             {a.selectedText && (
@@ -647,44 +642,41 @@ function SendToDeviceButton({ bookId }: { bookId: string }) {
 
   if (list.length === 0) {
     return (
-      <button
-        className="btn small"
+      <Button
+        variant="outline"
+        size="sm"
         onClick={() => void navigate({ to: '/settings' })}
         title="No devices paired — add one in Settings"
       >
         <Icon name="device" size={13} /> Send to device
-      </button>
+      </Button>
     );
   }
 
   return (
     <div style={{ position: 'relative' }}>
-      <button
-        className="btn small"
-        onClick={() => setOpen((v) => !v)}
-        disabled={sendMut.isPending}
-      >
-        <Icon name="device" size={13} />{' '}
-        {sendMut.isPending ? 'Sending…' : 'Send to device'}
-      </button>
-      {open && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 4px)',
-            right: 0,
-            minWidth: 220,
-            background: 'var(--color-paper-0)',
-            border: '1px solid var(--color-rule)',
-            boxShadow: '0 8px 24px oklch(0.2 0.02 60 / 0.15)',
-            zIndex: 20,
-          }}
-        >
+      <DropdownMenu open={open} onOpenChange={setOpen}>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" size="sm" disabled={sendMut.isPending}>
+            <Icon name="device" size={13} />{' '}
+            {sendMut.isPending ? 'Sending…' : 'Send to device'}
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-56">
           {list.map((d) => (
-            <SendTarget key={d.id} device={d} onPick={() => sendMut.mutate(d.id)} />
+            <DropdownMenuItem
+              key={d.id}
+              onSelect={() => sendMut.mutate(d.id)}
+              className="flex flex-col items-start gap-0.5"
+            >
+              <span style={{ fontSize: 13.5, fontWeight: 500 }}>{d.name}</span>
+              <span className="t-small" style={{ fontSize: 11 }}>
+                {DEVICE_KIND_LABELS[d.kind]}
+              </span>
+            </DropdownMenuItem>
           ))}
-        </div>
-      )}
+        </DropdownMenuContent>
+      </DropdownMenu>
       {toast && (
         <div
           style={{
@@ -693,7 +685,7 @@ function SendToDeviceButton({ bookId }: { bookId: string }) {
             right: 0,
             padding: '8px 12px',
             background: 'var(--color-paper-0)',
-            border: `1px solid ${toast.kind === 'ok' ? 'oklch(0.58 0.12 140)' : 'var(--color-accent)'}`,
+            border: `1px solid ${toast.kind === 'ok' ? 'oklch(0.58 0.12 140)' : 'var(--color-editorial-accent)'}`,
             color: toast.kind === 'ok' ? 'oklch(0.45 0.12 140)' : 'var(--color-accent-ink)',
             fontSize: 12.5,
             maxWidth: 320,
@@ -706,32 +698,5 @@ function SendToDeviceButton({ bookId }: { bookId: string }) {
         </div>
       )}
     </div>
-  );
-}
-
-function SendTarget({ device, onPick }: { device: Device; onPick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onPick}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 2,
-        padding: '10px 12px',
-        width: '100%',
-        textAlign: 'left',
-        background: 'transparent',
-        border: 'none',
-        borderBottom: '1px solid var(--color-rule-soft)',
-        cursor: 'pointer',
-        fontFamily: 'inherit',
-      }}
-    >
-      <span style={{ fontSize: 13.5, fontWeight: 500 }}>{device.name}</span>
-      <span className="t-small" style={{ fontSize: 11 }}>
-        {DEVICE_KIND_LABELS[device.kind]}
-      </span>
-    </button>
   );
 }

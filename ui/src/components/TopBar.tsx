@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from 'react';
 
 import { Icon } from './Icon';
+import { Input } from '@/components/ui/input';
 
 type TopBarProps = {
   title: ReactNode;
@@ -51,12 +52,11 @@ export function TopBar({ title, subtitle, search, setSearch, right, crumbs }: To
         </div>
         {setSearch && (
           <div style={{ position: 'relative', width: 280 }}>
-            <input
-              className="input"
+            <Input
               placeholder="Search library…"
               value={search ?? ''}
               onChange={(e) => setSearch(e.target.value)}
-              style={{ paddingLeft: 32 }}
+              className="pl-8"
             />
             <div
               style={{

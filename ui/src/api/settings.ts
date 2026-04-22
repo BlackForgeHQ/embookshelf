@@ -78,6 +78,31 @@ export async function fetchInstanceInfo(): Promise<InstanceInfo> {
 
 export const instanceInfoQueryKey = ['settings', 'instance'] as const;
 
+// --- Metadata providers (admin) --------------------------------------------
+
+export async function fetchProviderSettings(): Promise<ProviderInfo[]> {
+  const { providers } = await api<{ providers: ProviderInfo[] }>(
+    '/api/v1/settings/providers',
+  );
+  return providers;
+}
+
+export async function updateProviderSetting(
+  id: string,
+  enabled: boolean,
+): Promise<ProviderInfo[]> {
+  const { providers } = await api<{ providers: ProviderInfo[] }>(
+    `/api/v1/settings/providers/${encodeURIComponent(id)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    },
+  );
+  return providers;
+}
+
+export const providerSettingsQueryKey = ['settings', 'providers'] as const;
+
 // Lightweight, non-admin-gated version of InstanceInfo. Rendered in the
 // status bar at the bottom of every page, so all signed-in users can call
 // it — mirrors /api/v1/instance on the server.

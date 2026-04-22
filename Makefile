@@ -73,9 +73,27 @@ dev: ## Live-reload backend via `go tool air`
 	go tool air
 
 .PHONY: up
-up: ## Run backend (air) + UI (Vite) together — Ctrl-C stops both
+up: ## Run backend (air) + UI (Vite) together — backend first, UI once :6060 is up
 	@trap 'kill 0' EXIT INT TERM; \
 	$(MAKE) --no-print-directory dev & \
+	backend_pid=$$!; \
+	printf 'waiting for backend on :6060'; \
+	for i in $$(seq 1 60); do \
+		if curl -fsS http://localhost:6060/api/v1/healthcheck >/dev/null 2>&1; then \
+			printf ' ✓\n'; \
+			break; \
+		fi; \
+		if ! kill -0 $$backend_pid 2>/dev/null; then \
+			printf '\nbackend exited before becoming ready\n'; \
+			exit 1; \
+		fi; \
+		printf '.'; \
+		sleep 0.5; \
+	done; \
+	if ! curl -fsS http://localhost:6060/api/v1/healthcheck >/dev/null 2>&1; then \
+		printf '\nbackend healthcheck did not respond within 30s — aborting\n'; \
+		exit 1; \
+	fi; \
 	$(MAKE) --no-print-directory ui-dev & \
 	wait
 
@@ -88,6 +106,24 @@ up-otlp: obs-up ## Same as `up` but exports OTLP from backend AND browser to gra
 	OTEL_EXPORTER_OTLP_PROTOCOL=grpc \
 	OTEL_EXPORTER_OTLP_INSECURE=true \
 	$(MAKE) --no-print-directory dev & \
+	backend_pid=$$!; \
+	printf 'waiting for backend on :6060'; \
+	for i in $$(seq 1 60); do \
+		if curl -fsS http://localhost:6060/api/v1/healthcheck >/dev/null 2>&1; then \
+			printf ' ✓\n'; \
+			break; \
+		fi; \
+		if ! kill -0 $$backend_pid 2>/dev/null; then \
+			printf '\nbackend exited before becoming ready\n'; \
+			exit 1; \
+		fi; \
+		printf '.'; \
+		sleep 0.5; \
+	done; \
+	if ! curl -fsS http://localhost:6060/api/v1/healthcheck >/dev/null 2>&1; then \
+		printf '\nbackend healthcheck did not respond within 30s — aborting\n'; \
+		exit 1; \
+	fi; \
 	VITE_OTEL_ENABLED=true \
 	VITE_OTEL_SERVICE_NAME=embookshelf-ui \
 	$(MAKE) --no-print-directory ui-dev & \

@@ -120,6 +120,9 @@ func (h *Handler) Engine() *gin.Engine {
 				admin.DELETE("/libraries/paths/:id", h.SettingsLibraryPathDelete)
 				admin.POST("/libraries/paths/:id/scan", h.SettingsLibraryPathScan)
 
+				admin.GET("/providers", h.SettingsProvidersList)
+				admin.PATCH("/providers/:id", h.SettingsProviderUpdate)
+
 				admin.GET("/users", h.SettingsUsersList)
 				admin.POST("/users", h.SettingsUsersCreate)
 				admin.PATCH("/users/:id/role", h.SettingsUsersUpdateRole)

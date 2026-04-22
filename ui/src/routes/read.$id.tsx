@@ -30,6 +30,7 @@ import {
   type PdfProgress,
   type PdfReaderHandle,
 } from '@/components/PdfReader';
+import { Button } from '@/components/ui/button';
 
 export const Route = createFileRoute('/read/$id')({
   component: Reader,
@@ -67,12 +68,12 @@ function Reader() {
       <FullScreenMessage>
         Reader not implemented for <code>{b.format}</code> yet.
         <div style={{ marginTop: 16 }}>
-          <button
-            className="btn"
+          <Button
+            variant="outline"
             onClick={() => void navigate({ to: '/book/$id', params: { id } })}
           >
             <Icon name="arrow-left" size={14} /> Back
-          </button>
+          </Button>
         </div>
       </FullScreenMessage>
     );
@@ -230,9 +231,9 @@ function ReaderShell({ book }: { book: BookDetail }) {
             background: 'var(--color-paper-1)',
           }}
         >
-          <button className="btn ghost small" onClick={exit}>
+          <Button variant="ghost" size="sm" onClick={exit}>
             <Icon name="arrow-left" size={14} /> Library
-          </button>
+          </Button>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             <div style={{ fontSize: 13, fontWeight: 500, fontStyle: 'italic' }}>{book.title}</div>
             <div className="t-micro" style={{ fontSize: 10 }}>
@@ -241,8 +242,9 @@ function ReaderShell({ book }: { book: BookDetail }) {
             </div>
           </div>
           {book.format === 'EPUB' && (
-            <button
-              className={`btn ghost small ${tocOpen ? 'primary' : ''}`}
+            <Button
+              variant={tocOpen ? 'default' : 'ghost'}
+              size="icon-sm"
               onClick={() => {
                 const next = !tocOpen;
                 closePanels();
@@ -250,10 +252,11 @@ function ReaderShell({ book }: { book: BookDetail }) {
               }}
             >
               <Icon name="contents" size={14} />
-            </button>
+            </Button>
           )}
-          <button
-            className={`btn ghost small ${typePanelOpen ? 'primary' : ''}`}
+          <Button
+            variant={typePanelOpen ? 'default' : 'ghost'}
+            size="icon-sm"
             onClick={() => {
               const next = !typePanelOpen;
               closePanels();
@@ -261,12 +264,13 @@ function ReaderShell({ book }: { book: BookDetail }) {
             }}
           >
             <Icon name="aA" size={14} />
-          </button>
-          <button className="btn ghost small" aria-label="Bookmark">
+          </Button>
+          <Button variant="ghost" size="icon-sm" aria-label="Bookmark">
             <Icon name="bookmark" size={14} />
-          </button>
-          <button
-            className={`btn ghost small ${notesOpen ? 'primary' : ''}`}
+          </Button>
+          <Button
+            variant={notesOpen ? 'default' : 'ghost'}
+            size="icon-sm"
             onClick={() => {
               const next = !notesOpen;
               closePanels();
@@ -274,10 +278,10 @@ function ReaderShell({ book }: { book: BookDetail }) {
             }}
           >
             <Icon name="note" size={14} />
-          </button>
-          <button className="btn ghost small" onClick={() => setChromeVisible(false)} title="Hide chrome">
+          </Button>
+          <Button variant="ghost" size="icon-sm" onClick={() => setChromeVisible(false)} title="Hide chrome">
             <Icon name="close" size={14} />
-          </button>
+          </Button>
         </div>
       )}
 
@@ -379,9 +383,9 @@ function ReaderShell({ book }: { book: BookDetail }) {
               }}
             >
               <span className="t-micro">Selection</span>
-              <button
+              <Button
                 type="button"
-                className="btn primary small"
+                size="sm"
                 disabled={createAnnotationMut.isPending}
                 onClick={() =>
                   createAnnotationMut.mutate({
@@ -391,10 +395,11 @@ function ReaderShell({ book }: { book: BookDetail }) {
                 }
               >
                 <Icon name="highlight" size={12} /> Highlight
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="btn small"
+                variant="outline"
+                size="sm"
                 disabled={createAnnotationMut.isPending}
                 onClick={() => {
                   const note = window.prompt('Add a note for this selection:');
@@ -407,15 +412,16 @@ function ReaderShell({ book }: { book: BookDetail }) {
                 }}
               >
                 <Icon name="note" size={12} /> Note
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="btn ghost small"
+                variant="ghost"
+                size="icon-sm"
                 onClick={() => setPendingSelection(null)}
                 aria-label="Dismiss"
               >
                 <Icon name="close" size={12} />
-              </button>
+              </Button>
             </div>
           )}
         </div>
@@ -460,10 +466,11 @@ function ReaderShell({ book }: { book: BookDetail }) {
             <div className="t-label">Notes on this book</div>
 
             {book.format === 'PDF' && pageState && (
-              <button
+              <Button
                 type="button"
-                className="btn small"
-                style={{ justifyContent: 'center' }}
+                variant="outline"
+                size="sm"
+                className="w-full"
                 disabled={createAnnotationMut.isPending}
                 onClick={() => {
                   const note = window.prompt(`Note on page ${pageState.current}:`);
@@ -475,7 +482,7 @@ function ReaderShell({ book }: { book: BookDetail }) {
                 }}
               >
                 <Icon name="plus" size={12} /> New note on page {pageState.current}
-              </button>
+              </Button>
             )}
 
             {annotations.isLoading && (
@@ -507,41 +514,41 @@ function ReaderShell({ book }: { book: BookDetail }) {
                     </span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       {a.locator?.startsWith('epubcfi') && book.format === 'EPUB' && (
-                        <button
+                        <Button
                           type="button"
-                          className="btn ghost small"
+                          variant="ghost"
+                          size="icon-xs"
                           onClick={() => epubRef.current?.goTo(a.locator!)}
                           title="Go to highlight"
-                          style={{ padding: 2 }}
                         >
                           <Icon name="arrow-right" size={10} />
-                        </button>
+                        </Button>
                       )}
                       {a.locator?.startsWith('page:') && book.format === 'PDF' && (
-                        <button
+                        <Button
                           type="button"
-                          className="btn ghost small"
+                          variant="ghost"
+                          size="icon-xs"
                           onClick={() => {
                             const page = Number.parseInt(a.locator!.slice(5), 10);
                             if (Number.isFinite(page)) pdfRef.current?.goTo(page);
                           }}
                           title="Go to page"
-                          style={{ padding: 2 }}
                         >
                           <Icon name="arrow-right" size={10} />
-                        </button>
+                        </Button>
                       )}
-                      <button
+                      <Button
                         type="button"
-                        className="btn ghost small"
+                        variant="ghost"
+                        size="icon-xs"
                         onClick={() => deleteAnnotationMut.mutate(a)}
                         disabled={deleteAnnotationMut.isPending}
                         aria-label="Delete"
                         title="Delete"
-                        style={{ padding: 2 }}
                       >
                         <Icon name="close" size={10} />
-                      </button>
+                      </Button>
                     </div>
                   </div>
                   {a.selectedText && (
@@ -579,12 +586,13 @@ function ReaderShell({ book }: { book: BookDetail }) {
           background: 'var(--color-paper-1)',
         }}
       >
-        <button
-          className="btn ghost small"
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => (book.format === 'EPUB' ? epubRef.current?.prev() : pdfRef.current?.prev())}
         >
           <Icon name="chevron-left" size={14} /> Prev
-        </button>
+        </Button>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12 }}>
           <span className="mono" style={{ fontSize: 10.5, color: 'var(--color-ink-3)' }}>
             {footerPageLabel}
@@ -612,29 +620,24 @@ function ReaderShell({ book }: { book: BookDetail }) {
             {footerTotalLabel || `${Math.round(percent * 100)}%`}
           </span>
         </div>
-        <button
-          className="btn ghost small"
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => (book.format === 'EPUB' ? epubRef.current?.next() : pdfRef.current?.next())}
         >
           Next <Icon name="chevron-right" size={14} />
-        </button>
+        </Button>
       </div>
 
       {!chromeVisible && (
-        <button
+        <Button
+          variant="outline"
+          size="icon-sm"
           onClick={() => setChromeVisible(true)}
-          className="btn ghost"
-          style={{
-            position: 'absolute',
-            top: 8,
-            right: 8,
-            zIndex: 10,
-            background: 'var(--color-paper-0)',
-            border: '1px solid var(--color-rule-soft)',
-          }}
+          className="absolute top-2 right-2 z-10"
         >
           <Icon name="menu" size={14} />
-        </button>
+        </Button>
       )}
 
       {/* Intentional reference — keeps cfiState alive for the bookmark

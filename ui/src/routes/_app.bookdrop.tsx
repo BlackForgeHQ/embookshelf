@@ -27,6 +27,15 @@ import {
 import type { ApiError } from '@/api/client';
 import { Icon } from '@/components/Icon';
 import { TopBar } from '@/components/TopBar';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 export const Route = createFileRoute('/_app/bookdrop')({
   component: BookDrop,
@@ -120,14 +129,15 @@ function BookDrop() {
         subtitle="Drop files into /bookdrop and they'll appear here for review before joining your library."
         right={
           <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              className="btn small"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => queryClient.invalidateQueries({ queryKey: bookdropQueryKey })}
             >
               <Icon name="refresh" size={13} /> Rescan
-            </button>
-            <button
-              className="btn primary small"
+            </Button>
+            <Button
+              size="sm"
               disabled={approveMut.isPending || active.every((i) => i.state !== 'ready')}
               onClick={() => {
                 for (const item of active) {
@@ -138,7 +148,7 @@ function BookDrop() {
               }}
             >
               <Icon name="check" size={13} /> Approve all ready
-            </button>
+            </Button>
           </div>
         }
       />
@@ -192,9 +202,10 @@ function BookDrop() {
                 <span className="t-label">
                   Recently processed · {finished.length}
                 </span>
-                <button
+                <Button
                   type="button"
-                  className="btn ghost small"
+                  variant="ghost"
+                  size="sm"
                   disabled={clearMut.isPending}
                   title="Remove every imported / rejected row from the queue history"
                   onClick={() => {
@@ -209,7 +220,7 @@ function BookDrop() {
                 >
                   <Icon name="close" size={11} />{' '}
                   {clearMut.isPending ? 'Clearing…' : 'Clear'}
-                </button>
+                </Button>
               </div>
               {finished.map((f) => (
                 <QueueRow
@@ -301,8 +312,7 @@ function BookDrop() {
                       paddingTop: 20,
                     }}
                   >
-                    <button
-                      className="btn primary"
+                    <Button
                       onClick={() =>
                         void navigate({
                           to: '/book/$id',
@@ -311,7 +321,7 @@ function BookDrop() {
                       }
                     >
                       <Icon name="book-open" size={13} /> Open imported book
-                    </button>
+                    </Button>
                   </div>
                 ) : current.state === 'rejected' ? (
                   <div className="t-small" style={{ fontStyle: 'italic', color: 'var(--color-ink-3)' }}>
@@ -647,34 +657,36 @@ function ApprovalBar({
       }}
     >
       {libraries.length > 0 && (
-        <select
-          className="input"
+        <Select
           value={libraryId}
-          onChange={(e) => setLibraryId(e.target.value || undefined)}
-          style={{ width: 'auto', padding: '5px 10px', fontSize: 12.5 }}
+          onValueChange={(v) => setLibraryId(v || undefined)}
         >
-          {libraries.map((lib) => (
-            <option key={lib.id} value={lib.id}>
-              {lib.name}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger size="sm" className="w-auto">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {libraries.map((lib) => (
+              <SelectItem key={lib.id} value={lib.id}>
+                {lib.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       )}
-      <button
-        className="btn primary"
+      <Button
         disabled={disabled || !approvable}
         onClick={() => onApprove(libraryId)}
       >
         <Icon name="check" size={13} /> Approve &amp; add to library
-      </button>
-      <button
-        className="btn ghost"
+      </Button>
+      <Button
+        variant="ghost"
         disabled={disabled}
-        style={{ color: 'var(--color-accent-ink)' }}
+        className="text-(--color-accent-ink)"
         onClick={onReject}
       >
         Discard file
-      </button>
+      </Button>
     </div>
   );
 }
@@ -690,12 +702,11 @@ function Field({ label, value, placeholder, readOnly }: FieldProps): ReactNode {
   return (
     <div>
       <div className="t-label" style={{ marginBottom: 6 }}>{label}</div>
-      <input
-        className="input"
+      <Input
         defaultValue={value}
         placeholder={placeholder}
         readOnly={readOnly}
-        style={readOnly ? { background: 'var(--color-paper-2)', color: 'var(--color-ink-3)' } : undefined}
+        className={readOnly ? 'bg-muted text-muted-foreground' : undefined}
       />
     </div>
   );

@@ -22,24 +22,50 @@ import (
 // EnrichmentService fans metadata queries across providers concurrently and
 // merges the results. It also handles downloading + storing a cover image
 // from a provider URL.
+//
+// The provider set passed at construction is the full list of built-in
+// sources. Which of those are actually queried per request is decided by
+// the provider_settings table — an admin toggles them in Settings and the
+// filter below applies on the next Search.
 type EnrichmentService struct {
 	providers []provider.Provider
+	settings  *repo.ProviderSettingsRepo
 	libs      *repo.LibraryRepo
 	covers    *coverstore.Store
 	http      *http.Client
 }
 
-func NewEnrichmentService(providers []provider.Provider, libs *repo.LibraryRepo, covers *coverstore.Store) *EnrichmentService {
+// ErrUnknownProvider is returned by SetProviderEnabled when the caller
+// hands in an id the binary doesn't recognize.
+var ErrUnknownProvider = errors.New("unknown provider")
+
+// ProviderInfo is the handler-facing DTO shape: static catalog facts
+// joined with the live enabled flag from the DB.
+type ProviderInfo struct {
+	ID       provider.Source
+	Name     string
+	Enabled  bool
+	External bool
+}
+
+func NewEnrichmentService(
+	providers []provider.Provider,
+	settings *repo.ProviderSettingsRepo,
+	libs *repo.LibraryRepo,
+	covers *coverstore.Store,
+) *EnrichmentService {
 	return &EnrichmentService{
 		providers: providers,
+		settings:  settings,
 		libs:      libs,
 		covers:    covers,
 		http:      &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
-// Search queries every provider in parallel and returns a merged, sorted
-// slice. A provider failure is logged but does not abort the fan-out.
+// Search queries every enabled provider in parallel and returns a merged,
+// sorted slice. A provider failure is logged but does not abort the
+// fan-out. Disabled providers are skipped without hitting the network.
 func (s *EnrichmentService) Search(ctx context.Context, q provider.Query) ([]provider.Match, error) {
 	if len(s.providers) == 0 {
 		return nil, nil
@@ -49,6 +75,15 @@ func (s *EnrichmentService) Search(ctx context.Context, q provider.Query) ([]pro
 		return nil, nil
 	}
 
+	// Fetch the live enabled map; on DB error fall through to the full
+	// provider list so an outage of the settings table doesn't silently
+	// disable enrichment entirely. Best-effort graceful degrade.
+	enabled, err := s.settings.EnabledIDs(ctx)
+	if err != nil {
+		slog.Warn("provider settings fetch — running all providers", "err", err)
+		enabled = nil
+	}
+
 	g, gctx := errgroup.WithContext(ctx)
 	var (
 		mu  sync.Mutex
@@ -56,6 +91,9 @@ func (s *EnrichmentService) Search(ctx context.Context, q provider.Query) ([]pro
 	)
 	for _, p := range s.providers {
 		p := p
+		if enabled != nil && !enabled[string(p.Name())] {
+			continue
+		}
 		g.Go(func() error {
 			matches, err := p.Search(gctx, q)
 			if err != nil {
@@ -74,6 +112,36 @@ func (s *EnrichmentService) Search(ctx context.Context, q provider.Query) ([]pro
 		return all[i].Confidence > all[j].Confidence
 	})
 	return all, nil
+}
+
+// ListProviders joins the static catalog with the live enabled map so
+// the Settings UI can render one row per known provider. Missing rows
+// (catalog entries without a provider_settings row) count as disabled.
+func (s *EnrichmentService) ListProviders(ctx context.Context) ([]ProviderInfo, error) {
+	enabled, err := s.settings.EnabledIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ProviderInfo, 0, len(provider.Catalog))
+	for _, c := range provider.Catalog {
+		out = append(out, ProviderInfo{
+			ID:       c.ID,
+			Name:     c.Name,
+			External: c.External,
+			Enabled:  enabled[string(c.ID)],
+		})
+	}
+	return out, nil
+}
+
+// SetProviderEnabled flips the enabled flag for a single provider. The
+// id must match an entry in the static catalog; unknown ids return
+// ErrUnknownProvider rather than silently upserting junk.
+func (s *EnrichmentService) SetProviderEnabled(ctx context.Context, id string, enabled bool) error {
+	if _, ok := provider.CatalogLookup(id); !ok {
+		return ErrUnknownProvider
+	}
+	return s.settings.SetEnabled(ctx, id, enabled)
 }
 
 // AllowedCoverHosts caps which remote hosts we'll fetch cover bytes from.

@@ -115,22 +115,36 @@ func main() {
 	annotationSvc := service.NewAnnotationService(annotationRepo)
 	statsSvc := service.NewStatsService(statsRepo)
 	readingStatsSvc := service.NewReadingSessionService(readingSessionRepo)
-	// Resolve provider list from env. Unknown ids are logged and
-	// skipped so a typo never crashes startup; we still want the
-	// server up with whatever subset is recognized.
-	providers := make([]provider.Provider, 0, len(cfg.EnrichmentProviders))
-	for _, name := range cfg.EnrichmentProviders {
-		p := provider.Build(provider.Source(name))
+	// Build every provider in the static catalog so the service can
+	// dispatch to any of them at runtime. Which subset is actually
+	// queried per request is decided by provider_settings (DB) — the
+	// env var only seeds defaults on the very first boot.
+	providers := make([]provider.Provider, 0, len(provider.Catalog))
+	for _, c := range provider.Catalog {
+		p := provider.Build(c.ID)
 		if p == nil {
-			slog.Warn("unknown enrichment provider — skipping", "name", name)
+			slog.Warn("catalog provider has no Build() — skipping", "id", c.ID)
 			continue
 		}
 		providers = append(providers, p)
 	}
-	if len(providers) == 0 {
-		slog.Warn("no enrichment providers configured — metadata search will return empty")
+	providerSettingsRepo := repo.NewProviderSettingsRepo(pool)
+	// Seed DB from ENRICHMENT_PROVIDERS on first boot. ON CONFLICT DO
+	// NOTHING means subsequent restarts leave admin toggles alone — the
+	// DB is authoritative after the initial seed.
+	envEnabled := make(map[string]struct{}, len(cfg.EnrichmentProviders))
+	for _, name := range cfg.EnrichmentProviders {
+		envEnabled[name] = struct{}{}
 	}
-	enrichSvc := service.NewEnrichmentService(providers, libRepo, covers)
+	defaults := make(map[string]bool, len(provider.Catalog))
+	for _, c := range provider.Catalog {
+		_, on := envEnabled[string(c.ID)]
+		defaults[string(c.ID)] = on
+	}
+	if err := providerSettingsRepo.SeedIfAbsent(ctx, defaults); err != nil {
+		slog.Warn("seed provider settings", "err", err)
+	}
+	enrichSvc := service.NewEnrichmentService(providers, providerSettingsRepo, libRepo, covers)
 	deviceSvc := service.NewDeviceService(
 		deviceRepo, libRepo,
 		service.NewRemarkableDriver(),
