@@ -1,10 +1,10 @@
 # embookshelf
 
 Self-hosted, multi-user digital library — Go backend + React SPA
-(TanStack Start) + Postgres. EPUB + PDF readers, full-text search,
-per-user shelves, metadata enrichment, live BookDrop import queue, and
-an OPDS 1.2 catalog for e-readers. Ships as a single binary with the
-frontend embedded.
+(TanStack Start + shadcn/ui) + Postgres. EPUB + PDF readers, full-text
+search, per-user shelves, metadata enrichment, live BookDrop import
+queue, and an OPDS 1.2 catalog for e-readers. Ships as a single binary
+with the UI embedded.
 
 See [docs/architecture.md](docs/architecture.md) for the technical shape
 and [docs/prd.md](docs/prd.md) for the product intent + roadmap.
@@ -14,31 +14,35 @@ and [docs/prd.md](docs/prd.md) for the product intent + roadmap.
 ```
 cmd/                       Go entry points
 internal/                  Go backend (auth, service, repo, handler, queue, sse, …)
-internal/staticfs/dist/    Embedded SPA shell (written by the frontend build)
-frontend/                  TanStack Start SPA (Vite + TS + Tailwind v4)
+internal/staticfs/dist/    Embedded SPA shell (written by the UI build)
+ui/                        TanStack Start SPA (Vite + React 19 + Tailwind v4 + shadcn/ui)
 docs/                      PRD + architecture
 scripts/seed.sql           Dev seed (admin@local / changeme)
 ```
 
 ## Development
 
+Prerequisites: **Go 1.25**, **[Bun](https://bun.sh) 1.x**, Docker.
+
 ```bash
 # One-time
 make db-up           # start Postgres
-make frontend-install
+make ui-install      # bun install inside ui/
 
 # Iteration — one terminal
-make up              # backend (air) + Vite (concurrently) on :6060 and :5173
+make up              # backend (air) + Vite on :6060 and :5173
 ```
 
 Open <http://localhost:5173/>. Vite proxies `/api`, `/opds`, `/events`
-to the Go server on `:6060`, so cookies and SSE keep flowing.
+to the Go server on `:6060`, so cookies and SSE keep flowing. `/v1/*`
+is proxied to `:4318` for browser OTLP traces in dev (see
+[compose.dev.yml](compose.dev.yml)).
 
 If you want the processes separated (different panes, logs split):
 
 ```bash
 make dev             # backend only — live-reload via `go tool air`
-make frontend-dev    # Vite only — includes Tailwind CLI watcher via `concurrently`
+make ui-dev          # Vite dev server only (bun run dev)
 ```
 
 First-run signup creates the admin. With the seed:
@@ -50,14 +54,14 @@ make seed            # pipes scripts/seed.sql → admin@local / changeme
 ## Production build
 
 ```bash
-make build           # npm run build (frontend) → internal/staticfs/dist, then go build
+make build           # bun run build (ui) → internal/staticfs/dist, then go build
 ./tmp/embookshelf
 ```
 
 The binary ships self-contained. The compiled SPA is embedded via
 `//go:embed all:dist` in
 [internal/staticfs/staticfs.go](internal/staticfs/staticfs.go), so
-there is no Node runtime in production.
+there is no Node/Bun runtime in production.
 
 ## What's live end-to-end
 
@@ -83,32 +87,53 @@ there is no Node runtime in production.
 - **Realtime** — server-sent events at `/events`; background job state
   transitions invalidate react-query caches without polling.
 
+## UI stack
+
+- **React 19 + TanStack Start** in SPA mode (no SSR in prod; a
+  prerender pass emits the `_shell.html` entry).
+- **Tailwind v4** via the first-class `@tailwindcss/vite` plugin — no
+  standalone CLI watcher, no separate generated stylesheet. Design
+  tokens live in [ui/src/styles.css](ui/src/styles.css) under `@theme`.
+- **[shadcn/ui](https://ui.shadcn.com)** (radix-mira style) provides
+  the primitive layer (Button, Dialog, Select, Switch, Tabs, Dropdown,
+  Popover, Sonner toasts, …) under [ui/src/components/ui/](ui/src/components/ui/).
+  Editorial overrides (`.btn`, `.chip`, `.cover`, `.t-h1`, …) live
+  alongside the shadcn tokens in `styles.css`.
+- **Bun** is the package manager + script runner. No `npm`/`node_modules`
+  indirection in CI.
+- **TanStack Query** for server state, **TanStack Router** for
+  file-based routes. `useRealtime` wires the SSE stream into query
+  invalidation.
+- **Browser OpenTelemetry** (document-load, user-interaction, fetch
+  instrumentations) ships with the app and is gated on
+  `VITE_OTEL_ENABLED=true` — OTLP traces route to
+  [grafana/otel-lgtm](compose.dev.yml) in dev via the `/v1` proxy.
+
 ## How the SPA is served
 
 - **Build-time**: TanStack Start is configured in **SPA mode**
-  ([frontend/vite.config.ts](frontend/vite.config.ts)). `vite build`
-  produces `frontend/dist/client/{_shell.html, assets/*}`;
-  [frontend/scripts/sync-dist.mjs](frontend/scripts/sync-dist.mjs)
-  copies the shell + assets into `internal/staticfs/dist/` and
-  duplicates `_shell.html` as `index.html` so Go's SPA fallback finds
-  it.
+  ([ui/vite.config.ts](ui/vite.config.ts)). `vite build` produces
+  `ui/dist/client/{_shell.html, assets/*}`;
+  [ui/scripts/sync-dist.ts](ui/scripts/sync-dist.ts) (run via bun) copies
+  the shell + assets into `internal/staticfs/dist/` and duplicates
+  `_shell.html` as `index.html` so Go's SPA fallback finds it.
 - **Runtime**: Go serves `/api/v1/*`, `/opds/*`, `/events`, and any
   static file from the embedded FS; anything else returns `index.html`
   via a `NoRoute` handler
   ([internal/handler/router.go](internal/handler/router.go)) so the
   TanStack Router can resolve on hard reloads.
 
-Two workarounds worth knowing:
+Worth knowing:
 
-- **Tailwind compiles via the standalone CLI**, not through the Vite
-  plugin. `@tailwindcss/node`'s ESM loader conflicts with Start's
-  prerender pass. `npm run css` (or `css:watch`) emits
-  `frontend/src/generated.css`; `__root.tsx` imports that file with the
-  `?url` suffix so it becomes a `<link rel="stylesheet">`.
-- **Vite's `outDir` stays inside `frontend/`** (`dist/`). Redirecting
-  it outside breaks Node's module resolution during the prerender —
-  the SSR bundle can't resolve `rou3`/`h3` when it lives under
-  `internal/`. The sync script is what moves the final files out.
+- **Vite's `outDir` stays inside `ui/`** (`dist/`). Redirecting it
+  outside breaks Node's module resolution during the prerender — the
+  SSR bundle can't resolve `rou3`/`h3` when it lives under `internal/`.
+  The sync script is what moves the final files out.
+- **`@tailwindcss/vite` replaces the old Tailwind CLI watcher.** Earlier
+  iterations of this repo ran `tailwindcss -i styles.css -o generated.css`
+  as a side-process because `@tailwindcss/node` collided with Start's
+  prerender; that's no longer the case under the current Vite plugin +
+  SPA mode combo.
 
 ## What's next
 

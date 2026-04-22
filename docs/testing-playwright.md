@@ -7,15 +7,18 @@ code exists yet. Implement in a follow-up iteration.
 ## 1. Goals
 
 - Catch regressions across the full stack: Go server + Postgres + the
-  TanStack Start SPA + the embedded-binary serving path.
+  TanStack Start SPA (React 19 + shadcn/ui) + the embedded-binary
+  serving path.
 - Cover the golden paths that the README lists as "live end-to-end"
   (auth, library, book detail, BookDrop, readers, settings, OPDS is
   covered via API, realtime SSE).
 - Run locally against `make up` (dev) and in CI against the production
   binary so the embed + `NoRoute` fallback is also exercised.
 
-Non-goals: unit tests (Go has `go test`, frontend has `tsc --noEmit`),
-visual regression, performance/load.
+Non-goals: visual regression, performance/load. Unit coverage lives
+elsewhere: Go uses `go test`; the UI uses `tsc --noEmit` + `vitest`
+(`cd ui && bun run typecheck && bun run test`) for typed-API and
+component-level checks.
 
 ## 2. Layout
 
@@ -50,9 +53,11 @@ e2e/
     opds.spec.ts            # request-context only, no page
 ```
 
-Rationale for a sibling directory instead of `frontend/tests/`: the
-SPA's Vite config disables SSR and the test runner's isolated `tsconfig`
-avoids collisions with the `routeTree.gen.ts` generator.
+Rationale for a sibling directory instead of `ui/tests/`: the SPA's
+Vite config disables SSR, the test runner's isolated `tsconfig` avoids
+collisions with the `routeTree.gen.ts` generator, and keeping e2e on
+plain npm (not bun) keeps Playwright's browser download path + CI
+caches aligned with the upstream Playwright docs.
 
 ## 3. Test Environment
 
@@ -196,7 +201,7 @@ GitHub Actions job (or the equivalent for whichever CI lands):
 6. Upload `e2e/playwright-report/` and `e2e/test-results/` as
    artifacts on failure.
 
-Run on PRs touching `frontend/**`, `internal/handler/**`,
+Run on PRs touching `ui/**`, `internal/handler/**`,
 `internal/service/**`, or the e2e directory.
 
 ## 8. Data-testid discipline

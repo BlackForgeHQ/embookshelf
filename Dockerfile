@@ -1,13 +1,13 @@
 # syntax=docker/dockerfile:1.7
 # ---------- Stage 1: React build ----------
-FROM node:22-alpine AS assets
+FROM oven/bun:1 AS assets
 WORKDIR /app
-COPY frontend/package.json frontend/package-lock.json* ./frontend/
-RUN cd frontend && npm ci --no-audit --no-fund
-COPY frontend ./frontend
-# sync-dist.mjs writes to ../internal/staticfs/dist — ensure the parent
+COPY ui/package.json ui/bun.lock* ./ui/
+RUN cd ui && bun install --frozen-lockfile
+COPY ui ./ui
+# sync-dist.ts writes to ../internal/staticfs/dist — ensure the parent
 # exists before it runs.
-RUN mkdir -p internal/staticfs && cd frontend && npm run build
+RUN mkdir -p internal/staticfs && cd ui && bun run build
 
 # ---------- Stage 2: Go build ----------
 FROM golang:1.25-alpine AS gobuild

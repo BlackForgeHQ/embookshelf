@@ -42,6 +42,14 @@ import {
 import { Icon } from '@/components/Icon';
 import { TopBar } from '@/components/TopBar';
 import {
+  Select as ShadcnSelect,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
+import {
   defaultReadingPreferences,
   loadReadingPreferences,
   saveReadingPreferences,
@@ -1396,19 +1404,18 @@ function Select({
   disabled?: boolean;
 }) {
   return (
-    <select
-      className="input"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      disabled={disabled}
-      style={{ fontSize: 13 }}
-    >
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
+    <ShadcnSelect value={value} onValueChange={onChange} disabled={disabled}>
+      <SelectTrigger className="w-full">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </ShadcnSelect>
   );
 }
 
@@ -1434,12 +1441,7 @@ function Toggle({
         cursor: 'pointer',
       }}
     >
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        style={{ width: 16, height: 16 }}
-      />
+      <Switch checked={checked} onCheckedChange={onChange} />
       <div style={{ flex: 1 }}>
         <div style={{ fontSize: 13.5 }}>{label}</div>
         {hint && <div className="t-small" style={{ fontSize: 11.5 }}>{hint}</div>}

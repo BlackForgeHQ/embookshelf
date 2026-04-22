@@ -11,17 +11,17 @@ help: ## List targets
 tidy: ## go mod tidy
 	go mod tidy
 
-.PHONY: frontend-install
-frontend-install: ## Install frontend deps
-	cd frontend && npm install
+.PHONY: ui-install
+ui-install: ## Install UI deps
+	cd ui && bun install
 
-.PHONY: frontend-dev
-frontend-dev: ## Vite dev server (proxies /api, /opds → Go)
-	cd frontend && npm run dev
+.PHONY: ui-dev
+ui-dev: ## Vite dev server (proxies /api, /opds → Go)
+	cd ui && bun run dev
 
-.PHONY: frontend-build
-frontend-build: ## Build frontend + sync shell into internal/staticfs/dist/
-	cd frontend && npm run build
+.PHONY: ui-build
+ui-build: ## Build UI + sync shell into internal/staticfs/dist/
+	cd ui && bun run build
 
 .PHONY: db-up
 db-up: ## Start Postgres via compose
@@ -61,7 +61,7 @@ seed: ## Load dev seed data (runs psql inside the postgres container)
 		psql -U embookshelf -d embookshelf < scripts/seed.sql
 
 .PHONY: build
-build: frontend-build ## Build the server binary (includes embedded SPA)
+build: ui-build ## Build the server binary (includes embedded SPA)
 	go build -o ./tmp/embookshelf ./cmd/embookshelf
 
 .PHONY: run
@@ -73,10 +73,10 @@ dev: ## Live-reload backend via `go tool air`
 	go tool air
 
 .PHONY: up
-up: ## Run backend (air) + frontend (Vite) together — Ctrl-C stops both
+up: ## Run backend (air) + UI (Vite) together — Ctrl-C stops both
 	@trap 'kill 0' EXIT INT TERM; \
 	$(MAKE) --no-print-directory dev & \
-	$(MAKE) --no-print-directory frontend-dev & \
+	$(MAKE) --no-print-directory ui-dev & \
 	wait
 
 .PHONY: up-otlp
@@ -89,8 +89,8 @@ up-otlp: obs-up ## Same as `up` but exports OTLP from backend AND browser to gra
 	OTEL_EXPORTER_OTLP_INSECURE=true \
 	$(MAKE) --no-print-directory dev & \
 	VITE_OTEL_ENABLED=true \
-	VITE_OTEL_SERVICE_NAME=embookshelf-frontend \
-	$(MAKE) --no-print-directory frontend-dev & \
+	VITE_OTEL_SERVICE_NAME=embookshelf-ui \
+	$(MAKE) --no-print-directory ui-dev & \
 	wait
 
 .PHONY: test

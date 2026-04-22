@@ -3,12 +3,12 @@
 ## 1. High-Level Architecture
 
 Embookshelf is a Go backend + React SPA, shipped as a single binary. The
-frontend is a [TanStack Start](https://tanstack.com/start) app compiled in
-**SPA mode** ([Vite 7](https://vite.dev) + React 18 + TypeScript +
-[Tailwind 4](https://tailwindcss.com)). The Go server exposes JSON APIs
-under `/api/v1/*`, an OPDS 1.2 catalog under `/opds/*`, an SSE stream at
-`/events`, and serves the compiled SPA shell embedded in the binary via
-`//go:embed`. Data lives in PostgreSQL.
+UI is a [TanStack Start](https://tanstack.com/start) app compiled in
+**SPA mode** ([Vite 7](https://vite.dev) + React 19 + TypeScript +
+[Tailwind 4](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com)).
+The Go server exposes JSON APIs under `/api/v1/*`, an OPDS 1.2 catalog
+under `/opds/*`, an SSE stream at `/events`, and serves the compiled SPA
+shell embedded in the binary via `//go:embed`. Data lives in PostgreSQL.
 
 ```
 ┌───────────────────────────────────────────────────────────┐
@@ -80,22 +80,28 @@ so the session cookie the Go server issues rides along.
 | **Live reload (dev)** | [air-verse/air](https://github.com/air-verse/air) via `go tool air` | 1.65 |
 | **Containerization** | Docker (multi-stage) | — |
 
-### Frontend
+### UI
 
 | Layer | Technology | Version |
 |-------|-----------|---------|
 | **Framework** | [TanStack Start](https://tanstack.com/start) (SPA mode) | 1.167+ |
 | **Router** | [@tanstack/react-router](https://tanstack.com/router) (file-based routes) | 1.x |
 | **Server state** | [@tanstack/react-query](https://tanstack.com/query) | 5.59+ |
-| **UI runtime** | React + ReactDOM | 18.3 |
-| **Language** | TypeScript | 5.6 |
+| **UI runtime** | React + ReactDOM | 19.2 |
+| **Language** | TypeScript | 5.9 |
 | **Bundler** | [Vite](https://vite.dev) | 7.x |
-| **Styling** | Tailwind CSS 4 (compiled via standalone CLI, not the Vite plugin — see §9.4) | 4.2 |
-| **Dev runner** | `concurrently` (Tailwind CLI watcher + Vite dev server) | 9.x |
+| **Styling** | Tailwind CSS 4 via `@tailwindcss/vite` plugin (first-class, no CLI side-process) | 4.2 |
+| **Component library** | [shadcn/ui](https://ui.shadcn.com) (radix-mira style) over [radix-ui](https://www.radix-ui.com) primitives | 4.4 |
+| **Icons** | [lucide-react](https://lucide.dev) (shadcn default) + a 46-icon bespoke set (`Icon.tsx`) | 1.8 |
+| **Toasts** | [sonner](https://sonner.emilkowal.ski/) via shadcn wrapper | 2.0 |
+| **Package manager / runner** | [Bun](https://bun.sh) — `bun install` / `bun run dev` / `bun run build` | 1.x |
+| **Browser telemetry** | `@opentelemetry/sdk-trace-web` + `document-load` / `user-interaction` / `fetch` instrumentations, gated on `VITE_OTEL_ENABLED=true` | 2.7 / 0.215 |
 
-Testing stacks for both sides are not yet wired up — planned: Go
-`testing` + `testify` + `pgtest`, Playwright for e2e once the JSON API
-lands.
+Testing stacks: Go `testing` + `testify` for the backend; Playwright
+for end-to-end browser coverage under [e2e/](../e2e/) — see
+[docs/testing-playwright.md](./testing-playwright.md). UI unit tests
+are wired with **Vitest** + **@testing-library/react** (`bun run test`
+inside `ui/`).
 
 ---
 
@@ -141,50 +147,63 @@ embookshelf/
 │   ├── sse/                        # Server-Sent Events fan-out hub (handler not mounted yet)
 │   ├── staticfs/                   # //go:embed all:dist — embeds the compiled React SPA
 │   │   ├── staticfs.go
-│   │   └── dist/                   # Populated by `npm run build` (git-ignored)
+│   │   └── dist/                   # Populated by `bun run build` (git-ignored)
 │   ├── task/                       # river workers — BookDropWorker, LibraryScanWorker
 │   └── config/                     # env loading
 │
-├── frontend/                       # TanStack Start SPA (Vite + TS + Tailwind 4)
+├── ui/                             # TanStack Start SPA (Vite + React 19 + Tailwind 4 + shadcn/ui)
 │   ├── src/
 │   │   ├── routes/                 # File-based routing — routeTree.gen.ts auto-generated
-│   │   │   ├── __root.tsx          # html/body shell (HeadContent + Scripts + QueryClient)
+│   │   │   ├── __root.tsx          # html/body shell (HeadContent + Scripts + QueryClient + Toaster)
 │   │   │   ├── _app.tsx            # Pathless layout: Sidebar + main + status bar
-│   │   │   ├── _app.index.tsx      # /           — Dashboard
-│   │   │   ├── _app.library.tsx    # /library    — LibraryView (shelf|grid|list)
-│   │   │   ├── _app.book.$id.tsx   # /book/:id   — BookDetail
-│   │   │   ├── _app.book.$id.edit.tsx  # /book/:id/edit — MetadataEditor
-│   │   │   ├── _app.notebook.tsx   # /notebook   — cross-book notes
-│   │   │   ├── _app.bookdrop.tsx   # /bookdrop   — import review queue
-│   │   │   ├── _app.settings.tsx   # /settings
-│   │   │   ├── read.$id.tsx        # /read/:id   — full-screen Reader (no sidebar)
-│   │   │   └── login.tsx           # /login      — stub until auth endpoints land
+│   │   │   ├── _app.index.tsx      # /              — Dashboard
+│   │   │   ├── _app.library.tsx    # /library       — LibraryView (shelf|grid|list)
+│   │   │   ├── _app.book.$id.tsx   # /book/:id      — BookDetail
+│   │   │   ├── _app.book.$id_.edit.tsx # /book/:id/edit — MetadataEditor
+│   │   │   ├── _app.notebook.tsx   # /notebook      — cross-book notes
+│   │   │   ├── _app.bookdrop.tsx   # /bookdrop      — import review queue
+│   │   │   ├── _app.stats.tsx      # /stats         — library + reading statistics
+│   │   │   ├── _app.settings.tsx   # /settings      — account, reading prefs, libraries, devices, users
+│   │   │   ├── read.$id.tsx        # /read/:id      — full-screen Reader (no sidebar)
+│   │   │   └── login.tsx           # /login         — local + first-run signup + OIDC stub
 │   │   ├── components/
-│   │   │   ├── Icon.tsx            # 46-icon set from the prototype
+│   │   │   ├── ui/                 # shadcn/ui primitives (button, input, dialog, select, switch,
+│   │   │   │                       # tabs, dropdown-menu, popover, sonner, scroll-area, …)
+│   │   │   ├── Icon.tsx            # 46-icon bespoke set (editorial stroke 1.5)
 │   │   │   ├── Cover.tsx           # Cover + Spine + StarRating
 │   │   │   ├── Sidebar.tsx         # Wired to router Links + useRouterState
-│   │   │   └── TopBar.tsx
+│   │   │   ├── TopBar.tsx
+│   │   │   ├── RuleEditor.tsx      # Smart-shelf predicate editor (shadcn Dialog)
+│   │   │   ├── EpubReader.tsx      # epub.js wrapper (paginated, CFI resume, highlights)
+│   │   │   └── PdfReader.tsx       # pdfjs-dist wrapper (lazy per-page canvas)
 │   │   ├── data/
 │   │   │   └── mock.ts             # Typed mock dataset — replaced per-route by useQuery
 │   │   ├── api/
-│   │   │   └── client.ts           # fetch wrapper with credentials: include
+│   │   │   ├── client.ts           # fetch wrapper with credentials: include
+│   │   │   ├── auth.ts, books.ts, bookdrop.ts, devices.ts,
+│   │   │   ├── settings.ts, stats.ts, reading.ts, annotations.ts,
+│   │   │   ├── enrich.ts, realtime.ts  # Typed API clients + useRealtime SSE hook
+│   │   ├── lib/
+│   │   │   ├── utils.ts            # cn() — clsx + tailwind-merge (shadcn helper)
+│   │   │   └── readingPreferences.ts
 │   │   ├── router.tsx              # getRouter() — creates the QueryClient + router
-│   │   ├── styles.css              # Tailwind entry (@source globs + @theme tokens)
-│   │   └── generated.css           # Tailwind CLI output (git-ignored)
+│   │   ├── telemetry.ts            # Browser OTel setup (gated on VITE_OTEL_ENABLED)
+│   │   └── styles.css              # Tailwind entry — @theme tokens + shadcn/tailwind.css + editorial layer
 │   ├── scripts/
-│   │   └── sync-dist.mjs           # Copies dist/client → ../internal/staticfs/dist
-│   ├── index.html
-│   ├── vite.config.ts              # tanstackStart({ spa: { enabled: true } })
+│   │   └── sync-dist.ts            # Copies dist/client → ../internal/staticfs/dist (runs under bun)
+│   ├── components.json             # shadcn/ui config (radix-mira style, zinc base color)
+│   ├── vite.config.ts              # tanstackStart({ spa: { enabled: true } }) + @tailwindcss/vite + dev proxy
 │   ├── tsconfig.json
+│   ├── bun.lock
 │   └── package.json
 │
 ├── scripts/seed.sql                # Dev seed — admin@local / changeme
 ├── docs/                           # This doc + prd.md
-├── Dockerfile                      # Multi-stage (frontend build → go build → distroless)
-├── compose.dev.yml                 # Development Postgres
+├── Dockerfile                      # Multi-stage (bun build ui → go build → distroless)
+├── compose.dev.yml                 # Development Postgres + grafana/otel-lgtm
 ├── go.mod                          # Go 1.25; `tool` directive for air
-├── Makefile                        # db-up, frontend-install, dev, frontend-dev, up, build, ...
-├── .air.toml                       # live-reload config (excludes frontend/ and dist/)
+├── Makefile                        # db-up, ui-install, dev, ui-dev, up, build, ...
+├── .air.toml                       # live-reload config (excludes ui/ and dist/)
 └── README.md
 ```
 
@@ -232,7 +251,7 @@ Handler → Service → Repository → PostgreSQL
   (`userDTO`, `libraryDTO`, `bookDTO`, `bookDetailDTO`, `shelfDTO`,
   `bookdropDTO`, `enrichMatchDTO`, `settingsLibraryDTO` + pointer-field
   PATCH types). camelCase on the wire; matching TS types under
-  [frontend/src/api/](../frontend/src/api/).
+  [ui/src/api/](../ui/src/api/).
 
 ### 4.2 Concurrency Model
 
@@ -380,19 +399,19 @@ Background work uses **river**, a Postgres-backed job queue:
 
 ---
 
-## 5. Frontend Architecture
+## 5. UI Architecture
 
 ### 5.1 TanStack Start in SPA mode
 
-The frontend is a [TanStack Start](https://tanstack.com/start) app
-configured in **SPA mode** — no SSR, no Node runtime in production. Why
-Start over vanilla `@tanstack/react-router`? File-based routing,
-generated typed routes, `createFileRoute` with loaders and
-`validateSearch`, and a clear upgrade path if we ever need partial
-prerendering. SPA mode is opted in via the Vite plugin:
+The UI is a [TanStack Start](https://tanstack.com/start) app configured
+in **SPA mode** — no SSR, no Node runtime in production. Why Start over
+vanilla `@tanstack/react-router`? File-based routing, generated typed
+routes, `createFileRoute` with loaders and `validateSearch`, and a clear
+upgrade path if we ever need partial prerendering. SPA mode is opted in
+via the Vite plugin:
 
 ```ts
-// frontend/vite.config.ts
+// ui/vite.config.ts
 tanstackStart({ spa: { enabled: true } })
 ```
 
@@ -401,9 +420,9 @@ Start still runs a prerender pass during build to emit `_shell.html`
 `index.html` so Go's SPA fallback finds it.
 
 The route tree is regenerated on every dev change and build —
-`frontend/src/routeTree.gen.ts` is git-ignored. TypeScript module
-augmentation in `frontend/src/main.tsx` teaches the type system the
-shape of our router so `<Link to>`, `useParams`, `useSearch`, and
+`ui/src/routeTree.gen.ts` is git-ignored. TypeScript module augmentation
+in [`ui/src/router.tsx`](../ui/src/router.tsx) teaches the type system
+the shape of our router so `<Link to>`, `useParams`, `useSearch`, and
 `navigate` are all typed end-to-end.
 
 ### 5.2 Route tree
@@ -414,17 +433,18 @@ stand in for nested folders.
 
 | File | URL | Component |
 |------|-----|-----------|
-| `__root.tsx` | — | html/body shell, HeadContent, Scripts, QueryClientProvider |
+| `__root.tsx` | — | html/body shell, HeadContent, Scripts, QueryClientProvider, sonner `Toaster` |
 | `_app.tsx` | — | Sidebar + `<main>` + status bar layout, `<Outlet />` in the middle |
 | `_app.index.tsx` | `/` | Dashboard (currently reading, 12-week heatmap, stats, libraries) |
 | `_app.library.tsx` | `/library` | LibraryView — shelf/grid/list, filter, sort; `?shelf=`, `?layout=` in search |
 | `_app.book.$id.tsx` | `/book/:id` | BookDetail — overview / notes / annotations / versions / activity tabs |
-| `_app.book.$id.edit.tsx` | `/book/:id/edit` | MetadataEditor |
+| `_app.book.$id_.edit.tsx` | `/book/:id/edit` | MetadataEditor + EnrichmentPanel |
 | `_app.notebook.tsx` | `/notebook` | Cross-book notes + highlights |
 | `_app.bookdrop.tsx` | `/bookdrop` | Import review queue (list + detail split) |
-| `_app.settings.tsx` | `/settings` | Settings hub — Account section live, others stubbed |
+| `_app.stats.tsx` | `/stats` | Library totals, reading activity heatmap, bar charts |
+| `_app.settings.tsx` | `/settings` | Settings hub — account, reading prefs, libraries, providers, devices, users, backups |
 | `read.$id.tsx` | `/read/:id` | Full-screen Reader — intentionally outside `_app` so the sidebar is hidden |
-| `login.tsx` | `/login` | Stub until auth endpoints return |
+| `login.tsx` | `/login` | Local session login + first-run signup + OIDC link |
 
 The Sidebar uses `useRouterState` to determine the active pathname +
 search params so a shelf/library click navigates via `<Link to="/library" search={{ shelf: 'reading' }}>`
@@ -438,74 +458,149 @@ the prototype's single-component `setView` state machine.
   context so a loader can call `queryClient.ensureQueryData()` if we
   ever want route-level prefetching. Default `staleTime: 30_000`,
   `refetchOnWindowFocus: false`.
-- **Fetch wrapper** — `frontend/src/api/client.ts`. Always
-  `credentials: 'include'` (the session cookie must ride along),
-  JSON-body detection, uniform error shape `{ status, message }`.
+- **Fetch wrapper** — [`ui/src/api/client.ts`](../ui/src/api/client.ts).
+  Always `credentials: 'include'` (the session cookie must ride along),
+  JSON-body detection, uniform error shape `{ status, message }`. Empty
+  bodies on 202/204/205 are handled (some fire-and-forget endpoints
+  return no content).
 - **Search params** — routes that care about URL state declare a
   `validateSearch` zod-free parser so the types are tight without an
-  extra runtime dep (see [`_app.library.tsx`](../frontend/src/routes/_app.library.tsx)).
-- **Mock data** — every route is currently fed by the mock dataset in
-  [`frontend/src/data/mock.ts`](../frontend/src/data/mock.ts) so the
-  visuals can be exercised before the JSON API lands. Each mock export
-  has a typed counterpart the API will mirror.
-- **Auth state** — intentionally not centralised yet. Once the JSON
-  auth endpoints are back, `useQuery({ queryKey: ['me'] })` against
-  `/api/v1/me` plus route-level loaders calling
-  `router.invalidate()` on login/logout is the expected pattern.
+  extra runtime dep (see
+  [`_app.library.tsx`](../ui/src/routes/_app.library.tsx)).
+- **Typed API modules** — per-resource clients live under
+  [ui/src/api/](../ui/src/api/) (`auth`, `books`, `bookdrop`, `devices`,
+  `annotations`, `enrich`, `settings`, `stats`, `reading`, `realtime`).
+  Each exports query keys + fetchers so `useQuery`/`useMutation` call
+  sites stay one-liner.
+- **Mock data** — [`ui/src/data/mock.ts`](../ui/src/data/mock.ts) is
+  the reference dataset from the original prototype. Live routes are
+  now backed by the real API; mock exports remain as the source of
+  truth for types + the non-authenticated palette/style vocabulary.
+- **Auth state** — `useQuery({ queryKey: meQueryKey })` against
+  `/api/v1/me`. The `/_app` layout's `beforeLoad` calls
+  `queryClient.ensureQueryData` on that key and redirects to `/login`
+  when `null`; login/logout mutate the cache directly and navigate.
 
 ### 5.4 Component library
 
-Shared pieces live in `frontend/src/components/`:
+Two layers sit side-by-side in [`ui/src/components/`](../ui/src/components/):
 
-- [`Icon.tsx`](../frontend/src/components/Icon.tsx) — 46 icons from
-  the prototype, typed `IconName` union, stroke 1.5 editorial style.
-- [`Cover.tsx`](../frontend/src/components/Cover.tsx) —
-  `Cover`, `Spine`, `StarRating`. `Cover` takes `{ book, size, onClick, style }`;
+**shadcn/ui primitives** under
+[`components/ui/`](../ui/src/components/ui/) — installed via
+`bunx shadcn@latest add ...` with the **radix-mira** style + `zinc`
+base color (see [`ui/components.json`](../ui/components.json)). Each
+primitive is a thin wrapper around [radix-ui](https://www.radix-ui.com)
+or a native element with CVA-driven variants:
+
+| Primitive | Used by |
+|-----------|---------|
+| `Button`, `Input`, `Label`, `Textarea` | Login, settings forms, BookDrop approval, metadata editor |
+| `Dialog`, `DialogContent`, `DialogTitle` | `RuleEditor` (smart-shelf create/edit) |
+| `Select`, `SelectTrigger`, `SelectContent`, `SelectItem` | Settings (reading prefs, role picker), RuleEditor predicates |
+| `Switch` | Settings (reading prefs, feature toggles) |
+| `Checkbox`, `Slider`, `Progress` | Reader controls, stats charts |
+| `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent` | BookDetail (overview / notes / annotations / versions / activity) |
+| `DropdownMenu`, `Popover`, `Tooltip` | Send-to-device, overflow menus |
+| `Card`, `Separator`, `Badge`, `ScrollArea` | Settings panels, stat tiles |
+| `Sonner` (`Toaster`) | Mounted in `__root.tsx`; driven by `toast()` at mutation sites |
+
+**Editorial components** (bespoke, on top of the custom `@theme`
+tokens + `.chip` / `.cover` / `.t-*` utility layer defined in
+[`ui/src/styles.css`](../ui/src/styles.css)):
+
+- [`Icon.tsx`](../ui/src/components/Icon.tsx) — 46 hand-drawn icons
+  from the original prototype, typed `IconName` union, stroke 1.5. Kept
+  separate from `lucide-react` so the editorial voice of the book
+  chrome stays distinct from shadcn's default icon set.
+- [`Cover.tsx`](../ui/src/components/Cover.tsx) — `Cover`, `Spine`,
+  `StarRating`. `Cover` takes `{ book, size, onClick, style }`;
   switches on `book.style` for 5 typographic cover styles, on
   `book.palette` for 10 bookcloth-inspired colors, and on `size` for
   xs/sm/md/lg/hero. Placeholder books render as diagonal-stripe paper
   tile.
-- [`Sidebar.tsx`](../frontend/src/components/Sidebar.tsx) — router-aware
-  navigation.
-- [`TopBar.tsx`](../frontend/src/components/TopBar.tsx) — sticky header
-  with title + subtitle + crumbs + search + right slot, reused across
-  most in-app views.
+- [`Sidebar.tsx`](../ui/src/components/Sidebar.tsx) — router-aware
+  navigation with library/shelf/smart-shelf sections, hover-reveal
+  edit/delete affordances, and the `UserBadge` footer.
+- [`TopBar.tsx`](../ui/src/components/TopBar.tsx) — sticky header with
+  title + subtitle + crumbs + search + right slot, reused across most
+  in-app views.
+- [`RuleEditor.tsx`](../ui/src/components/RuleEditor.tsx) —
+  predicate-builder dialog for smart shelves. Wrapped in a shadcn
+  `Dialog` with `Select`/`Input` predicate rows and editorial `Button`
+  variants.
+- [`EpubReader.tsx`](../ui/src/components/EpubReader.tsx) +
+  [`PdfReader.tsx`](../ui/src/components/PdfReader.tsx) — imperative
+  reader surfaces; see §5.6.
 
-### 5.5 Styling: Tailwind 4
+The split is intentional: shadcn carries the common-case form/menu
+surface so accessibility + dark mode + focus rings are free, while the
+custom editorial classes own the "built like a printed book" chrome
+(warm ivory paper tones, Source Serif 4, oklch cover palette, cloth
+bindings) that no shadcn preset ships with.
+
+### 5.5 Styling: Tailwind 4 + shadcn/ui
 
 Tailwind 4's **CSS-first configuration** drives the design system.
-[`frontend/src/styles.css`](../frontend/src/styles.css) holds the
-`@source` glob, `@theme` tokens, and a large `@layer components` block
-for the custom primitives that are awkward as utilities:
+Tailwind now ships via the first-class [`@tailwindcss/vite`](https://tailwindcss.com/blog/tailwindcss-v4)
+plugin — no standalone CLI watcher, no generated stylesheet side-car.
+
+[`ui/src/styles.css`](../ui/src/styles.css) holds the Google Fonts
+import, Tailwind + shadcn bases, `@theme` tokens, the `:root` / `.dark`
+shadcn color scales, and a `@layer components` block for the editorial
+primitives (chips, covers, shelf plank, status bar, typography scale):
 
 ```css
-@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@...&family=Literata:ital,opsz,wght@...&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4...');
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/inter";
 
-@source "./**/*.{ts,tsx}";
+@custom-variant dark (&:is(.dark *));
 
-@theme {
-  /* Archival paper neutrals — warm ivory, never yellow */
-  --color-paper-0: oklch(0.985 0.006 85);
-  --color-paper-1: oklch(0.965 0.010 82);
-  /* Ink — navy-tinted near-black */
-  --color-ink-1:   oklch(0.20 0.018 255);
-  /* Library burgundy accent */
-  --color-accent:  oklch(0.40 0.095 25);
-  /* Library navy — secondary brand for chrome / status */
-  --color-navy:    oklch(0.30 0.045 255);
+@theme inline {
+  /* shadcn + radix-mira tokens */
+  --color-primary:  var(--primary);
+  --color-card:     var(--card);
+  --radius-md:      calc(var(--radius) * 0.8);
+  ...
 
+  /* Editorial overlay — warm ivory, navy-tinted ink, library burgundy */
+  --color-paper-0:  oklch(0.985 0.006 85);
+  --color-ink-1:    oklch(0.20 0.018 255);
+  --color-editorial-accent: oklch(0.40 0.095 25);
+
+  /* Cover palette — 10 muted bookcloth colors (NYRB / Penguin Classics vibe) */
+  --color-cov-olive:  oklch(0.45 0.055 115);
+  --color-cov-teal:   oklch(0.38 0.048 210);
+  ...
+
+  /* Typography */
   --font-serif:  "Source Serif 4", Georgia, serif;   /* UI + display */
   --font-reader: "Literata",       Georgia, serif;   /* long-form reading */
   --font-mono:   "IBM Plex Mono",  ui-monospace, monospace;
 }
 
+:root { --primary: oklch(0.555 0.163 48.998); --radius: 0.45rem; ... }
+.dark { --primary: oklch(0.473 0.137 46.201); ... }
+
 @layer components {
-  .btn, .chip, .input, .cover, .cov-*, .shelf-plank, .progress, .kbd,
-  .sidebar, .status-bar, .tweaks-panel, .fade-in, .t-h1, .t-h2, .t-label,
-  ... /* ~600 lines */
+  .chip, .cover, .cov-*, .shelf-plank, .progress, .status-bar,
+  .fade-in, .t-h1, .t-h2, .t-label, ...
 }
 ```
+
+Two sets of design tokens coexist:
+
+1. **shadcn / radix-mira tokens** — `--primary`, `--card`,
+   `--muted-foreground`, `--ring`, `--radius`, etc. These drive every
+   primitive under `components/ui/` and support light / dark variants
+   via the `.dark` class.
+2. **Editorial tokens** — `--color-paper-*`, `--color-ink-*`,
+   `--color-cov-*`, `--color-editorial-accent`, `--font-serif`,
+   `--font-reader`, `--font-mono`. These are consumed by the custom
+   `Cover`, `Sidebar`, `TopBar`, and the `.chip` / `.cover` /
+   typography utility classes.
 
 Typography stack:
 
@@ -513,6 +608,8 @@ Typography stack:
 - **Literata** (commissioned by Google for Play Books) for the reader
   body via `--font-reader`.
 - **IBM Plex Mono** for metadata chrome.
+- **Inter Variable** (via `@fontsource-variable/inter`) is available
+  as `--font-sans` for shadcn surfaces that default to sans.
 
 Fonts are pulled from Google Fonts today; self-hosting them under
 `internal/staticfs/dist/fonts/` is a planned follow-up to drop the
@@ -522,8 +619,8 @@ network dependency on first paint.
 
 | Reader | Status | Notes |
 |--------|--------|-------|
-| EPUB | **Built** | [`EpubReader`](../frontend/src/components/EpubReader.tsx) wraps epub.js with an imperative handle (`next` / `prev` / `goTo`). Paginated flow, `book.locations.generate(1024)` powers the percentage scrubber, `relocated` event reports `{percent, cfi}`. Typography overrides via `rendition.themes.default` so font/size changes survive chapter transitions. TOC tree flattened for the Contents panel. |
-| PDF | **Built** | [`PdfReader`](../frontend/src/components/PdfReader.tsx) uses pdfjs-dist 5. Worker URL resolved via `new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url)` so Vite emits a hashed worker. Scroll container with one `<canvas>` per page; only current ± 1 page are rasterized (others cleared) to keep memory flat on large PDFs. |
+| EPUB | **Built** | [`EpubReader`](../ui/src/components/EpubReader.tsx) wraps epub.js with an imperative handle (`next` / `prev` / `goTo`). Paginated flow, `book.locations.generate(1024)` powers the percentage scrubber, `relocated` event reports `{percent, cfi}`. Typography overrides via `rendition.themes.default` so font/size changes survive chapter transitions. TOC tree flattened for the Contents panel. |
+| PDF | **Built** | [`PdfReader`](../ui/src/components/PdfReader.tsx) uses pdfjs-dist 5. Worker URL resolved via `new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url)` so Vite emits a hashed worker. Scroll container with one `<canvas>` per page; only current ± 1 page are rasterized (others cleared) to keep memory flat on large PDFs. |
 | CBX (`.cbr` / `.cbz` / `.cb7`) | Deferred | Server returns per-page image URLs; client viewer with keyboard nav + manga mode. |
 | Audiobook (MP3/M4B) | Deferred | Native `<audio>` with chapter navigation. |
 
@@ -531,30 +628,33 @@ Progress lives in `user_book_progress` per user:
 `{percent, resume_cfi, last_read_at}`. EPUB writes CFI strings
 (`epubcfi(...)`); PDF writes `page:N` tokens. The prefix disambiguates
 them — one column suffices for both reader types.
-[`read.$id.tsx`](../frontend/src/routes/read.$id.tsx) dispatches to
-the right component by `book.format`, debounces progress writes by
-600 ms, and flushes any pending tick via a raw `fetch` inside the
-cleanup effect so a short reading session still records progress.
+[`read.$id.tsx`](../ui/src/routes/read.$id.tsx) dispatches to the right
+component by `book.format`, debounces progress writes by 600 ms, and
+flushes any pending tick via a raw `fetch` inside the cleanup effect
+so a short reading session still records progress.
 
-Reader typography (font, size, line-height) is hard-coded to
-sensible defaults today. Promoting it to `reader_preferences` + a
-React settings pane is a trivial future addition once the preference
-set grows beyond three values.
+Reader typography (font, size, line-height) is driven per-user by
+[`readingPreferences.ts`](../ui/src/lib/readingPreferences.ts) — stored
+in `localStorage`, editable from the Settings → Reading preferences
+pane via shadcn `Select` + `Switch` + range inputs. Promoting this to a
+server-side `reader_preferences` table is the next step for cross-device
+parity.
 
 ### 5.7 Realtime (SSE)
 
-[`useRealtime`](../frontend/src/api/realtime.ts) is mounted once inside
-the authed layout (`_app.tsx`). It opens a single
+[`useRealtime`](../ui/src/api/realtime.ts) is mounted once inside the
+authed layout (`_app.tsx`). It opens a single
 `EventSource('/events', { withCredentials: true })` per session — the
 browser reuses the same cookie that the JSON API calls carry, so no
 separate handshake is needed.
 
 Event → cache-invalidation dispatch is a typed `Record<RealtimeEvent,
 Handler>` map; TypeScript enforces exhaustive coverage, so adding a
-new event name surfaces missing handlers at build time. Today only
-`bookdrop.updated` is published; it invalidates the bookdrop queue,
-the books list, and the libraries list (for book-count updates after
-approvals).
+new event name surfaces missing handlers at build time. Today
+`bookdrop.updated` invalidates the bookdrop queue + books list +
+libraries (for book-count updates after approvals), and
+`bookdrop.cleared` re-fetches just the queue after the user empties
+the "Recently processed" section.
 
 The native `EventSource` handles reconnection + exponential backoff
 automatically; the hook only wires teardown (`removeEventListener` +
@@ -797,10 +897,11 @@ Basic Auth (`auth.BasicAuth`) under `/opds/*`.
 
 ### 9.1 Multi-Stage Docker Build
 
-Three stages: frontend (npm install + `vite build` + sync script) → Go
-build → distroless runtime. See [Dockerfile](../Dockerfile) for the
-authoritative recipe. The final binary embeds the compiled SPA at
-`internal/staticfs/dist/` via `//go:embed all:dist`.
+Three stages: UI (`oven/bun:1` → `bun install --frozen-lockfile` +
+`bun run build` + `sync-dist.ts`) → Go build → distroless runtime. See
+[Dockerfile](../Dockerfile) for the authoritative recipe. The final
+binary embeds the compiled SPA at `internal/staticfs/dist/` via
+`//go:embed all:dist`.
 
 ### 9.2 CI/CD Pipeline (planned)
 
@@ -833,43 +934,43 @@ services:
 Two processes power local development:
 
 - **`make dev`** — Go backend on `:6060` via `go tool air`. Air watches
-  `**/*.go` + `**/*.sql`; it ignores `frontend/` and
+  `**/*.go` + `**/*.sql`; it ignores `ui/` and
   `internal/staticfs/dist/` so a React edit doesn't trigger a Go
   rebuild.
-- **`make frontend-dev`** — `cd frontend && npm run dev`. Under the
-  hood that's `concurrently` running the Tailwind CLI watcher
-  (`src/styles.css` → `src/generated.css`) and the Vite dev server on
-  `:5173`. Vite proxies `/api`, `/opds`, and `/events` to `:6060` so
-  session cookies and SSE work against the Go backend.
+- **`make ui-dev`** — `cd ui && bun run dev`, i.e. the Vite dev server
+  on `:5173` with the `@tailwindcss/vite` plugin handling CSS inline.
+  Vite proxies `/api`, `/opds`, and `/events` to `:6060` (Go) and
+  `/v1/*` to `:4318` (grafana/otel-lgtm) so session cookies, SSE, and
+  browser OTLP traces all stay same-origin.
 
 `make up` runs both in parallel under one `trap 'kill 0'` so Ctrl-C
-tears them down together.
+tears them down together. `make up-otlp` additionally enables browser
++ backend OTel exporters against the `grafana/otel-lgtm` compose
+service (Grafana UI on `:3001`).
 
 Schema migrations apply automatically on boot
 (`MIGRATE_ON_START=true` by default).
 
-### 9.4 Frontend build quirks
+### 9.4 UI build quirks
 
-Two pragmatic workarounds exist around TanStack Start's prerender pass;
-they're documented here so nobody "simplifies" them away.
+One pragmatic workaround remains around TanStack Start's prerender
+pass; it's documented here so nobody "simplifies" it away.
 
-1. **Tailwind via the standalone CLI, not the Vite plugin.**
-   `@tailwindcss/node` installs a Node ESM loader that short-circuits
-   module resolution during the prerender, which breaks on the
-   `h3-v2`/`rou3` aliases that Start's SSR bundle imports. Running
-   `@tailwindcss/cli` as a separate step (`npm run css` /
-   `npm run css:watch`) avoids attaching the loader at all. `__root.tsx`
-   imports the generated file with `?url` so Vite treats it as a
-   stylesheet asset.
-2. **Vite's `build.outDir` stays inside `frontend/`** (defaults to
-   `dist/`). Redirecting it outside the package breaks Node's module
-   resolution during the prerender — the SSR bundle walks up from
-   `dist/server/` looking for `node_modules` and never reaches
-   `frontend/node_modules/`.
-   [`frontend/scripts/sync-dist.mjs`](../frontend/scripts/sync-dist.mjs)
-   is what moves the compiled shell + assets into
-   `internal/staticfs/dist/` after build, duplicating `_shell.html` as
-   `index.html` so Go's SPA fallback finds it.
+- **Vite's `build.outDir` stays inside `ui/`** (defaults to `dist/`).
+  Redirecting it outside the package breaks Node's module resolution
+  during the prerender — the SSR bundle walks up from `dist/server/`
+  looking for `node_modules` and never reaches `ui/node_modules/`.
+  [`ui/scripts/sync-dist.ts`](../ui/scripts/sync-dist.ts) (a bun script
+  invoked by `bun run build`) is what moves the compiled shell +
+  assets into `internal/staticfs/dist/` after build, duplicating
+  `_shell.html` as `index.html` so Go's SPA fallback finds it.
+
+Historical note: earlier iterations of this repo ran Tailwind via the
+standalone `@tailwindcss/cli` as a side-process because `@tailwindcss/node`'s
+ESM loader collided with Start's prerender on `h3-v2`/`rou3` alias
+resolution. The current `@tailwindcss/vite` plugin + SPA-mode combo no
+longer hits that issue — Tailwind compiles inline and there is no
+generated stylesheet side-car.
 
 ---
 
@@ -922,15 +1023,17 @@ Library filesystem roots beyond `BOOKDROP_PATH` are managed in the database
 |----------|-----------|
 | **Monolith over microservices** | Single deployment unit simplifies self-hosting; no inter-service communication overhead. |
 | **Go over JVM** | Lower memory footprint, single static binary, faster cold starts — all meaningful for self-hosters on modest hardware. |
-| **React SPA (TanStack Start, SPA mode) over server-rendered Templ/HTMX** | The original Templ + HTMX stack worked, but porting rich interactions (the reader chrome, the bookdrop approval split-pane, the metadata editor with live provider matches) turned every screen into a pile of per-fragment endpoints. React gives us one component tree that the designer's prototype maps onto 1:1 and `@tanstack/react-query` handles the "stale/refetch" logic that HTMX partial swaps were manually re-implementing. The tradeoff is a bundle (~270 KB gzipped today) the browser has to parse on first load. |
+| **React SPA (TanStack Start, SPA mode) over server-rendered Templ/HTMX** | The original Templ + HTMX stack worked, but porting rich interactions (the reader chrome, the bookdrop approval split-pane, the metadata editor with live provider matches) turned every screen into a pile of per-fragment endpoints. React gives us one component tree that the designer's prototype maps onto 1:1 and `@tanstack/react-query` handles the "stale/refetch" logic that HTMX partial swaps were manually re-implementing. The tradeoff is a client bundle the browser has to parse on first load; tree-shaking + per-route chunking keeps the first-paint cost bounded. |
 | **SPA mode instead of TanStack Start SSR** | The Go binary is already the canonical server. Running a Node SSR runtime alongside it would double operational surface area without paying for itself — SEO isn't a concern for an auth-walled personal library and the first-paint win is small against cached assets. SPA mode emits a static shell + client bundle, keeps file-based routing and `createFileRoute`, and lets Go own request handling. |
 | **TanStack Query over bespoke fetch + cache** | Server-state cache, invalidation, devtools, and a well-worn pattern for SSE-driven cache invalidation (once `/events` is rewired). Free upgrade path to prefetch-on-route-load via loader context. |
 | **Tailwind 4 CSS-first config** | Design tokens live in one `@theme` block that both CSS and TSX components reference — no JS config, no PostCSS plugin drift. |
-| **Tailwind via standalone CLI, not `@tailwindcss/vite`** | The Vite plugin's Node ESM loader collides with TanStack Start's prerender pass (breaks `h3-v2`/`rou3` alias resolution). The CLI is a clean side-process. See §9.4. |
+| **Tailwind via `@tailwindcss/vite`** | First-class Vite integration, no CLI watcher side-process, no generated stylesheet side-car. The earlier standalone-CLI workaround (to avoid the `@tailwindcss/node` loader colliding with Start's prerender on `h3-v2`/`rou3` aliases) is no longer needed under the current plugin + SPA-mode combo. See §9.4. |
+| **shadcn/ui (radix-mira) over rolling our own primitives** | Forms, menus, dialogs, tabs, and toasts get battle-tested keyboard nav + ARIA + focus management + dark-mode support for free via [radix-ui](https://www.radix-ui.com) and [sonner](https://sonner.emilkowal.ski/). The editorial "built like a printed book" layer (`.cover`, `.chip`, `.shelf-plank`, Source Serif 4 typography scale) lives alongside the shadcn tokens in `styles.css`, so the custom voice survives the adoption. Components land under `components/ui/` via `bunx shadcn add` and are owned/forkable source. |
+| **Bun over npm + node** | Bun's installer is ~10× faster than npm on a cold cache, it runs TS scripts (`sync-dist.ts`) directly without a compile step, and the Docker build stage is a single `oven/bun:1` image. The production binary has no JS runtime, so bun is a build-time-only dependency. |
 | **PostgreSQL over MariaDB/SQLite** | `jsonb`, `tsvector` full-text search, and a mature job-queue ecosystem (river) more than earn the operational overhead. |
 | **sqlc-staged over ORM** | Typed, compile-time-checked SQL keeps the query surface explicit and avoids N+1 surprises; hand-written pgx today, `sqlc.yaml` + `internal/repo/queries/*.sql` staged for when schema stabilizes. |
 | **golang-migrate over goose/dbmate** | Paired `.up.sql`/`.down.sql` files are unambiguous; the library is small, pgx-friendly, and can be embedded into the app binary so a single artifact can run its own migrations in any environment. |
-| **Gin over chi/echo** | Rich built-in middleware (logger, recovery, CORS via `gin-contrib`), well-known binding/validation story, ergonomic `gin.Context` for streaming responses. Survived the frontend refactor unchanged. |
+| **Gin over chi/echo** | Rich built-in middleware (logger, recovery, CORS via `gin-contrib`), well-known binding/validation story, ergonomic `gin.Context` for streaming responses. Survived the Templ→React and React→shadcn/bun UI migrations unchanged. |
 | **river over custom worker pool** | Jobs live in the same Postgres transaction boundary as the mutations that enqueue them; exactly-once semantics without extra infrastructure. |
 | **Format-specific processors** | Strategy pattern allows adding new formats without modifying existing code. |
 | **NETWORK storage mode** | Safe degradation for NAS users rather than risking file corruption. |
