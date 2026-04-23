@@ -1,6 +1,8 @@
 import type { CSSProperties, MouseEventHandler } from 'react';
 
 import { Icon } from './Icon';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 
 export type CoverPalette =
   | 'navy'
@@ -31,6 +33,9 @@ export type CoverBook = {
   palette?: string;
   style?: string;
   placeholder?: boolean;
+  // Format string like "epub" / "pdf" / "cbz". When set, Cover renders a
+  // small colored pill in the top-left corner (see FormatBadge below).
+  format?: string;
 };
 
 type CoverSize = 'xs' | 'sm' | 'md' | 'lg' | 'hero';
@@ -169,14 +174,58 @@ export function Cover({ book, size = 'md', onClick, style }: CoverProps) {
   const baseStyle: CSSProperties = isPlaceholder
     ? {}
     : { background: palette.bg, color: palette.ink };
+  const format = normalizeFormat(book.format);
   return (
     <div
       className={`cover ${size} ${isPlaceholder ? 'placeholder' : ''}`}
-      style={{ ...baseStyle, ...style }}
+      style={{ position: 'relative', ...baseStyle, ...style }}
       onClick={onClick}
     >
       <CoverInner book={book} size={size} />
+      {format && <FormatBadge format={format} size={size} />}
     </div>
+  );
+}
+
+// normalizeFormat returns the canonical uppercase label ("EPUB", "PDF",
+// "CBZ", …) or null when the book has no format string — e.g. mock
+// data for covers that aren't backed by a file.
+function normalizeFormat(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim().replace(/^\./, '').toUpperCase();
+  return trimmed === '' ? null : trimmed;
+}
+
+// Color map is explicit per format so the badge is recognizable at a
+// glance. Unknown formats fall through to the neutral secondary
+// variant — still visible, just not color-coded.
+const FORMAT_CLASSES: Record<string, string> = {
+  EPUB: 'bg-emerald-600 text-white border-transparent',
+  PDF:  'bg-red-600 text-white border-transparent',
+  CBZ:  'bg-indigo-600 text-white border-transparent',
+  CBR:  'bg-indigo-600 text-white border-transparent',
+  MOBI: 'bg-amber-600 text-white border-transparent',
+  AZW3: 'bg-amber-600 text-white border-transparent',
+  FB2:  'bg-sky-600 text-white border-transparent',
+  TXT:  'bg-slate-600 text-white border-transparent',
+};
+
+function FormatBadge({ format, size }: { format: string; size: CoverSize }) {
+  const cls = FORMAT_CLASSES[format];
+  // Smaller sizes get a tighter pill so it doesn't crowd the art.
+  const compact = size === 'xs' || size === 'sm';
+  return (
+    <Badge
+      aria-label={`format ${format}`}
+      className={cn(
+        'absolute top-1.5 left-1.5 uppercase tracking-wide',
+        compact ? 'h-4 px-1.5 text-[9px]' : 'h-5 px-2 text-[10px]',
+        cls,
+      )}
+      variant={cls ? 'default' : 'secondary'}
+    >
+      {format}
+    </Badge>
   );
 }
 

@@ -1,11 +1,9 @@
 import type { ReactNode } from 'react';
 
-import { Icon } from '@/components/Icon';
 import {
   Avatar as ShadcnAvatar,
   AvatarFallback,
 } from '@/components/ui/avatar';
-import { Button } from '@/components/ui/button';
 import {
   Select as ShadcnSelect,
   SelectContent,
@@ -124,47 +122,6 @@ export function DefRow({ label, value }: { label: string; value: ReactNode }) {
       <div style={{ fontSize: 13.5, flex: 1, minWidth: 0, wordBreak: 'break-word' }}>
         {value}
       </div>
-    </div>
-  );
-}
-
-export function Notice({
-  kind,
-  children,
-  onClose,
-}: {
-  kind: 'ok' | 'err';
-  children: ReactNode;
-  onClose?: () => void;
-}) {
-  const accent = kind === 'ok' ? 'oklch(0.58 0.12 140)' : 'var(--color-accent-ink)';
-  return (
-    <div
-      style={{
-        padding: '10px 14px',
-        border: `1px solid ${accent}`,
-        background: 'var(--color-paper-0)',
-        color: accent,
-        borderRadius: 2,
-        fontSize: 13,
-        marginBottom: 20,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-      }}
-    >
-      <span style={{ flex: 1 }}>{children}</span>
-      {onClose && (
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          onClick={onClose}
-          aria-label="Dismiss"
-        >
-          <Icon name="close" size={11} />
-        </Button>
-      )}
     </div>
   );
 }

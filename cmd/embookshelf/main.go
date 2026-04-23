@@ -97,6 +97,7 @@ func main() {
 	statsRepo := repo.NewStatsRepo(pool)
 	readingSessionRepo := repo.NewReadingSessionRepo(pool)
 	deviceRepo := repo.NewDeviceRepo(pool)
+	appSettingsRepo := repo.NewAppSettingsRepo(pool)
 
 	// SSE hub — shared between services that broadcast and the handler that serves /events.
 	hub := sse.NewHub()
@@ -108,7 +109,7 @@ func main() {
 	libSvc := service.NewLibraryService(libRepo)
 	shelfSvc := service.NewShelfService(shelfRepo)
 	authSvc := service.NewAuthService(userRepo, sessionRepo)
-	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, covers, hub)
+	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, appSettingsRepo, covers, hub)
 	progressSvc := service.NewProgressService(progressRepo, readingSessionRepo)
 	annotationSvc := service.NewAnnotationService(annotationRepo)
 	statsSvc := service.NewStatsService(statsRepo)
@@ -153,9 +154,11 @@ func main() {
 	// without a restart. Seed empty rows on first boot, and back-fill
 	// the generic-OIDC row from the legacy OIDC_* env vars when the
 	// DB is still empty (migration aid for existing deployments).
-	appSettingsRepo := repo.NewAppSettingsRepo(pool)
 	if err := appSettingsRepo.SeedOIDCIfAbsent(ctx); err != nil {
 		slog.Warn("seed oidc settings", "err", err)
+	}
+	if err := appSettingsRepo.SeedDefaultNamingPatternIfAbsent(ctx); err != nil {
+		slog.Warn("seed default naming pattern", "err", err)
 	}
 	if cfg.HasOIDCEnvSeed() {
 		existing, err := appSettingsRepo.GetGenericOIDC(ctx)

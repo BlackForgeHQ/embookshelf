@@ -15,12 +15,19 @@ import (
 // and toggle them independently. Shared knobs (force-only mode,
 // auto-provisioning policy) live at the top level.
 const (
-	SettingOIDCGeneric       = "OIDC_GENERIC"
-	SettingOIDCGoogle        = "OIDC_GOOGLE"
-	SettingOIDCGitHub        = "OIDC_GITHUB"
-	SettingOIDCAutoProvision = "OIDC_AUTO_PROVISION_DETAILS"
-	SettingOIDCForceOnlyMode = "OIDC_FORCE_ONLY_MODE"
+	SettingOIDCGeneric          = "OIDC_GENERIC"
+	SettingOIDCGoogle           = "OIDC_GOOGLE"
+	SettingOIDCGitHub           = "OIDC_GITHUB"
+	SettingOIDCAutoProvision    = "OIDC_AUTO_PROVISION_DETAILS"
+	SettingOIDCForceOnlyMode    = "OIDC_FORCE_ONLY_MODE"
+	SettingDefaultNamingPattern = "DEFAULT_FILE_NAMING_PATTERN"
 )
+
+// DefaultFileNamingPatternValue is the pattern used when neither the
+// library nor the instance admin set one. Keeps a reasonable catalog
+// shape out of the box; admins can override at /settings → File
+// Naming Patterns.
+const DefaultFileNamingPatternValue = "{title}"
 
 // Provider slugs used on the wire (URL path, state cache, login page).
 const (
@@ -249,6 +256,53 @@ func (r *AppSettingsRepo) SetOIDCAutoProvision(ctx context.Context, ap OIDCAutoP
 		return err
 	}
 	return r.SetRaw(ctx, SettingOIDCAutoProvision, b)
+}
+
+// GetDefaultNamingPattern returns the instance-wide fallback pattern.
+// Empty string means "keep the original filename" on approval. Callers
+// use GetDefaultNamingPatternOr when they want the hardcoded default
+// to apply when the row is still empty.
+func (r *AppSettingsRepo) GetDefaultNamingPattern(ctx context.Context) (string, error) {
+	raw, err := r.GetRaw(ctx, SettingDefaultNamingPattern)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return "", nil
+		}
+		return "", err
+	}
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "", err
+	}
+	return v, nil
+}
+
+// SetDefaultNamingPattern upserts the instance-wide pattern. Passing
+// an empty string stores "" (explicit "no pattern", which makes
+// fallback keep the original filename).
+func (r *AppSettingsRepo) SetDefaultNamingPattern(ctx context.Context, pattern string) error {
+	pattern = strings.TrimSpace(pattern)
+	b, err := json.Marshal(pattern)
+	if err != nil {
+		return err
+	}
+	return r.SetRaw(ctx, SettingDefaultNamingPattern, b)
+}
+
+// SeedDefaultNamingPatternIfAbsent writes the built-in pattern on
+// first boot so the admin settings UI has something to show. Returning
+// the error lets startup proceed; a missing row is non-fatal.
+func (r *AppSettingsRepo) SeedDefaultNamingPatternIfAbsent(ctx context.Context) error {
+	if _, err := r.GetRaw(ctx, SettingDefaultNamingPattern); err == nil {
+		return nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	b, err := json.Marshal(DefaultFileNamingPatternValue)
+	if err != nil {
+		return err
+	}
+	return r.SetRaw(ctx, SettingDefaultNamingPattern, b)
 }
 
 // SeedOIDCIfAbsent writes defaults for any OIDC setting still missing

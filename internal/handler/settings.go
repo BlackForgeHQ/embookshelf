@@ -301,6 +301,58 @@ func sampleBookInput() pattern.Input {
 	}
 }
 
+type updateDefaultNamingPatternReq struct {
+	// Pointer so clients can explicitly PUT {"pattern": null} to clear.
+	// An empty string also clears; both produce "" in the DB.
+	Pattern *string `json:"pattern"`
+}
+
+// SettingsDefaultNamingPatternGet returns the instance-wide default
+// file-naming pattern. Empty string means "no default — libraries that
+// don't override fall back to the original filename on approval".
+func (h *Handler) SettingsDefaultNamingPatternGet(c *gin.Context) {
+	pattern, err := h.appSettings.GetDefaultNamingPattern(c.Request.Context())
+	if err != nil {
+		writeServerError(c, "settings default naming pattern get", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"pattern": pattern})
+}
+
+// SettingsDefaultNamingPatternUpdate upserts the instance-wide default.
+// Validates by round-tripping through the resolver so an unterminated
+// block fails on save rather than silently being kept as an unused
+// fallback.
+func (h *Handler) SettingsDefaultNamingPatternUpdate(c *gin.Context) {
+	var body updateDefaultNamingPatternReq
+	if err := c.ShouldBindJSON(&body); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid json")
+		return
+	}
+	value := ""
+	if body.Pattern != nil {
+		value = strings.TrimSpace(*body.Pattern)
+	}
+	// A blank value is always allowed ("no default"). A non-blank value
+	// must parse — the resolver is forgiving at runtime but we want the
+	// admin to know about a typo now rather than on the next approval.
+	if value != "" {
+		sample := sampleBookInput()
+		if sample.CurrentFilename == "" {
+			sample.CurrentFilename = "sample." + firstNonEmpty(sample.Extension, "epub")
+		}
+		if out := pattern.Preview(value, sample); out == "" {
+			writeError(c, http.StatusBadRequest, "pattern did not resolve to a non-empty path")
+			return
+		}
+	}
+	if err := h.appSettings.SetDefaultNamingPattern(c.Request.Context(), value); err != nil {
+		writeServerError(c, "settings default naming pattern set", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"pattern": value})
+}
+
 // SettingsLibraryRescan enqueues a library.scan job for a library's
 // single filesystem root. Actual work runs in the river worker
 // (internal/task); the handler returns immediately with 202 so the UI

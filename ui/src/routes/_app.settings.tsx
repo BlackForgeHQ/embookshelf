@@ -5,6 +5,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
+import { toast } from 'sonner';
 
 import {
   fetchMe,
@@ -45,13 +46,13 @@ import {
   type ProviderSlug,
 } from '@/api/oidc';
 import { Icon } from '@/components/Icon';
+import { NamingPatternsPanel } from '@/components/NamingPatternsPanel';
 import {
   AdminGate,
   Avatar,
   Card,
   DefRow,
   Field,
-  Notice,
   Select,
   SettingsShell,
 } from '@/components/SettingsShared';
@@ -75,6 +76,7 @@ export const Route = createFileRoute('/_app/settings')({
 
 type SectionKey =
   | 'libraries'
+  | 'patterns'
   | 'providers'
   | 'email'
   | 'users'
@@ -86,6 +88,7 @@ type SectionSpec = { key: SectionKey; label: string; adminOnly?: boolean };
 
 const SECTIONS: SectionSpec[] = [
   { key: 'libraries', label: 'Libraries', adminOnly: true },
+  { key: 'patterns', label: 'File naming patterns', adminOnly: true },
   { key: 'providers', label: 'Metadata providers', adminOnly: true },
   { key: 'email', label: 'Email delivery', adminOnly: true },
   { key: 'users', label: 'Users & roles', adminOnly: true },
@@ -109,6 +112,7 @@ function Admin() {
         isAdmin={isAdmin}
       >
         {active === 'libraries' && <LibrariesPanel isAdmin={isAdmin} />}
+        {active === 'patterns' && <NamingPatternsPanel isAdmin={isAdmin} />}
         {active === 'providers' && <ProvidersPanel isAdmin={isAdmin} />}
         {active === 'email' && <EmailPanel isAdmin={isAdmin} />}
         {active === 'users' && <UsersPanel isAdmin={isAdmin} me={me.data ?? null} />}
@@ -141,21 +145,20 @@ function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
 
   const rescanMut = useMutation({
     mutationFn: (id: string) => rescanLibrary(id),
-    onSuccess: invalidate,
-  });
-  const patternMut = useMutation({
-    mutationFn: (args: { id: string; pattern: string | null }) =>
-      updateLibraryNamingPattern(args.id, args.pattern),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      toast.success('Rescan started.');
+    },
+    onError: (e) => toast.error((e as unknown as ApiError).message),
   });
   const deleteLibraryMut = useMutation({
     mutationFn: (id: string) => deleteLibrary(id),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      toast.success('Library removed.');
+    },
+    onError: (e) => toast.error((e as unknown as ApiError).message),
   });
-
-  const error = (rescanMut.error ?? patternMut.error ?? deleteLibraryMut.error) as
-    | ApiError
-    | null;
 
   if (!isAdmin) return <AdminGate label="Libraries" />;
 
@@ -177,8 +180,6 @@ function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
         through the BookDrop review queue.
       </p>
 
-      {error && <Notice kind="err">{error.message}</Notice>}
-
       {libraries.isLoading && (
         <div className="t-small" style={{ fontStyle: 'italic' }}>Loading libraries…</div>
       )}
@@ -188,10 +189,8 @@ function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
           key={lib.id}
           library={lib}
           rescanBusy={rescanMut.isPending}
-          patternBusy={patternMut.isPending}
           deleteBusy={deleteLibraryMut.isPending}
           onRescan={() => rescanMut.mutate(lib.id)}
-          onSavePattern={(pattern) => patternMut.mutate({ id: lib.id, pattern })}
           onDeleteLibrary={() => deleteLibraryMut.mutate(lib.id)}
         />
       ))}
@@ -255,7 +254,11 @@ function LibraryCreatorDialog({
   const createMut = useMutation({
     mutationFn: () =>
       createLibrary({ name: trimmedName, path: trimmedPath, scan: scanOnCreate }),
-    onSuccess: () => onCreated(),
+    onSuccess: () => {
+      toast.success('Library created.');
+      onCreated();
+    },
+    onError: (e) => toast.error((e as unknown as ApiError).message),
   });
 
   // Prescan is valid only for the exact path the user is looking at.
@@ -263,7 +266,6 @@ function LibraryCreatorDialog({
   const prescanFresh = prescan !== null && prescan.forPath === trimmedPath;
 
   const submitDisabled = !nameValid || !pathValid || createMut.isPending;
-  const createError = createMut.error as ApiError | null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -367,7 +369,6 @@ function LibraryCreatorDialog({
             <span className="t-small">Scan folder immediately after creating</span>
           </label>
 
-          {createError && <Notice kind="err">{createError.message}</Notice>}
         </div>
 
         <DialogFooter>
@@ -395,20 +396,16 @@ function LibraryCreatorDialog({
 type LibraryCardProps = {
   library: SettingsLibrary;
   rescanBusy: boolean;
-  patternBusy: boolean;
   deleteBusy: boolean;
   onRescan: () => void;
-  onSavePattern: (pattern: string | null) => void;
   onDeleteLibrary: () => void;
 };
 
 function LibraryCard({
   library,
   rescanBusy,
-  patternBusy,
   deleteBusy,
   onRescan,
-  onSavePattern,
   onDeleteLibrary,
 }: LibraryCardProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -494,11 +491,10 @@ function LibraryCard({
         </Button>
       </div>
 
-      <NamingPatternEditor
-        library={library}
-        busy={patternBusy}
-        onSave={onSavePattern}
-      />
+      <p className="t-small" style={{ fontStyle: 'italic', marginTop: 0 }}>
+        File naming patterns are managed in{' '}
+        <strong>File naming patterns</strong>.
+      </p>
     </div>
   );
 }
@@ -578,123 +574,6 @@ function DeleteLibraryDialog({
   );
 }
 
-// NamingPatternEditor is the per-library pattern field from spec §9.2.
-// Edits are local until Save; a live preview hits the backend resolver so
-// admins see the exact path a book would land at before committing.
-function NamingPatternEditor({
-  library,
-  busy,
-  onSave,
-}: {
-  library: SettingsLibrary;
-  busy: boolean;
-  onSave: (pattern: string | null) => void;
-}) {
-  const saved = library.fileNamingPattern ?? '';
-  const [draft, setDraft] = useState(saved);
-
-  // Resync when the server value changes (another tab saved, or a PATCH
-  // completed and invalidated the query).
-  useEffect(() => {
-    setDraft(saved);
-  }, [saved]);
-
-  const trimmed = draft.trim();
-  const dirty = trimmed !== saved;
-
-  // Preview fires after a short idle — avoids hammering the endpoint
-  // while the admin is typing.
-  const [debounced, setDebounced] = useState(trimmed);
-  useEffect(() => {
-    const handle = window.setTimeout(() => setDebounced(trimmed), 250);
-    return () => window.clearTimeout(handle);
-  }, [trimmed]);
-
-  const preview = useQuery({
-    queryKey: ['settings', 'libraries', library.id, 'pattern-preview', debounced],
-    queryFn: () => previewNamingPattern(debounced),
-    enabled: debounced !== '',
-    staleTime: 60_000,
-  });
-
-  return (
-    <div
-      style={{
-        borderTop: '1px dashed var(--color-rule-soft)',
-        marginTop: 14,
-        paddingTop: 14,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 6 }}>
-        <span className="t-label">File naming pattern</span>
-        <span
-          className="t-micro"
-          style={{
-            color: library.fileNamingPattern
-              ? 'var(--color-accent-ink)'
-              : 'var(--color-ink-3)',
-          }}
-        >
-          {library.fileNamingPattern ? 'custom' : 'default'}
-        </span>
-      </div>
-      <p className="t-small" style={{ marginBottom: 8, fontStyle: 'italic' }}>
-        Applied when you approve a book from BookDrop. Blank keeps the
-        original filename on disk.
-      </p>
-
-      <Input
-        placeholder="{authors}/<{series}/><{seriesIndex}. >{title}/{title}< - {authors}>< ({year})>"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        className="mono text-[12.5px]"
-      />
-
-      {debounced !== '' && (
-        <div
-          className="mono"
-          style={{
-            marginTop: 8,
-            padding: '8px 12px',
-            background: 'var(--color-paper-2)',
-            borderRadius: 2,
-            fontSize: 12,
-            color: 'var(--color-ink-2)',
-            wordBreak: 'break-all',
-          }}
-        >
-          <span className="t-micro" style={{ marginRight: 8 }}>Preview</span>
-          {preview.data ?? (preview.isLoading ? 'Resolving…' : '')}
-        </div>
-      )}
-
-      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => onSave(trimmed === '' ? null : trimmed)}
-          disabled={busy || !dirty}
-        >
-          {busy ? 'Saving…' : 'Save pattern'}
-        </Button>
-        {library.fileNamingPattern && (
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => {
-              setDraft('');
-              onSave(null);
-            }}
-            disabled={busy}
-          >
-            Clear
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Metadata providers (read-only — configured via env var)
 // ---------------------------------------------------------------------------
@@ -723,16 +602,18 @@ function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
       }
       return { prev };
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       if (ctx?.prev) {
         queryClient.setQueryData(providerSettingsQueryKey, ctx.prev);
       }
+      toast.error((err as unknown as ApiError).message);
     },
-    onSuccess: (providers) => {
+    onSuccess: (providers, { enabled }) => {
       // Server returns the canonical post-update list; take it wholesale.
       queryClient.setQueryData(providerSettingsQueryKey, providers);
       // Also refresh the instance blob so About / status bar agree.
       queryClient.invalidateQueries({ queryKey: instanceInfoQueryKey });
+      toast.success(enabled ? 'Provider enabled.' : 'Provider disabled.');
     },
   });
 
@@ -740,7 +621,6 @@ function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
 
   const providers = providersQuery.data ?? [];
   const enabledCount = providers.filter((p) => p.enabled).length;
-  const error = toggleMut.error as unknown as ApiError | null;
 
   return (
     <>
@@ -751,10 +631,6 @@ function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
         <span className="mono">ENRICHMENT_PROVIDERS</span>; after that, this
         page is authoritative and changes take effect on the next search.
       </p>
-
-      {error && (
-        <Notice kind="err">{error.message}</Notice>
-      )}
 
       <div className="t-label" style={{ marginBottom: 10 }}>
         {providersQuery.isLoading
@@ -856,7 +732,6 @@ function UsersPanel({ isAdmin, me }: { isAdmin: boolean; me: AuthUser | null }) 
     password: '',
     role: 'user' as 'user' | 'admin',
   });
-  const [notice, setNotice] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: settingsUsersQueryKey });
 
@@ -866,22 +741,30 @@ function UsersPanel({ isAdmin, me }: { isAdmin: boolean; me: AuthUser | null }) 
       invalidate();
       setCreateOpen(false);
       setDraft({ email: '', name: '', password: '', role: 'user' });
-      setNotice({ kind: 'ok', msg: 'User created.' });
+      toast.success('User created.');
     },
-    onError: (e) => setNotice({ kind: 'err', msg: (e as unknown as ApiError).message }),
+    onError: (e) => toast.error((e as unknown as ApiError).message),
   });
 
   const roleMut = useMutation({
     mutationFn: ({ id, role }: { id: string; role: 'admin' | 'user' }) =>
       updateSettingsUserRole(id, role),
-    onSuccess: invalidate,
-    onError: (e) => setNotice({ kind: 'err', msg: (e as unknown as ApiError).message }),
+    onSuccess: (_data, { role }) => {
+      invalidate();
+      toast.success(
+        role === 'admin' ? 'User promoted to admin.' : 'User demoted to regular user.',
+      );
+    },
+    onError: (e) => toast.error((e as unknown as ApiError).message),
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteSettingsUser(id),
-    onSuccess: invalidate,
-    onError: (e) => setNotice({ kind: 'err', msg: (e as unknown as ApiError).message }),
+    onSuccess: () => {
+      invalidate();
+      toast.success('User deleted.');
+    },
+    onError: (e) => toast.error((e as unknown as ApiError).message),
   });
 
   if (!isAdmin) return <AdminGate label="Users & roles" />;
@@ -894,10 +777,7 @@ function UsersPanel({ isAdmin, me }: { isAdmin: boolean; me: AuthUser | null }) 
           type="button"
           variant="outline"
           size="sm"
-          onClick={() => {
-            setCreateOpen((v) => !v);
-            setNotice(null);
-          }}
+          onClick={() => setCreateOpen((v) => !v)}
         >
           <Icon name="plus" size={13} /> New user
         </Button>
@@ -906,8 +786,6 @@ function UsersPanel({ isAdmin, me }: { isAdmin: boolean; me: AuthUser | null }) 
         Admins see every settings pane; regular users see only Account,
         Reading preferences, Device sync, and About.
       </p>
-
-      {notice && <Notice kind={notice.kind} onClose={() => setNotice(null)}>{notice.msg}</Notice>}
 
       {createOpen && (
         <Card>
@@ -1070,7 +948,9 @@ function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
       setDraft(data);
       setSecretTouched({ google: false, github: false, generic: false });
       queryClient.invalidateQueries({ queryKey: ['oidc-config'] });
+      toast.success('OIDC settings saved.');
     },
+    onError: (e) => toast.error((e as unknown as ApiError).message),
   });
 
   if (!isAdmin) return <AdminGate label="OIDC / SSO" />;
@@ -1083,7 +963,6 @@ function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
     );
   }
 
-  const saveError = saveMut.error as unknown as ApiError | null;
   const someEnabled =
     (draft.google.enabled && draft.google.clientId !== '' && (draft.google.clientSecretSet || (draft.google.clientSecret ?? '') !== '')) ||
     (draft.github.enabled && draft.github.clientId !== '' && (draft.github.clientSecretSet || (draft.github.clientSecret ?? '') !== '')) ||
@@ -1098,8 +977,6 @@ function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
         the login page shows a button for each one you turn on. Changes take
         effect on the next login, no restart required.
       </p>
-
-      {saveError && <Notice kind="err">{saveError.message}</Notice>}
 
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
@@ -1243,7 +1120,15 @@ function PresetProviderPanel({
           clientSecret: value.clientSecret ?? '',
         },
       }),
-    onSuccess: (res) => setTestResult(res),
+    onSuccess: (res) => {
+      setTestResult(res);
+      if (res.success) {
+        toast.success('All critical checks passed.');
+      } else {
+        toast.error('One or more checks failed.');
+      }
+    },
+    onError: (e) => toast.error((e as unknown as ApiError).message),
   });
 
   return (
@@ -1382,7 +1267,15 @@ function GenericOidcPanel({
           claimMapping: value.claimMapping,
         },
       }),
-    onSuccess: (res) => setTestResult(res),
+    onSuccess: (res) => {
+      setTestResult(res);
+      if (res.success) {
+        toast.success('All critical checks passed.');
+      } else {
+        toast.error('One or more checks failed.');
+      }
+    },
+    onError: (e) => toast.error((e as unknown as ApiError).message),
   });
 
   const canEnable =
@@ -1524,9 +1417,6 @@ function GenericOidcPanel({
 function TestResultBlock({ result }: { result: OidcTestResult }) {
   return (
     <div style={{ marginTop: 14 }}>
-      <Notice kind={result.success ? 'ok' : 'err'}>
-        {result.success ? 'All critical checks passed.' : 'One or more checks failed.'}
-      </Notice>
       <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
         {result.checks.map((c: OidcTestCheck, i: number) => (
           <div

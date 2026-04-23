@@ -70,16 +70,20 @@ const libCols = `
 // record. `slug` is UNIQUE (000001) and `path` is UNIQUE (000018) — a
 // collision on either surfaces as a typed sentinel (ErrLibraryNameTaken
 // or ErrLibraryPathTaken) so the handler can map it to a 409.
+//
+// RETURNING selects every column scanLibrary expects, with a literal
+// 0 for book_count (a brand-new library has no books, and referencing
+// `libraries l` alongside a modifying CTE wouldn't see the insert —
+// both share one snapshot per the PG manual).
 func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug, path string) (model.Library, error) {
 	row := r.pool.QueryRow(ctx, `
-		WITH inserted AS (
-			INSERT INTO libraries (name, slug, path)
-			VALUES ($1, $2, $3)
-			RETURNING id
-		)
-		SELECT `+libCols+`
-		FROM libraries l
-		WHERE l.id = (SELECT id FROM inserted)
+		INSERT INTO libraries (name, slug, path)
+		VALUES ($1, $2, $3)
+		RETURNING
+			id, name, slug, path,
+			last_scanned_at, file_count, discovered_count,
+			file_naming_pattern, created_at,
+			0 AS book_count
 	`, name, slug, path)
 	l, err := scanLibrary(row)
 	if err != nil {

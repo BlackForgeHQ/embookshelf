@@ -108,6 +108,35 @@ export async function previewNamingPattern(
   return resolved;
 }
 
+// fetchDefaultNamingPattern returns the instance-wide default pattern
+// used as a fallback when a library does not set its own. Empty string
+// means "keep the original filename on approval".
+export async function fetchDefaultNamingPattern(): Promise<string> {
+  const { pattern } = await api<{ pattern: string }>(
+    '/api/v1/settings/libraries/pattern/default',
+  );
+  return pattern;
+}
+
+export async function updateDefaultNamingPattern(
+  pattern: string,
+): Promise<string> {
+  const { pattern: saved } = await api<{ pattern: string }>(
+    '/api/v1/settings/libraries/pattern/default',
+    {
+      method: 'PUT',
+      body: JSON.stringify({ pattern }),
+    },
+  );
+  return saved;
+}
+
+export const defaultNamingPatternQueryKey = [
+  'settings',
+  'libraries',
+  'default-pattern',
+] as const;
+
 export const settingsLibrariesQueryKey = ['settings', 'libraries'] as const;
 
 // --- Instance info ---------------------------------------------------------

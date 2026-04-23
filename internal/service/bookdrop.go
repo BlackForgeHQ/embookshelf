@@ -23,23 +23,26 @@ import (
 // processor results). All state transitions go through here so SSE events,
 // cover-file side effects, and the state machine stay in one place.
 type BookDropService struct {
-	bdrop  *repo.BookDropRepo
-	libs   *repo.LibraryRepo
-	covers *coverstore.Store
-	hub    *sse.Hub
+	bdrop    *repo.BookDropRepo
+	libs     *repo.LibraryRepo
+	settings *repo.AppSettingsRepo
+	covers   *coverstore.Store
+	hub      *sse.Hub
 }
 
 func NewBookDropService(
 	bdrop *repo.BookDropRepo,
 	libs *repo.LibraryRepo,
+	settings *repo.AppSettingsRepo,
 	covers *coverstore.Store,
 	hub *sse.Hub,
 ) *BookDropService {
 	return &BookDropService{
-		bdrop:  bdrop,
-		libs:   libs,
-		covers: covers,
-		hub:    hub,
+		bdrop:    bdrop,
+		libs:     libs,
+		settings: settings,
+		covers:   covers,
+		hub:      hub,
 	}
 }
 
@@ -242,9 +245,23 @@ func (s *BookDropService) applyNamingPattern(
 		Extension:       ext,
 		CurrentFilename: filepath.Base(item.Path),
 	}
-	var resolved string
+	// Pattern precedence: library override → instance default → no pattern.
+	// Settings lookup is best-effort; a failure keeps the original filename
+	// rather than wedging an approval on a transient DB blip.
+	tmpl := ""
 	if lib.FileNamingPattern != nil {
-		resolved = pattern.Resolve(*lib.FileNamingPattern, in)
+		tmpl = strings.TrimSpace(*lib.FileNamingPattern)
+	}
+	if tmpl == "" && s.settings != nil {
+		if def, err := s.settings.GetDefaultNamingPattern(ctx); err != nil {
+			slog.Warn("bookdrop: read default naming pattern", "err", err)
+		} else {
+			tmpl = strings.TrimSpace(def)
+		}
+	}
+	var resolved string
+	if tmpl != "" {
+		resolved = pattern.Resolve(tmpl, in)
 	}
 	// Fallback to the original filename when no pattern is set or the
 	// resolver returned empty — books still land under the library

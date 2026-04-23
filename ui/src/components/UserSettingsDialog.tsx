@@ -11,6 +11,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
+import { toast } from 'sonner';
 
 import {
   changePassword,
@@ -33,7 +34,6 @@ import {
   Avatar,
   Card,
   Field,
-  Notice,
   Select,
   Toggle,
 } from '@/components/SettingsShared';
@@ -203,16 +203,15 @@ function AccountPanel() {
   const [pwCurrent, setPwCurrent] = useState('');
   const [pwNext, setPwNext] = useState('');
   const [pwConfirm, setPwConfirm] = useState('');
-  const [notice, setNotice] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
 
   const nameMut = useMutation({
     mutationFn: (next: string) => updateDisplayName(next),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: meQueryKey });
       setEditing(false);
-      setNotice({ kind: 'ok', msg: 'Display name updated.' });
+      toast.success('Display name updated.');
     },
-    onError: (e) => setNotice({ kind: 'err', msg: (e as unknown as ApiError).message }),
+    onError: (e) => toast.error((e as unknown as ApiError).message),
   });
 
   const pwMut = useMutation({
@@ -223,9 +222,9 @@ function AccountPanel() {
       setPwCurrent('');
       setPwNext('');
       setPwConfirm('');
-      setNotice({ kind: 'ok', msg: 'Password updated.' });
+      toast.success('Password updated.');
     },
-    onError: (e) => setNotice({ kind: 'err', msg: (e as unknown as ApiError).message }),
+    onError: (e) => toast.error((e as unknown as ApiError).message),
   });
 
   const joined = user?.createdAt
@@ -239,8 +238,6 @@ function AccountPanel() {
   return (
     <>
       <h2 className="t-h2" style={{ marginBottom: 24 }}>Account</h2>
-
-      {notice && <Notice kind={notice.kind} onClose={() => setNotice(null)}>{notice.msg}</Notice>}
 
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -290,7 +287,6 @@ function AccountPanel() {
                 onClick={() => {
                   setNameDraft(user?.name ?? '');
                   setEditing(true);
-                  setNotice(null);
                 }}
               >
                 Edit name
@@ -298,10 +294,7 @@ function AccountPanel() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => {
-                  setPwOpen((v) => !v);
-                  setNotice(null);
-                }}
+                onClick={() => setPwOpen((v) => !v)}
               >
                 Change password
               </Button>
@@ -314,7 +307,7 @@ function AccountPanel() {
             onSubmit={(e) => {
               e.preventDefault();
               if (pwNext !== pwConfirm) {
-                setNotice({ kind: 'err', msg: 'New passwords do not match.' });
+                toast.error('New passwords do not match.');
                 return;
               }
               pwMut.mutate({ current: pwCurrent, next: pwNext });
@@ -517,12 +510,14 @@ function DevicesPanel() {
   });
 
   const [adding, setAdding] = useState<DeviceKind | null>(null);
-  const [notice, setNotice] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteDevice(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: devicesQueryKey }),
-    onError: (e) => setNotice({ kind: 'err', msg: (e as unknown as ApiError).message }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: devicesQueryKey });
+      toast.success('Device removed.');
+    },
+    onError: (e) => toast.error((e as unknown as ApiError).message),
   });
 
   const [copied, setCopied] = useState(false);
@@ -554,8 +549,6 @@ function DevicesPanel() {
         Any OPDS-aware reader can also pull the catalog below directly.
       </p>
 
-      {notice && <Notice kind={notice.kind} onClose={() => setNotice(null)}>{notice.msg}</Notice>}
-
       {adding && (
         <AddDeviceForm
           kind={adding}
@@ -563,7 +556,7 @@ function DevicesPanel() {
           onPaired={() => {
             queryClient.invalidateQueries({ queryKey: devicesQueryKey });
             setAdding(null);
-            setNotice({ kind: 'ok', msg: 'Device paired.' });
+            toast.success('Device paired.');
           }}
         />
       )}
@@ -707,7 +700,6 @@ function AddDeviceForm({
 }) {
   const [name, setName] = useState(DEVICE_KIND_LABELS[kind]);
   const [code, setCode] = useState('');
-  const [err, setErr] = useState<string | null>(null);
 
   const pairMut = useMutation({
     mutationFn: () =>
@@ -717,7 +709,7 @@ function AddDeviceForm({
         params: { code: code.trim() },
       }),
     onSuccess: () => onPaired(),
-    onError: (e) => setErr((e as unknown as ApiError).message),
+    onError: (e) => toast.error((e as unknown as ApiError).message),
   });
 
   return (
@@ -742,7 +734,6 @@ function AddDeviceForm({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          setErr(null);
           pairMut.mutate();
         }}
         style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
@@ -765,8 +756,6 @@ function AddDeviceForm({
             required
           />
         </Field>
-
-        {err && <Notice kind="err">{err}</Notice>}
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <Button type="button" variant="ghost" size="sm" onClick={onClose}>

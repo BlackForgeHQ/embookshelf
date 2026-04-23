@@ -429,11 +429,18 @@ func applyModifier(name, mod, raw string, in Input) string {
 		}
 		return lastNameFirst(head)
 	case "initial":
-		head := raw
-		if name == "authors" && len(in.Authors) > 0 {
-			head = strings.TrimSpace(in.Authors[0])
+		// Authors use the last name's initial ("Patrick Rothfuss" → "R"),
+		// which is the shelving convention. Every other placeholder takes
+		// the first rune of the value so {title:initial} == "T" for
+		// "The Name of the Wind" — matches the docs example.
+		if name == "authors" {
+			head := raw
+			if len(in.Authors) > 0 {
+				head = strings.TrimSpace(in.Authors[0])
+			}
+			return initial(head)
 		}
-		return initial(head)
+		return firstRuneUpper(raw)
 	case "upper":
 		return strings.ToUpper(raw)
 	case "lower":
@@ -516,6 +523,21 @@ func lastNameFirst(name string) string {
 		return name
 	}
 	return last + ", " + rest
+}
+
+// firstRuneUpper returns the first rune of s, uppercased. Empty input
+// → empty output. Used for :initial on non-author placeholders so
+// {title:initial} is the title's first letter.
+func firstRuneUpper(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	r, size := utf8.DecodeRuneInString(s)
+	if size == 0 {
+		return ""
+	}
+	return strings.ToUpper(string(r))
 }
 
 // initial returns the first rune of the last name, uppercased.
