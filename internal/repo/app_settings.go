@@ -21,6 +21,10 @@ const (
 	SettingOIDCAutoProvision    = "OIDC_AUTO_PROVISION_DETAILS"
 	SettingOIDCForceOnlyMode    = "OIDC_FORCE_ONLY_MODE"
 	SettingDefaultNamingPattern = "DEFAULT_FILE_NAMING_PATTERN"
+	// SettingMetadataAutoEnrich, when true, triggers the enrichment
+	// service on bookdrop approval so newly imported books land with
+	// provider metadata already applied. Default false — opt-in.
+	SettingMetadataAutoEnrich = "METADATA_AUTO_ENRICH"
 )
 
 // DefaultFileNamingPatternValue is the pattern used when neither the

@@ -70,6 +70,42 @@ type Book struct {
 	// ResumeCFI is the current user's last-known reading position (EPUB CFI).
 	// Empty when the user hasn't opened the reader yet.
 	ResumeCFI string
+	// Locks pins individual metadata fields against automatic overwrite.
+	// The apply-metadata flow consults each flag before copying a
+	// candidate value over the stored one; manual PATCHes always write.
+	Locks BookLocks
+}
+
+// BookLocks is the per-field lock set for a book. Each flag corresponds
+// to a `<field>_locked` column on the books table; when set, the
+// apply-metadata flow (provider fan-out → user-selected match → PUT
+// /books/:id/metadata) leaves that field alone even if the candidate
+// carries a value.
+type BookLocks struct {
+	Title       bool
+	Subtitle    bool
+	Author      bool
+	Description bool
+	Publisher   bool
+	Series      bool
+	ISBN        bool
+	ISBN10      bool
+	Language    bool
+	PublishDate bool
+	Genres      bool
+	Moods       bool
+	Tags        bool
+	Pages       bool
+	Cover       bool
+}
+
+// LockFields enumerates the lock flag names accepted on the wire. Used by
+// the toggle-field-locks handler to validate incoming keys and by tests
+// to exhaustively check the serialization map.
+var LockFields = []string{
+	"title", "subtitle", "author", "description", "publisher", "series",
+	"isbn", "isbn10", "language", "publishDate", "genres", "moods",
+	"tags", "pages", "cover",
 }
 
 // Annotation is a single highlight or margin note attached to a book by a

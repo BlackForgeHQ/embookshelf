@@ -17,6 +17,7 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/coverstore"
+	"github.com/blackforge/embookshelf/internal/crypto"
 	"github.com/blackforge/embookshelf/internal/handler"
 	"github.com/blackforge/embookshelf/internal/ingest"
 	"github.com/blackforge/embookshelf/internal/migrator"
@@ -143,7 +144,31 @@ func main() {
 	if err := providerSettingsRepo.SeedIfAbsent(ctx, defaults); err != nil {
 		slog.Warn("seed provider settings", "err", err)
 	}
-	enrichSvc := service.NewEnrichmentService(providers, providerSettingsRepo, libRepo, covers)
+	// Build the at-rest cipher for provider secrets. Unset KEK falls
+	// back to passthrough with a loud warning — secrets on disk stay
+	// plaintext but the server still boots. A malformed key is fatal
+	// so admins don't think encryption is on when it isn't.
+	var secretCipher crypto.Cipher
+	if cfg.SecretKey != "" {
+		ac, err := crypto.NewAESGCM(cfg.SecretKey)
+		if err != nil {
+			slog.Error("EMBOOKSHELF_SECRET_KEY invalid — refusing to boot", "err", err)
+			os.Exit(1)
+		}
+		secretCipher = ac
+		slog.Info("secrets encryption enabled (AES-256-GCM)")
+	} else {
+		secretCipher = crypto.Noop{}
+		slog.Warn("EMBOOKSHELF_SECRET_KEY unset — provider secrets stored in plaintext. " +
+			"Set a base64-encoded 32-byte key for at-rest encryption.")
+	}
+	enrichSvc := service.NewEnrichmentService(providers, providerSettingsRepo, libRepo, covers, secretCipher)
+	// Push stored per-provider config (API keys, language, …) into the
+	// running provider instances. Failure here is non-fatal — providers
+	// fall back to their no-config defaults.
+	if err := enrichSvc.LoadConfigs(ctx); err != nil {
+		slog.Warn("load provider configs", "err", err)
+	}
 	deviceSvc := service.NewDeviceService(
 		deviceRepo, libRepo,
 		service.NewRemarkableDriver(),

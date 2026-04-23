@@ -16,6 +16,8 @@ type Info struct {
 var Catalog = []Info{
 	{ID: SourceGoogleBooks, Name: "Google Books", External: true},
 	{ID: SourceOpenLibrary, Name: "Open Library", External: true},
+	{ID: SourceHardcover, Name: "Hardcover", External: true},
+	{ID: SourceGoodReads, Name: "Goodreads", External: true},
 	{ID: SourceAmazon, Name: "Amazon", External: true},
 	{ID: SourceDuckDuckGo, Name: "DuckDuckGo", External: true},
 }

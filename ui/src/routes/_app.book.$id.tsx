@@ -130,13 +130,18 @@ function BookDetail() {
         >
           <Icon name="edit" size={13} /> Edit metadata
         </Button>
-        <Button variant="outline" size="sm">
-          <Icon name="download" size={13} /> Download
+        <Button variant="outline" size="sm" asChild>
+          <a
+            href={`/api/v1/books/${id}/file?download=1`}
+            // `download` hints the browser save-as; the server already
+            // sets Content-Disposition: attachment with the right
+            // filename, so this attribute is mostly belt-and-braces.
+            download
+          >
+            <Icon name="download" size={13} /> Download
+          </a>
         </Button>
         <SendToDeviceButton bookId={id} />
-        <Button variant="ghost" size="icon-sm" aria-label="More">
-          <Icon name="more" size={14} />
-        </Button>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 48, padding: '40px 48px' }}>

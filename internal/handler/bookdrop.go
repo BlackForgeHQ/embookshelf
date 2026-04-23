@@ -167,6 +167,17 @@ func (h *Handler) BookDropApprove(c *gin.Context) {
 		return
 	}
 
+	// Best-effort auto-enrich. A failure here must not block the import —
+	// the admin can always edit metadata after the fact. Skipped entirely
+	// when the instance setting is off.
+	if h.appSettings != nil && h.enrich != nil {
+		if on, err := h.appSettings.GetBool(c.Request.Context(), repo.SettingMetadataAutoEnrich); err == nil && on {
+			if _, err := h.enrich.AutoEnrich(c.Request.Context(), book); err != nil {
+				slog.Warn("auto-enrich on approve", "book", book.ID, "err", err)
+			}
+		}
+	}
+
 	// Re-load through the library service so the response carries the
 	// per-user progress fields + shelf memberships (empty on a fresh import).
 	fresh, err := h.lib.GetBook(c.Request.Context(), userID, book.ID)

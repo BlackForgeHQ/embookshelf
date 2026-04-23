@@ -32,6 +32,12 @@ type Config struct {
 	// anything else that needs an absolute link back to the UI.
 	AppURL string
 
+	// SecretKey is the KEK (base64-encoded 32 bytes) used to encrypt
+	// provider API keys and cookies at rest in provider_settings.
+	// Unset = plaintext storage (dev mode); the server logs a warning
+	// on boot so the fact doesn't silently linger.
+	SecretKey string
+
 	// OIDC seed values. These are applied to app_settings on first
 	// boot only — the DB is authoritative after that so admins can
 	// edit config in the UI without redeploying.
@@ -67,7 +73,8 @@ func Load() (Config, error) {
 		MigrateOnStart:      envBool("MIGRATE_ON_START", true),
 		EnrichmentProviders: envCSV("ENRICHMENT_PROVIDERS", "google_books,open_library,amazon,duckduckgo"),
 
-		AppURL: strings.TrimRight(envStr("APP_URL", ""), "/"),
+		AppURL:    strings.TrimRight(envStr("APP_URL", ""), "/"),
+		SecretKey: envStr("EMBOOKSHELF_SECRET_KEY", ""),
 
 		OIDCIssuerURL:    envStr("OIDC_ISSUER_URL", ""),
 		OIDCClientID:     envStr("OIDC_CLIENT_ID", ""),

@@ -28,7 +28,12 @@ const bookCols = `
 	b.age_rating, b.content_rating, b.pages, b.public_reviews,
 	b.created_at, b.path,
 	b.has_cover, b.cover_mime,
-	COALESCE(ubp.resume_cfi, '') AS resume_cfi
+	COALESCE(ubp.resume_cfi, '') AS resume_cfi,
+	b.title_locked, b.subtitle_locked, b.author_locked,
+	b.description_locked, b.publisher_locked, b.series_locked,
+	b.isbn_locked, b.isbn10_locked, b.language_locked,
+	b.publish_date_locked, b.genres_locked, b.moods_locked,
+	b.tags_locked, b.pages_locked, b.cover_locked
 `
 
 const bookFrom = `
@@ -340,7 +345,12 @@ func (r *LibraryRepo) Create(ctx context.Context, b model.Book) (model.Book, err
 		       b.age_rating, b.content_rating, b.pages, b.public_reviews,
 		       b.created_at, b.path,
 		       b.has_cover, b.cover_mime,
-		       '' AS resume_cfi
+		       '' AS resume_cfi,
+		       b.title_locked, b.subtitle_locked, b.author_locked,
+		       b.description_locked, b.publisher_locked, b.series_locked,
+		       b.isbn_locked, b.isbn10_locked, b.language_locked,
+		       b.publish_date_locked, b.genres_locked, b.moods_locked,
+		       b.tags_locked, b.pages_locked, b.cover_locked
 		FROM inserted b
 	`,
 		b.LibraryID, b.Title, b.Subtitle, b.Author, b.Format, b.Year,
@@ -415,7 +425,11 @@ func (r *LibraryRepo) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// UpdateMetadata applies the user-editable metadata fields for a book.
+// UpdateMetadata applies the user-editable metadata fields for a book,
+// including the per-field lock flags. Manual edits (PATCH /books/:id)
+// flow through here; the apply-metadata path (PUT /books/:id/metadata)
+// also writes via this method after the service has filtered locked
+// fields out of the candidate.
 func (r *LibraryRepo) UpdateMetadata(ctx context.Context, b model.Book) error {
 	if b.Genres == nil {
 		b.Genres = []string{}
@@ -451,8 +465,23 @@ func (r *LibraryRepo) UpdateMetadata(ctx context.Context, b model.Book) error {
 			content_rating = $21,
 			pages          = $22,
 			public_reviews = $23,
+			title_locked          = $24,
+			subtitle_locked       = $25,
+			author_locked         = $26,
+			description_locked    = $27,
+			publisher_locked      = $28,
+			series_locked         = $29,
+			isbn_locked           = $30,
+			isbn10_locked         = $31,
+			language_locked       = $32,
+			publish_date_locked   = $33,
+			genres_locked         = $34,
+			moods_locked          = $35,
+			tags_locked           = $36,
+			pages_locked          = $37,
+			cover_locked          = $38,
 			updated_at     = now()
-		WHERE id = $24 AND deleted_at IS NULL
+		WHERE id = $39 AND deleted_at IS NULL
 	`,
 		b.Title, b.Subtitle, b.Author, b.Format, b.Year,
 		b.PublishDate, b.Language,
@@ -461,6 +490,11 @@ func (r *LibraryRepo) UpdateMetadata(ctx context.Context, b model.Book) error {
 		b.Series, b.SeriesIndex, b.SeriesTotal,
 		b.Genres, b.Moods, b.Tags,
 		b.AgeRating, b.ContentRating, b.Pages, b.PublicReviews,
+		b.Locks.Title, b.Locks.Subtitle, b.Locks.Author,
+		b.Locks.Description, b.Locks.Publisher, b.Locks.Series,
+		b.Locks.ISBN, b.Locks.ISBN10, b.Locks.Language,
+		b.Locks.PublishDate, b.Locks.Genres, b.Locks.Moods,
+		b.Locks.Tags, b.Locks.Pages, b.Locks.Cover,
 		b.ID,
 	)
 	if err != nil {
@@ -490,6 +524,11 @@ func scanBook(s scanner) (model.Book, error) {
 		&b.CreatedAt, &b.Path,
 		&b.HasCover, &b.CoverMime,
 		&b.ResumeCFI,
+		&b.Locks.Title, &b.Locks.Subtitle, &b.Locks.Author,
+		&b.Locks.Description, &b.Locks.Publisher, &b.Locks.Series,
+		&b.Locks.ISBN, &b.Locks.ISBN10, &b.Locks.Language,
+		&b.Locks.PublishDate, &b.Locks.Genres, &b.Locks.Moods,
+		&b.Locks.Tags, &b.Locks.Pages, &b.Locks.Cover,
 	)
 	return b, err
 }

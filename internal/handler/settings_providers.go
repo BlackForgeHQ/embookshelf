@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -10,10 +11,10 @@ import (
 	"github.com/blackforge/embookshelf/internal/service"
 )
 
-// SettingsProvidersList returns every known metadata provider plus its
-// current enabled flag. Mirrors the shape inside InstanceInfo so the
-// Settings panel can also toggle individual rows (PATCH below) without
-// refetching the whole instance blob.
+// SettingsProvidersList returns every known metadata provider with its
+// live row (enabled/config/priority) and declared schema. Mirrors the
+// subset inside InstanceInfo so the Settings panel can render a full
+// form without a second round-trip.
 func (h *Handler) SettingsProvidersList(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -26,24 +27,25 @@ func (h *Handler) SettingsProvidersList(c *gin.Context) {
 
 	out := make([]providerInfoDTO, 0, len(infos))
 	for _, p := range infos {
-		out = append(out, providerInfoDTO{
-			ID:       string(p.ID),
-			Name:     p.Name,
-			Enabled:  p.Enabled,
-			External: p.External,
-		})
+		out = append(out, toProviderInfoDTO(p))
 	}
 	c.JSON(http.StatusOK, gin.H{"providers": out})
 }
 
+// settingsProviderPatchReq accepts any combination of the three axes;
+// callers include only the fields they're changing. `priorityClear`
+// distinguishes "leave as-is" from "reset to nil" (the fallback slot)
+// without needing double-pointer unmarshal.
 type settingsProviderPatchReq struct {
-	Enabled *bool `json:"enabled"`
+	Enabled       *bool           `json:"enabled,omitempty"`
+	Config        json.RawMessage `json:"config,omitempty"`
+	Priority      *int            `json:"priority,omitempty"`
+	PriorityClear bool            `json:"priorityClear,omitempty"`
 }
 
-// SettingsProviderUpdate toggles the enabled flag for one provider. The
-// id must match the static catalog; unknown ids get 404. `enabled` is a
-// pointer so a missing field is rejected as "nothing to update" rather
-// than silently treated as false.
+// SettingsProviderUpdate patches one or more axes of a provider row.
+// At least one of enabled, config, priority, or priorityClear must be
+// present.
 func (h *Handler) SettingsProviderUpdate(c *gin.Context) {
 	id := c.Param("id")
 	if id == "" {
@@ -55,20 +57,54 @@ func (h *Handler) SettingsProviderUpdate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	if req.Enabled == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "enabled required"})
+	if req.Enabled == nil && req.Config == nil && req.Priority == nil && !req.PriorityClear {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "nothing to update"})
 		return
 	}
 
 	ctx := c.Request.Context()
-	if err := h.enrich.SetProviderEnabled(ctx, id, *req.Enabled); err != nil {
-		if errors.Is(err, service.ErrUnknownProvider) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "unknown provider"})
+	if req.Config != nil {
+		if err := h.enrich.SetProviderConfig(ctx, id, req.Config); err != nil {
+			if errors.Is(err, service.ErrUnknownProvider) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "unknown provider"})
+				return
+			}
+			slog.Error("set provider config", "id", id, "err", err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		slog.Error("set provider enabled", "id", id, "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "update provider"})
-		return
+	}
+	if req.PriorityClear {
+		if err := h.enrich.SetProviderPriority(ctx, id, nil); err != nil {
+			if errors.Is(err, service.ErrUnknownProvider) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "unknown provider"})
+				return
+			}
+			slog.Error("clear provider priority", "id", id, "err", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "update provider"})
+			return
+		}
+	} else if req.Priority != nil {
+		if err := h.enrich.SetProviderPriority(ctx, id, req.Priority); err != nil {
+			if errors.Is(err, service.ErrUnknownProvider) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "unknown provider"})
+				return
+			}
+			slog.Error("set provider priority", "id", id, "err", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "update provider"})
+			return
+		}
+	}
+	if req.Enabled != nil {
+		if err := h.enrich.SetProviderEnabled(ctx, id, *req.Enabled); err != nil {
+			if errors.Is(err, service.ErrUnknownProvider) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "unknown provider"})
+				return
+			}
+			slog.Error("set provider enabled", "id", id, "err", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "update provider"})
+			return
+		}
 	}
 
 	// Return the full refreshed list so the client can reconcile its
@@ -81,12 +117,7 @@ func (h *Handler) SettingsProviderUpdate(c *gin.Context) {
 	}
 	out := make([]providerInfoDTO, 0, len(infos))
 	for _, p := range infos {
-		out = append(out, providerInfoDTO{
-			ID:       string(p.ID),
-			Name:     p.Name,
-			Enabled:  p.Enabled,
-			External: p.External,
-		})
+		out = append(out, toProviderInfoDTO(p))
 	}
 	c.JSON(http.StatusOK, gin.H{"providers": out})
 }

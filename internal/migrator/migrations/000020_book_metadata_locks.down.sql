@@ -1,0 +1,16 @@
+ALTER TABLE books
+    DROP COLUMN IF EXISTS title_locked,
+    DROP COLUMN IF EXISTS subtitle_locked,
+    DROP COLUMN IF EXISTS author_locked,
+    DROP COLUMN IF EXISTS description_locked,
+    DROP COLUMN IF EXISTS publisher_locked,
+    DROP COLUMN IF EXISTS series_locked,
+    DROP COLUMN IF EXISTS isbn_locked,
+    DROP COLUMN IF EXISTS isbn10_locked,
+    DROP COLUMN IF EXISTS language_locked,
+    DROP COLUMN IF EXISTS publish_date_locked,
+    DROP COLUMN IF EXISTS genres_locked,
+    DROP COLUMN IF EXISTS moods_locked,
+    DROP COLUMN IF EXISTS tags_locked,
+    DROP COLUMN IF EXISTS pages_locked,
+    DROP COLUMN IF EXISTS cover_locked;

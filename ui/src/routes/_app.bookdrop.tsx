@@ -28,6 +28,14 @@ import type { ApiError } from '@/api/client';
 import { Icon } from '@/components/Icon';
 import { TopBar } from '@/components/TopBar';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -81,6 +89,7 @@ function BookDrop() {
   }, [queue.data]);
 
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   // Auto-select the first actionable row on first load + whenever the
   // current selection disappears (approved / rejected / deleted).
   const current =
@@ -208,15 +217,7 @@ function BookDrop() {
                   size="sm"
                   disabled={clearMut.isPending}
                   title="Remove every imported / rejected row from the queue history"
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        `Clear ${finished.length} processed ${finished.length === 1 ? 'item' : 'items'} from the queue history? Imported books and already-dropped files are not affected.`,
-                      )
-                    ) {
-                      clearMut.mutate();
-                    }
-                  }}
+                  onClick={() => setClearConfirmOpen(true)}
                 >
                   <Icon name="close" size={11} />{' '}
                   {clearMut.isPending ? 'Clearing…' : 'Clear'}
@@ -341,6 +342,41 @@ function BookDrop() {
           </div>
         )}
       </div>
+
+      <Dialog open={clearConfirmOpen} onOpenChange={setClearConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Clear processed history?</DialogTitle>
+            <DialogDescription>
+              Remove {finished.length} processed{' '}
+              {finished.length === 1 ? 'item' : 'items'} from the BookDrop
+              queue history. Imported books and any files still on disk are
+              not affected.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setClearConfirmOpen(false)}
+              disabled={clearMut.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() =>
+                clearMut.mutate(undefined, {
+                  onSuccess: () => setClearConfirmOpen(false),
+                })
+              }
+              disabled={clearMut.isPending}
+            >
+              {clearMut.isPending ? 'Clearing…' : 'Clear'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -141,11 +141,43 @@ export const settingsLibrariesQueryKey = ['settings', 'libraries'] as const;
 
 // --- Instance info ---------------------------------------------------------
 
+// ProviderConfigField mirrors internal/handler/instance.go
+// providerConfigFieldDTO. Kind drives the input renderer; options
+// populate selects.
+export type ProviderConfigField = {
+  key: string;
+  label: string;
+  kind: 'text' | 'password' | 'select' | 'textarea';
+  placeholder?: string;
+  help?: string;
+  options?: { value: string; label: string }[];
+};
+
 export type ProviderInfo = {
   id: string;
   name: string;
   enabled: boolean;
   external: boolean;
+  priority?: number;
+  // Stored provider-specific config blob. Keys align with `schema`.
+  config?: Record<string, unknown>;
+  // Declared form fields — absent when the provider has no config.
+  schema?: ProviderConfigField[];
+  // Health telemetry — RFC3339 timestamps (or empty) set by the
+  // enrichment service on each Search call.
+  lastSuccessAt?: string;
+  lastErrorAt?: string;
+  lastError?: string;
+};
+
+// Patch payload for PATCH /settings/providers/:id. Any subset of the
+// axes may be supplied; the server requires at least one.
+// priorityClear distinguishes "leave alone" from "reset to unranked".
+export type ProviderPatch = {
+  enabled?: boolean;
+  config?: Record<string, unknown>;
+  priority?: number;
+  priorityClear?: boolean;
 };
 
 export type InstanceInfo = {
@@ -177,19 +209,42 @@ export async function fetchProviderSettings(): Promise<ProviderInfo[]> {
 
 export async function updateProviderSetting(
   id: string,
-  enabled: boolean,
+  patch: ProviderPatch,
 ): Promise<ProviderInfo[]> {
   const { providers } = await api<{ providers: ProviderInfo[] }>(
     `/api/v1/settings/providers/${encodeURIComponent(id)}`,
     {
       method: 'PATCH',
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify(patch),
     },
   );
   return providers;
 }
 
 export const providerSettingsQueryKey = ['settings', 'providers'] as const;
+
+// --- Instance-wide metadata switches --------------------------------------
+
+export type MetadataSettings = {
+  // When true, bookdrop approvals trigger an enrichment pass so the
+  // imported book lands with provider metadata already applied.
+  autoEnrich: boolean;
+};
+
+export async function fetchMetadataSettings(): Promise<MetadataSettings> {
+  return api<MetadataSettings>('/api/v1/settings/metadata');
+}
+
+export async function updateMetadataSettings(
+  body: MetadataSettings,
+): Promise<MetadataSettings> {
+  return api<MetadataSettings>('/api/v1/settings/metadata', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+export const metadataSettingsQueryKey = ['settings', 'metadata'] as const;
 
 // Lightweight, non-admin-gated version of InstanceInfo. Rendered in the
 // status bar at the bottom of every page, so all signed-in users can call

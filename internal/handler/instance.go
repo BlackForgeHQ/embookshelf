@@ -1,11 +1,15 @@
 package handler
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"runtime"
+	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/blackforge/embookshelf/internal/service"
 )
 
 // Version is the build-time app version. Bumped by hand; the status bar
@@ -35,6 +39,79 @@ type providerInfoDTO struct {
 	Name     string `json:"name"`
 	Enabled  bool   `json:"enabled"`
 	External bool   `json:"external"`
+	// Priority orders provider-chain walks. nil = unranked (fall back
+	// to catalog order).
+	Priority *int `json:"priority,omitempty"`
+	// Config is the stored provider-specific blob. nil when the row
+	// hasn't been populated; empty object means "configured, all
+	// defaults". Keys are provider-specific — see Schema.
+	Config json.RawMessage `json:"config,omitempty"`
+	// Schema describes the form fields the settings UI should render.
+	// nil when the provider exposes no config knobs.
+	Schema []providerConfigFieldDTO `json:"schema,omitempty"`
+	// Health telemetry — RFC3339 strings so the client can relativize
+	// ("2 minutes ago") without re-parsing Go time formats.
+	LastSuccessAt string `json:"lastSuccessAt,omitempty"`
+	LastErrorAt   string `json:"lastErrorAt,omitempty"`
+	LastError     string `json:"lastError,omitempty"`
+}
+
+// providerConfigFieldDTO mirrors provider.ConfigField for the wire.
+type providerConfigFieldDTO struct {
+	Key         string                    `json:"key"`
+	Label       string                    `json:"label"`
+	Kind        string                    `json:"kind"`
+	Placeholder string                    `json:"placeholder,omitempty"`
+	Help        string                    `json:"help,omitempty"`
+	Options     []providerConfigOptionDTO `json:"options,omitempty"`
+}
+
+type providerConfigOptionDTO struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+// toProviderInfoDTO flattens a service.ProviderInfo onto the wire
+// shape. Keeps the service layer free of json.RawMessage concerns and
+// gives the two callers (InstanceInfo + SettingsProvidersList) one
+// place to evolve the serialized shape.
+func toProviderInfoDTO(p service.ProviderInfo) providerInfoDTO {
+	dto := providerInfoDTO{
+		ID:        string(p.ID),
+		Name:      p.Name,
+		Enabled:   p.Enabled,
+		External:  p.External,
+		Priority:  p.Priority,
+		LastError: p.LastError,
+	}
+	if p.LastSuccessAt != nil {
+		dto.LastSuccessAt = p.LastSuccessAt.UTC().Format(time.RFC3339)
+	}
+	if p.LastErrorAt != nil {
+		dto.LastErrorAt = p.LastErrorAt.UTC().Format(time.RFC3339)
+	}
+	if len(p.Config) > 0 {
+		dto.Config = json.RawMessage(p.Config)
+	}
+	if len(p.Schema) > 0 {
+		schema := make([]providerConfigFieldDTO, 0, len(p.Schema))
+		for _, f := range p.Schema {
+			opts := make([]providerConfigOptionDTO, 0, len(f.Options))
+			for _, o := range f.Options {
+				opts = append(opts, providerConfigOptionDTO{Value: o.Value, Label: o.Label})
+			}
+			schema = append(schema, providerConfigFieldDTO{
+				Key:         f.Key,
+				Label:       f.Label,
+				Kind:        string(f.Kind),
+				Placeholder: f.Placeholder,
+				Help:        f.Help,
+				Options:     opts,
+			})
+		}
+		dto.Schema = schema
+	}
+	return dto
 }
 
 // instanceSummaryDTO is the subset of instance facts safe to share with
@@ -79,12 +156,7 @@ func (h *Handler) InstanceInfo(c *gin.Context) {
 	}
 	providers := make([]providerInfoDTO, 0, len(infos))
 	for _, p := range infos {
-		providers = append(providers, providerInfoDTO{
-			ID:       string(p.ID),
-			Name:     p.Name,
-			Enabled:  p.Enabled,
-			External: p.External,
-		})
+		providers = append(providers, toProviderInfoDTO(p))
 	}
 
 	counts := instanceCountsDTO{}

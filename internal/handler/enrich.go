@@ -1,12 +1,15 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/provider"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -105,6 +108,335 @@ func (h *Handler) EnrichSearch(c *gin.Context) {
 		"matches":   out,
 		"providers": providers,
 	})
+}
+
+// EnrichStream runs the same fan-out as EnrichSearch but streams each
+// match as an SSE frame so the UI can render results progressively
+// instead of waiting on the slowest provider. Query params mirror
+// EnrichSearch; a single `done` event closes the stream.
+//
+// Frames:
+//
+//	event: match    data: <enrichMatchDTO JSON>
+//	event: provider-error  data: {"provider":"...","error":"..."}
+//	event: done     data: {"providers":["..."]}
+//
+// Client disconnect cancels the request context, which cancels every
+// in-flight provider HTTP call via net/http's context integration.
+func (h *Handler) EnrichStream(c *gin.Context) {
+	userID := requireUserID(c)
+	if userID == "" {
+		return
+	}
+	id := c.Param("id")
+	book, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			writeError(c, http.StatusNotFound, "book not found")
+			return
+		}
+		writeServerError(c, "enrich get book", err)
+		return
+	}
+
+	q := provider.Query{
+		Title:  firstNonEmpty(strings.TrimSpace(c.Query("title")), book.Title),
+		Author: firstNonEmpty(strings.TrimSpace(c.Query("author")), book.Author),
+		ISBN:   firstNonEmpty(strings.TrimSpace(c.Query("isbn")), book.ISBN),
+	}
+
+	// SSE headers must land before the first write; once Gin buffers
+	// anything else the browser won't upgrade the response.
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.WriteHeader(http.StatusOK)
+	c.Writer.Flush()
+
+	stream := h.enrich.SearchStream(c.Request.Context(), q)
+	ctx := c.Request.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-stream:
+			if !ok {
+				return
+			}
+			if ev.Done {
+				queried := make([]string, 0, len(ev.Queried))
+				for _, p := range ev.Queried {
+					queried = append(queried, string(p))
+				}
+				payload, _ := json.Marshal(gin.H{"providers": queried})
+				fmt.Fprintf(c.Writer, "event: done\ndata: %s\n\n", payload)
+				c.Writer.Flush()
+				return
+			}
+			if ev.Err != nil {
+				payload, _ := json.Marshal(gin.H{
+					"provider": string(ev.Provider),
+					"error":    ev.Err.Error(),
+				})
+				fmt.Fprintf(c.Writer, "event: provider-error\ndata: %s\n\n", payload)
+				c.Writer.Flush()
+				continue
+			}
+			if ev.Match == nil {
+				continue
+			}
+			dto := toEnrichMatchDTO(*ev.Match)
+			payload, err := json.Marshal(dto)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(c.Writer, "event: match\ndata: %s\n\n", payload)
+			c.Writer.Flush()
+		}
+	}
+}
+
+// applyMetadataReq is the body for PUT /books/:id/metadata — apply a
+// single user-selected match onto the book, respecting per-field locks.
+// `source` + `sourceId` identify the candidate (server trusts the
+// client for the payload; the alternative of re-fetching adds latency
+// and upstream quota cost for no security gain since the user could
+// already PATCH the same fields manually).
+type applyMetadataReq struct {
+	Source          string   `json:"source"`
+	SourceID        string   `json:"sourceId"`
+	Title           string   `json:"title"`
+	Authors         []string `json:"authors"`
+	Description     string   `json:"description,omitempty"`
+	Publisher       string   `json:"publisher,omitempty"`
+	Year            int      `json:"year,omitempty"`
+	ISBN            string   `json:"isbn,omitempty"`
+	Series          string   `json:"series,omitempty"`
+	Categories      []string `json:"categories,omitempty"`
+	Language        string   `json:"language,omitempty"`
+	CoverURL        string   `json:"coverUrl,omitempty"`
+	MergeCategories bool     `json:"mergeCategories,omitempty"`
+	ApplyCover      bool     `json:"applyCover,omitempty"`
+}
+
+// EnrichApplyMatch persists a user-selected provider match onto the
+// book, respecting per-field locks and optionally unioning categories
+// or pulling the cover.
+func (h *Handler) EnrichApplyMatch(c *gin.Context) {
+	userID := requireUserID(c)
+	if userID == "" {
+		return
+	}
+	id := c.Param("id")
+	book, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			writeError(c, http.StatusNotFound, "book not found")
+			return
+		}
+		writeServerError(c, "enrich apply get book", err)
+		return
+	}
+
+	var body applyMetadataReq
+	if !bindJSON(c, &body) {
+		return
+	}
+
+	match := provider.Match{
+		Source:      provider.Source(body.Source),
+		SourceID:    body.SourceID,
+		Title:       body.Title,
+		Authors:     body.Authors,
+		Description: body.Description,
+		Publisher:   body.Publisher,
+		Year:        body.Year,
+		ISBN:        body.ISBN,
+		Series:      body.Series,
+		Categories:  body.Categories,
+		Language:    body.Language,
+		CoverURL:    body.CoverURL,
+	}
+
+	updated, err := h.enrich.ApplyMatch(c.Request.Context(), book, match, service.ApplyOptions{
+		MergeCategories: body.MergeCategories,
+		ApplyCover:      body.ApplyCover,
+	})
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			writeError(c, http.StatusNotFound, "book not found")
+			return
+		}
+		writeServerError(c, "enrich apply", err)
+		return
+	}
+
+	// Reload so the response carries fresh cover flags + any side
+	// effects of the cover-from-url import that ran after UpdateMetadata.
+	fresh, err := h.lib.GetBook(c.Request.Context(), userID, updated.ID)
+	if err != nil {
+		writeServerError(c, "enrich apply reload", err)
+		return
+	}
+	shelves, err := h.shelf.SlugsForBook(c.Request.Context(), userID, updated.ID)
+	if err != nil {
+		writeServerError(c, "enrich apply shelves", err)
+		return
+	}
+	if shelves == nil {
+		shelves = []string{}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"book": bookDetailDTO{
+			bookDTO: toBookDTO(fresh),
+			Shelves: shelves,
+		},
+	})
+}
+
+// toggleFieldLocksReq flips the lock flag for one or more metadata
+// fields on a single book. `locks` is a sparse map — only mentioned
+// fields change. Field keys match model.LockFields.
+type toggleFieldLocksReq struct {
+	Locks map[string]bool `json:"locks"`
+}
+
+// EnrichToggleFieldLocks updates per-field lock flags. Unknown keys are
+// rejected so a typo doesn't silently vanish.
+func (h *Handler) EnrichToggleFieldLocks(c *gin.Context) {
+	userID := requireUserID(c)
+	if userID == "" {
+		return
+	}
+	id := c.Param("id")
+	book, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			writeError(c, http.StatusNotFound, "book not found")
+			return
+		}
+		writeServerError(c, "lock get book", err)
+		return
+	}
+
+	var body toggleFieldLocksReq
+	if !bindJSON(c, &body) {
+		return
+	}
+
+	allowed := make(map[string]struct{}, len(model.LockFields))
+	for _, f := range model.LockFields {
+		allowed[f] = struct{}{}
+	}
+	for field := range body.Locks {
+		if _, ok := allowed[field]; !ok {
+			writeError(c, http.StatusBadRequest, "unknown lock field: "+field)
+			return
+		}
+	}
+
+	for field, v := range body.Locks {
+		applyLock(&book.Locks, field, v)
+	}
+
+	if err := h.lib.UpdateBookMetadata(c.Request.Context(), book); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			writeError(c, http.StatusNotFound, "book not found")
+			return
+		}
+		writeServerError(c, "lock update", err)
+		return
+	}
+
+	fresh, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	if err != nil {
+		writeServerError(c, "lock reload", err)
+		return
+	}
+	shelves, err := h.shelf.SlugsForBook(c.Request.Context(), userID, id)
+	if err != nil {
+		writeServerError(c, "lock shelves", err)
+		return
+	}
+	if shelves == nil {
+		shelves = []string{}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"book": bookDetailDTO{
+			bookDTO: toBookDTO(fresh),
+			Shelves: shelves,
+		},
+	})
+}
+
+func applyLock(l *model.BookLocks, field string, v bool) {
+	switch field {
+	case "title":
+		l.Title = v
+	case "subtitle":
+		l.Subtitle = v
+	case "author":
+		l.Author = v
+	case "description":
+		l.Description = v
+	case "publisher":
+		l.Publisher = v
+	case "series":
+		l.Series = v
+	case "isbn":
+		l.ISBN = v
+	case "isbn10":
+		l.ISBN10 = v
+	case "language":
+		l.Language = v
+	case "publishDate":
+		l.PublishDate = v
+	case "genres":
+		l.Genres = v
+	case "moods":
+		l.Moods = v
+	case "tags":
+		l.Tags = v
+	case "pages":
+		l.Pages = v
+	case "cover":
+		l.Cover = v
+	}
+}
+
+// isbnLookupReq drives POST /books/metadata/isbn-lookup. Walks enabled
+// providers in catalog order and returns the first hit.
+type isbnLookupReq struct {
+	ISBN string `json:"isbn"`
+}
+
+// EnrichISBNLookup runs the ISBN chain and returns the best candidate
+// or 404 if no provider has a hit. Used by bulk import flows that want
+// a one-shot metadata fetch from a bare ISBN.
+func (h *Handler) EnrichISBNLookup(c *gin.Context) {
+	if id := requireUserID(c); id == "" {
+		return
+	}
+	var body isbnLookupReq
+	if !bindJSON(c, &body) {
+		return
+	}
+	if strings.TrimSpace(body.ISBN) == "" {
+		writeError(c, http.StatusBadRequest, "isbn is required")
+		return
+	}
+	match, src, err := h.enrich.LookupByISBN(c.Request.Context(), body.ISBN)
+	if err != nil {
+		writeServerError(c, "isbn lookup", err)
+		return
+	}
+	if match == nil {
+		writeError(c, http.StatusNotFound, "no provider matched this ISBN")
+		return
+	}
+	dto := toEnrichMatchDTO(*match)
+	c.JSON(http.StatusOK, gin.H{"provider": string(src), "match": dto})
 }
 
 type coverFromURLReq struct {

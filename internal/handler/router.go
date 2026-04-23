@@ -90,6 +90,10 @@ func (h *Handler) Engine() *gin.Engine {
 
 			// Metadata enrichment
 			authed.GET("/books/:id/enrich", h.EnrichSearch)
+			authed.GET("/books/:id/enrich/stream", h.EnrichStream)
+			authed.PUT("/books/:id/metadata", h.EnrichApplyMatch)
+			authed.PUT("/books/:id/metadata/locks", h.EnrichToggleFieldLocks)
+			authed.POST("/books/metadata/isbn-lookup", h.EnrichISBNLookup)
 			authed.POST("/books/:id/cover-from-url", h.EnrichApplyCover)
 
 			// Library statistics dashboard
@@ -130,6 +134,9 @@ func (h *Handler) Engine() *gin.Engine {
 
 				admin.GET("/providers", h.SettingsProvidersList)
 				admin.PATCH("/providers/:id", h.SettingsProviderUpdate)
+
+				admin.GET("/metadata", h.SettingsMetadataGet)
+				admin.PUT("/metadata", h.SettingsMetadataUpdate)
 
 				admin.GET("/oidc", h.SettingsOIDCGet)
 				admin.PUT("/oidc", h.SettingsOIDCUpdate)

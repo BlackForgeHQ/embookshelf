@@ -9,7 +9,7 @@ export type IconName =
   | 'star' | 'star-half' | 'star-filled' | 'circle' | 'dot' | 'clock'
   | 'calendar' | 'device' | 'bell' | 'menu' | 'more' | 'aA' | 'chart'
   | 'hash' | 'tune' | 'refresh' | 'x-circle' | 'check-circle' | 'alert'
-  | 'library';
+  | 'library' | 'lock' | 'unlock';
 
 type Props = {
   name: IconName;
@@ -272,6 +272,20 @@ function renderPath(name: IconName) {
       );
     case 'library':
       return <path d="M4 4v16M8 4v16M12 4v16M16 4v16M20 4v16M4 20h16" />;
+    case 'lock':
+      return (
+        <>
+          <rect x="5" y="11" width="14" height="9" rx="1" />
+          <path d="M8 11V8a4 4 0 018 0v3" />
+        </>
+      );
+    case 'unlock':
+      return (
+        <>
+          <rect x="5" y="11" width="14" height="9" rx="1" />
+          <path d="M8 11V8a4 4 0 017.46-2" />
+        </>
+      );
     default:
       return null;
   }

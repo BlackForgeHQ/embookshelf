@@ -77,7 +77,12 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReade
 
     (async () => {
       try {
-        book = ePub(url);
+        // epub.js guesses "directory" mode for URLs without a .epub
+        // suffix and starts fetching META-INF/container.xml relative
+        // to the parent path. Our /books/:id/file endpoint is a
+        // binary zip — explicitly pass openAs: 'epub' so jszip
+        // unpacks it in-browser.
+        book = ePub(url, { openAs: 'epub' });
         if (cancelled) return;
 
         rendition = book.renderTo(containerRef.current, {

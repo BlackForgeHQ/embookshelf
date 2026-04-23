@@ -101,12 +101,49 @@ there is no Node/Bun runtime in production.
   ISBN-10 + ISBN-13, publisher, series (name / #/ total), genres,
   moods, tags, age rating, content rating, and a tri-state public
   review toggle. Inline edits save to `PATCH /api/v1/books/:id`.
-- **Enrichment** across **four providers** — Google Books, Open
-  Library, Amazon (ISBN-10 cover fallback), and DuckDuckGo (Wikipedia
-  summary). Confidence-sorted match cards with one-click "Use fields"
-  / "Use cover". Results are cached in-process for 5 min and a
-  per-provider 60 s cooldown kicks in on 429, so repeated refetches
-  don't burn rate limits.
+- **Streaming enrichment** — `POST /books/:id/enrich/stream` is a
+  Server-Sent Events endpoint; each provider frame arrives as it
+  finishes so the match list fills in as providers return. Frames are
+  `event: match`, `event: provider-error`, `event: done`; client
+  disconnects cancel every in-flight outbound HTTP call via context
+  propagation.
+- **Per-field locks** — padlock toggles next to title, subtitle,
+  author, description, publisher, series, ISBN-13/10, language,
+  publish date, pages, genres, moods, tags, and cover. Locked fields
+  are skipped by the apply-metadata flow (`PUT /books/:id/metadata`)
+  and auto-enrich. Manual `PATCH` still writes — the lock is against
+  automation, not user intent.
+- **Six providers** — Google Books (API), Open Library (API),
+  Hardcover (GraphQL; requires token), Goodreads (HTML scrape, polite
+  with 60 s cooldown on 429/403), Amazon (ISBN-10 cover fallback only),
+  DuckDuckGo (Wikipedia summary). Confidence scoring uses a fuzzy
+  Levenshtein tier so slight title/punctuation drift still sorts
+  sensibly. Results are cached in-process for 5 min; a per-provider
+  60 s cooldown kicks in on 429 so repeated refetches don't burn rate
+  limits.
+- **Provider config + priority** — per-provider JSONB config
+  (API keys, language, cookie; stored encrypted when a KEK is set),
+  enable/disable, and priority ordering. Priority drives the ISBN
+  lookup chain: `POST /books/metadata/isbn-lookup` walks providers
+  in rank order, first hit wins.
+- **Apply flow** — streaming search returns candidate cards; each
+  card has `Apply` (atomic server-side write, respects locks, optional
+  cover), `Use fields` (populate form for review), and `Use cover`
+  (cover-only).
+- **Auto-enrich on bookdrop approve** — opt-in toggle in
+  `Settings → Metadata providers`. On approval, the service runs the
+  ISBN chain (falling back to fan-out at Confidence ≥ 70) and writes
+  only fields empty on the extracted book, respecting existing locks.
+- **Provider health** — every `Search` call records last-success /
+  last-error timestamps + error string. Each row in the settings
+  panel shows a badge like `ok 12m ago` or `failed 2m ago — hardcover
+  401` so stale tokens don't silently rot.
+- **Secrets at rest** — password-kind config fields (API keys,
+  tokens) are encrypted with AES-256-GCM before hitting
+  `provider_settings.config`. KEK comes from
+  `EMBOOKSHELF_SECRET_KEY` (base64-encoded 32 bytes); unset = log a
+  warning and round-trip plaintext. Pre-encryption rows pass through
+  on read; next write upgrades them.
 - **File naming patterns** — per-library pattern + instance-wide
   default. Placeholders (`{title}`, `{authors}`, `{seriesIndex}`, …),
   optional blocks (`<…>`), else clauses (`<…|fallback>`), and value
@@ -133,9 +170,14 @@ Left-nav panels at `/settings`:
 - **File naming patterns** — default pattern + per-library overrides
   with live preview; full reference docs for placeholders, conditional
   blocks, else clauses, value modifiers, and worked examples.
-- **Metadata providers** — toggle Google Books / Open Library /
-  Amazon / DuckDuckGo individually. All four are enabled by default on
-  fresh installs.
+- **Metadata providers** — enable/disable each provider, reorder
+  priority with up/down arrows, fill provider-specific config
+  (Google Books API key + language, Hardcover token, …), toggle
+  auto-enrich on bookdrop approve, and see per-provider health
+  badges. Google Books / Open Library / Amazon / DuckDuckGo are
+  enabled by default on fresh installs; Hardcover + Goodreads land
+  disabled (the former needs a token, the latter is scrape-only and
+  brittle).
 - **Email delivery**, **Users & roles**, **OIDC / SSO**, **Backups**,
   **About**.
 
@@ -223,6 +265,7 @@ live in [internal/config/config.go](internal/config/config.go).
 | `DATA_PATH` | `./data` | Covers + on-disk caches |
 | `APP_URL` | _(unset, falls back to request origin)_ | Public origin; required only when behind a proxy that rewrites Host |
 | `ENRICHMENT_PROVIDERS` | `google_books,open_library,amazon,duckduckgo` | First-boot seed for provider toggles; DB is authoritative after |
+| `EMBOOKSHELF_SECRET_KEY` | _(unset — dev only)_ | Base64-encoded 32 bytes (`openssl rand -base64 32`). Encrypts provider API keys / tokens at rest. Unset = plaintext storage + loud boot warning |
 | `OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | _(unset)_ | Seeds the **generic** OIDC row on first boot; admin edits live in UI afterwards |
 | `MIGRATE_ON_START` | `true` | Apply app schema + River migrations on boot |
 | `OTEL_ENABLED` | `false` | Emit server traces/metrics/logs via OTLP |

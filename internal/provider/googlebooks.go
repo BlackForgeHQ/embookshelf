@@ -8,15 +8,31 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // GoogleBooks queries https://www.googleapis.com/books/v1/volumes.
-// No API key is required for low-volume anonymous use (~1000 req/day).
+// No API key is required for low-volume anonymous use (~1000 req/day);
+// an admin-provided key lifts the shared-IP quota ceiling considerably.
 type GoogleBooks struct {
 	Client *http.Client
 	// MaxResults caps how many hits the server returns. Google accepts up to
 	// 40; 5 is plenty for a disambiguation picker.
 	MaxResults int
+
+	mu     sync.RWMutex
+	apiKey string
+	lang   string
+}
+
+// GoogleBooksConfig is the admin-editable config blob for this provider.
+type GoogleBooksConfig struct {
+	// APIKey, when non-empty, is appended as `&key=…` on every request
+	// so the quota bills against the admin's Cloud project instead of
+	// the shared anonymous IP pool.
+	APIKey string `json:"apiKey"`
+	// Language is an optional `langRestrict` filter (e.g. "en").
+	Language string `json:"language"`
 }
 
 func NewGoogleBooks() *GoogleBooks {
@@ -24,6 +40,55 @@ func NewGoogleBooks() *GoogleBooks {
 }
 
 func (*GoogleBooks) Name() Source { return SourceGoogleBooks }
+
+// Configure reads the stored config blob into the provider's in-memory
+// state. Invalid JSON wipes the config rather than returning an error
+// so a broken blob doesn't wedge boot.
+func (g *GoogleBooks) Configure(raw []byte) error {
+	var c GoogleBooksConfig
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &c); err != nil {
+			return err
+		}
+	}
+	g.mu.Lock()
+	g.apiKey = strings.TrimSpace(c.APIKey)
+	g.lang = strings.TrimSpace(c.Language)
+	g.mu.Unlock()
+	return nil
+}
+
+// ConfigSchema describes the admin UI inputs for Google Books.
+func (*GoogleBooks) ConfigSchema() []ConfigField {
+	return []ConfigField{
+		{
+			Key:         "apiKey",
+			Label:       "API key",
+			Kind:        ConfigFieldPassword,
+			Placeholder: "AIza…",
+			Help:        "Optional. Anonymous quota is ~1000 req/day; a key bills against your Cloud project instead.",
+		},
+		{
+			Key:   "language",
+			Label: "Language",
+			Kind:  ConfigFieldSelect,
+			Help:  "Restrict results to a specific language. Leave on Any for mixed catalogs.",
+			Options: []ConfigOption{
+				{Value: "", Label: "Any"},
+				{Value: "en", Label: "English"},
+				{Value: "de", Label: "German"},
+				{Value: "fr", Label: "French"},
+				{Value: "es", Label: "Spanish"},
+				{Value: "it", Label: "Italian"},
+				{Value: "pt", Label: "Portuguese"},
+				{Value: "nl", Label: "Dutch"},
+				{Value: "pl", Label: "Polish"},
+				{Value: "ja", Label: "Japanese"},
+				{Value: "ru", Label: "Russian"},
+			},
+		},
+	}
+}
 
 func (g *GoogleBooks) Search(ctx context.Context, q Query) ([]Match, error) {
 	queryStr := buildGoogleQuery(q)
@@ -34,10 +99,20 @@ func (g *GoogleBooks) Search(ctx context.Context, q Query) ([]Match, error) {
 	if max <= 0 {
 		max = 5
 	}
+	g.mu.RLock()
+	apiKey, lang := g.apiKey, g.lang
+	g.mu.RUnlock()
+
 	u := fmt.Sprintf(
 		"https://www.googleapis.com/books/v1/volumes?q=%s&maxResults=%d&printType=books",
 		url.QueryEscape(queryStr), max,
 	)
+	if lang != "" {
+		u += "&langRestrict=" + url.QueryEscape(lang)
+	}
+	if apiKey != "" {
+		u += "&key=" + url.QueryEscape(apiKey)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {

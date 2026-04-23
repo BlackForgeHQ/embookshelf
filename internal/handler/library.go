@@ -2,8 +2,10 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,6 +80,9 @@ type bookDTO struct {
 	HasCover      bool     `json:"hasCover"`
 	CoverMime     string   `json:"coverMime,omitempty"`
 	AddedAt       string   `json:"addedAt"`
+	// Locks is a sparse map — only fields currently locked appear, so
+	// unlocked books keep the payload small. Keys match model.LockFields.
+	Locks map[string]bool `json:"locks,omitempty"`
 }
 
 func toBookDTO(b model.Book) bookDTO {
@@ -128,7 +133,64 @@ func toBookDTO(b model.Book) bookDTO {
 		HasCover:      b.HasCover,
 		CoverMime:     b.CoverMime,
 		AddedAt:       b.CreatedAt.UTC().Format(time.RFC3339),
+		Locks:         serializeLocks(b.Locks),
 	}
+}
+
+// serializeLocks emits a sparse map of just the set flags. nil when
+// everything is unlocked so the DTO stays lean on fresh books. Keys
+// match model.LockFields.
+func serializeLocks(l model.BookLocks) map[string]bool {
+	out := map[string]bool{}
+	if l.Title {
+		out["title"] = true
+	}
+	if l.Subtitle {
+		out["subtitle"] = true
+	}
+	if l.Author {
+		out["author"] = true
+	}
+	if l.Description {
+		out["description"] = true
+	}
+	if l.Publisher {
+		out["publisher"] = true
+	}
+	if l.Series {
+		out["series"] = true
+	}
+	if l.ISBN {
+		out["isbn"] = true
+	}
+	if l.ISBN10 {
+		out["isbn10"] = true
+	}
+	if l.Language {
+		out["language"] = true
+	}
+	if l.PublishDate {
+		out["publishDate"] = true
+	}
+	if l.Genres {
+		out["genres"] = true
+	}
+	if l.Moods {
+		out["moods"] = true
+	}
+	if l.Tags {
+		out["tags"] = true
+	}
+	if l.Pages {
+		out["pages"] = true
+	}
+	if l.Cover {
+		out["cover"] = true
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // bookDetailDTO adds the user's shelf memberships to the base book shape.
@@ -628,6 +690,11 @@ func writeBooksPayload(c *gin.Context, books []model.Book) {
 // PDF reader can open it. Delegates to serveBookFile for the path sandbox
 // (BOOKDROP_PATH + registered library_paths, trailing-separator prefix
 // match) — the same validation OPDS downloads use.
+//
+// ?download=1 flips Content-Disposition to "attachment" with a
+// human-readable filename so browsers save-as instead of embedding.
+// Without the flag the response stays "inline" for the in-browser
+// reader.
 func (h *Handler) BookFile(c *gin.Context) {
 	userID := requireUserID(c)
 	if userID == "" {
@@ -651,6 +718,15 @@ func (h *Handler) BookFile(c *gin.Context) {
 	if mime == "" {
 		writeError(c, http.StatusUnsupportedMediaType, "reader does not support this format")
 		return
+	}
+	if c.Query("download") != "" {
+		filename := downloadFilename(book)
+		// Standard RFC 6266: bare `filename=` for ASCII fallback +
+		// `filename*=UTF-8''…` for anything non-ASCII so browsers
+		// honour the suggested name when the title has diacritics.
+		c.Header("Content-Disposition",
+			fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`,
+				asciiFallback(filename), url.PathEscape(filename)))
 	}
 	if err := h.serveBookFile(c, book.Path, mime); err != nil {
 		writeError(c, http.StatusForbidden, err.Error())
@@ -693,4 +769,93 @@ func splitCSV(raw string) []string {
 		}
 	}
 	return out
+}
+
+// downloadFilename composes a human-readable filename for the save-as
+// dialog. Falls back to the on-disk basename when the metadata is
+// missing — we'd rather ship a working name than drop the download.
+func downloadFilename(b model.Book) string {
+	title := strings.TrimSpace(b.Title)
+	if title == "" {
+		if b.Path != "" {
+			return filepath.Base(b.Path)
+		}
+		title = "book"
+	}
+	name := title
+	if author := strings.TrimSpace(b.Author); author != "" {
+		name = author + " - " + name
+	}
+	name = sanitizeFilename(name)
+	ext := extForFormat(b.Format)
+	if ext != "" && !strings.HasSuffix(strings.ToLower(name), ext) {
+		name += ext
+	}
+	return name
+}
+
+// sanitizeFilename strips characters the OS won't accept in a filename
+// plus path separators. Conservative: preserves Unicode, drops shell/
+// filesystem special chars only.
+func sanitizeFilename(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|', 0:
+			b.WriteRune('_')
+		default:
+			if r < 0x20 {
+				continue
+			}
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// asciiFallback degrades a filename to printable ASCII for the bare
+// `filename=` leg of Content-Disposition. Non-ASCII runes collapse to
+// '_' so old browsers still get a usable name; modern ones pick the
+// UTF-8 variant instead.
+func asciiFallback(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r > 0x7e || r < 0x20 {
+			b.WriteRune('_')
+			continue
+		}
+		if r == '"' || r == '\\' {
+			b.WriteRune('_')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// extForFormat maps our Format tag to the conventional file
+// extension. "" for unsupported formats so the download still works
+// (no extension) rather than failing.
+func extForFormat(format string) string {
+	switch format {
+	case "EPUB":
+		return ".epub"
+	case "PDF":
+		return ".pdf"
+	case "CBZ":
+		return ".cbz"
+	case "CBR":
+		return ".cbr"
+	case "MOBI":
+		return ".mobi"
+	case "AZW3":
+		return ".azw3"
+	case "FB2":
+		return ".fb2"
+	case "TXT":
+		return ".txt"
+	}
+	return ""
 }

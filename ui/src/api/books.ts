@@ -90,7 +90,42 @@ export type Book = {
   hasCover: boolean;
   coverMime?: string;
   addedAt: string;
+  // Sparse map — only locked fields appear. Keys match LockField.
+  locks?: Partial<Record<LockField, boolean>>;
 };
+
+// Field keys accepted by PUT /books/:id/metadata/locks. Keep in sync
+// with model.LockFields in internal/model/book.go.
+export type LockField =
+  | 'title'
+  | 'subtitle'
+  | 'author'
+  | 'description'
+  | 'publisher'
+  | 'series'
+  | 'isbn'
+  | 'isbn10'
+  | 'language'
+  | 'publishDate'
+  | 'genres'
+  | 'moods'
+  | 'tags'
+  | 'pages'
+  | 'cover';
+
+export async function toggleBookFieldLocks(
+  id: string,
+  locks: Partial<Record<LockField, boolean>>,
+): Promise<BookDetail> {
+  const { book } = await api<{ book: BookDetail }>(
+    `/api/v1/books/${id}/metadata/locks`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ locks }),
+    },
+  );
+  return book;
+}
 
 export type BookDetail = Book & { shelves: string[] };
 

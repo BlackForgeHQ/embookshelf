@@ -1,20 +1,23 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 
 import {
   bookQueryKey,
   fetchBook,
   patchBook,
+  toggleBookFieldLocks,
   type BookDetail,
   type BookPatch,
+  type LockField,
 } from '@/api/books';
 import type { ApiError } from '@/api/client';
 import {
   applyCoverFromUrl,
-  enrichQueryKey,
-  fetchEnrichment,
+  applyEnrichmentMatch,
   formatProviderList,
+  streamEnrichment,
   type EnrichMatch,
 } from '@/api/enrich';
 import { Cover } from '@/components/Cover';
@@ -220,9 +223,6 @@ function MetadataEditor() {
           <Icon name="arrow-left" size={14} /> Back to book
         </Button>
         <div style={{ flex: 1 }} />
-        <Button variant="outline" size="sm" disabled title="Metadata enrichment lands in a later slice">
-          <Icon name="refresh" size={13} /> Refetch from sources
-        </Button>
         <Button
           variant="outline"
           onClick={() => void navigate({ to: '/book/$id', params: { id } })}
@@ -261,10 +261,16 @@ function MetadataEditor() {
 
           <Section title="Core">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-              <Row label="Title">
+              <Row
+                label="Title"
+                lock={{ bookId: b.id, field: 'title', locked: !!b.locks?.title }}
+              >
                 <Input value={form.title} onChange={(e) => set('title', e.target.value)} />
               </Row>
-              <Row label="Subtitle">
+              <Row
+                label="Subtitle"
+                lock={{ bookId: b.id, field: 'subtitle', locked: !!b.locks?.subtitle }}
+              >
                 <Input
                   value={form.subtitle}
                   onChange={(e) => set('subtitle', e.target.value)}
@@ -272,10 +278,16 @@ function MetadataEditor() {
                 />
               </Row>
             </div>
-            <Row label="Authors">
+            <Row
+              label="Authors"
+              lock={{ bookId: b.id, field: 'author', locked: !!b.locks?.author }}
+            >
               <Input value={form.author} onChange={(e) => set('author', e.target.value)} />
             </Row>
-            <Row label="Description">
+            <Row
+              label="Description"
+              lock={{ bookId: b.id, field: 'description', locked: !!b.locks?.description }}
+            >
               <Textarea
                 rows={5}
                 value={form.description}
@@ -287,13 +299,19 @@ function MetadataEditor() {
 
           <Section title="Publication">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
-              <Row label="Publisher">
+              <Row
+                label="Publisher"
+                lock={{ bookId: b.id, field: 'publisher', locked: !!b.locks?.publisher }}
+              >
                 <Input
                   value={form.publisher}
                   onChange={(e) => set('publisher', e.target.value)}
                 />
               </Row>
-              <Row label="Publish date">
+              <Row
+                label="Publish date"
+                lock={{ bookId: b.id, field: 'publishDate', locked: !!b.locks?.publishDate }}
+              >
                 <Input
                   type="date"
                   value={form.publishDate}
@@ -305,7 +323,10 @@ function MetadataEditor() {
               </Row>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
-              <Row label="Language">
+              <Row
+                label="Language"
+                lock={{ bookId: b.id, field: 'language', locked: !!b.locks?.language }}
+              >
                 <Input
                   value={form.language}
                   onChange={(e) => set('language', e.target.value)}
@@ -313,7 +334,10 @@ function MetadataEditor() {
                   className="mono"
                 />
               </Row>
-              <Row label="Pages">
+              <Row
+                label="Pages"
+                lock={{ bookId: b.id, field: 'pages', locked: !!b.locks?.pages }}
+              >
                 <Input
                   inputMode="numeric"
                   value={form.pages}
@@ -324,14 +348,20 @@ function MetadataEditor() {
               <div />
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-              <Row label="ISBN 13">
+              <Row
+                label="ISBN 13"
+                lock={{ bookId: b.id, field: 'isbn', locked: !!b.locks?.isbn }}
+              >
                 <Input
                   className="mono"
                   value={form.isbn13}
                   onChange={(e) => set('isbn13', e.target.value)}
                 />
               </Row>
-              <Row label="ISBN 10">
+              <Row
+                label="ISBN 10"
+                lock={{ bookId: b.id, field: 'isbn10', locked: !!b.locks?.isbn10 }}
+              >
                 <Input
                   className="mono"
                   value={form.isbn10}
@@ -343,7 +373,10 @@ function MetadataEditor() {
 
           <Section title="Series">
             <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 14 }}>
-              <Row label="Series name">
+              <Row
+                label="Series name"
+                lock={{ bookId: b.id, field: 'series', locked: !!b.locks?.series }}
+              >
                 <Input
                   value={form.series}
                   onChange={(e) => set('series', e.target.value)}
@@ -368,21 +401,30 @@ function MetadataEditor() {
           </Section>
 
           <Section title="Categories & tags">
-            <Row label="Genres">
+            <Row
+              label="Genres"
+              lock={{ bookId: b.id, field: 'genres', locked: !!b.locks?.genres }}
+            >
               <Input
                 value={form.genres}
                 onChange={(e) => set('genres', e.target.value)}
                 placeholder="Fiction, Science"
               />
             </Row>
-            <Row label="Moods">
+            <Row
+              label="Moods"
+              lock={{ bookId: b.id, field: 'moods', locked: !!b.locks?.moods }}
+            >
               <Input
                 value={form.moods}
                 onChange={(e) => set('moods', e.target.value)}
                 placeholder="Hopeful, Reflective"
               />
             </Row>
-            <Row label="Tags">
+            <Row
+              label="Tags"
+              lock={{ bookId: b.id, field: 'tags', locked: !!b.locks?.tags }}
+            >
               <Input value={form.tags} onChange={(e) => set('tags', e.target.value)} />
             </Row>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
@@ -494,40 +536,102 @@ function EnrichmentPanel({
   const queryClient = useQueryClient();
   const [opened, setOpened] = useState(false);
 
-  const q = { title: searchTitle, author: searchAuthor };
-  const enrich = useQuery({
-    queryKey: enrichQueryKey(book.id, q),
-    queryFn: () => fetchEnrichment(book.id, q),
-    // Don't fire until the user opens the panel — a default load of the
-    // editor shouldn't trigger outbound HTTP to Google Books + Open
-    // Library. ensures manual trigger gate.
-    enabled: opened,
-    staleTime: 60_000,
-  });
+  // Streaming state. matches lands incrementally as SSE frames arrive;
+  // we sort-insert by confidence so the highest-scoring hit floats to
+  // the top without a flash.
+  const [matches, setMatches] = useState<EnrichMatch[]>([]);
+  const [streaming, setStreaming] = useState(false);
+  const [providers, setProviders] = useState<string[]>([]);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const cancelRef = useRef<() => void>();
+
+  // Version bumps whenever the user hits "re-search" so streaming effect
+  // knows to tear down the old EventSource and open a fresh one.
+  const [runId, setRunId] = useState(0);
+
+  const q = useMemo(
+    () => ({ title: searchTitle, author: searchAuthor }),
+    [searchTitle, searchAuthor],
+  );
+
+  useEffect(() => {
+    if (!opened) return;
+    setMatches([]);
+    setProviders([]);
+    setStreamError(null);
+    setStreaming(true);
+    const cancel = streamEnrichment(book.id, q, (ev) => {
+      if (ev.type === 'match') {
+        setMatches((prev) => {
+          // De-dupe on (source, sourceId); provider retries or
+          // re-streams shouldn't produce double cards.
+          if (prev.some((m) => m.source === ev.match.source && m.sourceId === ev.match.sourceId)) {
+            return prev;
+          }
+          const next = [...prev, ev.match];
+          next.sort((a, b) => b.confidence - a.confidence);
+          return next;
+        });
+      } else if (ev.type === 'provider-error') {
+        setStreamError(`${ev.provider}: ${ev.error}`);
+      } else if (ev.type === 'done') {
+        setProviders(ev.providers);
+        setStreaming(false);
+      }
+    });
+    cancelRef.current = cancel;
+    return () => cancel();
+  }, [opened, book.id, q, runId]);
 
   const coverMut = useMutation({
     mutationFn: (url: string) => applyCoverFromUrl(book.id, url),
     onSuccess: () => {
-      // Bust book detail + lists so the UI reflects the new has_cover.
       queryClient.invalidateQueries({ queryKey: bookQueryKey(book.id) });
       queryClient.invalidateQueries({ queryKey: ['books'] });
+      toast.success('Cover updated.');
     },
+    onError: (err) => toast.error((err as ApiError).message || 'Cover import failed.'),
   });
 
-  const error = (enrich.error ?? coverMut.error) as unknown as ApiError | null;
+  // applyMut writes the selected match server-side via PUT
+  // /books/:id/metadata. Skips locked fields, optionally pulls the cover
+  // in the same request. Different from onApplyFields() which only
+  // populates the form for the user to review before saving.
+  const applyMut = useMutation({
+    mutationFn: ({ m, cover }: { m: EnrichMatch; cover: boolean }) =>
+      applyEnrichmentMatch(book.id, {
+        source: m.source,
+        sourceId: m.sourceId,
+        title: m.title,
+        authors: m.authors,
+        description: m.description,
+        publisher: m.publisher,
+        year: m.year,
+        isbn: m.isbn,
+        series: m.series,
+        categories: m.categories,
+        language: m.language,
+        coverUrl: m.coverUrl,
+        applyCover: cover,
+      }),
+    onSuccess: (fresh) => {
+      queryClient.setQueryData(bookQueryKey(book.id), fresh);
+      queryClient.invalidateQueries({ queryKey: ['books'] });
+      toast.success('Metadata applied.');
+    },
+    onError: (err) => toast.error((err as ApiError).message || 'Apply failed.'),
+  });
 
   return (
     <div>
-      <div className="t-label" style={{ marginBottom: 10 }}>Cover</div>
+      <div className="t-label" style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span>Cover</span>
+        <LockToggle bookId={book.id} field="cover" locked={!!book.locks?.cover} />
+      </div>
       <Cover book={book} size="hero" style={{ width: 240, height: 360 }} />
       {coverMut.isPending && (
         <div className="t-small" style={{ marginTop: 8, fontStyle: 'italic' }}>
           Fetching cover…
-        </div>
-      )}
-      {coverMut.isSuccess && (
-        <div className="t-small" style={{ marginTop: 8, color: 'var(--color-accent-ink)' }}>
-          Cover updated. Save to keep the metadata changes.
         </div>
       )}
 
@@ -549,18 +653,14 @@ function EnrichmentPanel({
             type="button"
             variant="ghost"
             size="sm"
-            disabled={enrich.isFetching}
-            onClick={() =>
-              queryClient.invalidateQueries({
-                queryKey: enrichQueryKey(book.id, q),
-              })
-            }
+            disabled={streaming}
+            onClick={() => setRunId((n) => n + 1)}
           >
             <Icon name="refresh" size={12} />{' '}
-            {enrich.isFetching ? 'Searching…' : 'Re-search with current fields'}
+            {streaming ? 'Searching…' : 'Re-search with current fields'}
           </Button>
 
-          {error && (
+          {streamError && (
             <div
               className="flash error"
               style={{
@@ -572,25 +672,30 @@ function EnrichmentPanel({
                 fontSize: 12,
               }}
             >
-              {error.message}
+              {streamError}
             </div>
           )}
 
-          {enrich.data && enrich.data.matches.length === 0 && (
+          {!streaming && matches.length === 0 && providers.length > 0 && (
             <div className="t-small" style={{ fontStyle: 'italic' }}>
-              {enrich.data.providers.length === 0
-                ? 'No metadata providers are enabled. An admin can turn them on in Settings → Metadata providers.'
-                : `No matches from ${formatProviderList(enrich.data.providers)}.`}
+              No matches from {formatProviderList(providers)}.
+            </div>
+          )}
+          {!streaming && matches.length === 0 && providers.length === 0 && (
+            <div className="t-small" style={{ fontStyle: 'italic' }}>
+              No metadata providers are enabled. An admin can turn them on in Settings → Metadata providers.
             </div>
           )}
 
-          {(enrich.data?.matches ?? []).slice(0, 10).map((m) => (
+          {matches.slice(0, 10).map((m) => (
             <MatchCard
               key={`${m.source}:${m.sourceId}`}
               match={m}
               applyFields={() => onApplyFields(m)}
               applyCover={() => coverMut.mutate(m.coverUrl ?? '')}
+              applyAll={(withCover) => applyMut.mutate({ m, cover: withCover })}
               coverBusy={coverMut.isPending}
+              applyBusy={applyMut.isPending}
             />
           ))}
         </div>
@@ -599,16 +704,58 @@ function EnrichmentPanel({
   );
 }
 
+function LockToggle({
+  bookId,
+  field,
+  locked,
+}: {
+  bookId: string;
+  field: LockField;
+  locked: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const mut = useMutation({
+    mutationFn: (next: boolean) =>
+      toggleBookFieldLocks(bookId, { [field]: next } as Partial<Record<LockField, boolean>>),
+    onSuccess: (fresh) => {
+      queryClient.setQueryData(bookQueryKey(bookId), fresh);
+    },
+    onError: (err) => toast.error((err as ApiError).message || 'Lock update failed.'),
+  });
+  return (
+    <button
+      type="button"
+      title={locked ? 'Field is locked — click to unlock' : 'Lock this field against auto-refresh'}
+      disabled={mut.isPending}
+      onClick={() => mut.mutate(!locked)}
+      style={{
+        padding: 0,
+        border: 'none',
+        background: 'transparent',
+        cursor: 'pointer',
+        color: locked ? 'var(--color-accent-ink)' : 'var(--color-ink-3)',
+        lineHeight: 0,
+      }}
+    >
+      <Icon name={locked ? 'lock' : 'unlock'} size={11} />
+    </button>
+  );
+}
+
 function MatchCard({
   match,
   applyFields,
   applyCover,
+  applyAll,
   coverBusy,
+  applyBusy,
 }: {
   match: EnrichMatch;
   applyFields: () => void;
   applyCover: () => void;
+  applyAll: (withCover: boolean) => void;
   coverBusy: boolean;
+  applyBusy: boolean;
 }) {
   return (
     <div
@@ -654,7 +801,16 @@ function MatchCard({
             conf {match.confidence}
           </span>
         </div>
-        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+        <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => applyAll(!!match.coverUrl)}
+            disabled={applyBusy}
+            title="Write these fields directly to the book (skips locked fields). Includes cover when available."
+          >
+            Apply
+          </Button>
           <Button type="button" variant="outline" size="sm" onClick={applyFields}>
             Use fields
           </Button>
@@ -688,7 +844,15 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
+function Row({
+  label,
+  children,
+  lock,
+}: {
+  label: string;
+  children: ReactNode;
+  lock?: { bookId: string; field: LockField; locked: boolean };
+}) {
   return (
     <div>
       <div
@@ -698,9 +862,15 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
           marginBottom: 4,
           fontFamily: 'var(--font-mono)',
           letterSpacing: '0.04em',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
         }}
       >
-        {label}
+        <span>{label}</span>
+        {lock && (
+          <LockToggle bookId={lock.bookId} field={lock.field} locked={lock.locked} />
+        )}
       </div>
       {children}
     </div>
