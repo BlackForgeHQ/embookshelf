@@ -64,28 +64,38 @@ function AppLayout() {
 }
 
 function StatusBar() {
-  // staleTime is generous — version + mode don't change at runtime, so
-  // the first fetch per session is enough.
+  // Counts come from /api/v1/instance alongside version+mode; the endpoint
+  // is cheap (single COUNT(*) per library) so a 5-minute staleTime keeps
+  // the bar fresh without polling.
   const instance = useQuery({
     queryKey: instanceSummaryQueryKey,
     queryFn: fetchInstanceSummary,
-    staleTime: 60 * 60_000,
+    staleTime: 5 * 60_000,
   });
 
   const version = instance.data?.version ?? '…';
   const mode = instance.data?.diskMode ?? '…';
+  const libCount = instance.data?.libraries;
+  const bookCount = instance.data?.books;
+
+  const catalog =
+    libCount != null && bookCount != null
+      ? `${libCount} ${libCount === 1 ? 'library' : 'libraries'} · ${bookCount.toLocaleString()} ${bookCount === 1 ? 'volume' : 'volumes'}`
+      : null;
 
   return (
     <div className="status-bar">
       <span className="status-dot green" />
       <span>embookshelf {version} · {mode} mode</span>
-      <span>·</span>
-      <span>3 libraries · 1,202 volumes</span>
+      {catalog && (
+        <>
+          <span>·</span>
+          <span>{catalog}</span>
+        </>
+      )}
       <span>·</span>
       <span>PostgreSQL · connected</span>
       <div style={{ flex: 1 }} />
-      <span>2 background tasks</span>
-      <span>·</span>
       <span>⌘K to search</span>
     </div>
   );

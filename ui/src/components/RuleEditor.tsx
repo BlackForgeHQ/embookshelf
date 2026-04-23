@@ -7,6 +7,7 @@ import type {
   ShelfPredicate,
   ShelfRule,
 } from "@/api/books"
+import { AccentPicker, type ShelfAccent } from "./AccentPicker"
 import { Icon } from "./Icon"
 import {
   Dialog,
@@ -137,13 +138,18 @@ type Props = {
   title: string
   initialName?: string
   initialRule?: ShelfRule
+  initialAccent?: ShelfAccent
   submitLabel: string
   error?: string | null
   busy?: boolean
   // When name is omitted (editing an existing shelf), the editor hides
   // the name field and only returns the rule.
   showName?: boolean
-  onSubmit: (draft: { name: string; rule: ShelfRule }) => void
+  onSubmit: (draft: {
+    name: string
+    rule: ShelfRule
+    accent: ShelfAccent
+  }) => void
   onCancel: () => void
 }
 
@@ -153,6 +159,7 @@ export function RuleEditor({
   title,
   initialName,
   initialRule,
+  initialAccent = "accent",
   submitLabel,
   error,
   busy,
@@ -161,6 +168,7 @@ export function RuleEditor({
   onCancel,
 }: Props) {
   const [name, setName] = useState(initialName ?? "")
+  const [accent, setAccent] = useState<ShelfAccent>(initialAccent)
   const [rule, setRule] = useState<ShelfRule>(
     initialRule ?? { match: "all", predicates: [blankPredicate()] }
   )
@@ -214,6 +222,11 @@ export function RuleEditor({
             />
           </div>
         )}
+
+        <div className="flex flex-col gap-2">
+          <Label>Accent</Label>
+          <AccentPicker value={accent} onChange={setAccent} />
+        </div>
 
         <div className="flex items-center gap-2.5">
           <span className="t-label">Match</span>
@@ -275,7 +288,7 @@ export function RuleEditor({
           </Button>
           <Button
             disabled={!canSubmit || busy}
-            onClick={() => onSubmit({ name: name.trim(), rule })}
+            onClick={() => onSubmit({ name: name.trim(), rule, accent })}
           >
             {busy ? "Saving…" : submitLabel}
           </Button>

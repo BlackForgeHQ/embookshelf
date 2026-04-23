@@ -1,7 +1,25 @@
 import type { CSSProperties, MouseEventHandler } from 'react';
 
-import type { CoverPalette, CoverStyle } from '@/data/mock';
 import { Icon } from './Icon';
+
+export type CoverPalette =
+  | 'navy'
+  | 'olive'
+  | 'rust'
+  | 'teal'
+  | 'plum'
+  | 'ochre'
+  | 'forest'
+  | 'cream'
+  | 'brick'
+  | 'ink';
+
+export type CoverStyle =
+  | 'centered-line'
+  | 'minimal-top'
+  | 'stacked-serif'
+  | 'block'
+  | 'typographic';
 
 // CoverBook is the minimal shape Cover needs to render. Accepting a
 // permissive string for palette + style lets the same component render

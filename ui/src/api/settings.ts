@@ -14,6 +14,7 @@ export type SettingsLibraryPath = {
 
 export type SettingsLibrary = Library & {
   paths: SettingsLibraryPath[];
+  fileNamingPattern: string | null;
 };
 
 export async function fetchSettingsLibraries(): Promise<SettingsLibrary[]> {
@@ -73,6 +74,51 @@ export async function scanLibraryPath(id: string): Promise<void> {
   await api<void>(`/api/v1/settings/libraries/paths/${id}/scan`, {
     method: 'POST',
   });
+}
+
+// updateLibraryNamingPattern stores or clears the per-library file naming
+// pattern. Pass null to clear (library falls back to "keep original
+// filename" on bookdrop approval).
+export async function updateLibraryNamingPattern(
+  id: string,
+  pattern: string | null,
+): Promise<SettingsLibrary> {
+  const { library } = await api<{ library: SettingsLibrary }>(
+    `/api/v1/settings/libraries/${id}/file-naming-pattern`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ fileNamingPattern: pattern }),
+    },
+  );
+  return library;
+}
+
+export type PreviewPatternSample = {
+  title?: string;
+  subtitle?: string;
+  authors?: string[];
+  year?: number;
+  series?: string;
+  seriesIndex?: number;
+  language?: string;
+  publisher?: string;
+  isbn?: string;
+  currentFilename?: string;
+  extension?: string;
+};
+
+export async function previewNamingPattern(
+  pattern: string,
+  sample?: PreviewPatternSample,
+): Promise<string> {
+  const { resolved } = await api<{ resolved: string }>(
+    '/api/v1/settings/libraries/pattern/preview',
+    {
+      method: 'POST',
+      body: JSON.stringify({ pattern, sample }),
+    },
+  );
+  return resolved;
 }
 
 export const settingsLibrariesQueryKey = ['settings', 'libraries'] as const;
@@ -135,6 +181,8 @@ export const providerSettingsQueryKey = ['settings', 'providers'] as const;
 export type InstanceSummary = {
   version: string;
   diskMode: string;
+  libraries: number;
+  books: number;
 };
 
 export async function fetchInstanceSummary(): Promise<InstanceSummary> {

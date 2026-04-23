@@ -14,6 +14,7 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/pattern"
 	"github.com/blackforge/embookshelf/internal/repo"
 )
 
@@ -267,6 +268,113 @@ func (h *Handler) SettingsLibraryScan(c *gin.Context) {
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"count": total})
+}
+
+type updateFileNamingPatternReq struct {
+	// Pointer so callers can explicitly send null to clear the pattern.
+	// A missing key is rejected (400) — the UI always sends one or the
+	// other, so there's no ambiguity to decode.
+	FileNamingPattern *string `json:"fileNamingPattern"`
+}
+
+// SettingsLibraryUpdateNamingPattern stores or clears the per-library file
+// naming pattern. Spec §7.1 — the pattern is what the bookdrop approval
+// flow uses to reorganize accepted files on disk. A null/blank value means
+// "keep the original filename" (the resolver's fallback).
+func (h *Handler) SettingsLibraryUpdateNamingPattern(c *gin.Context) {
+	id := c.Param("id")
+	var body updateFileNamingPatternReq
+	// Hand-parse so we can distinguish "field missing" from "field null".
+	if err := c.ShouldBindJSON(&body); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if err := h.lib.SetFileNamingPattern(c.Request.Context(), id, body.FileNamingPattern); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			writeError(c, http.StatusNotFound, "library not found")
+			return
+		}
+		writeServerError(c, "settings library pattern update", err)
+		return
+	}
+	lib, err := h.lib.GetByID(c.Request.Context(), id)
+	if err != nil {
+		writeServerError(c, "settings library pattern refetch", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"library": toLibraryDTO(lib)})
+}
+
+type previewPatternReq struct {
+	Pattern string `json:"pattern"`
+	Sample  *struct {
+		Title           string   `json:"title"`
+		Subtitle        string   `json:"subtitle"`
+		Authors         []string `json:"authors"`
+		Year            int      `json:"year"`
+		Series          string   `json:"series"`
+		SeriesIndex     float64  `json:"seriesIndex"`
+		Language        string   `json:"language"`
+		Publisher       string   `json:"publisher"`
+		ISBN            string   `json:"isbn"`
+		CurrentFilename string   `json:"currentFilename"`
+		Extension       string   `json:"extension"`
+	} `json:"sample"`
+}
+
+// SettingsLibraryPreviewPattern resolves a (pattern, sample metadata) pair
+// without touching any library row. Lets the settings UI show the shape of
+// a pattern before the admin commits to saving it (spec §5 preview). Blank
+// samples fall back to a canned "full" book so the page renders something
+// useful before the admin types anything.
+func (h *Handler) SettingsLibraryPreviewPattern(c *gin.Context) {
+	var body previewPatternReq
+	if !bindJSON(c, &body) {
+		return
+	}
+	var in pattern.Input
+	if body.Sample != nil {
+		s := body.Sample
+		in = pattern.Input{
+			Title:           s.Title,
+			Subtitle:        s.Subtitle,
+			Authors:         s.Authors,
+			Year:            s.Year,
+			Series:          s.Series,
+			SeriesIndex:     s.SeriesIndex,
+			Language:        s.Language,
+			Publisher:       s.Publisher,
+			ISBN:            s.ISBN,
+			CurrentFilename: s.CurrentFilename,
+			Extension:       s.Extension,
+		}
+	} else {
+		in = sampleBookInput()
+	}
+	if in.CurrentFilename == "" {
+		in.CurrentFilename = "original-filename." + firstNonEmpty(in.Extension, "epub")
+	}
+	if in.Extension == "" {
+		in.Extension = "epub"
+	}
+	c.JSON(http.StatusOK, gin.H{"resolved": pattern.Preview(body.Pattern, in)})
+}
+
+// sampleBookInput returns a canonical "full metadata" sample used by the
+// preview endpoint when the client doesn't provide one.
+func sampleBookInput() pattern.Input {
+	return pattern.Input{
+		Title:           "The Name of the Wind",
+		Authors:         []string{"Patrick Rothfuss"},
+		Year:            2007,
+		Series:          "The Kingkiller Chronicle",
+		SeriesIndex:     1,
+		Publisher:       "DAW",
+		ISBN:            "9780756404079",
+		Language:        "en",
+		Extension:       "epub",
+		CurrentFilename: "the-name-of-the-wind.epub",
+	}
 }
 
 // SettingsLibraryPathScan enqueues a library.scan job for the given path.

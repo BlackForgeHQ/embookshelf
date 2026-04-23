@@ -28,6 +28,26 @@ func (s *LibraryService) Create(ctx context.Context, name string) (model.Library
 	return s.repo.CreateLibrary(ctx, name, slugify(name))
 }
 
+// GetByID returns a single library (with its naming pattern) by id.
+func (s *LibraryService) GetByID(ctx context.Context, id string) (model.Library, error) {
+	return s.repo.GetByID(ctx, id)
+}
+
+// SetFileNamingPattern stores (or clears) the per-library template used by
+// the bookdrop approval flow. An empty trimmed string clears the pattern so
+// the library falls back to keeping the original filename on disk.
+func (s *LibraryService) SetFileNamingPattern(ctx context.Context, id string, pattern *string) error {
+	if pattern != nil {
+		trimmed := strings.TrimSpace(*pattern)
+		if trimmed == "" {
+			pattern = nil
+		} else {
+			pattern = &trimmed
+		}
+	}
+	return s.repo.SetFileNamingPattern(ctx, id, pattern)
+}
+
 // slugify collapses a human-readable name into a URL-safe slug:
 // lowercase ASCII alphanumerics pass through, everything else (spaces,
 // punctuation, non-ASCII) becomes a single '-'. Leading/trailing dashes are

@@ -35,10 +35,12 @@ import {
   fetchSettingsUsers,
   instanceInfoQueryKey,
   prescanLibraryPaths,
+  previewNamingPattern,
   providerSettingsQueryKey,
   scanLibraryPath,
   settingsLibrariesQueryKey,
   settingsUsersQueryKey,
+  updateLibraryNamingPattern,
   updateProviderSetting,
   updateSettingsUserRole,
   type ProviderInfo,
@@ -530,8 +532,13 @@ function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
     mutationFn: (id: string) => scanLibraryPath(id),
     onSuccess: invalidate,
   });
+  const patternMut = useMutation({
+    mutationFn: (args: { id: string; pattern: string | null }) =>
+      updateLibraryNamingPattern(args.id, args.pattern),
+    onSuccess: invalidate,
+  });
 
-  const error = (createMut.error ?? deleteMut.error ?? scanMut.error) as
+  const error = (createMut.error ?? deleteMut.error ?? scanMut.error ?? patternMut.error) as
     | ApiError
     | null;
 
@@ -564,9 +571,11 @@ function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
           key={lib.id}
           library={lib}
           busy={createMut.isPending || deleteMut.isPending || scanMut.isPending}
+          patternBusy={patternMut.isPending}
           onAddPath={(path) => createMut.mutate({ libraryId: lib.id, path })}
           onDeletePath={(id) => deleteMut.mutate(id)}
           onScanPath={(id) => scanMut.mutate(id)}
+          onSavePattern={(pattern) => patternMut.mutate({ id: lib.id, pattern })}
         />
       ))}
 
@@ -850,12 +859,22 @@ function LibraryCreatorDialog({
 type LibraryCardProps = {
   library: SettingsLibrary;
   busy: boolean;
+  patternBusy: boolean;
   onAddPath: (path: string) => void;
   onDeletePath: (id: string) => void;
   onScanPath: (id: string) => void;
+  onSavePattern: (pattern: string | null) => void;
 };
 
-function LibraryCard({ library, busy, onAddPath, onDeletePath, onScanPath }: LibraryCardProps) {
+function LibraryCard({
+  library,
+  busy,
+  patternBusy,
+  onAddPath,
+  onDeletePath,
+  onScanPath,
+  onSavePattern,
+}: LibraryCardProps) {
   const [draft, setDraft] = useState('');
 
   return (
@@ -917,6 +936,129 @@ function LibraryCard({ library, busy, onAddPath, onDeletePath, onScanPath }: Lib
           <Icon name="plus" size={13} /> Add path
         </Button>
       </form>
+
+      <NamingPatternEditor
+        library={library}
+        busy={patternBusy}
+        onSave={onSavePattern}
+      />
+    </div>
+  );
+}
+
+// NamingPatternEditor is the per-library pattern field from spec §9.2.
+// Edits are local until Save; a live preview hits the backend resolver so
+// admins see the exact path a book would land at before committing.
+function NamingPatternEditor({
+  library,
+  busy,
+  onSave,
+}: {
+  library: SettingsLibrary;
+  busy: boolean;
+  onSave: (pattern: string | null) => void;
+}) {
+  const saved = library.fileNamingPattern ?? '';
+  const [draft, setDraft] = useState(saved);
+
+  // Resync when the server value changes (another tab saved, or a PATCH
+  // completed and invalidated the query).
+  useEffect(() => {
+    setDraft(saved);
+  }, [saved]);
+
+  const trimmed = draft.trim();
+  const dirty = trimmed !== saved;
+
+  // Preview fires after a short idle — avoids hammering the endpoint
+  // while the admin is typing.
+  const [debounced, setDebounced] = useState(trimmed);
+  useEffect(() => {
+    const handle = window.setTimeout(() => setDebounced(trimmed), 250);
+    return () => window.clearTimeout(handle);
+  }, [trimmed]);
+
+  const preview = useQuery({
+    queryKey: ['settings', 'libraries', library.id, 'pattern-preview', debounced],
+    queryFn: () => previewNamingPattern(debounced),
+    enabled: debounced !== '',
+    staleTime: 60_000,
+  });
+
+  return (
+    <div
+      style={{
+        borderTop: '1px dashed var(--color-rule-soft)',
+        marginTop: 14,
+        paddingTop: 14,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 6 }}>
+        <span className="t-label">File naming pattern</span>
+        <span
+          className="t-micro"
+          style={{
+            color: library.fileNamingPattern
+              ? 'var(--color-accent-ink)'
+              : 'var(--color-ink-3)',
+          }}
+        >
+          {library.fileNamingPattern ? 'custom' : 'default'}
+        </span>
+      </div>
+      <p className="t-small" style={{ marginBottom: 8, fontStyle: 'italic' }}>
+        Applied when you approve a book from BookDrop. Blank keeps the
+        original filename on disk.
+      </p>
+
+      <Input
+        placeholder="{authors}/<{series}/><{seriesIndex}. >{title}/{title}< - {authors}>< ({year})>"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        className="mono text-[12.5px]"
+      />
+
+      {debounced !== '' && (
+        <div
+          className="mono"
+          style={{
+            marginTop: 8,
+            padding: '8px 12px',
+            background: 'var(--color-paper-2)',
+            borderRadius: 2,
+            fontSize: 12,
+            color: 'var(--color-ink-2)',
+            wordBreak: 'break-all',
+          }}
+        >
+          <span className="t-micro" style={{ marginRight: 8 }}>Preview</span>
+          {preview.data ?? (preview.isLoading ? 'Resolving…' : '')}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => onSave(trimmed === '' ? null : trimmed)}
+          disabled={busy || !dirty}
+        >
+          {busy ? 'Saving…' : 'Save pattern'}
+        </Button>
+        {library.fileNamingPattern && (
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => {
+              setDraft('');
+              onSave(null);
+            }}
+            disabled={busy}
+          >
+            Clear
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

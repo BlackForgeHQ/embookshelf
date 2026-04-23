@@ -5,10 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/pattern"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/sse"
 )
@@ -18,14 +23,27 @@ import (
 // processor results). All state transitions go through here so SSE events,
 // cover-file side effects, and the state machine stay in one place.
 type BookDropService struct {
-	bdrop  *repo.BookDropRepo
-	libs   *repo.LibraryRepo
-	covers *coverstore.Store
-	hub    *sse.Hub
+	bdrop    *repo.BookDropRepo
+	libs     *repo.LibraryRepo
+	libPaths *repo.LibraryPathRepo
+	covers   *coverstore.Store
+	hub      *sse.Hub
 }
 
-func NewBookDropService(bdrop *repo.BookDropRepo, libs *repo.LibraryRepo, covers *coverstore.Store, hub *sse.Hub) *BookDropService {
-	return &BookDropService{bdrop: bdrop, libs: libs, covers: covers, hub: hub}
+func NewBookDropService(
+	bdrop *repo.BookDropRepo,
+	libs *repo.LibraryRepo,
+	libPaths *repo.LibraryPathRepo,
+	covers *coverstore.Store,
+	hub *sse.Hub,
+) *BookDropService {
+	return &BookDropService{
+		bdrop:    bdrop,
+		libs:     libs,
+		libPaths: libPaths,
+		covers:   covers,
+		hub:      hub,
+	}
 }
 
 func (s *BookDropService) List(ctx context.Context) ([]model.BookDropItem, error) {
@@ -129,6 +147,16 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 		HasCover:    item.HasCover,
 		CoverMime:   item.CoverMime,
 	}
+
+	// File-naming pattern (spec/file-naming-patterns.spec.md §5.1). When
+	// the target library has a pattern and at least one registered path,
+	// resolve the template and physically move the file out of bookdrop
+	// into the library root. Failures are logged but don't abort import —
+	// the book still gets created pointing at the original bookdrop path.
+	if newPath, ok := s.applyNamingPattern(ctx, libraryID, item); ok {
+		book.Path = newPath
+	}
+
 	created, err := s.libs.Create(ctx, book)
 	if err != nil {
 		return created, err
@@ -181,6 +209,147 @@ func (s *BookDropService) ClearProcessed(ctx context.Context) (int, error) {
 		s.hub.Broadcast(sse.Event{Name: "bookdrop.cleared", Data: "{}"})
 	}
 	return len(ids), nil
+}
+
+// applyNamingPattern resolves the target library's file-naming pattern (if
+// set) against a bookdrop item's metadata and physically moves the file to
+// its new home under the first registered library path. Returns the new
+// absolute path on success; (false) means "leave the file alone, keep the
+// original path" — no-op for libraries without a pattern, libraries without
+// registered paths, or on any filesystem error.
+//
+// The move uses os.Rename where possible and falls back to copy+remove when
+// source/destination straddle different filesystems (EXDEV). Destination
+// collisions are resolved by appending " (2)", " (3)", etc.
+func (s *BookDropService) applyNamingPattern(
+	ctx context.Context,
+	libraryID string,
+	item model.BookDropItem,
+) (string, bool) {
+	lib, err := s.libs.GetByID(ctx, libraryID)
+	if err != nil || lib.FileNamingPattern == nil {
+		return "", false
+	}
+	paths, err := s.libPaths.ListForLibrary(ctx, libraryID)
+	if err != nil || len(paths) == 0 {
+		slog.Warn("skip naming pattern: no library paths", "library_id", libraryID, "err", err)
+		return "", false
+	}
+	root := paths[0].Path
+
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(item.Path)), ".")
+	in := pattern.Input{
+		Title:           item.Title,
+		Authors:         splitAuthors(item.Author),
+		Language:        item.Language,
+		Extension:       ext,
+		CurrentFilename: filepath.Base(item.Path),
+	}
+	resolved := pattern.Resolve(*lib.FileNamingPattern, in)
+	if resolved == "" || resolved == in.CurrentFilename && filepath.Dir(item.Path) == root {
+		// Nothing to move — either the resolver fell back to the original
+		// filename or the file is already under the library root.
+		return "", false
+	}
+
+	// Forward-slash-only resolver output → OS-native path separator.
+	dest := filepath.Join(root, filepath.FromSlash(resolved))
+	if dest == item.Path {
+		return "", false
+	}
+	dest = uniqueDestination(dest)
+	if err := moveFile(item.Path, dest); err != nil {
+		slog.Warn("bookdrop move failed, keeping original path",
+			"src", item.Path, "dest", dest, "err", err)
+		return "", false
+	}
+	return dest, true
+}
+
+// splitAuthors turns the bookdrop's single author string into a slice the
+// resolver can reason about. Commas are the canonical separator since the
+// extractor writes authors that way ("Name, Other Name"); a single name
+// round-trips unchanged.
+func splitAuthors(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// moveFile atomically moves src to dest. Falls back to copy+remove when
+// os.Rename fails (cross-filesystem moves return syscall.EXDEV, but the
+// spec's pragma is "try Rename, on any failure try the portable path").
+// The destination directory is created as needed.
+func moveFile(src, dest string) error {
+	if src == dest {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
+	if err := os.Rename(src, dest); err == nil {
+		return nil
+	}
+	// Copy + sync + remove fallback. Intentionally not checking the
+	// specific error type — any failure we can't rename through should
+	// try the portable path before giving up.
+	if err := copyFile(src, dest); err != nil {
+		return err
+	}
+	if err := os.Remove(src); err != nil {
+		// Leave the copy in place so the DB row still points to a valid
+		// file; log so the admin can reap the source manually.
+		slog.Warn("copy succeeded but source remove failed", "src", src, "err", err)
+	}
+	return nil
+}
+
+func copyFile(src, dest string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open src: %w", err)
+	}
+	defer in.Close()
+	out, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("create dest: %w", err)
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return fmt.Errorf("copy: %w", err)
+	}
+	if err := out.Sync(); err != nil {
+		return fmt.Errorf("fsync: %w", err)
+	}
+	return nil
+}
+
+// uniqueDestination walks " (2)", " (3)", … suffixes until it finds a free
+// name. Preserves the original extension so the file still opens after
+// renaming. Returns the input unchanged if it doesn't already exist.
+func uniqueDestination(dest string) string {
+	if _, err := os.Stat(dest); os.IsNotExist(err) {
+		return dest
+	}
+	dir := filepath.Dir(dest)
+	ext := filepath.Ext(dest)
+	base := strings.TrimSuffix(filepath.Base(dest), ext)
+	for i := 2; i < 10_000; i++ {
+		cand := filepath.Join(dir, fmt.Sprintf("%s (%d)%s", base, i, ext))
+		if _, err := os.Stat(cand); os.IsNotExist(err) {
+			return cand
+		}
+	}
+	return dest
 }
 
 func (s *BookDropService) Reject(ctx context.Context, id string) error {

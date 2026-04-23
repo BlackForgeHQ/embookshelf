@@ -211,18 +211,12 @@ function ShelfLayout({ books, onOpen }: { books: Book[]; onOpen: (id: string) =>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 42 }}>
       {chunks.map((row, ri) => (
         <div key={ri} className="shelf-row">
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'flex-end',
-              gap: 20,
-              minHeight: 200,
-              padding: '8px 0 0',
-            }}
-          >
-            {row.map((b) => (
-              <Cover key={b.id} book={b} size="md" onClick={() => onOpen(b.id)} />
-            ))}
+          <div className="shelf-scroll">
+            <div className="shelf-covers">
+              {row.map((b) => (
+                <Cover key={b.id} book={b} size="md" onClick={() => onOpen(b.id)} />
+              ))}
+            </div>
           </div>
           <div className="shelf-plank" />
         </div>

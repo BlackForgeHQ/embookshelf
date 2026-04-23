@@ -40,18 +40,31 @@ type providerInfoDTO struct {
 // instanceSummaryDTO is the subset of instance facts safe to share with
 // every signed-in user — rendered in the persistent status bar.
 type instanceSummaryDTO struct {
-	Version  string `json:"version"`
-	DiskMode string `json:"diskMode"`
+	Version   string `json:"version"`
+	DiskMode  string `json:"diskMode"`
+	Libraries int    `json:"libraries"`
+	Books     int    `json:"books"`
 }
 
 // InstanceSummary returns the non-sensitive instance fields (version,
-// disk mode). Session-authed but not admin-gated — the status bar at the
-// bottom of every page reads this.
+// disk mode, and catalog-size counts). Session-authed but not admin-gated —
+// the status bar at the bottom of every page reads this.
 func (h *Handler) InstanceSummary(c *gin.Context) {
-	c.JSON(http.StatusOK, instanceSummaryDTO{
+	out := instanceSummaryDTO{
 		Version:  Version,
 		DiskMode: h.cfg.DiskType,
-	})
+	}
+	// Counts are best-effort: a DB hiccup here shouldn't take down the
+	// status bar, so we log and render zeros rather than erroring.
+	if libs, err := h.lib.List(c.Request.Context()); err == nil {
+		out.Libraries = len(libs)
+		for _, l := range libs {
+			out.Books += l.BookCount
+		}
+	} else {
+		slog.Warn("instance summary counts", "err", err)
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // InstanceInfo returns the server-side facts the settings panels need:

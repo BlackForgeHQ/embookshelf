@@ -8,6 +8,10 @@ type Library struct {
 	Slug      string
 	BookCount int
 	CreatedAt time.Time
+	// FileNamingPattern is the per-library override template used by the
+	// bookdrop approval flow to organize accepted files on disk. nil means
+	// "use the hard-coded fallback" (i.e. keep the original filename).
+	FileNamingPattern *string
 }
 
 // LibraryPath is a filesystem root that a library scans for books.

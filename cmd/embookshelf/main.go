@@ -109,7 +109,7 @@ func main() {
 	libSvc := service.NewLibraryService(libRepo)
 	shelfSvc := service.NewShelfService(shelfRepo)
 	authSvc := service.NewAuthService(userRepo, sessionRepo)
-	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, covers, hub)
+	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, libPathRepo, covers, hub)
 	progressSvc := service.NewProgressService(progressRepo, readingSessionRepo)
 	libPathSvc := service.NewLibraryPathService(libPathRepo)
 	annotationSvc := service.NewAnnotationService(annotationRepo)

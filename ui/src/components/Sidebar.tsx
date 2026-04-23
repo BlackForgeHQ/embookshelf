@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 
@@ -21,11 +21,21 @@ import {
   type Shelf,
   type ShelfRule,
 } from '@/api/books';
-import { CURRENT_USER } from '@/data/mock';
+import { AccentPicker, accentColor, type ShelfAccent } from './AccentPicker';
 import { Icon, type IconName } from './Icon';
 import { RuleEditor } from './RuleEditor';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Sidebar,
   SidebarContent,
@@ -89,25 +99,38 @@ export function AppSidebar() {
     },
   });
 
-  // Regular shelf creation still goes through a native prompt — single
-  // text input, not worth a modal. Smart shelves open the RuleEditor.
+  // Regular shelves are created through a dedicated Dialog (name + accent
+  // picker). Smart shelves keep using the RuleEditor, extended with the
+  // same accent picker so both shelf types share one design language.
   const createShelfMut = useMutation({
-    mutationFn: (name: string) => createShelf(name),
+    mutationFn: (args: { name: string; accent: ShelfAccent }) =>
+      createShelf(args.name, args.accent),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: shelvesQueryKey });
+      setShelfDraftOpen(false);
     },
   });
   const createSmartMut = useMutation({
-    mutationFn: (args: { name: string; rule: ShelfRule }) =>
-      createSmartShelf(args.name, args.rule),
+    mutationFn: (args: { name: string; rule: ShelfRule; accent: ShelfAccent }) =>
+      createSmartShelf(args.name, args.rule, args.accent),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: shelvesQueryKey });
       setSmartDraft(null);
     },
   });
   const updateSmartMut = useMutation({
-    mutationFn: (args: { slug: string; name: string; rule: ShelfRule }) =>
-      updateShelf(args.slug, { name: args.name, rule: args.rule, ruleSet: true }),
+    mutationFn: (args: {
+      slug: string;
+      name: string;
+      rule: ShelfRule;
+      accent: ShelfAccent;
+    }) =>
+      updateShelf(args.slug, {
+        name: args.name,
+        accent: args.accent,
+        rule: args.rule,
+        ruleSet: true,
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: shelvesQueryKey });
       setSmartDraft(null);
@@ -120,18 +143,12 @@ export function AppSidebar() {
     },
   });
 
+  const [shelfDraftOpen, setShelfDraftOpen] = useState(false);
   const [smartDraft, setSmartDraft] = useState<
     | { mode: 'create' }
     | { mode: 'edit'; shelf: Shelf }
     | null
   >(null);
-
-  const promptCreateShelf = () => {
-    const name = window.prompt('Name the new shelf');
-    if (name && name.trim()) {
-      createShelfMut.mutate(name.trim());
-    }
-  };
 
   const libs = libraries.data ?? [];
   const allShelves = shelves.data ?? [];
@@ -239,7 +256,7 @@ export function AppSidebar() {
           <SidebarGroupAction
             title="New shelf"
             aria-label="New shelf"
-            onClick={promptCreateShelf}
+            onClick={() => setShelfDraftOpen(true)}
             disabled={createShelfMut.isPending}
           >
             <Icon name="plus" size={12} />
@@ -254,6 +271,7 @@ export function AppSidebar() {
                   icon={BUILTIN_SHELF_ICONS[s.slug] ?? 'folder'}
                   label={s.name}
                   count={s.bookCount}
+                  color={accentColor(s.accent)}
                   active={activeShelf === s.slug}
                 />
               ))}
@@ -303,19 +321,41 @@ export function AppSidebar() {
         />
       </SidebarFooter>
 
+      <ShelfCreatorDialog
+        open={shelfDraftOpen}
+        onOpenChange={(open) => {
+          if (!open) createShelfMut.reset();
+          setShelfDraftOpen(open);
+        }}
+        existingNames={allShelves.map((s) => s.name)}
+        busy={createShelfMut.isPending}
+        error={(createShelfMut.error as ApiError | null)?.message ?? null}
+        onSubmit={(draft) => createShelfMut.mutate(draft)}
+      />
+
       {smartDraft && (
         <RuleEditor
           title={smartDraft.mode === 'create' ? 'New smart shelf' : `Edit ${smartDraft.shelf.name}`}
           submitLabel={smartDraft.mode === 'create' ? 'Create' : 'Save'}
           initialName={smartDraft.mode === 'edit' ? smartDraft.shelf.name : ''}
           initialRule={smartDraft.mode === 'edit' ? smartDraft.shelf.rule : undefined}
+          initialAccent={
+            smartDraft.mode === 'edit'
+              ? (smartDraft.shelf.accent as ShelfAccent)
+              : 'accent'
+          }
           busy={createSmartMut.isPending || updateSmartMut.isPending}
           error={smartMutError?.message ?? null}
-          onSubmit={({ name, rule }) => {
+          onSubmit={({ name, rule, accent }) => {
             if (smartDraft.mode === 'create') {
-              createSmartMut.mutate({ name, rule });
+              createSmartMut.mutate({ name, rule, accent });
             } else {
-              updateSmartMut.mutate({ slug: smartDraft.shelf.slug, name, rule });
+              updateSmartMut.mutate({
+                slug: smartDraft.shelf.slug,
+                name,
+                rule,
+                accent,
+              });
             }
           }}
           onCancel={() => {
@@ -326,6 +366,105 @@ export function AppSidebar() {
         />
       )}
     </Sidebar>
+  );
+}
+
+type ShelfCreatorDialogProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  existingNames: string[];
+  busy: boolean;
+  error: string | null;
+  onSubmit: (draft: { name: string; accent: ShelfAccent }) => void;
+};
+
+// ShelfCreatorDialog replaces the old window.prompt-based shelf creation.
+// Matches the LibraryCreatorDialog shape (controlled open, reset on close)
+// so the two creation flows feel like part of the same family.
+function ShelfCreatorDialog({
+  open,
+  onOpenChange,
+  existingNames,
+  busy,
+  error,
+  onSubmit,
+}: ShelfCreatorDialogProps) {
+  const [name, setName] = useState('');
+  const [accent, setAccent] = useState<ShelfAccent>('accent');
+
+  useEffect(() => {
+    if (open) return;
+    setName('');
+    setAccent('accent');
+  }, [open]);
+
+  const trimmed = name.trim();
+  const collision = existingNames.some(
+    (n) => n.toLowerCase() === trimmed.toLowerCase(),
+  );
+  const valid = trimmed !== '' && !collision;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[420px]">
+        <DialogHeader>
+          <DialogTitle>New shelf</DialogTitle>
+          <DialogDescription>
+            A place to group books by hand. Smart shelves live alongside these
+            and fill themselves from rules.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="shelf-name">Name</Label>
+            <Input
+              id="shelf-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. To finish"
+              autoFocus
+            />
+            {trimmed !== '' && collision && (
+              <div className="t-small text-(--color-accent-ink)">
+                A shelf with that name already exists.
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label>Accent</Label>
+            <AccentPicker value={accent} onChange={setAccent} />
+          </div>
+
+          {error && (
+            <div
+              className="t-small rounded-sm border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink)"
+            >
+              {error}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+            disabled={busy}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={() => onSubmit({ name: trimmed, accent })}
+            disabled={!valid || busy}
+          >
+            {busy ? 'Creating…' : 'Create shelf'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -347,7 +486,12 @@ function SmartShelfRow({
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={shelf.name}>
         <Link to="/library" search={{ shelf: shelf.slug } as never}>
-          <Icon name="sparkle" size={15} />
+          <span
+            aria-hidden
+            className="relative size-1.5 shrink-0 rounded-full"
+            style={{ background: accentColor(shelf.accent) }}
+          />
+          <Icon name="sparkle" size={13} aria-label="smart shelf" />
           <span>{shelf.name}</span>
         </Link>
       </SidebarMenuButton>
@@ -390,12 +534,11 @@ type UserBadgeProps = {
 };
 
 function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
-  // Fall back to the prototype's mock identity while the /me query is still
-  // warming up — keeps the sidebar from flickering on first paint. Cleared
-  // automatically once a real AuthUser resolves.
-  const display = user ? user.display : CURRENT_USER.name;
-  const role = user ? user.role : CURRENT_USER.role;
-  const initials = user ? user.initials : CURRENT_USER.initials;
+  // Skip rendering until /me resolves — the beforeLoad guard in _app.tsx
+  // ensures a session exists by the time this component mounts, so the
+  // null window is brief and avoids flashing fake identity details.
+  if (!user) return null;
+  const { display, role, initials } = user;
 
   return (
     <div className="flex items-center gap-2.5 px-2 py-1.5">

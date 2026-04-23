@@ -298,8 +298,33 @@
   .cover.placeholder .c-title  { color: var(--color-ink-2); font-style: italic; }
   .cover.placeholder .c-author { color: var(--color-ink-3); }
 
-  /* Shelf plank (wooden bookshelf visual beneath a row of covers) */
+  /* Shelf plank (wooden bookshelf visual beneath a row of covers).
+     Covers live inside a horizontally scrolling inner track so they keep
+     their intrinsic size even when the viewport is narrower than eight
+     covers wide; the plank stays pinned to the visible bottom of the row. */
   .shelf-row { position: relative; padding-bottom: 18px; }
+  .shelf-scroll {
+    overflow-x: auto;
+    overflow-y: visible;
+    /* Firefox */
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-rule) transparent;
+  }
+  .shelf-scroll::-webkit-scrollbar { height: 6px; }
+  .shelf-scroll::-webkit-scrollbar-track { background: transparent; }
+  .shelf-scroll::-webkit-scrollbar-thumb {
+    background: var(--color-rule); border-radius: 3px;
+  }
+  .shelf-scroll::-webkit-scrollbar-thumb:hover { background: var(--color-ink-4); }
+  .shelf-covers {
+    display: flex;
+    align-items: flex-end;
+    gap: 20px;
+    min-height: 200px;
+    padding: 8px 0 0;
+    width: max-content;
+  }
+  .shelf-covers > * { flex: 0 0 auto; }
   .shelf-plank {
     position: absolute; left: -12px; right: -12px; bottom: 0;
     height: 8px;

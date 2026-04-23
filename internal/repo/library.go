@@ -55,10 +55,12 @@ func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug string) (mod
 		INSERT INTO libraries (name, slug)
 		VALUES ($1, $2)
 		ON CONFLICT (slug) DO NOTHING
-		RETURNING id, name, slug, created_at
+		RETURNING id, name, slug, file_naming_pattern, created_at
 	`, name, slug)
 	var l model.Library
-	if err := row.Scan(&l.ID, &l.Name, &l.Slug, &l.CreatedAt); err != nil {
+	if err := row.Scan(
+		&l.ID, &l.Name, &l.Slug, &l.FileNamingPattern, &l.CreatedAt,
+	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return model.Library{}, ErrLibraryNameTaken
 		}
@@ -70,7 +72,7 @@ func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug string) (mod
 func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT
-			l.id, l.name, l.slug, l.created_at,
+			l.id, l.name, l.slug, l.file_naming_pattern, l.created_at,
 			COALESCE(
 				(SELECT COUNT(*) FROM books b
 				 WHERE b.library_id = l.id AND b.deleted_at IS NULL),
@@ -87,12 +89,57 @@ func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
 	var libs []model.Library
 	for rows.Next() {
 		var l model.Library
-		if err := rows.Scan(&l.ID, &l.Name, &l.Slug, &l.CreatedAt, &l.BookCount); err != nil {
+		if err := rows.Scan(
+			&l.ID, &l.Name, &l.Slug, &l.FileNamingPattern, &l.CreatedAt, &l.BookCount,
+		); err != nil {
 			return nil, err
 		}
 		libs = append(libs, l)
 	}
 	return libs, rows.Err()
+}
+
+// GetByID returns a single library row, with its naming pattern and a
+// COUNT(books) aggregate. Used by pattern-preview + rename flows that need
+// the live pattern without a full listing.
+func (r *LibraryRepo) GetByID(ctx context.Context, id string) (model.Library, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT
+			l.id, l.name, l.slug, l.file_naming_pattern, l.created_at,
+			COALESCE(
+				(SELECT COUNT(*) FROM books b
+				 WHERE b.library_id = l.id AND b.deleted_at IS NULL),
+				0
+			) AS book_count
+		FROM libraries l
+		WHERE l.id = $1
+	`, id)
+	var l model.Library
+	err := row.Scan(
+		&l.ID, &l.Name, &l.Slug, &l.FileNamingPattern, &l.CreatedAt, &l.BookCount,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.Library{}, ErrNotFound
+		}
+		return model.Library{}, err
+	}
+	return l, nil
+}
+
+// SetFileNamingPattern writes (or clears) the per-library naming pattern.
+// Pass nil to revert to the fallback (keep original filename on approval).
+func (r *LibraryRepo) SetFileNamingPattern(ctx context.Context, id string, pattern *string) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE libraries SET file_naming_pattern = $2 WHERE id = $1
+	`, id, pattern)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // Search lists books scoped to a specific user's progress. An empty
