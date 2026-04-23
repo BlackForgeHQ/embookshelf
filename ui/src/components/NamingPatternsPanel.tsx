@@ -542,6 +542,11 @@ function PatternEditor({
   );
 }
 
+// ReferenceGrid is the key/value list used both for the placeholder
+// docs and for the sample-book cards. A fixed key column can't be
+// reused for both contexts — the placeholder docs get a roomy panel
+// while the sample cards are narrow — so we size the key column to
+// its widest token with max-content, and let the value column flex.
 function ReferenceGrid({
   items,
 }: {
@@ -551,10 +556,11 @@ function ReferenceGrid({
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: '220px 1fr',
-        rowGap: 4,
-        columnGap: 14,
+        gridTemplateColumns: 'max-content 1fr',
+        rowGap: 6,
+        columnGap: 16,
         fontSize: 13,
+        alignItems: 'baseline',
       }}
     >
       {items.map((it) => (
@@ -567,10 +573,17 @@ function ReferenceGrid({
 function Row({ token, desc }: { token: string; desc: string }) {
   return (
     <>
-      <span className="mono" style={{ fontSize: 12, color: 'var(--color-ink-2)' }}>
+      <span
+        className="mono"
+        style={{
+          fontSize: 12,
+          color: 'var(--color-ink-2)',
+          whiteSpace: 'nowrap',
+        }}
+      >
         {token}
       </span>
-      <span>{desc}</span>
+      <span style={{ wordBreak: 'break-word' }}>{desc}</span>
     </>
   );
 }
@@ -616,6 +629,10 @@ function ExampleRow({
   pattern: string;
   rows: ReadonlyArray<{ caption: string; output: string }>;
 }) {
+  // Some example blocks have a single output and don't use captions
+  // (the "Basic patterns" section). In that case we don't want a ghost
+  // column reserving 110px on the left — drop to a single-column layout.
+  const anyCaption = rows.some((r) => r.caption.trim() !== '');
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div
@@ -635,18 +652,20 @@ function ExampleRow({
           key={i}
           style={{
             display: 'grid',
-            gridTemplateColumns: '110px 1fr',
+            gridTemplateColumns: anyCaption ? '110px 1fr' : '1fr',
             columnGap: 10,
             fontSize: 12.5,
             padding: '2px 4px',
           }}
         >
-          <span
-            className="t-micro"
-            style={{ color: 'var(--color-ink-3)', alignSelf: 'center' }}
-          >
-            {r.caption}
-          </span>
+          {anyCaption && (
+            <span
+              className="t-micro"
+              style={{ color: 'var(--color-ink-3)', alignSelf: 'center' }}
+            >
+              {r.caption}
+            </span>
+          )}
           <span className="mono" style={{ wordBreak: 'break-all' }}>
             {r.output}
           </span>

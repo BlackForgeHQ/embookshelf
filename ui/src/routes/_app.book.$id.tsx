@@ -203,12 +203,15 @@ function BookDetail() {
           )}
 
           <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="mb-6">
-            <TabsList variant="line" className="w-full justify-start border-b border-(--color-rule-soft) rounded-none px-0">
-              <TabsTrigger value="overview" className="capitalize">Overview</TabsTrigger>
-              <TabsTrigger value="notes" className="capitalize">Notes</TabsTrigger>
-              <TabsTrigger value="annotations" className="capitalize">Annotations</TabsTrigger>
-              <TabsTrigger value="versions" className="capitalize">Versions</TabsTrigger>
-              <TabsTrigger value="activity" className="capitalize">Activity</TabsTrigger>
+            <TabsList
+              variant="line"
+              className="h-9 w-full justify-start gap-4 border-b border-(--color-rule-soft) px-0"
+            >
+              <TabsTrigger value="overview" className="flex-none px-3">Overview</TabsTrigger>
+              <TabsTrigger value="notes" className="flex-none px-3">Notes</TabsTrigger>
+              <TabsTrigger value="annotations" className="flex-none px-3">Annotations</TabsTrigger>
+              <TabsTrigger value="versions" className="flex-none px-3">Versions</TabsTrigger>
+              <TabsTrigger value="activity" className="flex-none px-3">Activity</TabsTrigger>
             </TabsList>
 
             <TabsContent value="overview">

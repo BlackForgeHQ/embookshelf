@@ -11,12 +11,15 @@ function Tabs({
   orientation = "horizontal",
   ...props
 }: React.ComponentProps<typeof TabsPrimitive.Root>) {
+  // font-sans is explicit because the app's html defaults to serif.
+  // Without it the trigger labels inherit serif + body font-size, which
+  // makes the shadcn pill/line variants look oversized.
   return (
     <TabsPrimitive.Root
       data-slot="tabs"
       data-orientation={orientation}
       className={cn(
-        "group/tabs flex gap-2 data-horizontal:flex-col",
+        "group/tabs flex gap-2 font-sans data-horizontal:flex-col",
         className
       )}
       {...props}

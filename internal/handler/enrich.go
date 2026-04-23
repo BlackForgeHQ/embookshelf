@@ -86,19 +86,24 @@ func (h *Handler) EnrichSearch(c *gin.Context) {
 		ISBN:   firstNonEmpty(strings.TrimSpace(c.Query("isbn")), book.ISBN),
 	}
 
-	matches, err := h.enrich.Search(c.Request.Context(), q)
+	result, err := h.enrich.Search(c.Request.Context(), q)
 	if err != nil {
 		writeServerError(c, "enrich search", err)
 		return
 	}
 
-	out := make([]enrichMatchDTO, 0, len(matches))
-	for _, m := range matches {
+	out := make([]enrichMatchDTO, 0, len(result.Matches))
+	for _, m := range result.Matches {
 		out = append(out, toEnrichMatchDTO(m))
 	}
+	providers := make([]string, 0, len(result.QueriedProviders))
+	for _, p := range result.QueriedProviders {
+		providers = append(providers, string(p))
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"query":   gin.H{"title": q.Title, "author": q.Author, "isbn": q.ISBN},
-		"matches": out,
+		"query":     gin.H{"title": q.Title, "author": q.Author, "isbn": q.ISBN},
+		"matches":   out,
+		"providers": providers,
 	})
 }
 

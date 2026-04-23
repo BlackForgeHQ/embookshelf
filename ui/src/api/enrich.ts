@@ -20,7 +20,29 @@ export type EnrichMatch = {
 export type EnrichResult = {
   query: { title: string; author: string; isbn: string };
   matches: EnrichMatch[];
+  // IDs of providers the server actually queried for this request —
+  // excludes disabled ones. Empty when no provider is enabled or when
+  // the query was blank (server short-circuits).
+  providers: string[];
 };
+
+// Wire-side provider IDs (matches internal/provider/provider.go Source
+// constants) mapped to display labels. Used for the enrichment panel's
+// empty-state copy so the UI lists what was actually searched.
+export const PROVIDER_LABELS: Record<string, string> = {
+  google_books: 'Google Books',
+  open_library: 'Open Library',
+  amazon: 'Amazon',
+  duckduckgo: 'DuckDuckGo',
+};
+
+export function formatProviderList(ids: readonly string[]): string {
+  const labels = ids.map((id) => PROVIDER_LABELS[id] ?? id);
+  if (labels.length === 0) return '';
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} or ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')}, or ${labels[labels.length - 1]}`;
+}
 
 export type EnrichQuery = {
   title?: string;

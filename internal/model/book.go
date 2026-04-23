@@ -26,21 +26,40 @@ type Book struct {
 	ID           string
 	LibraryID    string
 	Title        string
+	Subtitle     string
 	Author       string
 	Format       string
 	Year         int
+	// PublishDate is the full publication date when known. Year is kept
+	// alongside it as a cheap sort/display field — it's populated from
+	// the date when PublishDate is set, otherwise preserved as-is.
+	PublishDate *time.Time
+	// Language is an IETF BCP-47 tag or bare 2-letter code ("en", "de").
+	Language string
 	// Progress is the *current user's* reading progress (0-100), populated by
 	// the LEFT JOIN on user_book_progress. Zero when there's no row yet.
 	Progress     int
 	Rating       int
 	CoverPalette string
 	Description  string
-	ISBN         string
-	Publisher    string
-	Series       string
-	SeriesIndex  int
-	Tags         []string
-	CreatedAt    time.Time
+	// ISBN is the legacy single-ISBN column; the edit UI now treats it as
+	// the ISBN-13 slot. ISBN10 is a separate, optional column.
+	ISBN        string
+	ISBN10      string
+	Publisher   string
+	Series      string
+	SeriesIndex int
+	SeriesTotal int
+	Genres      []string
+	Moods       []string
+	Tags        []string
+	AgeRating   string
+	ContentRating string
+	Pages         int
+	// PublicReviews is tri-state: nil = unset, non-nil = explicit
+	// true/false (spec mirror of the UI's "No Value" option).
+	PublicReviews *bool
+	CreatedAt     time.Time
 	// Path is the absolute file path on disk (or empty for seed data).
 	Path string
 	// HasCover is true when a cover image lives under coverstore/books/{ID}.

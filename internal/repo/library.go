@@ -18,10 +18,14 @@ import (
 // user_book_progress; callers must alias that join as `ubp` and bind the
 // user id as $1.
 const bookCols = `
-	b.id, b.library_id, b.title, b.author, b.format, b.year,
+	b.id, b.library_id, b.title, b.subtitle, b.author, b.format, b.year,
+	b.publish_date, b.language,
 	COALESCE(ubp.progress, 0) AS progress,
 	b.rating, b.cover_palette,
-	b.description, b.isbn, b.publisher, b.series, b.series_index, b.tags,
+	b.description, b.isbn, b.isbn10, b.publisher,
+	b.series, b.series_index, b.series_total,
+	b.genres, b.moods, b.tags,
+	b.age_rating, b.content_rating, b.pages, b.public_reviews,
 	b.created_at, b.path,
 	b.has_cover, b.cover_mime,
 	COALESCE(ubp.resume_cfi, '') AS resume_cfi
@@ -303,29 +307,50 @@ func (r *LibraryRepo) Create(ctx context.Context, b model.Book) (model.Book, err
 	if b.Format == "" {
 		b.Format = "EPUB"
 	}
+	if b.Genres == nil {
+		b.Genres = []string{}
+	}
+	if b.Moods == nil {
+		b.Moods = []string{}
+	}
 	// We don't have a user context on book creation itself — return with
 	// Progress=0 and no resume CFI. The next user-scoped query will re-
 	// populate those via the LEFT JOIN.
 	row := r.pool.QueryRow(ctx, `
 		WITH inserted AS (
-			INSERT INTO books (library_id, title, author, format, year, rating, cover_palette,
-			                   description, isbn, publisher, series, series_index, tags, path,
-			                   has_cover, cover_mime)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+			INSERT INTO books (library_id, title, subtitle, author, format, year,
+			                   publish_date, language,
+			                   rating, cover_palette,
+			                   description, isbn, isbn10, publisher,
+			                   series, series_index, series_total,
+			                   genres, moods, tags,
+			                   age_rating, content_rating, pages, public_reviews,
+			                   path, has_cover, cover_mime)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+			        $18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
 			RETURNING *
 		)
-		SELECT b.id, b.library_id, b.title, b.author, b.format, b.year,
+		SELECT b.id, b.library_id, b.title, b.subtitle, b.author, b.format, b.year,
+		       b.publish_date, b.language,
 		       0 AS progress,
 		       b.rating, b.cover_palette,
-		       b.description, b.isbn, b.publisher, b.series, b.series_index, b.tags,
+		       b.description, b.isbn, b.isbn10, b.publisher,
+		       b.series, b.series_index, b.series_total,
+		       b.genres, b.moods, b.tags,
+		       b.age_rating, b.content_rating, b.pages, b.public_reviews,
 		       b.created_at, b.path,
 		       b.has_cover, b.cover_mime,
 		       '' AS resume_cfi
 		FROM inserted b
 	`,
-		b.LibraryID, b.Title, b.Author, b.Format, b.Year, b.Rating, b.CoverPalette,
-		b.Description, b.ISBN, b.Publisher, b.Series, b.SeriesIndex, b.Tags, b.Path,
-		b.HasCover, b.CoverMime,
+		b.LibraryID, b.Title, b.Subtitle, b.Author, b.Format, b.Year,
+		b.PublishDate, b.Language,
+		b.Rating, b.CoverPalette,
+		b.Description, b.ISBN, b.ISBN10, b.Publisher,
+		b.Series, b.SeriesIndex, b.SeriesTotal,
+		b.Genres, b.Moods, b.Tags,
+		b.AgeRating, b.ContentRating, b.Pages, b.PublicReviews,
+		b.Path, b.HasCover, b.CoverMime,
 	)
 	return scanBook(row)
 }
@@ -392,25 +417,50 @@ func (r *LibraryRepo) Delete(ctx context.Context, id string) error {
 
 // UpdateMetadata applies the user-editable metadata fields for a book.
 func (r *LibraryRepo) UpdateMetadata(ctx context.Context, b model.Book) error {
+	if b.Genres == nil {
+		b.Genres = []string{}
+	}
+	if b.Moods == nil {
+		b.Moods = []string{}
+	}
+	if b.Tags == nil {
+		b.Tags = []string{}
+	}
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE books SET
-			title         = $1,
-			author        = $2,
-			format        = $3,
-			year          = $4,
-			rating        = $5,
-			cover_palette = $6,
-			description   = $7,
-			isbn          = $8,
-			publisher     = $9,
-			series        = $10,
-			series_index  = $11,
-			tags          = $12,
-			updated_at    = now()
-		WHERE id = $13 AND deleted_at IS NULL
+			title          = $1,
+			subtitle       = $2,
+			author         = $3,
+			format         = $4,
+			year           = $5,
+			publish_date   = $6,
+			language       = $7,
+			rating         = $8,
+			cover_palette  = $9,
+			description    = $10,
+			isbn           = $11,
+			isbn10         = $12,
+			publisher      = $13,
+			series         = $14,
+			series_index   = $15,
+			series_total   = $16,
+			genres         = $17,
+			moods          = $18,
+			tags           = $19,
+			age_rating     = $20,
+			content_rating = $21,
+			pages          = $22,
+			public_reviews = $23,
+			updated_at     = now()
+		WHERE id = $24 AND deleted_at IS NULL
 	`,
-		b.Title, b.Author, b.Format, b.Year, b.Rating, b.CoverPalette,
-		b.Description, b.ISBN, b.Publisher, b.Series, b.SeriesIndex, b.Tags,
+		b.Title, b.Subtitle, b.Author, b.Format, b.Year,
+		b.PublishDate, b.Language,
+		b.Rating, b.CoverPalette,
+		b.Description, b.ISBN, b.ISBN10, b.Publisher,
+		b.Series, b.SeriesIndex, b.SeriesTotal,
+		b.Genres, b.Moods, b.Tags,
+		b.AgeRating, b.ContentRating, b.Pages, b.PublicReviews,
 		b.ID,
 	)
 	if err != nil {
@@ -430,9 +480,13 @@ type scanner interface {
 func scanBook(s scanner) (model.Book, error) {
 	var b model.Book
 	err := s.Scan(
-		&b.ID, &b.LibraryID, &b.Title, &b.Author, &b.Format, &b.Year,
+		&b.ID, &b.LibraryID, &b.Title, &b.Subtitle, &b.Author, &b.Format, &b.Year,
+		&b.PublishDate, &b.Language,
 		&b.Progress, &b.Rating, &b.CoverPalette,
-		&b.Description, &b.ISBN, &b.Publisher, &b.Series, &b.SeriesIndex, &b.Tags,
+		&b.Description, &b.ISBN, &b.ISBN10, &b.Publisher,
+		&b.Series, &b.SeriesIndex, &b.SeriesTotal,
+		&b.Genres, &b.Moods, &b.Tags,
+		&b.AgeRating, &b.ContentRating, &b.Pages, &b.PublicReviews,
 		&b.CreatedAt, &b.Path,
 		&b.HasCover, &b.CoverMime,
 		&b.ResumeCFI,

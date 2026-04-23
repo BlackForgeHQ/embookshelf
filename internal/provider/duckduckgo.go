@@ -44,6 +44,12 @@ func (d *DuckDuckGo) Search(ctx context.Context, q Query) ([]Match, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	// 202 = DDG couldn't derive an Instant Answer with confidence. That's
+	// "no result" for our purposes, not an error — other providers in the
+	// fan-out may still have a hit.
+	if resp.StatusCode == http.StatusAccepted {
+		return nil, nil
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("duckduckgo %d", resp.StatusCode)
 	}

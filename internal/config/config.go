@@ -65,7 +65,7 @@ func Load() (Config, error) {
 		BookDropInterval:    time.Duration(envInt("BOOKDROP_POLL_SECONDS", 5)) * time.Second,
 		DataPath:            envStr("DATA_PATH", "./data"),
 		MigrateOnStart:      envBool("MIGRATE_ON_START", true),
-		EnrichmentProviders: envCSV("ENRICHMENT_PROVIDERS", "google_books,open_library"),
+		EnrichmentProviders: envCSV("ENRICHMENT_PROVIDERS", "google_books,open_library,amazon,duckduckgo"),
 
 		AppURL: strings.TrimRight(envStr("APP_URL", ""), "/"),
 

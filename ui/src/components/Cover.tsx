@@ -1,6 +1,7 @@
-import type { CSSProperties, MouseEventHandler } from 'react';
+import { useState, type CSSProperties, type MouseEventHandler } from 'react';
 
 import { Icon } from './Icon';
+import { bookCoverUrl } from '@/api/books';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
@@ -36,6 +37,12 @@ export type CoverBook = {
   // Format string like "epub" / "pdf" / "cbz". When set, Cover renders a
   // small colored pill in the top-left corner (see FormatBadge below).
   format?: string;
+  // id + hasCover drive the image-vs-typographic choice. Both must be
+  // present for <img> rendering — id for the URL, hasCover to tell the
+  // component the backend has extracted bytes. On image-load failure we
+  // fall back to the typographic tile.
+  id?: string;
+  hasCover?: boolean;
 };
 
 type CoverSize = 'xs' | 'sm' | 'md' | 'lg' | 'hero';
@@ -171,17 +178,53 @@ function coercePalette(raw: string | undefined): CoverPalette {
 export function Cover({ book, size = 'md', onClick, style }: CoverProps) {
   const palette = PALETTES[coercePalette(book.palette)];
   const isPlaceholder = Boolean(book.placeholder);
-  const baseStyle: CSSProperties = isPlaceholder
-    ? {}
-    : { background: palette.bg, color: palette.ink };
   const format = normalizeFormat(book.format);
+
+  // Render the extracted image when the backend has one. A bad/missing
+  // file on disk returns 404 from /books/:id/cover; the <img>'s onError
+  // flips this flag and we degrade to the typographic tile without a
+  // broken-image glyph.
+  const [imgFailed, setImgFailed] = useState(false);
+  const showImage =
+    !isPlaceholder &&
+    Boolean(book.id) &&
+    Boolean(book.hasCover) &&
+    !imgFailed;
+
+  const baseStyle: CSSProperties =
+    isPlaceholder || showImage
+      ? {}
+      : { background: palette.bg, color: palette.ink };
+
   return (
     <div
       className={`cover ${size} ${isPlaceholder ? 'placeholder' : ''}`}
-      style={{ position: 'relative', ...baseStyle, ...style }}
+      style={{
+        position: 'relative',
+        overflow: 'hidden',
+        ...baseStyle,
+        ...style,
+      }}
       onClick={onClick}
     >
-      <CoverInner book={book} size={size} />
+      {showImage ? (
+        <img
+          src={bookCoverUrl(book.id as string)}
+          alt={book.title}
+          loading="lazy"
+          onError={() => setImgFailed(true)}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            display: 'block',
+          }}
+        />
+      ) : (
+        <CoverInner book={book} size={size} />
+      )}
       {format && <FormatBadge format={format} size={size} />}
     </div>
   );

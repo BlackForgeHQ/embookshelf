@@ -14,6 +14,7 @@ import {
   applyCoverFromUrl,
   enrichQueryKey,
   fetchEnrichment,
+  formatProviderList,
   type EnrichMatch,
 } from '@/api/enrich';
 import { Cover } from '@/components/Cover';
@@ -27,64 +28,122 @@ export const Route = createFileRoute('/_app/book/$id_/edit')({
 });
 
 // FormState mirrors the editor inputs as strings (native form shape);
-// numeric fields get parsed back to numbers on save.
+// numeric fields get parsed back to numbers on save. publicReviews is
+// tri-state — '' means "No Value" (null), 'yes' / 'no' map to true/false.
 type FormState = {
   title: string;
+  subtitle: string;
   author: string;
   description: string;
   year: string;
+  publishDate: string;
+  language: string;
   publisher: string;
-  isbn: string;
+  isbn13: string;
+  isbn10: string;
   series: string;
   seriesNum: string;
+  seriesTotal: string;
+  genres: string;
+  moods: string;
   tags: string;
+  ageRating: string;
+  contentRating: string;
+  pages: string;
+  publicReviews: '' | 'yes' | 'no';
 };
 
 function blankForm(): FormState {
   return {
     title: '',
+    subtitle: '',
     author: '',
     description: '',
     year: '',
+    publishDate: '',
+    language: '',
     publisher: '',
-    isbn: '',
+    isbn13: '',
+    isbn10: '',
     series: '',
     seriesNum: '',
+    seriesTotal: '',
+    genres: '',
+    moods: '',
     tags: '',
+    ageRating: '',
+    contentRating: '',
+    pages: '',
+    publicReviews: '',
   };
 }
 
 function bookToForm(b: BookDetail): FormState {
+  const pr = b.publicReviews;
   return {
     title: b.title ?? '',
+    subtitle: b.subtitle ?? '',
     author: b.author ?? '',
     description: b.description ?? '',
     year: b.year ? String(b.year) : '',
+    publishDate: b.publishDate ?? '',
+    language: b.language ?? '',
     publisher: b.publisher ?? '',
-    isbn: b.isbn ?? '',
+    isbn13: b.isbn ?? '',
+    isbn10: b.isbn10 ?? '',
     series: b.series ?? '',
     seriesNum: b.seriesNum ? String(b.seriesNum) : '',
+    seriesTotal: b.seriesTotal ? String(b.seriesTotal) : '',
+    genres: (b.genres ?? []).join(', '),
+    moods: (b.moods ?? []).join(', '),
     tags: (b.tags ?? []).join(', '),
+    ageRating: b.ageRating ?? '',
+    contentRating: b.contentRating ?? '',
+    pages: b.pages ? String(b.pages) : '',
+    publicReviews: pr === true ? 'yes' : pr === false ? 'no' : '',
   };
+}
+
+function splitCsv(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
 }
 
 function formToPatch(form: FormState): BookPatch {
   const patch: BookPatch = {
     title: form.title.trim(),
+    subtitle: form.subtitle.trim(),
     author: form.author.trim(),
     description: form.description,
+    language: form.language.trim(),
     publisher: form.publisher.trim(),
-    isbn: form.isbn.trim(),
+    isbn: form.isbn13.trim(),
+    isbn10: form.isbn10.trim(),
     series: form.series.trim(),
+    ageRating: form.ageRating.trim(),
+    contentRating: form.contentRating.trim(),
+    publishDate: form.publishDate.trim(),
   };
   const year = Number.parseInt(form.year, 10);
   patch.year = Number.isFinite(year) ? year : 0;
   const seriesNum = Number.parseInt(form.seriesNum, 10);
   patch.seriesNum = Number.isFinite(seriesNum) ? seriesNum : 0;
-  patch.tags = form.tags
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean);
+  const seriesTotal = Number.parseInt(form.seriesTotal, 10);
+  patch.seriesTotal = Number.isFinite(seriesTotal) ? seriesTotal : 0;
+  const pages = Number.parseInt(form.pages, 10);
+  patch.pages = Number.isFinite(pages) ? pages : 0;
+  patch.genres = splitCsv(form.genres);
+  patch.moods = splitCsv(form.moods);
+  patch.tags = splitCsv(form.tags);
+  if (form.publicReviews === 'yes') {
+    patch.publicReviews = true;
+  } else if (form.publicReviews === 'no') {
+    patch.publicReviews = false;
+  } else {
+    patch.publicReviewsClear = true;
+  }
   return patch;
 }
 
@@ -201,10 +260,19 @@ function MetadataEditor() {
           <h1 className="t-h1" style={{ marginBottom: 28 }}>{b.title}</h1>
 
           <Section title="Core">
-            <Row label="Title">
-              <Input value={form.title} onChange={(e) => set('title', e.target.value)} />
-            </Row>
-            <Row label="Author">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <Row label="Title">
+                <Input value={form.title} onChange={(e) => set('title', e.target.value)} />
+              </Row>
+              <Row label="Subtitle">
+                <Input
+                  value={form.subtitle}
+                  onChange={(e) => set('subtitle', e.target.value)}
+                  placeholder="—"
+                />
+              </Row>
+            </div>
+            <Row label="Authors">
               <Input value={form.author} onChange={(e) => set('author', e.target.value)} />
             </Row>
             <Row label="Description">
@@ -218,28 +286,63 @@ function MetadataEditor() {
           </Section>
 
           <Section title="Publication">
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-              <Row label="Year">
-                <Input value={form.year} onChange={(e) => set('year', e.target.value)} />
-              </Row>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
               <Row label="Publisher">
                 <Input
                   value={form.publisher}
                   onChange={(e) => set('publisher', e.target.value)}
                 />
               </Row>
+              <Row label="Publish date">
+                <Input
+                  type="date"
+                  value={form.publishDate}
+                  onChange={(e) => set('publishDate', e.target.value)}
+                />
+              </Row>
+              <Row label="Year">
+                <Input value={form.year} onChange={(e) => set('year', e.target.value)} />
+              </Row>
             </div>
-            <Row label="ISBN">
-              <Input
-                className="mono"
-                value={form.isbn}
-                onChange={(e) => set('isbn', e.target.value)}
-              />
-            </Row>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+              <Row label="Language">
+                <Input
+                  value={form.language}
+                  onChange={(e) => set('language', e.target.value)}
+                  placeholder="en"
+                  className="mono"
+                />
+              </Row>
+              <Row label="Pages">
+                <Input
+                  inputMode="numeric"
+                  value={form.pages}
+                  onChange={(e) => set('pages', e.target.value)}
+                  placeholder="—"
+                />
+              </Row>
+              <div />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <Row label="ISBN 13">
+                <Input
+                  className="mono"
+                  value={form.isbn13}
+                  onChange={(e) => set('isbn13', e.target.value)}
+                />
+              </Row>
+              <Row label="ISBN 10">
+                <Input
+                  className="mono"
+                  value={form.isbn10}
+                  onChange={(e) => set('isbn10', e.target.value)}
+                />
+              </Row>
+            </div>
           </Section>
 
           <Section title="Series">
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 14 }}>
               <Row label="Series name">
                 <Input
                   value={form.series}
@@ -254,10 +357,31 @@ function MetadataEditor() {
                   placeholder="—"
                 />
               </Row>
+              <Row label="Total">
+                <Input
+                  value={form.seriesTotal}
+                  onChange={(e) => set('seriesTotal', e.target.value)}
+                  placeholder="—"
+                />
+              </Row>
             </div>
           </Section>
 
           <Section title="Categories & tags">
+            <Row label="Genres">
+              <Input
+                value={form.genres}
+                onChange={(e) => set('genres', e.target.value)}
+                placeholder="Fiction, Science"
+              />
+            </Row>
+            <Row label="Moods">
+              <Input
+                value={form.moods}
+                onChange={(e) => set('moods', e.target.value)}
+                placeholder="Hopeful, Reflective"
+              />
+            </Row>
             <Row label="Tags">
               <Input value={form.tags} onChange={(e) => set('tags', e.target.value)} />
             </Row>
@@ -277,6 +401,55 @@ function MetadataEditor() {
               )}
             </div>
           </Section>
+
+          <Section title="Ratings & reviews">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+              <Row label="Age rating">
+                <select
+                  value={form.ageRating}
+                  onChange={(e) => set('ageRating', e.target.value)}
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+                >
+                  <option value="">—</option>
+                  <option value="All ages">All ages</option>
+                  <option value="8+">8+</option>
+                  <option value="12+">12+</option>
+                  <option value="16+">16+</option>
+                  <option value="18+">18+</option>
+                </select>
+              </Row>
+              <Row label="Content rating">
+                <select
+                  value={form.contentRating}
+                  onChange={(e) => set('contentRating', e.target.value)}
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+                >
+                  <option value="">—</option>
+                  <option value="G">G</option>
+                  <option value="PG">PG</option>
+                  <option value="PG-13">PG-13</option>
+                  <option value="R">R</option>
+                  <option value="NC-17">NC-17</option>
+                </select>
+              </Row>
+              <Row label="Public reviews">
+                <select
+                  value={form.publicReviews}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      publicReviews: e.target.value as FormState['publicReviews'],
+                    }))
+                  }
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+                >
+                  <option value="">No value</option>
+                  <option value="yes">Allowed</option>
+                  <option value="no">Blocked</option>
+                </select>
+              </Row>
+            </div>
+          </Section>
         </div>
 
         <EnrichmentPanel
@@ -291,12 +464,14 @@ function MetadataEditor() {
               description: m.description || prev.description,
               year: m.year ? String(m.year) : prev.year,
               publisher: m.publisher || prev.publisher,
-              isbn: m.isbn || prev.isbn,
+              isbn13: m.isbn || prev.isbn13,
               series: m.series || prev.series,
-              tags: [...new Set([
-                ...prev.tags.split(',').map((t) => t.trim()).filter(Boolean),
-                ...(m.categories ?? []),
-              ])].join(', '),
+              genres: [
+                ...new Set([
+                  ...splitCsv(prev.genres),
+                  ...(m.categories ?? []),
+                ]),
+              ].join(', '),
             }));
           }}
         />
@@ -403,7 +578,9 @@ function EnrichmentPanel({
 
           {enrich.data && enrich.data.matches.length === 0 && (
             <div className="t-small" style={{ fontStyle: 'italic' }}>
-              No matches from Google Books or Open Library.
+              {enrich.data.providers.length === 0
+                ? 'No metadata providers are enabled. An admin can turn them on in Settings → Metadata providers.'
+                : `No matches from ${formatProviderList(enrich.data.providers)}.`}
             </div>
           )}
 

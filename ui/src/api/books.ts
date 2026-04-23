@@ -61,19 +61,32 @@ export type Book = {
   id: string;
   libraryId: string;
   title: string;
+  subtitle?: string;
   author: string;
   format: string;
   year: number;
+  // YYYY-MM-DD, empty/undefined when unknown.
+  publishDate?: string;
+  language?: string;
   progress: number;
   resumeCfi?: string;
   rating: number;
   palette: string;
   description?: string;
   isbn?: string;
+  isbn10?: string;
   publisher?: string;
   series?: string;
   seriesNum?: number;
+  seriesTotal?: number;
+  genres: string[];
+  moods: string[];
   tags: string[];
+  ageRating?: string;
+  contentRating?: string;
+  pages?: number;
+  // tri-state: null/undefined = unset ("No Value"), true/false = explicit.
+  publicReviews?: boolean | null;
   hasCover: boolean;
   coverMime?: string;
   addedAt: string;
@@ -125,19 +138,34 @@ export async function fetchBook(id: string): Promise<BookDetail> {
 }
 
 // All fields optional — missing fields preserve the existing row.
+// publishDate is "YYYY-MM-DD" or "" to clear. publicReviewsClear lets
+// the UI explicitly reset the tri-state (overrides any publicReviews
+// set in the same payload).
 export type BookPatch = {
   title?: string;
+  subtitle?: string;
   author?: string;
   format?: string;
   year?: number;
+  publishDate?: string;
+  language?: string;
   rating?: number;
   palette?: string;
   description?: string;
   isbn?: string;
+  isbn10?: string;
   publisher?: string;
   series?: string;
   seriesNum?: number;
+  seriesTotal?: number;
+  genres?: string[];
+  moods?: string[];
   tags?: string[];
+  ageRating?: string;
+  contentRating?: string;
+  pages?: number;
+  publicReviews?: boolean;
+  publicReviewsClear?: boolean;
 };
 
 export async function patchBook(

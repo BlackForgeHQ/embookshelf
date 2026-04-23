@@ -41,26 +41,43 @@ func toLibraryDTO(l model.Library) libraryDTO {
 
 // bookDTO mirrors the TS Book type. Progress is emitted as a 0..1 float to
 // match the prototype; the DB column is 0..100 int.
+//
+// The extended metadata surface (subtitle, language, publish date, genres,
+// moods, series total, ISBN-10, age/content rating, pages, public
+// reviews) is optional on the wire — fields stay out of the JSON blob
+// when empty so clients that don't care about them don't see a pile of
+// blank strings.
 type bookDTO struct {
-	ID          string   `json:"id"`
-	LibraryID   string   `json:"libraryId"`
-	Title       string   `json:"title"`
-	Author      string   `json:"author"`
-	Format      string   `json:"format"`
-	Year        int      `json:"year"`
-	Progress    float64  `json:"progress"`
-	ResumeCFI   string   `json:"resumeCfi,omitempty"`
-	Rating      int      `json:"rating"`
-	Palette     string   `json:"palette"`
-	Description string   `json:"description,omitempty"`
-	ISBN        string   `json:"isbn,omitempty"`
-	Publisher   string   `json:"publisher,omitempty"`
-	Series      string   `json:"series,omitempty"`
-	SeriesNum   int      `json:"seriesNum,omitempty"`
-	Tags        []string `json:"tags"`
-	HasCover    bool     `json:"hasCover"`
-	CoverMime   string   `json:"coverMime,omitempty"`
-	AddedAt     string   `json:"addedAt"`
+	ID            string   `json:"id"`
+	LibraryID     string   `json:"libraryId"`
+	Title         string   `json:"title"`
+	Subtitle      string   `json:"subtitle,omitempty"`
+	Author        string   `json:"author"`
+	Format        string   `json:"format"`
+	Year          int      `json:"year"`
+	PublishDate   string   `json:"publishDate,omitempty"` // YYYY-MM-DD, empty when unset
+	Language      string   `json:"language,omitempty"`
+	Progress      float64  `json:"progress"`
+	ResumeCFI     string   `json:"resumeCfi,omitempty"`
+	Rating        int      `json:"rating"`
+	Palette       string   `json:"palette"`
+	Description   string   `json:"description,omitempty"`
+	ISBN          string   `json:"isbn,omitempty"`
+	ISBN10        string   `json:"isbn10,omitempty"`
+	Publisher     string   `json:"publisher,omitempty"`
+	Series        string   `json:"series,omitempty"`
+	SeriesNum     int      `json:"seriesNum,omitempty"`
+	SeriesTotal   int      `json:"seriesTotal,omitempty"`
+	Genres        []string `json:"genres"`
+	Moods         []string `json:"moods"`
+	Tags          []string `json:"tags"`
+	AgeRating     string   `json:"ageRating,omitempty"`
+	ContentRating string   `json:"contentRating,omitempty"`
+	Pages         int      `json:"pages,omitempty"`
+	PublicReviews *bool    `json:"publicReviews,omitempty"`
+	HasCover      bool     `json:"hasCover"`
+	CoverMime     string   `json:"coverMime,omitempty"`
+	AddedAt       string   `json:"addedAt"`
 }
 
 func toBookDTO(b model.Book) bookDTO {
@@ -68,26 +85,49 @@ func toBookDTO(b model.Book) bookDTO {
 	if tags == nil {
 		tags = []string{}
 	}
+	genres := b.Genres
+	if genres == nil {
+		genres = []string{}
+	}
+	moods := b.Moods
+	if moods == nil {
+		moods = []string{}
+	}
+	publishDate := ""
+	if b.PublishDate != nil {
+		publishDate = b.PublishDate.UTC().Format("2006-01-02")
+	}
 	return bookDTO{
-		ID:          b.ID,
-		LibraryID:   b.LibraryID,
-		Title:       b.Title,
-		Author:      b.Author,
-		Format:      b.Format,
-		Year:        b.Year,
-		Progress:    float64(b.Progress) / 100.0,
-		ResumeCFI:   b.ResumeCFI,
-		Rating:      b.Rating,
-		Palette:     firstNonEmpty(b.CoverPalette, "navy"),
-		Description: b.Description,
-		ISBN:        b.ISBN,
-		Publisher:   b.Publisher,
-		Series:      b.Series,
-		SeriesNum:   b.SeriesIndex,
-		Tags:        tags,
-		HasCover:    b.HasCover,
-		CoverMime:   b.CoverMime,
-		AddedAt:     b.CreatedAt.UTC().Format(time.RFC3339),
+		ID:            b.ID,
+		LibraryID:     b.LibraryID,
+		Title:         b.Title,
+		Subtitle:      b.Subtitle,
+		Author:        b.Author,
+		Format:        b.Format,
+		Year:          b.Year,
+		PublishDate:   publishDate,
+		Language:      b.Language,
+		Progress:      float64(b.Progress) / 100.0,
+		ResumeCFI:     b.ResumeCFI,
+		Rating:        b.Rating,
+		Palette:       firstNonEmpty(b.CoverPalette, "navy"),
+		Description:   b.Description,
+		ISBN:          b.ISBN,
+		ISBN10:        b.ISBN10,
+		Publisher:     b.Publisher,
+		Series:        b.Series,
+		SeriesNum:     b.SeriesIndex,
+		SeriesTotal:   b.SeriesTotal,
+		Genres:        genres,
+		Moods:         moods,
+		Tags:          tags,
+		AgeRating:     b.AgeRating,
+		ContentRating: b.ContentRating,
+		Pages:         b.Pages,
+		PublicReviews: b.PublicReviews,
+		HasCover:      b.HasCover,
+		CoverMime:     b.CoverMime,
+		AddedAt:       b.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -163,19 +203,36 @@ func (h *Handler) Books(c *gin.Context) {
 // bookPatch is the PATCH /books/:id body. Every field is optional — pointer
 // fields let us distinguish "not sent" from "sent as zero value". Missing
 // fields preserve the existing row; present fields overwrite.
+//
+// PublishDate is "YYYY-MM-DD" or empty string to clear. PublicReviews
+// is a *bool: omitting keeps the current value, true/false sets it. A
+// separate PublicReviewsClear lets callers reset the tri-state to null
+// without needing **bool decoding gymnastics.
 type bookPatch struct {
-	Title       *string   `json:"title,omitempty"`
-	Author      *string   `json:"author,omitempty"`
-	Format      *string   `json:"format,omitempty"`
-	Year        *int      `json:"year,omitempty"`
-	Rating      *int      `json:"rating,omitempty"`
-	Palette     *string   `json:"palette,omitempty"`
-	Description *string   `json:"description,omitempty"`
-	ISBN        *string   `json:"isbn,omitempty"`
-	Publisher   *string   `json:"publisher,omitempty"`
-	Series      *string   `json:"series,omitempty"`
-	SeriesNum   *int      `json:"seriesNum,omitempty"`
-	Tags        *[]string `json:"tags,omitempty"`
+	Title              *string   `json:"title,omitempty"`
+	Subtitle           *string   `json:"subtitle,omitempty"`
+	Author             *string   `json:"author,omitempty"`
+	Format             *string   `json:"format,omitempty"`
+	Year               *int      `json:"year,omitempty"`
+	PublishDate        *string   `json:"publishDate,omitempty"`
+	Language           *string   `json:"language,omitempty"`
+	Rating             *int      `json:"rating,omitempty"`
+	Palette            *string   `json:"palette,omitempty"`
+	Description        *string   `json:"description,omitempty"`
+	ISBN               *string   `json:"isbn,omitempty"`
+	ISBN10             *string   `json:"isbn10,omitempty"`
+	Publisher          *string   `json:"publisher,omitempty"`
+	Series             *string   `json:"series,omitempty"`
+	SeriesNum          *int      `json:"seriesNum,omitempty"`
+	SeriesTotal        *int      `json:"seriesTotal,omitempty"`
+	Genres             *[]string `json:"genres,omitempty"`
+	Moods              *[]string `json:"moods,omitempty"`
+	Tags               *[]string `json:"tags,omitempty"`
+	AgeRating          *string   `json:"ageRating,omitempty"`
+	ContentRating      *string   `json:"contentRating,omitempty"`
+	Pages              *int      `json:"pages,omitempty"`
+	PublicReviews      *bool     `json:"publicReviews,omitempty"`
+	PublicReviewsClear bool      `json:"publicReviewsClear,omitempty"`
 }
 
 // progressPayload is the POST /books/:id/progress body. Progress is 0..1 to
@@ -410,6 +467,9 @@ func applyBookPatch(b *model.Book, p bookPatch) {
 	if p.Title != nil {
 		b.Title = strings.TrimSpace(*p.Title)
 	}
+	if p.Subtitle != nil {
+		b.Subtitle = strings.TrimSpace(*p.Subtitle)
+	}
 	if p.Author != nil {
 		b.Author = strings.TrimSpace(*p.Author)
 	}
@@ -418,6 +478,20 @@ func applyBookPatch(b *model.Book, p bookPatch) {
 	}
 	if p.Year != nil {
 		b.Year = *p.Year
+	}
+	if p.PublishDate != nil {
+		raw := strings.TrimSpace(*p.PublishDate)
+		if raw == "" {
+			b.PublishDate = nil
+		} else if t, err := time.Parse("2006-01-02", raw); err == nil {
+			b.PublishDate = &t
+			// Keep Year in sync when a full date is supplied — avoids a
+			// confusing mismatch between the two columns on display.
+			b.Year = t.Year()
+		}
+	}
+	if p.Language != nil {
+		b.Language = strings.TrimSpace(*p.Language)
 	}
 	if p.Rating != nil {
 		r := *p.Rating
@@ -438,6 +512,9 @@ func applyBookPatch(b *model.Book, p bookPatch) {
 	if p.ISBN != nil {
 		b.ISBN = strings.TrimSpace(*p.ISBN)
 	}
+	if p.ISBN10 != nil {
+		b.ISBN10 = strings.TrimSpace(*p.ISBN10)
+	}
 	if p.Publisher != nil {
 		b.Publisher = strings.TrimSpace(*p.Publisher)
 	}
@@ -447,16 +524,57 @@ func applyBookPatch(b *model.Book, p bookPatch) {
 	if p.SeriesNum != nil {
 		b.SeriesIndex = *p.SeriesNum
 	}
-	if p.Tags != nil {
-		tags := model.DedupTags(*p.Tags)
-		clean := tags[:0]
-		for _, t := range tags {
-			if v := strings.TrimSpace(t); v != "" {
-				clean = append(clean, v)
-			}
+	if p.SeriesTotal != nil {
+		if *p.SeriesTotal < 0 {
+			b.SeriesTotal = 0
+		} else {
+			b.SeriesTotal = *p.SeriesTotal
 		}
-		b.Tags = clean
 	}
+	if p.Genres != nil {
+		b.Genres = cleanStringSlice(*p.Genres)
+	}
+	if p.Moods != nil {
+		b.Moods = cleanStringSlice(*p.Moods)
+	}
+	if p.Tags != nil {
+		b.Tags = cleanStringSlice(*p.Tags)
+	}
+	if p.AgeRating != nil {
+		b.AgeRating = strings.TrimSpace(*p.AgeRating)
+	}
+	if p.ContentRating != nil {
+		b.ContentRating = strings.TrimSpace(*p.ContentRating)
+	}
+	if p.Pages != nil {
+		if *p.Pages < 0 {
+			b.Pages = 0
+		} else {
+			b.Pages = *p.Pages
+		}
+	}
+	// Tri-state public_reviews: explicit clear wins over a set, so
+	// callers can send both to "reset then ignore". A plain set just
+	// overwrites the current value.
+	if p.PublicReviewsClear {
+		b.PublicReviews = nil
+	} else if p.PublicReviews != nil {
+		v := *p.PublicReviews
+		b.PublicReviews = &v
+	}
+}
+
+// cleanStringSlice trims + dedupes a string slice for storage. Keeps
+// first-occurrence order and drops empties.
+func cleanStringSlice(in []string) []string {
+	tags := model.DedupTags(in)
+	clean := tags[:0]
+	for _, t := range tags {
+		if v := strings.TrimSpace(t); v != "" {
+			clean = append(clean, v)
+		}
+	}
+	return clean
 }
 
 // BookDetail returns a single book enriched with the user's shelf
