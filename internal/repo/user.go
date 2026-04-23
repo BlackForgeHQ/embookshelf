@@ -20,7 +20,7 @@ func NewUserRepo(pool *pgxpool.Pool) *UserRepo {
 	return &UserRepo{pool: pool}
 }
 
-const userCols = `id, email, password_hash, name, role, oidc_subject, oidc_issuer, created_at, updated_at, last_seen_at`
+const userCols = `id, email, password_hash, name, role, oidc_subject, oidc_issuer, avatar_url, created_at, updated_at, last_seen_at`
 
 func (r *UserRepo) GetByEmail(ctx context.Context, email string) (model.User, error) {
 	row := r.pool.QueryRow(ctx, `
@@ -166,12 +166,27 @@ func (r *UserRepo) LinkOIDC(ctx context.Context, userID, issuer, subject string)
 	return err
 }
 
+// SyncOIDCProfile keeps name and avatar in line with the provider on every
+// login. Empty strings in `name` or `avatarURL` leave the column untouched so
+// a provider that stops supplying a claim doesn't wipe out a user-edited name.
+func (r *UserRepo) SyncOIDCProfile(ctx context.Context, userID, name, avatarURL string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE users
+		SET
+		    name       = CASE WHEN $2 = '' THEN name       ELSE $2 END,
+		    avatar_url = CASE WHEN $3 = '' THEN avatar_url ELSE $3 END,
+		    updated_at = now()
+		WHERE id = $1
+	`, userID, strings.TrimSpace(name), strings.TrimSpace(avatarURL))
+	return err
+}
+
 func scanUser(s scanner) (model.User, error) {
 	var (
 		u    model.User
 		role string
 	)
-	err := s.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &role, &u.OIDCSubject, &u.OIDCIssuer, &u.CreatedAt, &u.UpdatedAt, &u.LastSeenAt)
+	err := s.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &role, &u.OIDCSubject, &u.OIDCIssuer, &u.AvatarURL, &u.CreatedAt, &u.UpdatedAt, &u.LastSeenAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return u, ErrNotFound

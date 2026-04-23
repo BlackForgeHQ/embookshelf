@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createFileRoute,
@@ -22,12 +22,31 @@ import { Input } from '@/components/ui/input';
 type LoginSearch = {
   next?: string;
   mode?: 'login' | 'signup';
+  oidcError?: string;
+  local?: boolean;
+};
+
+// OIDC error codes the callback handler may redirect with. Kept in one
+// place so new failure paths pick up a friendly message automatically.
+const OIDC_ERROR_MESSAGES: Record<string, string> = {
+  stateMismatch:
+    'The SSO login timed out or was tampered with — please try again.',
+  userNotProvisioned:
+    'Your SSO account is not authorised for this instance. Contact an administrator.',
+  disabled: 'SSO is not currently enabled on this instance.',
+  notConfigured: 'SSO is not configured on this instance.',
+  invalidRequest:
+    'The provider returned an incomplete response — please try again.',
+  unknown: 'Sign-in failed. Please try again or use a local account.',
 };
 
 export const Route = createFileRoute('/login')({
   validateSearch: (raw: Record<string, unknown>): LoginSearch => ({
     next: typeof raw.next === 'string' ? raw.next : undefined,
     mode: raw.mode === 'signup' ? 'signup' : 'login',
+    oidcError:
+      typeof raw.oidcError === 'string' ? raw.oidcError : undefined,
+    local: raw.local === true || raw.local === 'true',
   }),
   // Skip rendering the page entirely for already-authenticated users.
   beforeLoad: async ({ context, search }) => {
@@ -53,7 +72,7 @@ function safeNext(raw: string | undefined): string {
 }
 
 function LoginPage() {
-  const { next, mode: modeSearch } = Route.useSearch();
+  const { next, mode: modeSearch, oidcError, local } = Route.useSearch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -93,6 +112,22 @@ function LoginPage() {
 
   const active = mode === 'signup' ? signupMut : loginMut;
   const error = active.error as ApiError | null;
+
+  // Force-only mode: redirect straight to the provider unless the user
+  // has an escape-hatch query param or an OIDC error to read. No loop
+  // guard needed client-side — the server already rejects the flow
+  // when configuration is missing, which bounces back with oidcError.
+  const oidcForceOnly = oidc.data?.forceOnly && !local && !oidcError;
+  useEffect(() => {
+    if (oidcForceOnly && mode === 'login') {
+      window.location.href = '/api/v1/auth/oidc';
+    }
+  }, [oidcForceOnly, mode]);
+
+  const providerName = oidc.data?.providerName || 'SSO';
+  const oidcErrorMessage = oidcError
+    ? OIDC_ERROR_MESSAGES[oidcError] ?? OIDC_ERROR_MESSAGES.unknown
+    : null;
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -172,6 +207,23 @@ function LoginPage() {
               : 'Enter your credentials to continue.'}
           </p>
 
+          {oidcErrorMessage && (
+            <div
+              className="flash error"
+              style={{
+                padding: '10px 14px',
+                border: '1px solid var(--color-accent-soft)',
+                background: 'var(--color-accent-soft)',
+                color: 'var(--color-accent-ink)',
+                borderRadius: 2,
+                fontSize: 13,
+                marginBottom: 16,
+              }}
+            >
+              {oidcErrorMessage}
+            </div>
+          )}
+
           {error && (
             <div
               className="flash error"
@@ -245,7 +297,7 @@ function LoginPage() {
                   <div style={{ flex: 1, height: 1, background: 'var(--color-rule-soft)' }} />
                 </div>
                 <Button asChild variant="outline" className="w-full">
-                  <a href="/api/v1/auth/oidc">Sign in with SSO</a>
+                  <a href="/api/v1/auth/oidc">Sign in with {providerName}</a>
                 </Button>
               </>
             )}

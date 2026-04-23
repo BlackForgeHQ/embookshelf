@@ -150,15 +150,32 @@ func main() {
 		service.NewRemarkableDriver(),
 	)
 
-	// OIDC (optional — nil when not configured).
-	oidcSvc, err := service.NewOIDCService(ctx, cfg, userRepo, sessionRepo)
-	if err != nil {
-		slog.Error("oidc provider discovery", "err", err)
-		os.Exit(1)
+	// OIDC — settings live in app_settings now, so the service doesn't
+	// need the issuer at construction time. Seed rows on first boot
+	// from the legacy OIDC_* env vars (documented as a migration aid)
+	// and from sane defaults.
+	appSettingsRepo := repo.NewAppSettingsRepo(pool)
+	if err := appSettingsRepo.SeedOIDCIfAbsent(ctx); err != nil {
+		slog.Warn("seed oidc settings", "err", err)
 	}
-	if oidcSvc != nil {
-		slog.Info("OIDC enabled", "issuer", cfg.OIDCIssuerURL)
+	if cfg.HasOIDCEnvSeed() {
+		// Only write the seed when the provider row is still empty —
+		// never clobber a value an admin has saved through the UI.
+		existing, err := appSettingsRepo.GetOIDCProvider(ctx)
+		if err == nil && existing.IssuerURI == "" {
+			seed := repo.DefaultOIDCProviderDetails()
+			seed.IssuerURI = cfg.OIDCIssuerURL
+			seed.ClientID = cfg.OIDCClientID
+			seed.ClientSecret = cfg.OIDCClientSecret
+			if err := appSettingsRepo.SetOIDCProvider(ctx, seed); err != nil {
+				slog.Warn("seed oidc provider from env", "err", err)
+			} else {
+				_ = appSettingsRepo.SetBool(ctx, repo.SettingOIDCEnabled, true)
+				slog.Info("seeded OIDC provider from env", "issuer", cfg.OIDCIssuerURL)
+			}
+		}
 	}
+	oidcSvc := service.NewOIDCService(appSettingsRepo, userRepo, sessionRepo, cfg.AppURL)
 
 	if n, err := authSvc.PurgeExpiredSessions(ctx); err != nil {
 		slog.Warn("purge sessions", "err", err)
@@ -208,6 +225,7 @@ func main() {
 		ReadingStats: readingStatsSvc,
 		Devices:      deviceSvc,
 		OIDC:         oidcSvc,
+		AppSettings:  appSettingsRepo,
 		Covers:       covers,
 		Hub:         hub,
 		Queue:       q,

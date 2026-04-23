@@ -27,12 +27,17 @@ type Config struct {
 	// duckduckgo by overriding ENRICHMENT_PROVIDERS.
 	EnrichmentProviders []string
 
-	// OIDC configuration. When OIDCIssuerURL and OIDCClientID are both
-	// non-empty the "Sign in with SSO" flow is enabled.
-	OIDCIssuerURL   string
-	OIDCClientID    string
+	// AppURL is the public origin of the BookLore instance. It feeds
+	// the OIDC redirect URI (${AppURL}/api/v1/auth/oidc/callback) and
+	// anything else that needs an absolute link back to the UI.
+	AppURL string
+
+	// OIDC seed values. These are applied to app_settings on first
+	// boot only — the DB is authoritative after that so admins can
+	// edit config in the UI without redeploying.
+	OIDCIssuerURL    string
+	OIDCClientID     string
 	OIDCClientSecret string
-	OIDCRedirectURL string
 
 	// OpenTelemetry / OTLP. When OTELEnabled is true the server exports
 	// traces, metrics, and logs via OTLP to OTELEndpoint. The SDK also
@@ -62,10 +67,11 @@ func Load() (Config, error) {
 		MigrateOnStart:      envBool("MIGRATE_ON_START", true),
 		EnrichmentProviders: envCSV("ENRICHMENT_PROVIDERS", "google_books,open_library"),
 
+		AppURL: strings.TrimRight(envStr("APP_URL", ""), "/"),
+
 		OIDCIssuerURL:    envStr("OIDC_ISSUER_URL", ""),
 		OIDCClientID:     envStr("OIDC_CLIENT_ID", ""),
 		OIDCClientSecret: envStr("OIDC_CLIENT_SECRET", ""),
-		OIDCRedirectURL:  envStr("OIDC_REDIRECT_URL", ""),
 
 		OTELEnabled:     envBool("OTEL_ENABLED", false),
 		OTELServiceName: envStr("OTEL_SERVICE_NAME", "embookshelf"),
@@ -95,8 +101,9 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-// OIDCEnabled reports whether OIDC login is configured.
-func (c Config) OIDCEnabled() bool {
+// HasOIDCEnvSeed reports whether the legacy env vars carry enough to
+// pre-populate app_settings on first boot.
+func (c Config) HasOIDCEnvSeed() bool {
 	return c.OIDCIssuerURL != "" && c.OIDCClientID != ""
 }
 

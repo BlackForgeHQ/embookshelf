@@ -47,6 +47,14 @@ import {
   type SettingsLibrary,
   type SettingsLibraryPath,
 } from '@/api/settings';
+import {
+  fetchOidcAdminSettings,
+  oidcAdminSettingsQueryKey,
+  saveOidcAdminSettings,
+  testOidcConnection,
+  type OidcAdminSettings,
+  type OidcTestCheck,
+} from '@/api/oidc';
 import { Icon } from '@/components/Icon';
 import { TopBar } from '@/components/TopBar';
 import {
@@ -91,6 +99,7 @@ type SectionKey =
   | 'devices'
   | 'email'
   | 'users'
+  | 'oidc'
   | 'backups'
   | 'about';
 
@@ -104,6 +113,7 @@ const SECTIONS: SectionSpec[] = [
   { key: 'devices', label: 'Device sync' },
   { key: 'email', label: 'Email delivery', adminOnly: true },
   { key: 'users', label: 'Users & roles', adminOnly: true },
+  { key: 'oidc', label: 'OIDC / SSO', adminOnly: true },
   { key: 'backups', label: 'Backups', adminOnly: true },
   { key: 'about', label: 'About' },
 ];
@@ -169,6 +179,7 @@ function Settings() {
           {active === 'devices' && <DevicesPanel />}
           {active === 'email' && <EmailPanel isAdmin={isAdmin} />}
           {active === 'users' && <UsersPanel isAdmin={isAdmin} me={me.data ?? null} />}
+          {active === 'oidc' && <OidcPanel isAdmin={isAdmin} />}
           {active === 'backups' && <BackupsPanel isAdmin={isAdmin} />}
           {active === 'about' && <AboutPanel isAdmin={isAdmin} />}
         </div>
@@ -1750,6 +1761,384 @@ function UsersPanel({ isAdmin, me }: { isAdmin: boolean; me: AuthUser | null }) 
           );
         })}
       </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// OIDC / SSO
+// ---------------------------------------------------------------------------
+
+function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
+  const queryClient = useQueryClient();
+  const query = useQuery({
+    queryKey: oidcAdminSettingsQueryKey,
+    queryFn: fetchOidcAdminSettings,
+    enabled: isAdmin,
+  });
+
+  const [draft, setDraft] = useState<OidcAdminSettings | null>(null);
+  const [secretTouched, setSecretTouched] = useState(false);
+  const [testChecks, setTestChecks] = useState<OidcTestCheck[] | null>(null);
+  const [testOverall, setTestOverall] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (query.data && !draft) {
+      setDraft(query.data);
+    }
+  }, [query.data, draft]);
+
+  const saveMut = useMutation({
+    mutationFn: saveOidcAdminSettings,
+    onSuccess: (data) => {
+      queryClient.setQueryData(oidcAdminSettingsQueryKey, data);
+      setDraft(data);
+      setSecretTouched(false);
+      // Public config also changes — the login page reads it.
+      queryClient.invalidateQueries({ queryKey: ['oidc-config'] });
+    },
+  });
+
+  const testMut = useMutation({
+    mutationFn: () => {
+      if (!draft) throw new Error('no draft');
+      return testOidcConnection(draft.provider);
+    },
+    onSuccess: (res) => {
+      setTestChecks(res.checks);
+      setTestOverall(res.success);
+    },
+  });
+
+  if (!isAdmin) return <AdminGate label="OIDC / SSO" />;
+  if (query.isLoading || !draft) {
+    return (
+      <>
+        <h2 className="t-h2" style={{ marginBottom: 8 }}>OIDC / SSO</h2>
+        <p className="t-small" style={{ fontStyle: 'italic' }}>Loading…</p>
+      </>
+    );
+  }
+
+  const saveError = saveMut.error as unknown as ApiError | null;
+  const provider = draft.provider;
+  const formComplete =
+    provider.providerName.trim() !== '' &&
+    provider.clientId.trim() !== '' &&
+    provider.issuerUri.trim() !== '' &&
+    provider.claimMapping.username.trim() !== '' &&
+    provider.claimMapping.email.trim() !== '' &&
+    provider.claimMapping.name.trim() !== '';
+
+  const canEnable = formComplete;
+  const canForceOnly = draft.enabled && canEnable;
+
+  return (
+    <>
+      <h2 className="t-h2" style={{ marginBottom: 8 }}>OIDC / SSO</h2>
+      <p className="t-small" style={{ marginBottom: 24, fontStyle: 'italic' }}>
+        Delegate sign-in to an OpenID Connect provider (Authentik, Authelia,
+        Keycloak, Pocket ID, …). Changes take effect on the next login — no
+        restart required.
+      </p>
+
+      {saveError && <Notice kind="err">{saveError.message}</Notice>}
+
+      <Card>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 500 }}>Enable OIDC login</div>
+              <div className="t-small" style={{ fontSize: 11.5 }}>
+                Adds a "Sign in with {provider.providerName || 'provider'}" button to the login page.
+              </div>
+            </div>
+            <Switch
+              checked={draft.enabled}
+              disabled={!canEnable}
+              onCheckedChange={(v) => setDraft({ ...draft, enabled: v })}
+              aria-label="Enable OIDC"
+            />
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 500 }}>Force SSO (hide local login)</div>
+              <div className="t-small" style={{ fontSize: 11.5 }}>
+                Hides the password form. Escape hatch:{' '}
+                <span className="mono">/login?local=true</span>.
+              </div>
+            </div>
+            <Switch
+              checked={draft.forceOnly}
+              disabled={!canForceOnly}
+              onCheckedChange={(v) => setDraft({ ...draft, forceOnly: v })}
+              aria-label="Force OIDC"
+            />
+          </div>
+        </div>
+      </Card>
+
+      <h3 className="t-h3" style={{ marginTop: 24, marginBottom: 8 }}>Provider</h3>
+      <Card>
+        <Field label="Provider display name">
+          <Input
+            value={provider.providerName}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                provider: { ...provider, providerName: e.target.value },
+              })
+            }
+            placeholder="Authentik"
+          />
+        </Field>
+        <Field label="Issuer URI">
+          <Input
+            value={provider.issuerUri}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                provider: { ...provider, issuerUri: e.target.value },
+              })
+            }
+            placeholder="https://auth.example.com/application/o/embookshelf/"
+          />
+        </Field>
+        <Field label="Client ID">
+          <Input
+            value={provider.clientId}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                provider: { ...provider, clientId: e.target.value },
+              })
+            }
+          />
+        </Field>
+        <Field label={`Client secret${provider.clientSecretSet ? ' (stored — leave blank to keep)' : ''}`}>
+          <Input
+            type="password"
+            autoComplete="new-password"
+            placeholder={provider.clientSecretSet ? '••••••••' : ''}
+            onChange={(e) => {
+              setSecretTouched(true);
+              setDraft({
+                ...draft,
+                provider: {
+                  ...provider,
+                  clientSecret: e.target.value,
+                  clientSecretSet: e.target.value !== '' || provider.clientSecretSet,
+                },
+              });
+            }}
+          />
+          {provider.clientSecretSet && !secretTouched && (
+            <button
+              type="button"
+              className="t-small"
+              style={{
+                marginTop: 4,
+                background: 'none',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+                color: 'var(--color-accent)',
+                alignSelf: 'flex-start',
+              }}
+              onClick={() => {
+                setSecretTouched(true);
+                setDraft({
+                  ...draft,
+                  provider: { ...provider, clientSecret: '', clientSecretSet: false },
+                });
+              }}
+            >
+              Clear stored secret
+            </button>
+          )}
+        </Field>
+        <Field label="Scopes (space-separated)">
+          <Input
+            value={provider.scopes}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                provider: { ...provider, scopes: e.target.value },
+              })
+            }
+            placeholder="openid profile email"
+          />
+        </Field>
+      </Card>
+
+      <h3 className="t-h3" style={{ marginTop: 24, marginBottom: 8 }}>Claim mapping</h3>
+      <Card>
+        <Field label="Username claim">
+          <Input
+            value={provider.claimMapping.username}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                provider: {
+                  ...provider,
+                  claimMapping: { ...provider.claimMapping, username: e.target.value },
+                },
+              })
+            }
+          />
+        </Field>
+        <Field label="Email claim">
+          <Input
+            value={provider.claimMapping.email}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                provider: {
+                  ...provider,
+                  claimMapping: { ...provider.claimMapping, email: e.target.value },
+                },
+              })
+            }
+          />
+        </Field>
+        <Field label="Display name claim">
+          <Input
+            value={provider.claimMapping.name}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                provider: {
+                  ...provider,
+                  claimMapping: { ...provider.claimMapping, name: e.target.value },
+                },
+              })
+            }
+          />
+        </Field>
+      </Card>
+
+      <h3 className="t-h3" style={{ marginTop: 24, marginBottom: 8 }}>Auto provisioning</h3>
+      <Card>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 500 }}>Auto-create users on first login</div>
+              <div className="t-small" style={{ fontSize: 11.5 }}>
+                When off, unknown OIDC users are rejected unless linked to an existing local account.
+              </div>
+            </div>
+            <Switch
+              checked={draft.autoProvision.enableAutoProvisioning}
+              onCheckedChange={(v) =>
+                setDraft({
+                  ...draft,
+                  autoProvision: { ...draft.autoProvision, enableAutoProvisioning: v },
+                })
+              }
+            />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 500 }}>Link by email</div>
+              <div className="t-small" style={{ fontSize: 11.5 }}>
+                Permits linking an existing local account to its OIDC identity on first SSO login when emails match.
+              </div>
+            </div>
+            <Switch
+              checked={draft.autoProvision.allowLocalAccountLinking}
+              onCheckedChange={(v) =>
+                setDraft({
+                  ...draft,
+                  autoProvision: { ...draft.autoProvision, allowLocalAccountLinking: v },
+                })
+              }
+            />
+          </div>
+          <Field label="Default role for new users">
+            <Select
+              value={draft.autoProvision.defaultRole}
+              onChange={(v) =>
+                setDraft({
+                  ...draft,
+                  autoProvision: {
+                    ...draft.autoProvision,
+                    defaultRole: v === 'admin' ? 'admin' : 'user',
+                  },
+                })
+              }
+              options={[
+                { value: 'user', label: 'User' },
+                { value: 'admin', label: 'Admin' },
+              ]}
+            />
+          </Field>
+        </div>
+      </Card>
+
+      <h3 className="t-h3" style={{ marginTop: 24, marginBottom: 8 }}>Register with your provider</h3>
+      <Card>
+        <DefRow label="Redirect URI" value={<span className="mono">{draft.redirectUri || '(set APP_URL)'}</span>} />
+        <DefRow label="Grant type" value={<span className="mono">authorization_code</span>} />
+        <DefRow label="PKCE method" value={<span className="mono">S256</span>} />
+        <DefRow label="Scopes" value={<span className="mono">{provider.scopes || 'openid profile email'}</span>} />
+      </Card>
+
+      <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+        <Button
+          onClick={() => saveMut.mutate(draft)}
+          disabled={saveMut.isPending || (draft.enabled && !canEnable)}
+        >
+          {saveMut.isPending ? 'Saving…' : 'Save'}
+        </Button>
+        <Button variant="outline" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
+          {testMut.isPending ? 'Testing…' : 'Test connection'}
+        </Button>
+      </div>
+
+      {testChecks && (
+        <div style={{ marginTop: 16 }}>
+          <Notice kind={testOverall ? 'ok' : 'err'}>
+            {testOverall ? 'All critical checks passed.' : 'One or more checks failed.'}
+          </Notice>
+          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {testChecks.map((c, i) => (
+              <div
+                key={i}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '70px 1fr',
+                  gap: 10,
+                  fontSize: 13,
+                  padding: '6px 10px',
+                  border: '1px solid var(--color-rule-soft)',
+                  borderRadius: 2,
+                  background: 'var(--color-paper-0)',
+                }}
+              >
+                <span
+                  className="mono"
+                  style={{
+                    color:
+                      c.status === 'PASS'
+                        ? 'oklch(0.58 0.12 140)'
+                        : c.status === 'WARN'
+                          ? 'oklch(0.72 0.14 70)'
+                          : 'oklch(0.62 0.22 25)',
+                    fontWeight: 600,
+                  }}
+                >
+                  {c.status}
+                </span>
+                <div>
+                  <div style={{ fontWeight: 500 }}>{c.name}</div>
+                  <div className="t-small" style={{ fontSize: 11.5 }}>{c.message}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </>
   );
 }

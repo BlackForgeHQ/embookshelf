@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -9,88 +10,89 @@ import (
 	"github.com/blackforge/embookshelf/internal/service"
 )
 
-const (
-	oidcStateCookie = "embookshelf_oidc_state"
-	oidcNonceCookie = "embookshelf_oidc_nonce"
-)
-
-// OIDCConfig tells the SPA whether the OIDC login button should be shown.
+// OIDCConfig returns the public subset of OIDC settings — the login page
+// uses this to render "Sign in with {provider}" and to honor force-only
+// mode. Rendered even when OIDC is off so the SPA can decide layout.
 func (h *Handler) OIDCConfig(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"enabled": h.oidc != nil,
-	})
+	if h.oidc == nil {
+		c.JSON(http.StatusOK, gin.H{"enabled": false, "forceOnly": false, "configured": false})
+		return
+	}
+	cfg, err := h.oidc.PublicConfig(c.Request.Context())
+	if err != nil {
+		writeServerError(c, "oidc public config", err)
+		return
+	}
+	c.JSON(http.StatusOK, cfg)
 }
 
-// OIDCLogin redirects the browser to the OIDC provider's authorization endpoint.
+// OIDCLogin generates a PKCE challenge + state and redirects the browser
+// to the provider's authorize endpoint. State is held server-side — no
+// cookies needed for the round trip.
 func (h *Handler) OIDCLogin(c *gin.Context) {
 	if h.oidc == nil {
 		writeError(c, http.StatusNotFound, "OIDC is not configured")
 		return
 	}
-
-	authURL, state, nonce, err := h.oidc.AuthURL()
+	authURL, _, err := h.oidc.AuthURL(c.Request.Context())
 	if err != nil {
-		writeServerError(c, "oidc auth url", err)
+		switch {
+		case errors.Is(err, service.ErrOIDCDisabled), errors.Is(err, service.ErrOIDCNotConfigured):
+			writeError(c, http.StatusNotFound, "OIDC is not configured")
+		default:
+			writeServerError(c, "oidc auth url", err)
+		}
 		return
 	}
-
-	// Persist state + nonce in short-lived, HttpOnly cookies so the callback
-	// can verify them. 10 minutes should be more than enough.
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(oidcStateCookie, state, 600, "/", "", h.Secure(), true)
-	c.SetCookie(oidcNonceCookie, nonce, 600, "/", "", h.Secure(), true)
-
 	c.Redirect(http.StatusFound, authURL)
 }
 
-// OIDCCallback handles the redirect back from the OIDC provider.
+// OIDCCallback trades the authorization code for a BookLore session and
+// redirects to the dashboard. Failures redirect to /login with an error
+// query param so the SPA can render a friendly message.
 func (h *Handler) OIDCCallback(c *gin.Context) {
 	if h.oidc == nil {
 		writeError(c, http.StatusNotFound, "OIDC is not configured")
 		return
 	}
-
-	// Verify state.
-	state, err := c.Cookie(oidcStateCookie)
-	if err != nil || state == "" || state != c.Query("state") {
-		writeError(c, http.StatusBadRequest, "invalid OIDC state — please try again")
-		return
-	}
-	nonce, err := c.Cookie(oidcNonceCookie)
-	if err != nil || nonce == "" {
-		writeError(c, http.StatusBadRequest, "missing OIDC nonce — please try again")
-		return
-	}
-
-	// Clear the one-time cookies.
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(oidcStateCookie, "", -1, "/", "", h.Secure(), true)
-	c.SetCookie(oidcNonceCookie, "", -1, "/", "", h.Secure(), true)
-
-	// Check for upstream error.
 	if errParam := c.Query("error"); errParam != "" {
 		desc := c.Query("error_description")
 		if desc == "" {
 			desc = errParam
 		}
-		writeError(c, http.StatusBadRequest, "OIDC provider error: "+desc)
+		c.Redirect(http.StatusFound, "/login?oidcError="+errParam+"&oidcDesc="+desc)
 		return
 	}
-
 	code := c.Query("code")
-	if code == "" {
-		writeError(c, http.StatusBadRequest, "missing authorization code")
+	state := c.Query("state")
+	if code == "" || state == "" {
+		c.Redirect(http.StatusFound, "/login?oidcError=invalidRequest")
 		return
 	}
 
-	sess, _, err := h.oidc.Exchange(c.Request.Context(), code, nonce, c.Request.UserAgent())
+	sess, _, err := h.oidc.Exchange(c.Request.Context(), code, state, c.Request.UserAgent())
 	if err != nil {
-		writeServerError(c, "oidc exchange", err)
+		code := oidcErrorCode(err)
+		c.Redirect(http.StatusFound, "/login?oidcError="+code)
 		return
 	}
-
 	auth.SetSessionCookie(c, sess.ID, service.SessionTTL, h.Secure())
-
-	// Redirect to the SPA — the session cookie is set, so /me will succeed.
 	c.Redirect(http.StatusFound, "/")
+}
+
+// oidcErrorCode maps service errors to the stable short codes the SPA
+// translates for display.
+func oidcErrorCode(err error) string {
+	switch {
+	case errors.Is(err, service.ErrOIDCStateMismatch):
+		return "stateMismatch"
+	case errors.Is(err, service.ErrOIDCLoginNotAllowed):
+		return "userNotProvisioned"
+	case errors.Is(err, service.ErrOIDCDisabled):
+		return "disabled"
+	case errors.Is(err, service.ErrOIDCNotConfigured):
+		return "notConfigured"
+	default:
+		return "unknown"
+	}
 }

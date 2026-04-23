@@ -127,6 +127,10 @@ func (h *Handler) Engine() *gin.Engine {
 				admin.GET("/providers", h.SettingsProvidersList)
 				admin.PATCH("/providers/:id", h.SettingsProviderUpdate)
 
+				admin.GET("/oidc", h.SettingsOIDCGet)
+				admin.PUT("/oidc", h.SettingsOIDCUpdate)
+				admin.POST("/oidc/test", h.SettingsOIDCTest)
+
 				admin.GET("/users", h.SettingsUsersList)
 				admin.POST("/users", h.SettingsUsersCreate)
 				admin.PATCH("/users/:id/role", h.SettingsUsersUpdateRole)

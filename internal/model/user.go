@@ -17,6 +17,7 @@ type User struct {
 	PasswordHash string  // never rendered; repo populates but handlers don't leak it.
 	OIDCSubject  *string // OIDC sub claim — non-nil when linked to an external identity.
 	OIDCIssuer   *string // OIDC issuer URL.
+	AvatarURL    *string // OIDC picture claim, when the provider supplies one.
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	LastSeenAt   *time.Time

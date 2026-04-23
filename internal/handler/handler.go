@@ -6,6 +6,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/queue"
+	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sse"
 )
@@ -27,6 +28,7 @@ type Handler struct {
 	readingStats *service.ReadingSessionService
 	devices      *service.DeviceService
 	oidc         *service.OIDCService
+	appSettings  *repo.AppSettingsRepo
 	covers       *coverstore.Store
 	hub          *sse.Hub
 	queue        queue.Client
@@ -47,6 +49,7 @@ type Deps struct {
 	ReadingStats *service.ReadingSessionService
 	Devices      *service.DeviceService
 	OIDC         *service.OIDCService
+	AppSettings  *repo.AppSettingsRepo
 	Covers       *coverstore.Store
 	Hub          *sse.Hub
 	Queue        queue.Client
@@ -61,6 +64,7 @@ func New(d Deps) *Handler {
 		readingStats: d.ReadingStats,
 		devices:      d.Devices,
 		oidc:         d.OIDC,
+		appSettings:  d.AppSettings,
 		covers:       d.Covers,
 		hub:          d.Hub, queue: d.Queue,
 	}

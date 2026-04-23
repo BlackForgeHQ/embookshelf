@@ -60,7 +60,15 @@ export async function signupStatus(): Promise<SignupStatus> {
   return api<SignupStatus>('/api/v1/auth/signup');
 }
 
-type OIDCConfig = { enabled: boolean };
+// OIDCConfig mirrors the public config the server exposes to the login
+// page — enough to render the SSO button and obey force-only mode. It
+// never carries the client secret.
+export type OIDCConfig = {
+  enabled: boolean;
+  forceOnly: boolean;
+  configured: boolean;
+  providerName?: string;
+};
 
 export async function oidcConfig(): Promise<OIDCConfig> {
   return api<OIDCConfig>('/api/v1/auth/oidc/config');

@@ -1,0 +1,2 @@
+ALTER TABLE users DROP COLUMN IF EXISTS avatar_url;
+DROP TABLE IF EXISTS app_settings;
