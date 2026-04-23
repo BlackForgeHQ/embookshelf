@@ -1,17 +1,23 @@
 # Library Creation — Feature Specification
 
-> Create a new Library that aggregates books from one or more filesystem paths, with per-library rules for file formats, monitoring, metadata source, and organization mode.
+> Create a new Library that aggregates books from a single filesystem root, optionally enqueues an initial scan, and gives the admin a place to configure naming-pattern overrides and future rescans.
 
 - **Status:** Shipped
-- **Scope:** `booklore-api` (Go) + `booklore-ui` (Angular)
-- **Permission required:** `canManageLibrary` **or** `isAdmin`
-- **Entry point:** Topbar button (`openLibraryCreatorDialog()`) → Library Creator dialog
+- **Scope:** `embookshelf` Go backend + React (TanStack Start) SPA
+- **Permission required:** `admin` role
+- **Entry point:** `/settings → Libraries` panel → **New library** button → modal dialog
 
 ---
 
 ## 1. Purpose
 
-A Library is BookLore's top-level container for books. Creating a library lets an admin point the system at one or more folders on disk, pick which file formats to accept, decide whether to watch the paths for changes, and choose how files are grouped into books. On creation the backend persists the library, optionally registers a filesystem watcher, and kicks off an asynchronous initial scan (goroutine) that ingests existing files.
+A Library is embookshelf's top-level container for books. Creating one points the system at a filesystem root, registers it in the `libraries` table, and (optionally) fires an asynchronous scan job that walks the tree, diffs against existing books, and feeds new files into the BookDrop queue for review.
+
+Design choices worth flagging up front:
+
+- **One filesystem root per library**, fixed at creation. Multiple paths would race on scans and naming collisions, so the constraint is schema-enforced (`libraries.path` is `UNIQUE` where non-empty).
+- **No filesystem validation at creation**. The handler accepts any non-empty string; existence, readability, and contents are verified by the scan job.
+- **Scan is always async**, whether triggered at creation or via rescan. The HTTP response returns immediately and the admin watches SSE events for progress.
 
 ---
 
@@ -19,15 +25,12 @@ A Library is BookLore's top-level container for books. Creating a library lets a
 
 | # | As a … | I want to … | So that … |
 |---|--------|-------------|-----------|
-| 1 | Admin | Create a library from one or more folders | I can point BookLore at my existing file tree |
-| 2 | Admin | Pick an icon and a name | Libraries are easy to distinguish in the UI |
-| 3 | Admin | Restrict accepted file formats | My "Comics" library doesn't pick up EPUBs sitting in the same tree |
-| 4 | Admin | Order format priority | When multiple files represent the same book, the preferred format wins |
-| 5 | Admin | Choose whether the system watches the paths | New files dropped into the folder are auto-ingested |
-| 6 | Admin | Choose a metadata source (embedded vs sidecar) | I can control where book metadata comes from per library |
-| 7 | Admin | Choose an organization mode (file-per-book vs folder-per-book) | Comics / audiobooks packaged as folders are grouped correctly |
-| 8 | Admin | See a file count before committing | I know whether to expect a long scan |
-| 9 | Admin | Be taken straight into the library after creation | I can immediately see the ingestion in progress |
+| 1 | Admin | Create a library from a single folder | I can point embookshelf at my existing file tree |
+| 2 | Admin | See the file count before committing | I know whether to expect a long scan |
+| 3 | Admin | Opt in/out of the initial scan | I can wire a library ahead of time and schedule the scan separately |
+| 4 | Admin | Configure a per-library naming pattern after creation | Imported files land in the conventions my tree already follows |
+| 5 | Admin | Trigger a rescan on demand | New files dropped into the folder out-of-band are picked up |
+| 6 | Admin | Delete a library with a typed-name confirmation | I can remove a misconfigured library without nuking real data by accident |
 
 ---
 
@@ -35,304 +38,343 @@ A Library is BookLore's top-level container for books. Creating a library lets a
 
 ### 3.1 Entry points
 
-- **Topbar** — `openLibraryCreatorDialog()` in `app.topbar.component.ts:166`, opened via the shared dialog launcher service (`dialog-launcher.service.ts:80`).
-- **Edit mode** — the same component is reused when launched with `{ mode: 'edit', libraryId }` as dialog data. Edit mode is out of scope for this spec but is called out where its behavior diverges.
+- **Settings → Libraries panel** ([ui/src/routes/_app.settings.tsx](ui/src/routes/_app.settings.tsx)) — the **New library** button opens the creator dialog. This is the only UI surface; there is no top-bar shortcut.
 
-### 3.2 Dialog steps
+### 3.2 Dialog
 
-The creator is a single dialog with multiple grouped sections (no stepper). The user must satisfy two validations to enable **Create**:
+A single-step modal (shadcn `Dialog`) with three inputs. Submit is disabled until both `name` and `path` are non-empty after trim and the name isn't a case-insensitive duplicate of an existing library.
 
-1. **Library details valid** — trimmed name is non-empty and does not collide with an existing library name.
-2. **Directory selection valid** — at least one folder has been added.
+| Field | Required | Default | Notes |
+|-------|----------|---------|-------|
+| Name | yes | `""` | Trimmed; case-insensitive client-side uniqueness check against the live list |
+| Path | yes | `""` | Trimmed, trailing slashes stripped. Absolute filesystem path |
+| Scan on create | no | `true` | When on, an initial scan job is enqueued immediately after insert |
 
-### 3.3 Submit sequence
+### 3.3 Pre-scan preview
 
-1. Frontend validates name and folder list.
-2. Frontend calls `POST /api/v1/libraries/scan` with the in-progress library DTO to count processable files across the selected paths.
-3. If the count ≥ 500, the UI sets a "large library loading" flag so subsequent book lists buffer smoothly.
-4. Frontend calls `POST /api/v1/libraries` with the library DTO.
-5. On success the dialog closes and the router navigates to `/library/{id}/books`.
-6. On failure the loading flag is cleared and a toast shows the error. The dialog stays open so the user can fix input.
+Before submission, the admin may click **Count files** to call `POST /api/v1/settings/libraries/scan` and see how many supported files the target path contains. The response is a count only — no library is created and no `bookdrop_items` are enqueued. Used to gut-check the path before committing.
 
----
+### 3.4 Submit sequence
 
-## 4. Form Fields
-
-| Field | Type | Required | Default | Notes |
-|-------|------|----------|---------|-------|
-| `name` (`chosenLibraryName`) | string | **Yes** | `""` | Trimmed before validation; must be unique (checked against in-memory library list). |
-| `icon` / `iconType` | `{ type: 'PRIME_NG' \| 'CUSTOM_SVG', value: string } \| null` | No | `null` | Selected via icon-picker modal. |
-| `paths` (`folders`) | `[]string` | **Yes** (≥1) | `[]` | Selected via directory-picker modal. Duplicates within the form are rejected at add-time. |
-| `watch` | bool | No | `false` | When `true` backend registers each path with the filesystem watcher. |
-| `metadataSource` | `EMBEDDED \| SIDECAR \| PREFER_SIDECAR \| PREFER_EMBEDDED \| NONE` | No | `EMBEDDED` | Per-library metadata strategy. |
-| `organizationMode` | `BOOK_PER_FILE \| BOOK_PER_FOLDER \| AUTO_DETECT` | No | `BOOK_PER_FILE` (UI default) | Backend model default is `AUTO_DETECT`; UI sends `BOOK_PER_FILE`. `AUTO_DETECT` is deprecated on the backend enum. |
-| `allowAllFormats` | bool | No | `true` | UI-only toggle. When `false`, `allowedFormats` drives the payload. |
-| `allowedFormats` | `[]BookFileType` | No | all formats when `allowAllFormats=true` | Empty list on the backend means "accept all". |
-| `formatPriority` | `[]BookFileType` | No | default order `[EPUB, PDF, CBX, MOBI, AZW3, FB2, AUDIOBOOK]` | Drag-drop reorderable (Angular CDK). Used when multiple files represent the same book. |
-
-Reference: [library-creator.component.ts](booklore-ui/src/app/features/library-creator/library-creator.component.ts), [library-creator.component.html](booklore-ui/src/app/features/library-creator/library-creator.component.html).
+1. Client validates name + path (non-empty, unique name).
+2. Client calls `POST /api/v1/settings/libraries` with `{ name, path, scan }`.
+3. On 201, dialog closes, the libraries list refetches, and a sonner toast confirms. If `scan === true`, the library appears with `lastScannedAt = null` and starts receiving SSE scan progress events within seconds.
+4. On 409, a toast surfaces the conflict (name taken or path taken). The dialog stays open.
 
 ---
 
-## 5. API Surface
+## 4. API Surface
 
-### 5.1 Pre-create scan
+All endpoints live under `/api/v1/settings` and are admin-gated by `auth.RequireRole(model.RoleAdmin)` middleware declared in [internal/handler/router.go](internal/handler/router.go:117).
 
-```
-POST /api/v1/libraries/scan
-Auth:     canManageLibrary or isAdmin
-Body:     CreateLibraryRequest (without id)
-Response: int64  — count of processable files across all paths
-```
-
-Implemented in [library_handler.go:130](booklore-api/internal/library/handler.go:130) → `LibraryService.ScanLibraryPaths` ([service.go:316](booklore-api/internal/library/service.go:316)). Used by the UI to decide whether to enable large-library buffering.
-
-### 5.2 Create
+### 4.1 Pre-create file count
 
 ```
-POST /api/v1/libraries
-Auth:     canManageLibrary or isAdmin
+POST /api/v1/settings/libraries/scan
+Auth:     admin
+Body:     { "path": "<string>" }
+Response: { "count": <int> }
+```
+
+Walks the path with `filepath.WalkDir` and counts files whose extension clears `fileproc.IsSupported`. No side effects; no `bookdrop_items` written.
+
+### 4.2 Create
+
+```
+POST /api/v1/settings/libraries
+Auth:     admin
 Body:     CreateLibraryRequest
-Response: Library (DTO, including assigned id)
+Response: 201 Created → { "library": SettingsLibraryDTO }
+Errors:   400 if name or path empty; 409 on ErrLibraryNameTaken / ErrLibraryPathTaken
 ```
 
-[library_handler.go:59](booklore-api/internal/library/handler.go:59) → `LibraryService.CreateLibrary` ([service.go:171](booklore-api/internal/library/service.go:171)).
+See [internal/handler/settings.go](internal/handler/settings.go) (`SettingsLibraryCreate`).
 
-### 5.3 DTOs
+### 4.3 Related endpoints (same panel)
 
-**`CreateLibraryRequest`** ([request.go](booklore-api/internal/library/dto/request.go)):
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/settings/libraries` | List all libraries with scan stats + book counts |
+| `POST` | `/settings/libraries/:id/rescan` | Enqueue a rescan job (202 Accepted) |
+| `DELETE` | `/settings/libraries/:id` | Hard-delete library + cascade book rows (204 No Content) |
+| `POST` | `/settings/libraries/pattern/preview` | Render a naming pattern against a sample row |
+| `GET` | `/settings/libraries/pattern/default` | Fetch instance-wide default naming pattern |
+| `PUT` | `/settings/libraries/pattern/default` | Set instance-wide default naming pattern |
+| `PATCH` | `/settings/libraries/:id/file-naming-pattern` | Per-library pattern override |
+
+### 4.4 DTOs
+
+**`createLibraryReq`** ([internal/handler/settings.go](internal/handler/settings.go)):
 
 ```go
-type CreateLibraryRequest struct {
-    Name             string                  `json:"name"             validate:"required"`
-    Icon             string                  `json:"icon,omitempty"`
-    IconType         *IconType               `json:"iconType,omitempty"`         // PRIME_NG | CUSTOM_SVG
-    Paths            []LibraryPath           `json:"paths"            validate:"required,min=1,dive"`
-    Watch            bool                    `json:"watch"`
-    FormatPriority   []BookFileType          `json:"formatPriority,omitempty"`
-    AllowedFormats   []BookFileType          `json:"allowedFormats,omitempty"`   // empty/nil ⇒ accept all
-    MetadataSource   MetadataSource          `json:"metadataSource,omitempty"`
-    OrganizationMode LibraryOrganizationMode `json:"organizationMode,omitempty"`
+type createLibraryReq struct {
+    Name string `json:"name"`
+    Path string `json:"path"`
+    Scan bool   `json:"scan"`
 }
 ```
 
-**`Library`** response DTO ([library.go](booklore-api/internal/library/dto/library.go)):
+Validation is hand-rolled (no `validator/v10` tags): both `Name` and `Path` are trimmed, and `Path` has trailing `/` stripped before the non-empty check. A missing or empty value returns `400 Bad Request`.
+
+**`SettingsLibraryDTO`** response shape:
+
+```json
+{
+  "library": {
+    "id": "<uuid>",
+    "name": "string",
+    "slug": "string",
+    "path": "string",
+    "lastScannedAt": null,
+    "fileCount": 0,
+    "discoveredCount": 0,
+    "fileNamingPattern": null,
+    "bookCount": 0,
+    "createdAt": "<RFC3339>"
+  }
+}
+```
+
+---
+
+## 5. Backend Logic
+
+### 5.1 Handler sequence
+
+`SettingsLibraryCreate` ([internal/handler/settings.go](internal/handler/settings.go)):
+
+1. Bind JSON body; reject malformed payloads with `400`.
+2. Validate `name` and `path` are non-empty after trim / slash-strip; `400` otherwise.
+3. Delegate to `lib.Create(ctx, name, path)` — the service layer.
+4. Map `ErrLibraryNameTaken` → `409`, `ErrLibraryPathTaken` → `409`, other errors → `500`.
+5. When `body.Scan == true` and a queue is available, enqueue a River `LibraryScan` job via `h.queue.EnqueueLibraryScan(ctx, lib.ID)`. Failures here are logged as warnings but do **not** fail the response — the library already exists and the admin can rescan manually.
+6. Respond `201 Created` with the `SettingsLibraryDTO`.
+
+### 5.2 Service layer
+
+[internal/service/library.go](internal/service/library.go):
+
+```go
+func (s *LibraryService) Create(ctx context.Context, name, path string) (model.Library, error) {
+    name = strings.TrimSpace(name)
+    path = strings.TrimRight(strings.TrimSpace(path), "/")
+    return s.repo.CreateLibrary(ctx, name, slugify(name), path)
+}
+```
+
+The service is a thin pass-through: derive a URL-safe slug from the name, then hand off to the repo. No filesystem validation, no watcher registration (we don't run `fsnotify` — the scan job is manual-trigger or on-create).
+
+### 5.3 Repository layer
+
+[internal/repo/library.go](internal/repo/library.go):
+
+```sql
+INSERT INTO libraries (name, slug, path)
+VALUES ($1, $2, $3)
+RETURNING
+    id, name, slug, path,
+    last_scanned_at, file_count, discovered_count,
+    file_naming_pattern, created_at,
+    0 AS book_count
+```
+
+Two unique indexes trip the same Postgres `23505` code:
+
+- `libraries_slug_key` → `ErrLibraryNameTaken`
+- `libraries_path_key` → `ErrLibraryPathTaken`
+
+The handler maps both to `409 Conflict` with distinct messages.
+
+> **PG quirk**: the `RETURNING` clause pulls every column `scanLibrary` expects, with a literal `0 AS book_count`. A brand-new library has no books, and a modifying CTE (e.g. `WITH ins AS (INSERT ...) SELECT ... FROM libraries l JOIN ins ...`) wouldn't see its own insert — per the PG manual, both share a snapshot. Single-statement `INSERT … RETURNING` is the only shape that works cleanly.
+
+### 5.4 Scan pipeline
+
+Initial scan is a River background job ([internal/task/library_scan.go](internal/task/library_scan.go)):
+
+1. Load the `libraries` row by ID; read `path`.
+2. `filepath.WalkDir` the tree.
+3. For each file:
+   - Skip if `repo.BookExistsByPath(path)` returns true — prevents re-ingesting the same file on rescan.
+   - Skip if `fileproc.IsSupported(path)` returns false — extension filter (EPUB / PDF / CBZ / MOBI / FB2 / TXT today).
+   - Otherwise enqueue a row in `bookdrop_items` via `BookDropService.Enqueue`; fire a River `bookdrop` job for the file processor.
+   - Increment `fileCount` (supported files seen) and `discovered` (new bookdrop items created).
+4. Call `LibraryRepo.TouchScan(ctx, libID, fileCount, discovered)` to stamp `last_scanned_at = now()` and the two counters on the row.
+5. Broadcast SSE events (`library.scan-started`, `library.scan-completed`) so the UI can refresh without polling.
+
+Errors from the walk are logged (`slog.Warn`) and don't abort the job — a partial scan still stamps whatever was counted. No retry / outbox / rescue — if the River worker crashes mid-walk, River retries the job from the start and dedup is handled by `BookExistsByPath`.
+
+### 5.5 File naming patterns (post-creation)
+
+The create endpoint does **not** accept a `fileNamingPattern` field. The column defaults to `NULL`, which means "fall back to the instance-wide default" (or to "keep the original filename" if that's blank too). Pattern configuration happens separately on the same Settings panel via:
+
+- `PUT /settings/libraries/pattern/default` — instance default
+- `PATCH /settings/libraries/:id/file-naming-pattern` — per-library override (send `null` or `""` to clear)
+
+See [spec/file-naming-patterns.spec.md](spec/file-naming-patterns.spec.md) if present.
+
+### 5.6 Delete
+
+`DELETE /settings/libraries/:id` hands off to `LibraryRepo.DeleteLibrary` which runs a transactional delete:
+
+1. Select dependent book IDs (so the handler can clean up cover files).
+2. Delete the library row — FK cascades take care of `books`, `shelf_books`, `annotations`, `reading_sessions`, `user_book_progress`.
+3. Handler loops over the returned book IDs and calls `coverstore.DeleteBook(id)` for each — covers are on disk, not in the DB, so the cascade can't reach them.
+4. **Source files on disk are intentionally left alone.** Library paths point at user-managed filesystem roots; "unregister this library" is not the same as "wipe the bytes."
+
+The UI guards this with a typed-name confirmation: the admin must type the library name exactly before the Delete button enables.
+
+### 5.7 Rescan
+
+`POST /settings/libraries/:id/rescan` just enqueues the same River job the create path uses. Returns `202 Accepted` immediately; progress is tracked via SSE. Returns `503 Service Unavailable` if the queue isn't initialized (pre-migration boot states).
+
+---
+
+## 6. Data Model
+
+### 6.1 `libraries` table
+
+Schema built up across three migrations:
+
+**[000001_init.up.sql](internal/migrator/migrations/000001_init.up.sql):**
+
+```sql
+CREATE TABLE libraries (
+    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    name       TEXT        NOT NULL,
+    slug       TEXT        NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+**[000016_library_naming_pattern.up.sql](internal/migrator/migrations/000016_library_naming_pattern.up.sql):** adds per-library override.
+
+```sql
+ALTER TABLE libraries ADD COLUMN file_naming_pattern TEXT;
+```
+
+**[000018_library_single_path.up.sql](internal/migrator/migrations/000018_library_single_path.up.sql):** collapses the multi-path model and adds scan-state columns.
+
+```sql
+ALTER TABLE libraries
+    ADD COLUMN path             TEXT        NOT NULL DEFAULT '',
+    ADD COLUMN last_scanned_at  TIMESTAMPTZ,
+    ADD COLUMN file_count       INTEGER     NOT NULL DEFAULT 0,
+    ADD COLUMN discovered_count INTEGER     NOT NULL DEFAULT 0;
+
+CREATE UNIQUE INDEX libraries_path_key
+    ON libraries (path)
+    WHERE path <> '';
+```
+
+The `WHERE path <> ''` partial predicate is what lets us have the column `NOT NULL DEFAULT ''` while still rejecting duplicate real paths — seed / pre-migration rows with an empty path don't trip the index.
+
+### 6.2 Final column set
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | UUID | PK, default `gen_random_uuid()` | Surface key |
+| `name` | TEXT | NOT NULL | Display string; not unique at the DB level — uniqueness is via `slug` |
+| `slug` | TEXT | UNIQUE NOT NULL | URL-safe derivative of `name`; collisions surface as `ErrLibraryNameTaken` |
+| `path` | TEXT | NOT NULL DEFAULT `''`, partial UNIQUE | Single filesystem root, immutable post-create |
+| `last_scanned_at` | TIMESTAMPTZ | nullable | NULL until first successful scan completes |
+| `file_count` | INTEGER | NOT NULL DEFAULT 0 | Supported files seen on last scan |
+| `discovered_count` | INTEGER | NOT NULL DEFAULT 0 | New `bookdrop_items` produced on last scan |
+| `file_naming_pattern` | TEXT | nullable | Per-library override; NULL ⇒ use instance default |
+| `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT now() | Insert timestamp |
+
+### 6.3 Model struct
+
+[internal/model/library.go](internal/model/library.go):
 
 ```go
 type Library struct {
-    ID                int64                   `json:"id"`
-    Name              string                  `json:"name"`
-    Sort              *Sort                   `json:"sort,omitempty"`
-    Icon              string                  `json:"icon,omitempty"`
-    IconType          *IconType               `json:"iconType,omitempty"`
-    FileNamingPattern *string                 `json:"fileNamingPattern,omitempty"` // nil until set; see file-naming-patterns spec
-    Watch             bool                    `json:"watch"`
-    Paths             []LibraryPath           `json:"paths"`
-    FormatPriority    []BookFileType          `json:"formatPriority"`
-    AllowedFormats    []BookFileType          `json:"allowedFormats"`
-    OrganizationMode  LibraryOrganizationMode `json:"organizationMode"`
-    MetadataSource    MetadataSource          `json:"metadataSource"`
+    ID              string
+    Name            string
+    Slug            string
+    Path            string      // immutable post-create
+    LastScannedAt   *time.Time
+    FileCount       int
+    DiscoveredCount int
+    BookCount       int         // computed via subquery in SELECTs
+    CreatedAt       time.Time
+    FileNamingPattern *string   // nil == "use instance default"
 }
 ```
 
-**`LibraryPath`** DTO: `{ ID int64; LibraryID int64; Path string }`.
-
-Validation uses `github.com/go-playground/validator/v10` and is executed in the handler before invoking the service.
+`BookCount` is never stored — the `libCols` SQL block carries a correlated subquery against `books WHERE library_id = l.id AND deleted_at IS NULL`. Keeps the row small; the subquery is cheap on the sizes we target.
 
 ---
 
-## 6. Backend Logic
-
-### 6.1 `CreateLibrary` sequence
-
-1. Resolve the authenticated user from the request context (`ctx.Value(authContextKey)`).
-2. Build `LibraryModel` from the request — name, icon/iconType, watch, formatPriority, allowedFormats, metadataSource, organizationMode.
-3. Build `LibraryPathModel` slice from `paths` and attach them (GORM associations with `FullSaveAssociations`).
-4. Associate the library with the current user (many-to-many `users` join table).
-5. Persist inside a `gorm.DB.Transaction(...)` so path inserts roll back with the library row.
-6. If `Watch=true`, for each path call `libraryWatchService.RegisterPath(ctx, library, path)`.
-7. Launch the initial scan in a goroutine, propagating a detached context built from the user's auth claims (`authctx.Detach(ctx)`) so request cancellation doesn't abort the scan. Track the library id in `scanningLibraries` (a `sync.Map`) to prevent duplicate concurrent scans; delete on completion.
-8. Audit: `auditService.Log(ctx, audit.LibraryCreated, "Library", libraryID, fmt.Sprintf("Created library: %s", name))`.
-9. Return the persisted `Library` DTO to the handler (response is immediate; scan runs async).
-
-### 6.2 Initial scan
-
-Async entry point: `LibraryProcessingService.ProcessLibrary(ctx, libraryID)` ([processing.go:51](booklore-api/internal/library/processing.go:51)).
-
-Pipeline:
-1. Load `LibraryModel`.
-2. Emit a "scan started" notification to connected clients (via the SSE/WebSocket hub).
-3. Walk each `LibraryPathModel` via `LibraryFileHelper.GetLibraryFiles` (uses `filepath.WalkDir`).
-4. Diff discovered files against existing `BookModel` rows.
-5. Group files according to `OrganizationMode` via `BookGroupingService.GroupForInitialScan`.
-6. Process groups via `FileAsBookProcessor.ProcessLibraryFilesGrouped`.
-7. Emit a "scan complete" notification. Errors are logged (`slog.Error`), not propagated.
-
-The goroutine recovers from panics with `defer func() { if r := recover(); r != nil { ... } }()` so a single bad file cannot crash the process.
-
-### 6.3 Path validation
-
-- `ScanLibraryPaths` checks each path with `os.Stat`; missing paths are logged as warnings but do not fail the scan call.
-- Recursive rescans of an existing library return `apierr.LibraryPathNotAccessible` when the library has books but the scan now finds zero processable files (suggests the mount dropped).
-- No duplicate-path check within a single library — the form prevents it at add-time but the backend accepts duplicates.
-
-### 6.4 Processable-file filter
-
-`isProcessableFile` ([service.go:355](booklore-api/internal/library/service.go:355)):
-- Extension (lowercased via `strings.ToLower(filepath.Ext(name))`) is matched against `BookFileType` (PDF, EPUB, CBX `.cbz/.cbr/.cb7`, FB2, MOBI, AZW3 `.azw3/.azw`, AUDIOBOOK `.m4b/.m4a/.mp3/.opus`).
-- If `AllowedFormats` is non-empty, the extension must match one of the allowed types.
-
----
-
-## 7. Data Model
-
-### 7.1 `library` table
-
-Base from `0001_create_tables.up.sql` (golang-migrate):
-
-```sql
-CREATE TABLE library (
-    id     BIGSERIAL PRIMARY KEY,
-    name   VARCHAR(255) UNIQUE NOT NULL,
-    sort   VARCHAR(255) NULL,
-    icon   VARCHAR(64)  NOT NULL,
-    watch  BOOLEAN NOT NULL DEFAULT FALSE
-);
-```
-
-Additive columns (through later migrations):
-
-| Column | Type | Default | Migration |
-|--------|------|---------|-----------|
-| `file_naming_pattern` | `VARCHAR(1000)` | `NULL` | 0043 |
-| `format_priority` | `JSONB` | `NULL` → empty list | — |
-| `allowed_formats` | `JSONB` | `NULL` → empty list | — |
-| `organization_mode` | `VARCHAR(50)` | `'AUTO_DETECT'` | 0103 |
-| `metadata_source` | `VARCHAR(50)` | — (app default `EMBEDDED`) | — |
-| `icon_type` | `VARCHAR(50)` | `NULL` | — |
-
-### 7.2 `library_path` table
-
-```sql
-CREATE TABLE library_path (
-    id         BIGSERIAL PRIMARY KEY,
-    path       TEXT,
-    library_id BIGINT,
-    CONSTRAINT fk_library_path FOREIGN KEY (library_id)
-        REFERENCES library(id) ON DELETE CASCADE
-);
-```
-
-Cascade delete was tightened in `0116_add_cascade_delete_to_library_path.up.sql`.
-
-### 7.3 GORM
-
-- `LibraryModel.LibraryPaths` — `gorm:"foreignKey:LibraryID;constraint:OnDelete:CASCADE"`, loaded with `.Preload("LibraryPaths")`.
-- `LibraryModel.Books` — `gorm:"foreignKey:LibraryID"` with orphan cleanup handled by service deletes.
-- `LibraryModel.Users` — `gorm:"many2many:user_libraries;"`.
-- `format_priority` / `allowed_formats` use a custom `Scan` / `Value` pair (`pgtype.JSONB` or `json.RawMessage` + `[]BookFileType`).
-- `sort` is serialized with a custom `driver.Valuer` / `sql.Scanner` implementation on the `Sort` struct.
-
----
-
-## 8. Enums
-
-Go enums are modeled as named string types with package-level constants and a `values()` helper for validation.
-
-| Enum | Values | Source |
-|------|--------|--------|
-| `BookFileType` | `PDF, EPUB, CBX, FB2, MOBI, AZW3, AUDIOBOOK` | [book_file_type.go](booklore-api/internal/library/enum/book_file_type.go) |
-| `MetadataSource` | `EMBEDDED, SIDECAR, PREFER_SIDECAR, PREFER_EMBEDDED, NONE` | [metadata_source.go](booklore-api/internal/library/enum/metadata_source.go) |
-| `LibraryOrganizationMode` | `BOOK_PER_FILE, BOOK_PER_FOLDER, AUTO_DETECT` *(deprecated)* | [organization_mode.go](booklore-api/internal/library/enum/organization_mode.go) |
-| `IconType` | `PRIME_NG, CUSTOM_SVG` | [icon_type.go](booklore-api/internal/library/enum/icon_type.go) |
-
-Each enum implements `encoding.TextMarshaler` / `TextUnmarshaler` so it round-trips through JSON and the DB driver as a string.
-
----
-
-## 9. Edge Cases
+## 7. Edge Cases
 
 | Case | Outcome |
-|------|---------|
-| Empty `name` | UI disables Create; backend rejects with validator `required` tag → 400. |
-| Duplicate `name` (in-memory match) | UI blocks submission with a validation error. No backend uniqueness check beyond the `UNIQUE` DB constraint, which would surface as a 500 via the `pgconn.PgError` `23505` path if bypassed. |
-| No paths selected | UI disables Create; backend rejects with validator `min=1` → 400. |
-| Path does not exist at scan time | `os.Stat` returns `ErrNotExist`; logged as a warning; creation still succeeds; scan reports zero files for that path. |
-| Path exists but has no processable files | Library is created; initial scan yields zero books. Subsequent rescans on an already-populated library would return `LibraryPathNotAccessible`. |
-| Large folder (≥ 500 processable files) | UI enables a "large library loading" flag so list rendering buffers; backend scan is always async (goroutine). |
-| `watch=true` but path is not watchable (e.g. remote mount) | Registration is attempted per path; `fsnotify.Watcher.Add` errors are logged by the watch service. Library creation is not rolled back. |
-| `AllowedFormats` empty or nil | Treated as "accept all formats". |
-| `FormatPriority` nil | Persisted as empty JSON array. |
-| Concurrent scans on the same library | Prevented by a `sync.Map`-backed `scanningLibraries` set guarding `ProcessLibrary`. |
-| User lacks permission | `403 Forbidden` from the `RequireLibraryManageOrAdmin` middleware. |
+|---|---|
+| Empty `name` | `400 Bad Request`; dialog keeps state |
+| Empty `path` | `400 Bad Request`; dialog keeps state |
+| Path with trailing slashes (`/srv/books///`) | Stripped by the service layer before insert; normalized stored path is `/srv/books` |
+| Name collision (case-insensitive, in-memory) | UI blocks submission client-side |
+| Name collision (server-side, via slug) | `409 Conflict` with `ErrLibraryNameTaken`; possible when two admins race, or the client bypasses the UI check |
+| Path collision | `409 Conflict` with `ErrLibraryPathTaken` — two libraries cannot share one root |
+| Path that doesn't exist on disk | Library row is created. Scan job runs, `filepath.WalkDir` returns immediately, `file_count = 0`, `discovered = 0`. No error surfaced to the admin beyond the empty counts on the row |
+| Path becomes unreadable between create and scan | Walk errors are logged; row still gets stamped with whatever counts were reached |
+| `scan = false` on create | Library row persisted; no River job enqueued. `last_scanned_at` stays `NULL` until a manual rescan |
+| Queue unavailable (River not up) | Library row still created; scan-enqueue logs a warning. No response error — `lastScannedAt` stays null and the admin sees "never scanned" in the list |
+| Concurrent scans on the same library | Not explicitly guarded at the service level. Each scan job calls `BookExistsByPath` per file, so a double-scan at worst re-examines files that are already imported — it won't produce duplicate `books` or `bookdrop_items` |
+| Delete on a library with active scan | The DB delete cascades; the in-flight scan job will log errors on subsequent `TouchScan` / `BookDropService.Enqueue` calls and the River worker treats the job as failed (retried once or twice, then dropped) |
+| Non-admin user | `403 Forbidden` from the admin middleware on the `/settings` group |
+
+---
+
+## 8. Validation Summary
+
+| Layer | Rule |
+|---|---|
+| UI | Both fields non-empty after trim; name not a case-insensitive duplicate in the live list |
+| Handler | Both fields non-empty after trim + path slash-strip; malformed JSON → 400 |
+| Service | Trims inputs and generates `slug` |
+| Repository | Two unique indexes (`slug`, `path`) enforce uniqueness at the DB level |
+| Auth | Admin-only; enforced by `auth.RequireRole(model.RoleAdmin)` on the `/settings` group |
+
+---
+
+## 9. Security Considerations
+
+- The admin supplies absolute filesystem paths; there is no sandbox. Deployments rely on the container / systemd unit's filesystem boundary to restrict reachable roots. Paths are trimmed but not normalized against a chroot.
+- Admin role is required to create libraries; non-admins cannot point embookshelf at arbitrary paths.
+- The pre-create count endpoint reads directory listings but does not open file bytes — the same walk function is shared with the real scan job.
+- Path traversal via `..` inside the stored path is not actively blocked; the walk would resolve it but still stay under whatever the process can read. Deployments that care should run the binary under a user with a narrow home / bind-mount.
+- No `fsnotify` watcher is registered, so a malicious library path can't be used to pin watchers on unrelated directories.
 
 ---
 
 ## 10. Cross-feature Interactions
 
-- **File Naming Patterns** — `FileNamingPattern` is not set during creation; it stays `nil` and falls back to the system default. See [file-naming-patterns.spec.md](specs/file-naming-patterns.spec.md).
-- **File watcher** — `LibraryWatchService` (wrapping `fsnotify.Watcher`) is called from both create (`watch=true`) and update flows. The watcher is also paused around bulk moves (see File Naming Patterns spec §5.2).
-- **Metadata persistence** — library metadata source does not inherit from global `MetadataPersistenceSettings`; it is stored per library.
-- **App settings** — no settings are copied from global defaults on creation.
+- **BookDrop** — the scan job's discovered files land in `bookdrop_items`, not directly in `books`. An admin reviews and approves each item, which then creates the `books` row. See [spec/bookdrop.spec.md](spec/bookdrop.spec.md) if present.
+- **File Naming Patterns** — per-library pattern lives on the library row; applied on BookDrop approval (file move + rename).
+- **Cover storage** — covers live on disk under `DATA_PATH/covers/books/{bookID}` and are not owned by the `libraries` row. Delete cleans them up per-book in the handler loop.
+- **SSE** — scan job broadcasts `library.scan-started` / `library.scan-completed` events that the UI listens to for cache invalidation.
 
 ---
 
-## 11. Audit
+## 11. Open / Future Work
 
-Every successful create writes an audit row:
-
-```
-audit.LibraryCreated
-entity   = "Library"
-entityID = <new library id>
-details  = "Created library: <name>"
-```
-
-Related actions: `LibraryUpdated`, `LibraryDeleted`, `LibraryScanned`, `NamingPatternChanged`.
+1. **Surface scan progress** — today SSE fires start / complete only. A `{ filesScanned, total }` tick would let the UI render a real progress bar instead of an indeterminate spinner.
+2. **Up-front path existence check** — creating a library pointed at a non-existent path silently produces an empty scan. A 400-level response or an inline warning on the library row would match admin expectations.
+3. **`fsnotify` auto-ingest** — "drop a file, it appears in BookDrop within seconds" would be a natural extension of the scan job. The `watch` field exists in the spec world but not in ours.
+4. **Concurrent-scan guard** — a `sync.Map`-backed set per library ID would short-circuit a double-rescan instead of relying on per-file dedup.
+5. **Path editing** — currently immutable. Adding an edit path requires rewriting every `books.path` that pointed under the old root, which is why it's punted.
+6. **Per-library allowed-formats filter** — today the scan job runs one extension set shared across all libraries (`fileproc.IsSupported`). A per-library whitelist would let a "Comics" library skip EPUBs in the same tree.
 
 ---
 
-## 12. Validation Summary
+## 12. Key References
 
-| Layer | Rule |
-|-------|------|
-| UI | Trimmed name non-empty; name not already in in-memory library list; ≥ 1 folder; no duplicate folder added to the form. |
-| DTO | `validate:"required"` on `Name`; `validate:"required,min=1,dive"` on `Paths`. |
-| Database | `library.name` `UNIQUE NOT NULL`. |
-| Auth | `canManageLibrary` or `isAdmin` middleware; edit/delete additionally require the `CheckLibraryAccess` middleware. |
-
----
-
-## 13. Security Considerations
-
-- The user supplies absolute filesystem paths; there is no sandbox to a root directory. Deployments should rely on the container/host filesystem boundary to restrict reachable paths. Paths are cleaned with `filepath.Clean` but not resolved against a chroot.
-- Permission is required to create libraries; non-admin users cannot point BookLore at arbitrary paths.
-- The pre-create scan reads directory listings (`os.ReadDir`) but does not open file contents; the async initial scan is what actually reads files.
-- Path inputs that contain null bytes or traversal sequences (`..`) are rejected before `os.Stat` is called.
-
----
-
-## 14. Open / Future Work
-
-1. **Backend duplicate-path check** — reject adding the same path to a library (UI already does, DB does not).
-2. **Path reachability check up-front** — currently a missing path silently scans zero files; a warning in the create response would be clearer.
-3. **Inheritance from app settings** — opt-in defaults for `MetadataSource`, `OrganizationMode`, and `FileNamingPattern` at creation time.
-4. **Finish deprecating `AUTO_DETECT`** — the enum value is marked deprecated but remains the column default.
-5. **Atomic rollback when watcher registration fails** — today the library is created even if watch registration errors. Consider wrapping watcher registration in the same transaction via an outbox or a post-commit hook that can mark the library as `watchErrored`.
-6. **Context-aware cancellation of initial scan** — expose an admin-facing cancel endpoint that closes the scan's context.
-
----
-
-## 15. Key References
-
-- Handler: [handler.go](booklore-api/internal/library/handler.go)
-- Service: [service.go](booklore-api/internal/library/service.go)
-- Processor: [processing.go](booklore-api/internal/library/processing.go)
-- Watcher: [watch.go](booklore-api/internal/library/watch.go) (`LibraryWatchService`)
-- Request DTO: [request.go](booklore-api/internal/library/dto/request.go)
-- Response DTO: [library.go](booklore-api/internal/library/dto/library.go)
-- Models: [library_model.go](booklore-api/internal/library/model/library_model.go), [library_path_model.go](booklore-api/internal/library/model/library_path_model.go)
-- UI: [library-creator.component.ts](booklore-ui/src/app/features/library-creator/library-creator.component.ts), [library-creator.component.html](booklore-ui/src/app/features/library-creator/library-creator.component.html)
-- UI service: [library.service.ts](booklore-ui/src/app/features/book/service/library.service.ts)
-- Topbar entry: [app.topbar.component.ts:166](booklore-ui/src/app/shared/layout/component/layout-topbar/app.topbar.component.ts:166)
-- Dialog launcher: [dialog-launcher.service.ts:80](booklore-ui/src/app/shared/services/dialog-launcher.service.ts:80)
+- Handler: [internal/handler/settings.go](internal/handler/settings.go) — `SettingsLibraryCreate`, `SettingsLibraryScan`, `SettingsLibraryRescan`, `SettingsLibraryDelete`
+- Router: [internal/handler/router.go](internal/handler/router.go) (lines 117–129)
+- Service: [internal/service/library.go](internal/service/library.go)
+- Repository: [internal/repo/library.go](internal/repo/library.go) — `CreateLibrary`, `DeleteLibrary`, `TouchScan`
+- Scan worker: [internal/task/library_scan.go](internal/task/library_scan.go)
+- Model: [internal/model/library.go](internal/model/library.go)
+- Migrations: [000001](internal/migrator/migrations/000001_init.up.sql), [000016](internal/migrator/migrations/000016_library_naming_pattern.up.sql), [000018](internal/migrator/migrations/000018_library_single_path.up.sql)
+- UI panel: [ui/src/routes/_app.settings.tsx](ui/src/routes/_app.settings.tsx) — Libraries section + creator dialog + delete confirmation
+- UI API client: [ui/src/api/settings.ts](ui/src/api/settings.ts) — `createLibrary`, `prescanLibraryPaths`, `rescanLibrary`, `deleteLibrary`
