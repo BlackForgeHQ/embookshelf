@@ -10,12 +10,12 @@ import (
 	"github.com/blackforge/embookshelf/internal/service"
 )
 
-// OIDCConfig returns the public subset of OIDC settings — the login page
-// uses this to render "Sign in with {provider}" and to honor force-only
-// mode. Rendered even when OIDC is off so the SPA can decide layout.
+// OIDCConfig returns the public list of enabled providers — the login
+// page uses this to render one "Sign in with …" button per provider.
+// Safe to serve unauthenticated: no secrets.
 func (h *Handler) OIDCConfig(c *gin.Context) {
 	if h.oidc == nil {
-		c.JSON(http.StatusOK, gin.H{"enabled": false, "forceOnly": false, "configured": false})
+		c.JSON(http.StatusOK, gin.H{"providers": []any{}, "forceOnly": false})
 		return
 	}
 	cfg, err := h.oidc.PublicConfig(c.Request.Context())
@@ -26,19 +26,20 @@ func (h *Handler) OIDCConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, cfg)
 }
 
-// OIDCLogin generates a PKCE challenge + state and redirects the browser
-// to the provider's authorize endpoint. State is held server-side — no
-// cookies needed for the round trip.
+// OIDCLogin initiates the flow for the provider slug in the URL.
 func (h *Handler) OIDCLogin(c *gin.Context) {
 	if h.oidc == nil {
 		writeError(c, http.StatusNotFound, "OIDC is not configured")
 		return
 	}
-	authURL, _, err := h.oidc.AuthURL(c.Request.Context())
+	slug := c.Param("slug")
+	authURL, err := h.oidc.AuthURL(c.Request.Context(), slug)
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrOIDCUnknownProvider):
+			writeError(c, http.StatusNotFound, "unknown provider")
 		case errors.Is(err, service.ErrOIDCDisabled), errors.Is(err, service.ErrOIDCNotConfigured):
-			writeError(c, http.StatusNotFound, "OIDC is not configured")
+			writeError(c, http.StatusNotFound, "provider is not enabled")
 		default:
 			writeServerError(c, "oidc auth url", err)
 		}
@@ -47,9 +48,8 @@ func (h *Handler) OIDCLogin(c *gin.Context) {
 	c.Redirect(http.StatusFound, authURL)
 }
 
-// OIDCCallback trades the authorization code for a BookLore session and
-// redirects to the dashboard. Failures redirect to /login with an error
-// query param so the SPA can render a friendly message.
+// OIDCCallback trades the authorization code for a session. Routing by
+// provider lives inside the service — the state token carries the slug.
 func (h *Handler) OIDCCallback(c *gin.Context) {
 	if h.oidc == nil {
 		writeError(c, http.StatusNotFound, "OIDC is not configured")
@@ -72,16 +72,13 @@ func (h *Handler) OIDCCallback(c *gin.Context) {
 
 	sess, _, err := h.oidc.Exchange(c.Request.Context(), code, state, c.Request.UserAgent())
 	if err != nil {
-		code := oidcErrorCode(err)
-		c.Redirect(http.StatusFound, "/login?oidcError="+code)
+		c.Redirect(http.StatusFound, "/login?oidcError="+oidcErrorCode(err))
 		return
 	}
 	auth.SetSessionCookie(c, sess.ID, service.SessionTTL, h.Secure())
 	c.Redirect(http.StatusFound, "/")
 }
 
-// oidcErrorCode maps service errors to the stable short codes the SPA
-// translates for display.
 func oidcErrorCode(err error) string {
 	switch {
 	case errors.Is(err, service.ErrOIDCStateMismatch):
@@ -91,6 +88,8 @@ func oidcErrorCode(err error) string {
 	case errors.Is(err, service.ErrOIDCDisabled):
 		return "disabled"
 	case errors.Is(err, service.ErrOIDCNotConfigured):
+		return "notConfigured"
+	case errors.Is(err, service.ErrOIDCUnknownProvider):
 		return "notConfigured"
 	default:
 		return "unknown"

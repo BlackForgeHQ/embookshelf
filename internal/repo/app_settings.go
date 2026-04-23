@@ -10,14 +10,23 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// App-settings keys. Kept here so the service layer and handlers both
-// reference the same strings — typo drift in this table is hard to debug
-// because missing keys look identical to "never set".
+// Settings keys. Each built-in integration has its own key so admins
+// can configure Google, GitHub, and a custom OIDC provider in parallel
+// and toggle them independently. Shared knobs (force-only mode,
+// auto-provisioning policy) live at the top level.
 const (
-	SettingOIDCEnabled         = "OIDC_ENABLED"
-	SettingOIDCProvider        = "OIDC_PROVIDER_DETAILS"
-	SettingOIDCAutoProvision   = "OIDC_AUTO_PROVISION_DETAILS"
-	SettingOIDCForceOnlyMode   = "OIDC_FORCE_ONLY_MODE"
+	SettingOIDCGeneric       = "OIDC_GENERIC"
+	SettingOIDCGoogle        = "OIDC_GOOGLE"
+	SettingOIDCGitHub        = "OIDC_GITHUB"
+	SettingOIDCAutoProvision = "OIDC_AUTO_PROVISION_DETAILS"
+	SettingOIDCForceOnlyMode = "OIDC_FORCE_ONLY_MODE"
+)
+
+// Provider slugs used on the wire (URL path, state cache, login page).
+const (
+	ProviderSlugGeneric = "generic"
+	ProviderSlugGoogle  = "google"
+	ProviderSlugGitHub  = "github"
 )
 
 // AppSettingsRepo stores instance-wide configuration that admins can edit
@@ -31,21 +40,9 @@ func NewAppSettingsRepo(pool *pgxpool.Pool) *AppSettingsRepo {
 	return &AppSettingsRepo{pool: pool}
 }
 
-// OIDCProviderDetails mirrors section 4.1 of oidc.spec.md. ClientSecret is
-// stripped from the public settings response — the repo keeps it; the
-// handler decides who sees it.
-type OIDCProviderDetails struct {
-	ProviderName string       `json:"providerName"`
-	ClientID     string       `json:"clientId"`
-	ClientSecret string       `json:"clientSecret,omitempty"`
-	IssuerURI    string       `json:"issuerUri"`
-	Scopes       string       `json:"scopes,omitempty"`
-	ClaimMapping ClaimMapping `json:"claimMapping"`
-}
-
 // ClaimMapping names the ID-token / userinfo claims we read for each
-// profile field. Groups is optional and only consulted when the mapping
-// service is wired up (deferred to a later phase).
+// profile field. Only the generic OIDC provider exposes this — Google
+// and GitHub use fixed claims baked into the service.
 type ClaimMapping struct {
 	Username string `json:"username"`
 	Name     string `json:"name"`
@@ -53,18 +50,41 @@ type ClaimMapping struct {
 	Groups   string `json:"groups,omitempty"`
 }
 
+// GenericOIDCConfig is the full OIDC config surface — issuer URL, scopes,
+// and claim mapping. Used when an admin wires up Authentik / Keycloak /
+// Authelia / etc.
+type GenericOIDCConfig struct {
+	Enabled      bool         `json:"enabled"`
+	ProviderName string       `json:"providerName"`
+	ClientID     string       `json:"clientId"`
+	ClientSecret string       `json:"clientSecret,omitempty"`
+	IssuerURI    string       `json:"issuerUri"`
+	Scopes       string       `json:"scopes"`
+	ClaimMapping ClaimMapping `json:"claimMapping"`
+}
+
+// OAuthPresetConfig is the tiny config surface used for built-in
+// providers whose endpoints/scopes/claim mapping are hard-coded in the
+// service (Google, GitHub). The admin only supplies credentials.
+type OAuthPresetConfig struct {
+	Enabled      bool   `json:"enabled"`
+	ClientID     string `json:"clientId"`
+	ClientSecret string `json:"clientSecret,omitempty"`
+}
+
 // OIDCAutoProvisionDetails mirrors section 4.2. DefaultRole is this
-// codebase's simpler analogue of "default permissions + libraries" in the
-// spec — our permission model is admin/user, not per-library.
+// codebase's simpler analogue of "default permissions + libraries" in
+// the spec — our permission model is admin/user, not per-library.
 type OIDCAutoProvisionDetails struct {
 	EnableAutoProvisioning   bool   `json:"enableAutoProvisioning"`
 	AllowLocalAccountLinking bool   `json:"allowLocalAccountLinking"`
 	DefaultRole              string `json:"defaultRole"` // "admin" | "user"
 }
 
-// Defaults mirrors the form defaults documented in section 4.1.
-func DefaultOIDCProviderDetails() OIDCProviderDetails {
-	return OIDCProviderDetails{
+// -------- defaults --------
+
+func DefaultGenericOIDCConfig() GenericOIDCConfig {
+	return GenericOIDCConfig{
 		Scopes: "openid profile email",
 		ClaimMapping: ClaimMapping{
 			Username: "preferred_username",
@@ -75,7 +95,8 @@ func DefaultOIDCProviderDetails() OIDCProviderDetails {
 	}
 }
 
-// Defaults per spec 4.2.
+func DefaultOAuthPresetConfig() OAuthPresetConfig { return OAuthPresetConfig{} }
+
 func DefaultOIDCAutoProvisionDetails() OIDCAutoProvisionDetails {
 	return OIDCAutoProvisionDetails{
 		EnableAutoProvisioning:   false,
@@ -84,9 +105,11 @@ func DefaultOIDCAutoProvisionDetails() OIDCAutoProvisionDetails {
 	}
 }
 
-// GetRaw returns the JSONB bytes for one setting. Returns ErrNotFound when
-// the row is missing — callers decide whether a missing row is fatal or a
-// "use default" signal.
+// -------- generic access --------
+
+// GetRaw returns the JSONB bytes for one setting. Returns ErrNotFound
+// when the row is missing — callers decide whether a missing row is
+// fatal or a "use default" signal.
 func (r *AppSettingsRepo) GetRaw(ctx context.Context, name string) (json.RawMessage, error) {
 	var raw json.RawMessage
 	err := r.pool.QueryRow(ctx, `SELECT value FROM app_settings WHERE name = $1`, name).Scan(&raw)
@@ -111,8 +134,8 @@ func (r *AppSettingsRepo) SetRaw(ctx context.Context, name string, value json.Ra
 }
 
 // GetBool returns (false, nil) when the row is missing so callers don't
-// need to distinguish between "never set" and "explicitly false" for the
-// common toggle case.
+// need to distinguish between "never set" and "explicitly false" for
+// the common toggle case.
 func (r *AppSettingsRepo) GetBool(ctx context.Context, name string) (bool, error) {
 	raw, err := r.GetRaw(ctx, name)
 	if err != nil {
@@ -133,35 +156,73 @@ func (r *AppSettingsRepo) SetBool(ctx context.Context, name string, v bool) erro
 	return r.SetRaw(ctx, name, b)
 }
 
-// GetOIDCProvider returns the stored provider config or the documented
-// defaults when no row exists yet.
-func (r *AppSettingsRepo) GetOIDCProvider(ctx context.Context) (OIDCProviderDetails, error) {
-	raw, err := r.GetRaw(ctx, SettingOIDCProvider)
+// -------- per-provider accessors --------
+
+func (r *AppSettingsRepo) GetGenericOIDC(ctx context.Context) (GenericOIDCConfig, error) {
+	raw, err := r.GetRaw(ctx, SettingOIDCGeneric)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return DefaultOIDCProviderDetails(), nil
+			return DefaultGenericOIDCConfig(), nil
 		}
-		return OIDCProviderDetails{}, err
+		return GenericOIDCConfig{}, err
 	}
-	// Merge stored values onto defaults so partial rows (e.g. missing
-	// claim mapping after an older migration) stay usable.
-	p := DefaultOIDCProviderDetails()
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return OIDCProviderDetails{}, err
+	c := DefaultGenericOIDCConfig()
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return GenericOIDCConfig{}, err
 	}
-	return p, nil
+	return c, nil
 }
 
-func (r *AppSettingsRepo) SetOIDCProvider(ctx context.Context, p OIDCProviderDetails) error {
-	p.ProviderName = strings.TrimSpace(p.ProviderName)
-	p.ClientID = strings.TrimSpace(p.ClientID)
-	p.IssuerURI = strings.TrimRight(strings.TrimSpace(p.IssuerURI), "/")
-	p.Scopes = strings.TrimSpace(p.Scopes)
-	b, err := json.Marshal(p)
+func (r *AppSettingsRepo) SetGenericOIDC(ctx context.Context, c GenericOIDCConfig) error {
+	c.ProviderName = strings.TrimSpace(c.ProviderName)
+	c.ClientID = strings.TrimSpace(c.ClientID)
+	c.IssuerURI = strings.TrimRight(strings.TrimSpace(c.IssuerURI), "/")
+	c.Scopes = strings.TrimSpace(c.Scopes)
+	b, err := json.Marshal(c)
 	if err != nil {
 		return err
 	}
-	return r.SetRaw(ctx, SettingOIDCProvider, b)
+	return r.SetRaw(ctx, SettingOIDCGeneric, b)
+}
+
+func (r *AppSettingsRepo) GetGoogle(ctx context.Context) (OAuthPresetConfig, error) {
+	return r.getPreset(ctx, SettingOIDCGoogle)
+}
+
+func (r *AppSettingsRepo) SetGoogle(ctx context.Context, c OAuthPresetConfig) error {
+	return r.setPreset(ctx, SettingOIDCGoogle, c)
+}
+
+func (r *AppSettingsRepo) GetGitHub(ctx context.Context) (OAuthPresetConfig, error) {
+	return r.getPreset(ctx, SettingOIDCGitHub)
+}
+
+func (r *AppSettingsRepo) SetGitHub(ctx context.Context, c OAuthPresetConfig) error {
+	return r.setPreset(ctx, SettingOIDCGitHub, c)
+}
+
+func (r *AppSettingsRepo) getPreset(ctx context.Context, name string) (OAuthPresetConfig, error) {
+	raw, err := r.GetRaw(ctx, name)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return DefaultOAuthPresetConfig(), nil
+		}
+		return OAuthPresetConfig{}, err
+	}
+	var c OAuthPresetConfig
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return OAuthPresetConfig{}, err
+	}
+	return c, nil
+}
+
+func (r *AppSettingsRepo) setPreset(ctx context.Context, name string, c OAuthPresetConfig) error {
+	c.ClientID = strings.TrimSpace(c.ClientID)
+	b, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	return r.SetRaw(ctx, name, b)
 }
 
 func (r *AppSettingsRepo) GetOIDCAutoProvision(ctx context.Context) (OIDCAutoProvisionDetails, error) {
@@ -190,36 +251,34 @@ func (r *AppSettingsRepo) SetOIDCAutoProvision(ctx context.Context, ap OIDCAutoP
 	return r.SetRaw(ctx, SettingOIDCAutoProvision, b)
 }
 
-// SeedIfAbsent writes the defaults for any OIDC setting that is still
-// missing. Invoked at boot so first-time admins see sensible values in
-// the settings UI instead of empty fields.
+// SeedOIDCIfAbsent writes defaults for any OIDC setting still missing
+// so the admin settings UI has sensible rows to render on first boot.
 func (r *AppSettingsRepo) SeedOIDCIfAbsent(ctx context.Context) error {
-	if _, err := r.GetRaw(ctx, SettingOIDCEnabled); errors.Is(err, ErrNotFound) {
-		if err := r.SetBool(ctx, SettingOIDCEnabled, false); err != nil {
+	seed := func(key string, defaultValue any) error {
+		if _, err := r.GetRaw(ctx, key); err == nil {
+			return nil
+		} else if !errors.Is(err, ErrNotFound) {
 			return err
 		}
-	} else if err != nil {
+		b, err := json.Marshal(defaultValue)
+		if err != nil {
+			return err
+		}
+		return r.SetRaw(ctx, key, b)
+	}
+	if err := seed(SettingOIDCGeneric, DefaultGenericOIDCConfig()); err != nil {
 		return err
 	}
-	if _, err := r.GetRaw(ctx, SettingOIDCProvider); errors.Is(err, ErrNotFound) {
-		if err := r.SetOIDCProvider(ctx, DefaultOIDCProviderDetails()); err != nil {
-			return err
-		}
-	} else if err != nil {
+	if err := seed(SettingOIDCGoogle, DefaultOAuthPresetConfig()); err != nil {
 		return err
 	}
-	if _, err := r.GetRaw(ctx, SettingOIDCAutoProvision); errors.Is(err, ErrNotFound) {
-		if err := r.SetOIDCAutoProvision(ctx, DefaultOIDCAutoProvisionDetails()); err != nil {
-			return err
-		}
-	} else if err != nil {
+	if err := seed(SettingOIDCGitHub, DefaultOAuthPresetConfig()); err != nil {
 		return err
 	}
-	if _, err := r.GetRaw(ctx, SettingOIDCForceOnlyMode); errors.Is(err, ErrNotFound) {
-		if err := r.SetBool(ctx, SettingOIDCForceOnlyMode, false); err != nil {
-			return err
-		}
-	} else if err != nil {
+	if err := seed(SettingOIDCAutoProvision, DefaultOIDCAutoProvisionDetails()); err != nil {
+		return err
+	}
+	if err := seed(SettingOIDCForceOnlyMode, false); err != nil {
 		return err
 	}
 	return nil

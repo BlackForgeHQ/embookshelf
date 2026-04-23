@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,47 +24,49 @@ import (
 )
 
 var (
-	ErrOIDCNotConfigured     = errors.New("OIDC is not configured")
-	ErrOIDCDisabled          = errors.New("OIDC is disabled")
-	ErrOIDCStateMismatch     = errors.New("OIDC state mismatch")
-	ErrOIDCLoginNotAllowed   = errors.New("this OIDC identity is not allowed to log in")
-	ErrOIDCForceOnlyBlocked  = errors.New("OIDC-only mode cannot be enabled without a valid provider configuration")
+	ErrOIDCNotConfigured    = errors.New("OIDC is not configured")
+	ErrOIDCDisabled         = errors.New("OIDC is disabled")
+	ErrOIDCStateMismatch    = errors.New("OIDC state mismatch")
+	ErrOIDCLoginNotAllowed  = errors.New("this OIDC identity is not allowed to log in")
+	ErrOIDCForceOnlyBlocked = errors.New("OIDC-only mode cannot be enabled without at least one configured provider")
+	ErrOIDCUnknownProvider  = errors.New("unknown OIDC provider")
 )
 
-// OIDC discovery + provider cache TTL. Matches the spec section 6.4 value
-// so admins who edit settings in the UI don't wait an hour to see the new
-// provider take effect — the handler also invalidates on save.
-const providerCacheTTL = 1 * time.Hour
+const (
+	// providerCacheTTL is how long the discovery result for a generic
+	// OIDC issuer is kept before re-fetching. Admins saving settings
+	// also call Invalidate to bust it explicitly.
+	providerCacheTTL = 1 * time.Hour
 
-// stateTTL is the window in which a /login must complete the round-trip
-// back to /callback. Matches the spec's 5-minute guidance.
-const stateTTL = 5 * time.Minute
+	// stateTTL is the window in which a /login must complete the
+	// round-trip back to /callback. Matches the spec's 5-min guidance.
+	stateTTL = 5 * time.Minute
+)
 
-// OIDCService handles the OpenID Connect authorization code + PKCE flow,
-// reading its settings from app_settings at runtime so admins can edit
-// them without restarting the process.
+// OIDCService is the multi-provider OIDC/OAuth login service.
+// Google, GitHub, and a custom OIDC provider each have their own
+// settings row and can be enabled in parallel.
 type OIDCService struct {
-	appURL    string
-	settings  *repo.AppSettingsRepo
-	users     *repo.UserRepo
-	sessions  *repo.SessionRepo
-
-	// cached discovery + oauth config, keyed by a fingerprint of the
-	// provider settings so mutations invalidate automatically.
-	mu           sync.Mutex
-	cached       *cachedProvider
-	cachedExpiry time.Time
+	appURL   string
+	settings *repo.AppSettingsRepo
+	users    *repo.UserRepo
+	sessions *repo.SessionRepo
 
 	states *stateStore
+
+	// Discovery cache for the generic OIDC provider only. Google runs
+	// through the same path but its issuer is fixed so we'd still hit
+	// discovery once per restart — harmless.
+	discoveryMu  sync.Mutex
+	discoveryKey string
+	discoveryVal *cachedDiscovery
+	discoveryExp time.Time
 }
 
-type cachedProvider struct {
-	fingerprint string
-	provider    *oidc.Provider
-	verifier    *oidc.IDTokenVerifier
-	oauth       oauth2.Config
-	claims      repo.ClaimMapping
-	issuer      string
+type cachedDiscovery struct {
+	provider *oidc.Provider
+	verifier *oidc.IDTokenVerifier
+	oauth    oauth2.Config
 }
 
 func NewOIDCService(settings *repo.AppSettingsRepo, users *repo.UserRepo, sessions *repo.SessionRepo, appURL string) *OIDCService {
@@ -75,142 +79,147 @@ func NewOIDCService(settings *repo.AppSettingsRepo, users *repo.UserRepo, sessio
 	}
 }
 
-// PublicConfig is the subset shown on the unauthenticated login page.
-// ClientSecret and every non-public setting is intentionally absent.
-type PublicConfig struct {
-	Enabled       bool   `json:"enabled"`
-	ProviderName  string `json:"providerName,omitempty"`
-	ForceOnly     bool   `json:"forceOnly"`
-	// Configured is true when OIDC has enough to at least attempt a
-	// login — surfaced so the admin UI can explain why the enable
-	// toggle is refused.
-	Configured bool `json:"configured"`
+// -----------------------------------------------------------------------------
+// Provider registry / public API
+// -----------------------------------------------------------------------------
+
+// PublicProvider is one enabled login option surfaced on the public
+// login page — enough to render "Sign in with X" without leaking
+// secrets.
+type PublicProvider struct {
+	Slug         string `json:"slug"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind"` // "oidc" | "google" | "github"
+	LoginURL     string `json:"loginUrl"`
 }
 
-// PublicConfig returns the settings the login page can read anonymously.
+// PublicConfig is what the login page reads anonymously.
+type PublicConfig struct {
+	Providers []PublicProvider `json:"providers"`
+	ForceOnly bool             `json:"forceOnly"`
+}
+
+// PublicConfig builds the anonymous login page view.
 func (s *OIDCService) PublicConfig(ctx context.Context) (PublicConfig, error) {
-	enabled, err := s.settings.GetBool(ctx, repo.SettingOIDCEnabled)
-	if err != nil {
-		return PublicConfig{}, err
-	}
-	provider, err := s.settings.GetOIDCProvider(ctx)
-	if err != nil {
-		return PublicConfig{}, err
-	}
 	force, err := s.settings.GetBool(ctx, repo.SettingOIDCForceOnlyMode)
 	if err != nil {
 		return PublicConfig{}, err
 	}
+	providers, err := s.publicProviders(ctx)
+	if err != nil {
+		return PublicConfig{}, err
+	}
 	return PublicConfig{
-		Enabled:      enabled && provider.ClientID != "" && provider.IssuerURI != "",
-		ProviderName: provider.ProviderName,
-		ForceOnly:    force && enabled,
-		Configured:   provider.ClientID != "" && provider.IssuerURI != "",
+		Providers: providers,
+		ForceOnly: force && len(providers) > 0,
 	}, nil
 }
 
-// Enabled reports whether the OIDC login flow should be accepted.
+// Enabled reports whether at least one provider is enabled and usable.
 func (s *OIDCService) Enabled(ctx context.Context) (bool, error) {
-	on, err := s.settings.GetBool(ctx, repo.SettingOIDCEnabled)
+	ps, err := s.publicProviders(ctx)
 	if err != nil {
 		return false, err
 	}
-	if !on {
-		return false, nil
-	}
-	p, err := s.settings.GetOIDCProvider(ctx)
-	if err != nil {
-		return false, err
-	}
-	return p.ClientID != "" && p.IssuerURI != "", nil
+	return len(ps) > 0, nil
 }
 
-// AuthURL builds the provider authorization URL and returns the state the
-// caller must set on the browser so the callback can resolve it. PKCE
-// code_verifier is kept server-side, bound to the state.
-func (s *OIDCService) AuthURL(ctx context.Context) (authURL, state string, err error) {
-	if on, err := s.Enabled(ctx); err != nil {
-		return "", "", err
-	} else if !on {
-		return "", "", ErrOIDCDisabled
+func (s *OIDCService) publicProviders(ctx context.Context) ([]PublicProvider, error) {
+	var out []PublicProvider
+	if g, err := s.settings.GetGoogle(ctx); err != nil {
+		return nil, err
+	} else if googleUsable(g) {
+		out = append(out, PublicProvider{
+			Slug: repo.ProviderSlugGoogle, Name: "Google", Kind: "google",
+			LoginURL: "/api/v1/auth/oidc/" + repo.ProviderSlugGoogle,
+		})
 	}
-
-	cp, err := s.getProvider(ctx)
-	if err != nil {
-		return "", "", err
+	if g, err := s.settings.GetGitHub(ctx); err != nil {
+		return nil, err
+	} else if githubUsable(g) {
+		out = append(out, PublicProvider{
+			Slug: repo.ProviderSlugGitHub, Name: "GitHub", Kind: "github",
+			LoginURL: "/api/v1/auth/oidc/" + repo.ProviderSlugGitHub,
+		})
 	}
-
-	state, err = randomString(32)
-	if err != nil {
-		return "", "", err
+	if g, err := s.settings.GetGenericOIDC(ctx); err != nil {
+		return nil, err
+	} else if genericUsable(g) {
+		name := g.ProviderName
+		if name == "" {
+			name = "SSO"
+		}
+		out = append(out, PublicProvider{
+			Slug: repo.ProviderSlugGeneric, Name: name, Kind: "oidc",
+			LoginURL: "/api/v1/auth/oidc/" + repo.ProviderSlugGeneric,
+		})
 	}
-	nonce, err := randomString(32)
-	if err != nil {
-		return "", "", err
-	}
-	verifier, err := randomString(64)
-	if err != nil {
-		return "", "", err
-	}
-	challenge := pkceChallengeS256(verifier)
-
-	s.states.put(state, stateEntry{
-		Nonce:        nonce,
-		CodeVerifier: verifier,
-		CreatedAt:    time.Now(),
-	})
-
-	u := cp.oauth.AuthCodeURL(state,
-		oidc.Nonce(nonce),
-		oauth2.SetAuthURLParam("code_challenge", challenge),
-		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
-	)
-	return u, state, nil
+	return out, nil
 }
 
-// Exchange trades the authorization code for tokens, verifies the ID
-// token, finds or provisions the matching local user, and issues a
-// BookLore session. Returns ErrOIDCStateMismatch when the state token is
-// missing/expired/reused.
+func googleUsable(c repo.OAuthPresetConfig) bool {
+	return c.Enabled && c.ClientID != "" && c.ClientSecret != ""
+}
+func githubUsable(c repo.OAuthPresetConfig) bool {
+	return c.Enabled && c.ClientID != "" && c.ClientSecret != ""
+}
+func genericUsable(c repo.GenericOIDCConfig) bool {
+	return c.Enabled && c.ClientID != "" && c.IssuerURI != ""
+}
+
+// ValidateForceOnlyTransition refuses to enable force-only mode when no
+// provider is enabled — admins would otherwise lock themselves out.
+func (s *OIDCService) ValidateForceOnlyTransition(ctx context.Context, next bool) error {
+	if !next {
+		return nil
+	}
+	ps, err := s.publicProviders(ctx)
+	if err != nil {
+		return err
+	}
+	if len(ps) == 0 {
+		return ErrOIDCForceOnlyBlocked
+	}
+	return nil
+}
+
+// Invalidate drops the generic-OIDC discovery cache. Settings handlers
+// call this after saving so admins don't have to wait for a TTL.
+func (s *OIDCService) Invalidate() {
+	s.discoveryMu.Lock()
+	s.discoveryKey = ""
+	s.discoveryVal = nil
+	s.discoveryExp = time.Time{}
+	s.discoveryMu.Unlock()
+}
+
+// -----------------------------------------------------------------------------
+// Flow entrypoints
+// -----------------------------------------------------------------------------
+
+// AuthURL builds the authorization URL for the given provider slug.
+// The state is held server-side and carries the slug so the callback
+// can route back to the right provider.
+func (s *OIDCService) AuthURL(ctx context.Context, slug string) (string, error) {
+	switch slug {
+	case repo.ProviderSlugGoogle:
+		return s.authURLGoogle(ctx)
+	case repo.ProviderSlugGitHub:
+		return s.authURLGitHub(ctx)
+	case repo.ProviderSlugGeneric:
+		return s.authURLGeneric(ctx)
+	default:
+		return "", ErrOIDCUnknownProvider
+	}
+}
+
+// Exchange completes the callback by inspecting the state (which
+// carries the provider slug), dispatching to the right backend, and
+// issuing a BookLore session.
 func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent string) (model.Session, model.User, error) {
 	entry, ok := s.states.take(state)
 	if !ok {
 		return model.Session{}, model.User{}, ErrOIDCStateMismatch
-	}
-
-	if on, err := s.Enabled(ctx); err != nil {
-		return model.Session{}, model.User{}, err
-	} else if !on {
-		return model.Session{}, model.User{}, ErrOIDCDisabled
-	}
-
-	cp, err := s.getProvider(ctx)
-	if err != nil {
-		return model.Session{}, model.User{}, err
-	}
-
-	token, err := cp.oauth.Exchange(ctx, code,
-		oauth2.SetAuthURLParam("code_verifier", entry.CodeVerifier),
-	)
-	if err != nil {
-		return model.Session{}, model.User{}, fmt.Errorf("token exchange: %w", err)
-	}
-
-	rawIDToken, ok := token.Extra("id_token").(string)
-	if !ok || rawIDToken == "" {
-		return model.Session{}, model.User{}, errors.New("provider response missing id_token")
-	}
-	idToken, err := cp.verifier.Verify(ctx, rawIDToken)
-	if err != nil {
-		return model.Session{}, model.User{}, fmt.Errorf("id_token verify: %w", err)
-	}
-	if idToken.Nonce != entry.Nonce {
-		return model.Session{}, model.User{}, errors.New("nonce mismatch")
-	}
-
-	claims, err := extractClaims(ctx, cp, token, idToken)
-	if err != nil {
-		return model.Session{}, model.User{}, err
 	}
 
 	provision, err := s.settings.GetOIDCAutoProvision(ctx)
@@ -218,12 +227,56 @@ func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent strin
 		return model.Session{}, model.User{}, err
 	}
 
-	u, err := s.findOrProvisionUser(ctx, cp.issuer, claims, provision)
+	var (
+		claims resolvedClaims
+		issuer string
+	)
+	switch entry.ProviderSlug {
+	case repo.ProviderSlugGoogle:
+		cfg, err := s.settings.GetGoogle(ctx)
+		if err != nil {
+			return model.Session{}, model.User{}, err
+		}
+		if !googleUsable(cfg) {
+			return model.Session{}, model.User{}, ErrOIDCDisabled
+		}
+		claims, issuer, err = s.oidcCallback(ctx, code, entry, googleOIDCConfig(cfg))
+		if err != nil {
+			return model.Session{}, model.User{}, err
+		}
+	case repo.ProviderSlugGitHub:
+		cfg, err := s.settings.GetGitHub(ctx)
+		if err != nil {
+			return model.Session{}, model.User{}, err
+		}
+		if !githubUsable(cfg) {
+			return model.Session{}, model.User{}, ErrOIDCDisabled
+		}
+		claims, err = s.githubCallback(ctx, code, entry, cfg)
+		if err != nil {
+			return model.Session{}, model.User{}, err
+		}
+		issuer = "https://github.com"
+	case repo.ProviderSlugGeneric:
+		cfg, err := s.settings.GetGenericOIDC(ctx)
+		if err != nil {
+			return model.Session{}, model.User{}, err
+		}
+		if !genericUsable(cfg) {
+			return model.Session{}, model.User{}, ErrOIDCDisabled
+		}
+		claims, issuer, err = s.oidcCallback(ctx, code, entry, cfg)
+		if err != nil {
+			return model.Session{}, model.User{}, err
+		}
+	default:
+		return model.Session{}, model.User{}, ErrOIDCUnknownProvider
+	}
+
+	u, err := s.findOrProvisionUser(ctx, issuer, claims, provision)
 	if err != nil {
 		return model.Session{}, model.User{}, err
 	}
-
-	// Keep display-name / avatar fresh on every login.
 	_ = s.users.SyncOIDCProfile(ctx, u.ID, claims.Name, claims.Picture)
 
 	sess, err := s.sessions.Create(ctx, u.ID, userAgent, SessionTTL)
@@ -234,139 +287,252 @@ func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent strin
 	return sess, u, nil
 }
 
-// Invalidate drops the cached *oidc.Provider so the next AuthURL call
-// re-runs discovery. Handlers call this after saving provider settings.
-func (s *OIDCService) Invalidate() {
-	s.mu.Lock()
-	s.cached = nil
-	s.cachedExpiry = time.Time{}
-	s.mu.Unlock()
-}
+// -----------------------------------------------------------------------------
+// AuthURL builders
+// -----------------------------------------------------------------------------
 
-// ValidateForceOnlyTransition enforces the server-side guard described in
-// spec section 4.4: an admin cannot enable force-only mode without a
-// usable provider configuration, else they lock themselves out.
-func (s *OIDCService) ValidateForceOnlyTransition(ctx context.Context, next bool) error {
-	if !next {
-		return nil
-	}
-	if on, err := s.Enabled(ctx); err != nil {
-		return err
-	} else if !on {
-		return ErrOIDCForceOnlyBlocked
-	}
-	return nil
-}
-
-// getProvider returns a cached discovery result, re-running discovery
-// when the settings change or the TTL expires.
-func (s *OIDCService) getProvider(ctx context.Context) (*cachedProvider, error) {
-	details, err := s.settings.GetOIDCProvider(ctx)
+func (s *OIDCService) authURLGoogle(ctx context.Context) (string, error) {
+	cfg, err := s.settings.GetGoogle(ctx)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	if details.ClientID == "" || details.IssuerURI == "" {
-		return nil, ErrOIDCNotConfigured
+	if !googleUsable(cfg) {
+		return "", ErrOIDCDisabled
 	}
-	fp := fingerprint(details, s.redirectURL())
+	return s.authURLOIDC(ctx, repo.ProviderSlugGoogle, googleOIDCConfig(cfg))
+}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.cached != nil && s.cached.fingerprint == fp && time.Now().Before(s.cachedExpiry) {
-		return s.cached, nil
-	}
-
-	provider, err := oidc.NewProvider(ctx, details.IssuerURI)
+func (s *OIDCService) authURLGeneric(ctx context.Context) (string, error) {
+	cfg, err := s.settings.GetGenericOIDC(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("oidc discovery: %w", err)
+		return "", err
 	}
-	scopes := splitScopes(details.Scopes)
-	oauthCfg := oauth2.Config{
-		ClientID:     details.ClientID,
-		ClientSecret: details.ClientSecret,
-		RedirectURL:  s.redirectURL(),
-		Endpoint:     provider.Endpoint(),
-		Scopes:       scopes,
+	if !genericUsable(cfg) {
+		return "", ErrOIDCDisabled
 	}
-	cp := &cachedProvider{
-		fingerprint: fp,
-		provider:    provider,
-		verifier:    provider.Verifier(&oidc.Config{ClientID: details.ClientID}),
-		oauth:       oauthCfg,
-		claims:      details.ClaimMapping,
-		issuer:      details.IssuerURI,
-	}
-	s.cached = cp
-	s.cachedExpiry = time.Now().Add(providerCacheTTL)
-	return cp, nil
+	return s.authURLOIDC(ctx, repo.ProviderSlugGeneric, cfg)
 }
 
-func (s *OIDCService) redirectURL() string {
-	if s.appURL == "" {
-		return ""
+func (s *OIDCService) authURLOIDC(ctx context.Context, slug string, cfg repo.GenericOIDCConfig) (string, error) {
+	disc, err := s.getDiscovery(ctx, cfg)
+	if err != nil {
+		return "", err
 	}
-	return s.appURL + "/api/v1/auth/oidc/callback"
+	state, nonce, verifier, err := s.issueState(slug)
+	if err != nil {
+		return "", err
+	}
+	challenge := pkceChallengeS256(verifier)
+	u := disc.oauth.AuthCodeURL(state,
+		oidc.Nonce(nonce),
+		oauth2.SetAuthURLParam("code_challenge", challenge),
+		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
+	)
+	return u, nil
 }
 
-// findOrProvisionUser implements section 6.1's lookup cascade adapted to
-// this codebase's admin/user role model.
-func (s *OIDCService) findOrProvisionUser(ctx context.Context, issuer string, claims resolvedClaims, provision repo.OIDCAutoProvisionDetails) (model.User, error) {
-	// 1) Match by OIDC identity.
-	u, err := s.users.GetByOIDC(ctx, issuer, claims.Subject)
-	if err != nil && !errors.Is(err, repo.ErrNotFound) {
-		return model.User{}, err
+// authURLGitHub builds the GitHub authorize URL by hand; GitHub is not
+// an OIDC provider so there's no discovery document.
+func (s *OIDCService) authURLGitHub(ctx context.Context) (string, error) {
+	cfg, err := s.settings.GetGitHub(ctx)
+	if err != nil {
+		return "", err
 	}
-	if err == nil {
-		return u, nil
+	if !githubUsable(cfg) {
+		return "", ErrOIDCDisabled
+	}
+	state, _, verifier, err := s.issueState(repo.ProviderSlugGitHub)
+	if err != nil {
+		return "", err
+	}
+	v := url.Values{}
+	v.Set("client_id", cfg.ClientID)
+	v.Set("redirect_uri", s.redirectURL())
+	v.Set("scope", "read:user user:email")
+	v.Set("state", state)
+	v.Set("code_challenge", pkceChallengeS256(verifier))
+	v.Set("code_challenge_method", "S256")
+	v.Set("allow_signup", "true")
+	return "https://github.com/login/oauth/authorize?" + v.Encode(), nil
+}
+
+func (s *OIDCService) issueState(slug string) (state, nonce, verifier string, err error) {
+	state, err = randomString(32)
+	if err != nil {
+		return "", "", "", err
+	}
+	nonce, err = randomString(32)
+	if err != nil {
+		return "", "", "", err
+	}
+	verifier, err = randomString(64)
+	if err != nil {
+		return "", "", "", err
+	}
+	s.states.put(state, stateEntry{
+		Nonce:        nonce,
+		CodeVerifier: verifier,
+		CreatedAt:    time.Now(),
+		ProviderSlug: slug,
+	})
+	return state, nonce, verifier, nil
+}
+
+// -----------------------------------------------------------------------------
+// Callbacks
+// -----------------------------------------------------------------------------
+
+func (s *OIDCService) oidcCallback(ctx context.Context, code string, entry stateEntry, cfg repo.GenericOIDCConfig) (resolvedClaims, string, error) {
+	disc, err := s.getDiscovery(ctx, cfg)
+	if err != nil {
+		return resolvedClaims{}, "", err
+	}
+	token, err := disc.oauth.Exchange(ctx, code,
+		oauth2.SetAuthURLParam("code_verifier", entry.CodeVerifier),
+	)
+	if err != nil {
+		return resolvedClaims{}, "", fmt.Errorf("token exchange: %w", err)
+	}
+	rawIDToken, ok := token.Extra("id_token").(string)
+	if !ok || rawIDToken == "" {
+		return resolvedClaims{}, "", errors.New("provider response missing id_token")
+	}
+	idToken, err := disc.verifier.Verify(ctx, rawIDToken)
+	if err != nil {
+		return resolvedClaims{}, "", fmt.Errorf("id_token verify: %w", err)
+	}
+	if idToken.Nonce != entry.Nonce {
+		return resolvedClaims{}, "", errors.New("nonce mismatch")
+	}
+	claims, err := extractClaims(ctx, disc, token, idToken, cfg.ClaimMapping)
+	if err != nil {
+		return resolvedClaims{}, "", err
+	}
+	return claims, cfg.IssuerURI, nil
+}
+
+// githubCallback runs the GitHub OAuth token exchange + REST user
+// lookup. No ID token; the GitHub user id is the stable subject.
+func (s *OIDCService) githubCallback(ctx context.Context, code string, entry stateEntry, cfg repo.OAuthPresetConfig) (resolvedClaims, error) {
+	body := url.Values{}
+	body.Set("client_id", cfg.ClientID)
+	body.Set("client_secret", cfg.ClientSecret)
+	body.Set("code", code)
+	body.Set("redirect_uri", s.redirectURL())
+	body.Set("code_verifier", entry.CodeVerifier)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://github.com/login/oauth/access_token", strings.NewReader(body.Encode()))
+	if err != nil {
+		return resolvedClaims{}, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient().Do(req)
+	if err != nil {
+		return resolvedClaims{}, fmt.Errorf("github token exchange: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return resolvedClaims{}, fmt.Errorf("github token exchange returned %d", resp.StatusCode)
+	}
+	var tokenResp struct {
+		AccessToken      string `json:"access_token"`
+		Error            string `json:"error"`
+		ErrorDescription string `json:"error_description"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return resolvedClaims{}, fmt.Errorf("github token decode: %w", err)
+	}
+	if tokenResp.Error != "" {
+		return resolvedClaims{}, fmt.Errorf("github: %s: %s", tokenResp.Error, tokenResp.ErrorDescription)
+	}
+	if tokenResp.AccessToken == "" {
+		return resolvedClaims{}, errors.New("github did not return an access_token")
 	}
 
-	// 2) Match by email and link, if linking is allowed.
-	if claims.Email != "" {
-		existing, err := s.users.GetByEmail(ctx, claims.Email)
-		if err != nil && !errors.Is(err, repo.ErrNotFound) {
-			return model.User{}, err
-		}
-		if err == nil {
-			if !provision.AllowLocalAccountLinking && existing.OIDCSubject == nil {
-				return model.User{}, ErrOIDCLoginNotAllowed
-			}
-			if err := s.users.LinkOIDC(ctx, existing.ID, issuer, claims.Subject); err != nil {
-				return model.User{}, err
-			}
-			return existing, nil
-		}
+	user, err := githubFetchUser(ctx, "https://api.github.com/user", tokenResp.AccessToken)
+	if err != nil {
+		return resolvedClaims{}, err
 	}
-
-	// 3) Auto-provision — refused outright when the flag is off.
-	if !provision.EnableAutoProvisioning {
-		// The very first OIDC user on an empty instance still boots so
-		// an operator can recover from a clean DB. Matches the existing
-		// behaviour before this refactor.
-		n, err := s.users.Count(ctx)
-		if err != nil {
-			return model.User{}, err
-		}
-		if n > 0 {
-			return model.User{}, ErrOIDCLoginNotAllowed
-		}
-	}
-
-	role := model.RoleUser
-	if provision.DefaultRole == "admin" {
-		role = model.RoleAdmin
-	}
-	// Bootstrap: the first user on an empty DB is always the admin so
-	// the instance ends up with someone who can manage it.
-	if n, err := s.users.Count(ctx); err == nil && n == 0 {
-		role = model.RoleAdmin
-	}
-
-	email := claims.Email
+	email := strings.TrimSpace(user.Email)
 	if email == "" {
-		return model.User{}, errors.New("OIDC provider did not return an email claim and email is required")
+		email, _ = githubFetchPrimaryEmail(ctx, "https://api.github.com/user/emails", tokenResp.AccessToken)
 	}
-	return s.users.CreateOIDC(ctx, email, claims.Name, role, issuer, claims.Subject)
+	if email == "" {
+		return resolvedClaims{}, errors.New("github account has no verified email accessible via user:email scope")
+	}
+	return resolvedClaims{
+		Subject: strconv.FormatInt(user.ID, 10),
+		Email:   strings.ToLower(email),
+		Name:    orString(user.Name, user.Login),
+		Picture: user.AvatarURL,
+	}, nil
 }
+
+type githubUserResp struct {
+	ID        int64  `json:"id"`
+	Login     string `json:"login"`
+	Name      string `json:"name"`
+	Email     string `json:"email"`
+	AvatarURL string `json:"avatar_url"`
+}
+
+func githubFetchUser(ctx context.Context, userURL, accessToken string) (githubUserResp, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, userURL, nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := httpClient().Do(req)
+	if err != nil {
+		return githubUserResp{}, fmt.Errorf("github user fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return githubUserResp{}, fmt.Errorf("github user fetch: status %d", resp.StatusCode)
+	}
+	var u githubUserResp
+	if err := json.NewDecoder(resp.Body).Decode(&u); err != nil {
+		return githubUserResp{}, err
+	}
+	return u, nil
+}
+
+func githubFetchPrimaryEmail(ctx context.Context, emailsURL, accessToken string) (string, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, emailsURL, nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := httpClient().Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("github emails fetch: status %d", resp.StatusCode)
+	}
+	var emails []struct {
+		Email    string `json:"email"`
+		Primary  bool   `json:"primary"`
+		Verified bool   `json:"verified"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&emails); err != nil {
+		return "", err
+	}
+	for _, e := range emails {
+		if e.Primary && e.Verified {
+			return e.Email, nil
+		}
+	}
+	for _, e := range emails {
+		if e.Verified {
+			return e.Email, nil
+		}
+	}
+	return "", errors.New("no verified emails returned by github")
+}
+
+// -----------------------------------------------------------------------------
+// Claim extraction (OIDC)
+// -----------------------------------------------------------------------------
 
 type resolvedClaims struct {
 	Subject string
@@ -375,18 +541,12 @@ type resolvedClaims struct {
 	Picture string
 }
 
-// extractClaims pulls values out of ID token + userinfo according to the
-// admin-configured claim mapping, falling back to the standard names
-// documented in spec section 6.1.
-func extractClaims(ctx context.Context, cp *cachedProvider, token *oauth2.Token, idToken *oidc.IDToken) (resolvedClaims, error) {
-	// Merge id_token claims + userinfo into one bag — userinfo wins when
-	// both are present so a provider that only exposes email on the
-	// userinfo endpoint (e.g. some AD FS setups) still works.
+func extractClaims(ctx context.Context, disc *cachedDiscovery, token *oauth2.Token, idToken *oidc.IDToken, mapping repo.ClaimMapping) (resolvedClaims, error) {
 	claims := map[string]any{}
 	if err := idToken.Claims(&claims); err != nil {
 		return resolvedClaims{}, fmt.Errorf("id_token claims: %w", err)
 	}
-	if ui, err := cp.provider.UserInfo(ctx, oauth2.StaticTokenSource(token)); err == nil {
+	if ui, err := disc.provider.UserInfo(ctx, oauth2.StaticTokenSource(token)); err == nil {
 		var uclaims map[string]any
 		if err := ui.Claims(&uclaims); err == nil {
 			for k, v := range uclaims {
@@ -397,7 +557,6 @@ func extractClaims(ctx context.Context, cp *cachedProvider, token *oauth2.Token,
 		}
 	}
 
-	mapping := cp.claims
 	pick := func(key, fallback string) string {
 		if v, ok := claims[key].(string); ok && v != "" {
 			return v
@@ -415,8 +574,6 @@ func extractClaims(ctx context.Context, cp *cachedProvider, token *oauth2.Token,
 		Picture: pick("picture", "picture"),
 	}
 	if out.Name == "" {
-		// Compose from given_name + family_name the same way most
-		// providers do when the single `name` claim is missing.
 		g, _ := claims["given_name"].(string)
 		f, _ := claims["family_name"].(string)
 		out.Name = strings.TrimSpace(g + " " + f)
@@ -424,22 +581,214 @@ func extractClaims(ctx context.Context, cp *cachedProvider, token *oauth2.Token,
 	return out, nil
 }
 
-// TestConnection runs the checks in section 6.7 against a prospective
-// provider configuration. Uses a fresh HTTP client — we deliberately
-// don't consult the service cache so admins see current reality.
-func (s *OIDCService) TestConnection(ctx context.Context, p repo.OIDCProviderDetails) TestResult {
-	out := TestResult{}
-	if strings.TrimSpace(p.IssuerURI) == "" {
-		out.add("Issuer URI", CheckFail, "issuer URI is empty")
-		return out
+// -----------------------------------------------------------------------------
+// User provisioning
+// -----------------------------------------------------------------------------
+
+func (s *OIDCService) findOrProvisionUser(ctx context.Context, issuer string, claims resolvedClaims, provision repo.OIDCAutoProvisionDetails) (model.User, error) {
+	// 1) Match by OIDC identity.
+	u, err := s.users.GetByOIDC(ctx, issuer, claims.Subject)
+	if err != nil && !errors.Is(err, repo.ErrNotFound) {
+		return model.User{}, err
 	}
-	if strings.TrimSpace(p.ClientID) == "" {
+	if err == nil {
+		return u, nil
+	}
+
+	// 2) Match by email and link.
+	if claims.Email != "" {
+		existing, err := s.users.GetByEmail(ctx, claims.Email)
+		if err != nil && !errors.Is(err, repo.ErrNotFound) {
+			return model.User{}, err
+		}
+		if err == nil {
+			if !provision.AllowLocalAccountLinking && existing.OIDCSubject == nil {
+				return model.User{}, ErrOIDCLoginNotAllowed
+			}
+			if err := s.users.LinkOIDC(ctx, existing.ID, issuer, claims.Subject); err != nil {
+				return model.User{}, err
+			}
+			return existing, nil
+		}
+	}
+
+	// 3) Auto-provision.
+	if !provision.EnableAutoProvisioning {
+		n, err := s.users.Count(ctx)
+		if err != nil {
+			return model.User{}, err
+		}
+		if n > 0 {
+			return model.User{}, ErrOIDCLoginNotAllowed
+		}
+	}
+
+	role := model.RoleUser
+	if provision.DefaultRole == "admin" {
+		role = model.RoleAdmin
+	}
+	if n, err := s.users.Count(ctx); err == nil && n == 0 {
+		role = model.RoleAdmin
+	}
+
+	if claims.Email == "" {
+		return model.User{}, errors.New("OIDC provider did not return an email claim and email is required")
+	}
+	return s.users.CreateOIDC(ctx, claims.Email, claims.Name, role, issuer, claims.Subject)
+}
+
+// -----------------------------------------------------------------------------
+// Discovery cache (generic OIDC + Google share this path)
+// -----------------------------------------------------------------------------
+
+func (s *OIDCService) getDiscovery(ctx context.Context, cfg repo.GenericOIDCConfig) (*cachedDiscovery, error) {
+	if cfg.IssuerURI == "" || cfg.ClientID == "" {
+		return nil, ErrOIDCNotConfigured
+	}
+	key := cfg.IssuerURI + "|" + cfg.ClientID + "|" + cfg.ClientSecret + "|" + cfg.Scopes + "|" + s.redirectURL()
+
+	s.discoveryMu.Lock()
+	defer s.discoveryMu.Unlock()
+	if s.discoveryVal != nil && s.discoveryKey == key && time.Now().Before(s.discoveryExp) {
+		return s.discoveryVal, nil
+	}
+
+	provider, err := oidc.NewProvider(ctx, cfg.IssuerURI)
+	if err != nil {
+		return nil, fmt.Errorf("oidc discovery: %w", err)
+	}
+	oauthCfg := oauth2.Config{
+		ClientID:     cfg.ClientID,
+		ClientSecret: cfg.ClientSecret,
+		RedirectURL:  s.redirectURL(),
+		Endpoint:     provider.Endpoint(),
+		Scopes:       splitScopes(cfg.Scopes),
+	}
+	d := &cachedDiscovery{
+		provider: provider,
+		verifier: provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
+		oauth:    oauthCfg,
+	}
+	s.discoveryKey = key
+	s.discoveryVal = d
+	s.discoveryExp = time.Now().Add(providerCacheTTL)
+	return d, nil
+}
+
+// googleOIDCConfig widens Google's tiny preset config into the generic
+// OIDC shape the discovery path consumes. Issuer + scopes + claim
+// mapping are all baked in — admins only supply credentials.
+func googleOIDCConfig(c repo.OAuthPresetConfig) repo.GenericOIDCConfig {
+	return repo.GenericOIDCConfig{
+		Enabled:      c.Enabled,
+		ProviderName: "Google",
+		ClientID:     c.ClientID,
+		ClientSecret: c.ClientSecret,
+		IssuerURI:    "https://accounts.google.com",
+		Scopes:       "openid profile email",
+		ClaimMapping: repo.ClaimMapping{
+			Username: "email",
+			Email:    "email",
+			Name:     "name",
+		},
+	}
+}
+
+func (s *OIDCService) redirectURL() string {
+	if s.appURL == "" {
+		return ""
+	}
+	return s.appURL + "/api/v1/auth/oidc/callback"
+}
+
+// -----------------------------------------------------------------------------
+// Test Connection
+// -----------------------------------------------------------------------------
+
+// CheckStatus + TestCheck mirror the spec's diagnostic DTO.
+type CheckStatus string
+
+const (
+	CheckPass CheckStatus = "PASS"
+	CheckFail CheckStatus = "FAIL"
+	CheckWarn CheckStatus = "WARN"
+)
+
+type TestCheck struct {
+	Name    string      `json:"name"`
+	Status  CheckStatus `json:"status"`
+	Message string      `json:"message"`
+}
+
+type TestResult struct {
+	Success bool        `json:"success"`
+	Checks  []TestCheck `json:"checks"`
+}
+
+func (t *TestResult) add(name string, status CheckStatus, msg string) {
+	t.Checks = append(t.Checks, TestCheck{Name: name, Status: status, Message: msg})
+}
+
+// TestGeneric runs the discovery-based checks.
+func (s *OIDCService) TestGeneric(ctx context.Context, cfg repo.GenericOIDCConfig) TestResult {
+	return testOIDCIssuer(ctx, cfg.IssuerURI, cfg.ClientID)
+}
+
+// TestGoogle reuses the generic path after filling in Google's issuer.
+func (s *OIDCService) TestGoogle(ctx context.Context, cfg repo.OAuthPresetConfig) TestResult {
+	return testOIDCIssuer(ctx, "https://accounts.google.com", cfg.ClientID)
+}
+
+// TestGitHub pings the fixed GitHub endpoints (no discovery doc).
+func (s *OIDCService) TestGitHub(ctx context.Context, cfg repo.OAuthPresetConfig) TestResult {
+	out := TestResult{}
+	if cfg.ClientID == "" {
 		out.add("Client ID", CheckFail, "client id is empty")
 		return out
 	}
+	cli := httpClient()
+	for _, ep := range []struct {
+		name, url string
+	}{
+		{"authorize endpoint", "https://github.com/login/oauth/authorize"},
+		{"user API", "https://api.github.com/user"},
+	} {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ep.url, nil)
+		resp, err := cli.Do(req)
+		if err != nil {
+			out.add(ep.name, CheckFail, err.Error())
+			continue
+		}
+		resp.Body.Close()
+		out.add(ep.name, CheckPass, fmt.Sprintf("%s reachable (%d)", ep.url, resp.StatusCode))
+	}
+	if cfg.ClientSecret == "" {
+		out.add("client secret", CheckFail, "GitHub OAuth apps require a client secret")
+	} else {
+		out.add("client secret", CheckPass, "set")
+	}
+	out.Success = true
+	for _, c := range out.Checks {
+		if c.Status == CheckFail {
+			out.Success = false
+			break
+		}
+	}
+	return out
+}
 
-	cli := &http.Client{Timeout: 10 * time.Second}
-	discoveryURL := strings.TrimRight(p.IssuerURI, "/") + "/.well-known/openid-configuration"
+func testOIDCIssuer(ctx context.Context, issuer, clientID string) TestResult {
+	out := TestResult{}
+	if strings.TrimSpace(issuer) == "" {
+		out.add("Issuer URI", CheckFail, "issuer URI is empty")
+		return out
+	}
+	if strings.TrimSpace(clientID) == "" {
+		out.add("Client ID", CheckFail, "client id is empty")
+		return out
+	}
+	cli := httpClient()
+	discoveryURL := strings.TrimRight(issuer, "/") + "/.well-known/openid-configuration"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
 	if err != nil {
 		out.add("Discovery", CheckFail, err.Error())
@@ -468,25 +817,20 @@ func (s *OIDCService) TestConnection(ctx context.Context, p repo.OIDCProviderDet
 		return out
 	}
 
-	if doc.AuthorizationEndpoint == "" {
-		out.add("authorization_endpoint", CheckFail, "missing")
-	} else {
-		out.add("authorization_endpoint", CheckPass, doc.AuthorizationEndpoint)
-	}
-	if doc.TokenEndpoint == "" {
-		out.add("token_endpoint", CheckFail, "missing")
-	} else {
-		out.add("token_endpoint", CheckPass, doc.TokenEndpoint)
-	}
-	if doc.JWKSURI == "" {
-		out.add("jwks_uri", CheckFail, "missing")
-	} else {
-		out.add("jwks_uri", CheckPass, doc.JWKSURI)
+	for _, p := range []struct {
+		name, value string
+	}{
+		{"authorization_endpoint", doc.AuthorizationEndpoint},
+		{"token_endpoint", doc.TokenEndpoint},
+		{"jwks_uri", doc.JWKSURI},
+	} {
+		if p.value == "" {
+			out.add(p.name, CheckFail, "missing")
+		} else {
+			out.add(p.name, CheckPass, p.value)
+		}
 	}
 
-	// Scopes: issuer MUST advertise openid; profile/email warn when
-	// missing because the admin's claim mapping almost certainly needs
-	// them.
 	has := map[string]bool{}
 	for _, sc := range doc.ScopesSupported {
 		has[sc] = true
@@ -501,35 +845,30 @@ func (s *OIDCService) TestConnection(ctx context.Context, p repo.OIDCProviderDet
 		}
 	}
 
-	// response_type=code
-	hasCode := false
+	codeOk := false
 	for _, rt := range doc.ResponseTypesSupported {
 		if rt == "code" {
-			hasCode = true
-			break
+			codeOk = true
 		}
 	}
-	if hasCode {
+	if codeOk {
 		out.add("response_type: code", CheckPass, "supported")
 	} else {
 		out.add("response_type: code", CheckFail, "authorization code flow not supported")
 	}
 
-	// PKCE S256
-	hasS256 := false
+	s256 := false
 	for _, m := range doc.CodeChallengeMethodsSupported {
 		if m == "S256" {
-			hasS256 = true
-			break
+			s256 = true
 		}
 	}
-	if hasS256 {
+	if s256 {
 		out.add("PKCE S256", CheckPass, "supported")
 	} else {
 		out.add("PKCE S256", CheckWarn, "not advertised — BookLore sends S256 anyway")
 	}
 
-	// JWKS fetch
 	if doc.JWKSURI != "" {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, doc.JWKSURI, nil)
 		jresp, err := cli.Do(req)
@@ -572,41 +911,17 @@ type discoveryDoc struct {
 	CodeChallengeMethodsSupported []string `json:"code_challenge_methods_supported"`
 }
 
-// CheckStatus + TestCheck mirror the spec's diagnostic DTO so the UI can
-// render a clear PASS/FAIL/WARN table.
-type CheckStatus string
-
-const (
-	CheckPass CheckStatus = "PASS"
-	CheckFail CheckStatus = "FAIL"
-	CheckWarn CheckStatus = "WARN"
-)
-
-type TestCheck struct {
-	Name    string      `json:"name"`
-	Status  CheckStatus `json:"status"`
-	Message string      `json:"message"`
-}
-
-type TestResult struct {
-	Success bool        `json:"success"`
-	Checks  []TestCheck `json:"checks"`
-}
-
-func (t *TestResult) add(name string, status CheckStatus, msg string) {
-	t.Checks = append(t.Checks, TestCheck{Name: name, Status: status, Message: msg})
-}
-
-// -------------- helpers --------------
+// -----------------------------------------------------------------------------
+// State cache
+// -----------------------------------------------------------------------------
 
 type stateEntry struct {
 	Nonce        string
 	CodeVerifier string
 	CreatedAt    time.Time
+	ProviderSlug string
 }
 
-// stateStore is a tiny in-memory single-use TTL map — we don't pull in a
-// cache library for one use, and the state set is always small.
 type stateStore struct {
 	mu sync.Mutex
 	m  map[string]stateEntry
@@ -642,6 +957,10 @@ func (s *stateStore) reap() {
 	}
 }
 
+// -----------------------------------------------------------------------------
+// Small helpers
+// -----------------------------------------------------------------------------
+
 func randomString(nBytes int) (string, error) {
 	b := make([]byte, nBytes)
 	if _, err := rand.Read(b); err != nil {
@@ -660,7 +979,6 @@ func splitScopes(raw string) []string {
 	if len(fields) == 0 {
 		return []string{oidc.ScopeOpenID, "profile", "email"}
 	}
-	// openid is mandatory.
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(fields)+1)
 	for _, f := range fields {
@@ -676,12 +994,13 @@ func splitScopes(raw string) []string {
 	return out
 }
 
-// fingerprint returns a stable key for the cache so edits to any
-// meaningful field bust the cached provider. We don't hash — plain
-// concat is fine for an in-process cache.
-func fingerprint(p repo.OIDCProviderDetails, redirectURL string) string {
-	return strings.Join([]string{
-		p.IssuerURI, p.ClientID, p.ClientSecret, p.Scopes, redirectURL,
-	}, "|")
+func orString(primary, fallback string) string {
+	if strings.TrimSpace(primary) != "" {
+		return primary
+	}
+	return fallback
 }
 
+func httpClient() *http.Client {
+	return &http.Client{Timeout: 10 * time.Second}
+}

@@ -150,28 +150,27 @@ func main() {
 		service.NewRemarkableDriver(),
 	)
 
-	// OIDC — settings live in app_settings now, so the service doesn't
-	// need the issuer at construction time. Seed rows on first boot
-	// from the legacy OIDC_* env vars (documented as a migration aid)
-	// and from sane defaults.
+	// OIDC — settings live in app_settings now so three providers
+	// (Google, GitHub, generic OIDC) can be toggled independently
+	// without a restart. Seed empty rows on first boot, and back-fill
+	// the generic-OIDC row from the legacy OIDC_* env vars when the
+	// DB is still empty (migration aid for existing deployments).
 	appSettingsRepo := repo.NewAppSettingsRepo(pool)
 	if err := appSettingsRepo.SeedOIDCIfAbsent(ctx); err != nil {
 		slog.Warn("seed oidc settings", "err", err)
 	}
 	if cfg.HasOIDCEnvSeed() {
-		// Only write the seed when the provider row is still empty —
-		// never clobber a value an admin has saved through the UI.
-		existing, err := appSettingsRepo.GetOIDCProvider(ctx)
+		existing, err := appSettingsRepo.GetGenericOIDC(ctx)
 		if err == nil && existing.IssuerURI == "" {
-			seed := repo.DefaultOIDCProviderDetails()
+			seed := repo.DefaultGenericOIDCConfig()
+			seed.Enabled = true
 			seed.IssuerURI = cfg.OIDCIssuerURL
 			seed.ClientID = cfg.OIDCClientID
 			seed.ClientSecret = cfg.OIDCClientSecret
-			if err := appSettingsRepo.SetOIDCProvider(ctx, seed); err != nil {
+			if err := appSettingsRepo.SetGenericOIDC(ctx, seed); err != nil {
 				slog.Warn("seed oidc provider from env", "err", err)
 			} else {
-				_ = appSettingsRepo.SetBool(ctx, repo.SettingOIDCEnabled, true)
-				slog.Info("seeded OIDC provider from env", "issuer", cfg.OIDCIssuerURL)
+				slog.Info("seeded generic OIDC provider from env", "issuer", cfg.OIDCIssuerURL)
 			}
 		}
 	}

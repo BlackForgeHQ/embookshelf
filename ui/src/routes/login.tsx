@@ -113,18 +113,26 @@ function LoginPage() {
   const active = mode === 'signup' ? signupMut : loginMut;
   const error = active.error as ApiError | null;
 
-  // Force-only mode: redirect straight to the provider unless the user
-  // has an escape-hatch query param or an OIDC error to read. No loop
-  // guard needed client-side — the server already rejects the flow
-  // when configuration is missing, which bounces back with oidcError.
-  const oidcForceOnly = oidc.data?.forceOnly && !local && !oidcError;
+  // Force-only mode: when exactly one provider is enabled we can
+  // auto-redirect to it. When multiple are enabled we still show the
+  // login card (but hide the local form) so the user picks one. The
+  // `?local=true` escape hatch and any OIDC error bail out to the
+  // normal card — matches the spec recovery path.
+  const providers = oidc.data?.providers ?? [];
+  const canAutoRedirect =
+    oidc.data?.forceOnly === true &&
+    providers.length === 1 &&
+    !local &&
+    !oidcError;
   useEffect(() => {
-    if (oidcForceOnly && mode === 'login') {
-      window.location.href = '/api/v1/auth/oidc';
+    if (canAutoRedirect && mode === 'login' && providers[0]) {
+      window.location.href = providers[0].loginUrl;
     }
-  }, [oidcForceOnly, mode]);
+  }, [canAutoRedirect, mode, providers]);
 
-  const providerName = oidc.data?.providerName || 'SSO';
+  const hideLocalForm =
+    oidc.data?.forceOnly === true && providers.length > 0 && !local && !oidcError;
+
   const oidcErrorMessage = oidcError
     ? OIDC_ERROR_MESSAGES[oidcError] ?? OIDC_ERROR_MESSAGES.unknown
     : null;
@@ -242,63 +250,71 @@ function LoginPage() {
           )}
 
           <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {mode === 'signup' && (
-              <Field label="Name">
-                <Input
-                  autoComplete="name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </Field>
-            )}
-            <Field label="Email">
-              <Input
-                type="email"
-                autoComplete="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </Field>
-            <Field label="Password">
-              <Input
-                type="password"
-                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </Field>
-
-            <Button
-              type="submit"
-              className="mt-1 w-full"
-              disabled={active.isPending}
-            >
-              {active.isPending
-                ? 'Working…'
-                : mode === 'signup'
-                  ? 'Create account'
-                  : 'Sign in'}
-            </Button>
-
-            {mode === 'login' && oidc.data?.enabled && (
+            {!hideLocalForm && (
               <>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 12,
-                    marginTop: 4,
-                  }}
+                {mode === 'signup' && (
+                  <Field label="Name">
+                    <Input
+                      autoComplete="name"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                    />
+                  </Field>
+                )}
+                <Field label="Email">
+                  <Input
+                    type="email"
+                    autoComplete="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </Field>
+                <Field label="Password">
+                  <Input
+                    type="password"
+                    autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                </Field>
+
+                <Button
+                  type="submit"
+                  className="mt-1 w-full"
+                  disabled={active.isPending}
                 >
-                  <div style={{ flex: 1, height: 1, background: 'var(--color-rule-soft)' }} />
-                  <span className="t-small" style={{ color: 'var(--color-ink-3)' }}>or</span>
-                  <div style={{ flex: 1, height: 1, background: 'var(--color-rule-soft)' }} />
-                </div>
-                <Button asChild variant="outline" className="w-full">
-                  <a href="/api/v1/auth/oidc">Sign in with {providerName}</a>
+                  {active.isPending
+                    ? 'Working…'
+                    : mode === 'signup'
+                      ? 'Create account'
+                      : 'Sign in'}
                 </Button>
+              </>
+            )}
+
+            {mode === 'login' && providers.length > 0 && (
+              <>
+                {!hideLocalForm && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      marginTop: 4,
+                    }}
+                  >
+                    <div style={{ flex: 1, height: 1, background: 'var(--color-rule-soft)' }} />
+                    <span className="t-small" style={{ color: 'var(--color-ink-3)' }}>or</span>
+                    <div style={{ flex: 1, height: 1, background: 'var(--color-rule-soft)' }} />
+                  </div>
+                )}
+                {providers.map((p) => (
+                  <Button key={p.slug} asChild variant="outline" className="w-full">
+                    <a href={p.loginUrl}>Sign in with {p.name}</a>
+                  </Button>
+                ))}
               </>
             )}
           </form>

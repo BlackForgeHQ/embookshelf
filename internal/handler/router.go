@@ -46,10 +46,13 @@ func (h *Handler) Engine() *gin.Engine {
 		api.GET("/auth/signup", h.SignupStatus)
 		api.POST("/auth/signup", h.Signup)
 
-		// OIDC / SSO
+		// OIDC / SSO — each provider has its own /auth/oidc/:slug
+		// entrypoint (slug ∈ { google | github | generic }). The
+		// callback is shared; the state token carries the slug so the
+		// service knows which provider issued it.
 		api.GET("/auth/oidc/config", h.OIDCConfig)
-		api.GET("/auth/oidc", h.OIDCLogin)
 		api.GET("/auth/oidc/callback", h.OIDCCallback)
+		api.GET("/auth/oidc/:slug", h.OIDCLogin)
 
 		authed := api.Group("")
 		authed.Use(auth.RequireAuth(h.auth))
@@ -129,7 +132,7 @@ func (h *Handler) Engine() *gin.Engine {
 
 				admin.GET("/oidc", h.SettingsOIDCGet)
 				admin.PUT("/oidc", h.SettingsOIDCUpdate)
-				admin.POST("/oidc/test", h.SettingsOIDCTest)
+				admin.POST("/oidc/test/:slug", h.SettingsOIDCTest)
 
 				admin.GET("/users", h.SettingsUsersList)
 				admin.POST("/users", h.SettingsUsersCreate)

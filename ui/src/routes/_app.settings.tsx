@@ -51,9 +51,11 @@ import {
   fetchOidcAdminSettings,
   oidcAdminSettingsQueryKey,
   saveOidcAdminSettings,
-  testOidcConnection,
+  testOidcProvider,
   type OidcAdminSettings,
   type OidcTestCheck,
+  type OidcTestResult,
+  type ProviderSlug,
 } from '@/api/oidc';
 import { Icon } from '@/components/Icon';
 import { TopBar } from '@/components/TopBar';
@@ -1778,9 +1780,14 @@ function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
   });
 
   const [draft, setDraft] = useState<OidcAdminSettings | null>(null);
-  const [secretTouched, setSecretTouched] = useState(false);
-  const [testChecks, setTestChecks] = useState<OidcTestCheck[] | null>(null);
-  const [testOverall, setTestOverall] = useState<boolean | null>(null);
+  // Per-provider "secret was touched" flags so an empty secret field
+  // only clears the stored secret when the admin explicitly typed in
+  // it (or clicked the clear button).
+  const [secretTouched, setSecretTouched] = useState<Record<ProviderSlug, boolean>>({
+    google: false,
+    github: false,
+    generic: false,
+  });
 
   useEffect(() => {
     if (query.data && !draft) {
@@ -1793,20 +1800,8 @@ function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
     onSuccess: (data) => {
       queryClient.setQueryData(oidcAdminSettingsQueryKey, data);
       setDraft(data);
-      setSecretTouched(false);
-      // Public config also changes — the login page reads it.
+      setSecretTouched({ google: false, github: false, generic: false });
       queryClient.invalidateQueries({ queryKey: ['oidc-config'] });
-    },
-  });
-
-  const testMut = useMutation({
-    mutationFn: () => {
-      if (!draft) throw new Error('no draft');
-      return testOidcConnection(draft.provider);
-    },
-    onSuccess: (res) => {
-      setTestChecks(res.checks);
-      setTestOverall(res.success);
     },
   });
 
@@ -1821,202 +1816,65 @@ function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
   }
 
   const saveError = saveMut.error as unknown as ApiError | null;
-  const provider = draft.provider;
-  const formComplete =
-    provider.providerName.trim() !== '' &&
-    provider.clientId.trim() !== '' &&
-    provider.issuerUri.trim() !== '' &&
-    provider.claimMapping.username.trim() !== '' &&
-    provider.claimMapping.email.trim() !== '' &&
-    provider.claimMapping.name.trim() !== '';
-
-  const canEnable = formComplete;
-  const canForceOnly = draft.enabled && canEnable;
+  const someEnabled =
+    (draft.google.enabled && draft.google.clientId !== '' && (draft.google.clientSecretSet || (draft.google.clientSecret ?? '') !== '')) ||
+    (draft.github.enabled && draft.github.clientId !== '' && (draft.github.clientSecretSet || (draft.github.clientSecret ?? '') !== '')) ||
+    (draft.generic.enabled && draft.generic.clientId !== '' && draft.generic.issuerUri !== '');
+  const canForceOnly = someEnabled;
 
   return (
     <>
       <h2 className="t-h2" style={{ marginBottom: 8 }}>OIDC / SSO</h2>
       <p className="t-small" style={{ marginBottom: 24, fontStyle: 'italic' }}>
-        Delegate sign-in to an OpenID Connect provider (Authentik, Authelia,
-        Keycloak, Pocket ID, …). Changes take effect on the next login — no
-        restart required.
+        Enable Google, GitHub, and a custom OpenID Connect provider independently —
+        the login page shows a button for each one you turn on. Changes take
+        effect on the next login, no restart required.
       </p>
 
       {saveError && <Notice kind="err">{saveError.message}</Notice>}
 
       <Card>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 500 }}>Enable OIDC login</div>
-              <div className="t-small" style={{ fontSize: 11.5 }}>
-                Adds a "Sign in with {provider.providerName || 'provider'}" button to the login page.
-              </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 500 }}>Force SSO (hide local login)</div>
+            <div className="t-small" style={{ fontSize: 11.5 }}>
+              Hides the password form. Escape hatch:{' '}
+              <span className="mono">/login?local=true</span>. Requires at least
+              one provider enabled.
             </div>
-            <Switch
-              checked={draft.enabled}
-              disabled={!canEnable}
-              onCheckedChange={(v) => setDraft({ ...draft, enabled: v })}
-              aria-label="Enable OIDC"
-            />
           </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 500 }}>Force SSO (hide local login)</div>
-              <div className="t-small" style={{ fontSize: 11.5 }}>
-                Hides the password form. Escape hatch:{' '}
-                <span className="mono">/login?local=true</span>.
-              </div>
-            </div>
-            <Switch
-              checked={draft.forceOnly}
-              disabled={!canForceOnly}
-              onCheckedChange={(v) => setDraft({ ...draft, forceOnly: v })}
-              aria-label="Force OIDC"
-            />
-          </div>
+          <Switch
+            checked={draft.forceOnly}
+            disabled={!canForceOnly}
+            onCheckedChange={(v) => setDraft({ ...draft, forceOnly: v })}
+            aria-label="Force OIDC"
+          />
         </div>
       </Card>
 
-      <h3 className="t-h3" style={{ marginTop: 24, marginBottom: 8 }}>Provider</h3>
-      <Card>
-        <Field label="Provider display name">
-          <Input
-            value={provider.providerName}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                provider: { ...provider, providerName: e.target.value },
-              })
-            }
-            placeholder="Authentik"
-          />
-        </Field>
-        <Field label="Issuer URI">
-          <Input
-            value={provider.issuerUri}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                provider: { ...provider, issuerUri: e.target.value },
-              })
-            }
-            placeholder="https://auth.example.com/application/o/embookshelf/"
-          />
-        </Field>
-        <Field label="Client ID">
-          <Input
-            value={provider.clientId}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                provider: { ...provider, clientId: e.target.value },
-              })
-            }
-          />
-        </Field>
-        <Field label={`Client secret${provider.clientSecretSet ? ' (stored — leave blank to keep)' : ''}`}>
-          <Input
-            type="password"
-            autoComplete="new-password"
-            placeholder={provider.clientSecretSet ? '••••••••' : ''}
-            onChange={(e) => {
-              setSecretTouched(true);
-              setDraft({
-                ...draft,
-                provider: {
-                  ...provider,
-                  clientSecret: e.target.value,
-                  clientSecretSet: e.target.value !== '' || provider.clientSecretSet,
-                },
-              });
-            }}
-          />
-          {provider.clientSecretSet && !secretTouched && (
-            <button
-              type="button"
-              className="t-small"
-              style={{
-                marginTop: 4,
-                background: 'none',
-                border: 'none',
-                padding: 0,
-                cursor: 'pointer',
-                color: 'var(--color-accent)',
-                alignSelf: 'flex-start',
-              }}
-              onClick={() => {
-                setSecretTouched(true);
-                setDraft({
-                  ...draft,
-                  provider: { ...provider, clientSecret: '', clientSecretSet: false },
-                });
-              }}
-            >
-              Clear stored secret
-            </button>
-          )}
-        </Field>
-        <Field label="Scopes (space-separated)">
-          <Input
-            value={provider.scopes}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                provider: { ...provider, scopes: e.target.value },
-              })
-            }
-            placeholder="openid profile email"
-          />
-        </Field>
-      </Card>
+      <GooglePanel
+        value={draft.google}
+        onChange={(next) => setDraft({ ...draft, google: next })}
+        redirectUri={draft.redirectUri}
+        secretTouched={secretTouched.google}
+        onSecretTouch={(v) => setSecretTouched({ ...secretTouched, google: v })}
+      />
 
-      <h3 className="t-h3" style={{ marginTop: 24, marginBottom: 8 }}>Claim mapping</h3>
-      <Card>
-        <Field label="Username claim">
-          <Input
-            value={provider.claimMapping.username}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                provider: {
-                  ...provider,
-                  claimMapping: { ...provider.claimMapping, username: e.target.value },
-                },
-              })
-            }
-          />
-        </Field>
-        <Field label="Email claim">
-          <Input
-            value={provider.claimMapping.email}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                provider: {
-                  ...provider,
-                  claimMapping: { ...provider.claimMapping, email: e.target.value },
-                },
-              })
-            }
-          />
-        </Field>
-        <Field label="Display name claim">
-          <Input
-            value={provider.claimMapping.name}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                provider: {
-                  ...provider,
-                  claimMapping: { ...provider.claimMapping, name: e.target.value },
-                },
-              })
-            }
-          />
-        </Field>
-      </Card>
+      <GitHubPanel
+        value={draft.github}
+        onChange={(next) => setDraft({ ...draft, github: next })}
+        redirectUri={draft.redirectUri}
+        secretTouched={secretTouched.github}
+        onSecretTouch={(v) => setSecretTouched({ ...secretTouched, github: v })}
+      />
+
+      <GenericOidcPanel
+        value={draft.generic}
+        onChange={(next) => setDraft({ ...draft, generic: next })}
+        redirectUri={draft.redirectUri}
+        secretTouched={secretTouched.generic}
+        onSecretTouch={(v) => setSecretTouched({ ...secretTouched, generic: v })}
+      />
 
       <h3 className="t-h3" style={{ marginTop: 24, marginBottom: 8 }}>Auto provisioning</h3>
       <Card>
@@ -2025,7 +1883,7 @@ function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 13.5, fontWeight: 500 }}>Auto-create users on first login</div>
               <div className="t-small" style={{ fontSize: 11.5 }}>
-                When off, unknown OIDC users are rejected unless linked to an existing local account.
+                When off, unknown SSO users are rejected unless linked to an existing local account.
               </div>
             </div>
             <Switch
@@ -2042,7 +1900,7 @@ function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 13.5, fontWeight: 500 }}>Link by email</div>
               <div className="t-small" style={{ fontSize: 11.5 }}>
-                Permits linking an existing local account to its OIDC identity on first SSO login when emails match.
+                Permits linking an existing local account to an SSO identity on first login when emails match.
               </div>
             </div>
             <Switch
@@ -2076,70 +1934,368 @@ function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
         </div>
       </Card>
 
-      <h3 className="t-h3" style={{ marginTop: 24, marginBottom: 8 }}>Register with your provider</h3>
-      <Card>
-        <DefRow label="Redirect URI" value={<span className="mono">{draft.redirectUri || '(set APP_URL)'}</span>} />
-        <DefRow label="Grant type" value={<span className="mono">authorization_code</span>} />
-        <DefRow label="PKCE method" value={<span className="mono">S256</span>} />
-        <DefRow label="Scopes" value={<span className="mono">{provider.scopes || 'openid profile email'}</span>} />
-      </Card>
-
       <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-        <Button
-          onClick={() => saveMut.mutate(draft)}
-          disabled={saveMut.isPending || (draft.enabled && !canEnable)}
-        >
-          {saveMut.isPending ? 'Saving…' : 'Save'}
-        </Button>
-        <Button variant="outline" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
-          {testMut.isPending ? 'Testing…' : 'Test connection'}
+        <Button onClick={() => saveMut.mutate(draft)} disabled={saveMut.isPending}>
+          {saveMut.isPending ? 'Saving…' : 'Save all'}
         </Button>
       </div>
-
-      {testChecks && (
-        <div style={{ marginTop: 16 }}>
-          <Notice kind={testOverall ? 'ok' : 'err'}>
-            {testOverall ? 'All critical checks passed.' : 'One or more checks failed.'}
-          </Notice>
-          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {testChecks.map((c, i) => (
-              <div
-                key={i}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '70px 1fr',
-                  gap: 10,
-                  fontSize: 13,
-                  padding: '6px 10px',
-                  border: '1px solid var(--color-rule-soft)',
-                  borderRadius: 2,
-                  background: 'var(--color-paper-0)',
-                }}
-              >
-                <span
-                  className="mono"
-                  style={{
-                    color:
-                      c.status === 'PASS'
-                        ? 'oklch(0.58 0.12 140)'
-                        : c.status === 'WARN'
-                          ? 'oklch(0.72 0.14 70)'
-                          : 'oklch(0.62 0.22 25)',
-                    fontWeight: 600,
-                  }}
-                >
-                  {c.status}
-                </span>
-                <div>
-                  <div style={{ fontWeight: 500 }}>{c.name}</div>
-                  <div className="t-small" style={{ fontSize: 11.5 }}>{c.message}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </>
+  );
+}
+
+type OAuthPresetValue = OidcAdminSettings['google'];
+
+function PresetProviderPanel({
+  title,
+  slug,
+  value,
+  onChange,
+  redirectUri,
+  registerUrl,
+  intro,
+  secretTouched,
+  onSecretTouch,
+}: {
+  title: string;
+  slug: ProviderSlug;
+  value: OAuthPresetValue;
+  onChange: (next: OAuthPresetValue) => void;
+  redirectUri: string;
+  registerUrl: string;
+  intro: ReactNode;
+  secretTouched: boolean;
+  onSecretTouch: (v: boolean) => void;
+}) {
+  const [testResult, setTestResult] = useState<OidcTestResult | null>(null);
+  const testMut = useMutation({
+    mutationFn: () =>
+      testOidcProvider(slug, {
+        [slug]: {
+          clientId: value.clientId,
+          clientSecret: value.clientSecret ?? '',
+        },
+      }),
+    onSuccess: (res) => setTestResult(res),
+  });
+
+  return (
+    <>
+      <h3 className="t-h3" style={{ marginTop: 24, marginBottom: 8 }}>{title}</h3>
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 10 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 500 }}>Enable</div>
+            <div className="t-small" style={{ fontSize: 11.5 }}>{intro}</div>
+          </div>
+          <Switch
+            checked={value.enabled}
+            disabled={value.clientId === '' || (!value.clientSecretSet && (value.clientSecret ?? '') === '')}
+            onCheckedChange={(v) => onChange({ ...value, enabled: v })}
+          />
+        </div>
+        <p className="t-small" style={{ marginBottom: 10, fontStyle: 'italic' }}>
+          Register an OAuth app at{' '}
+          <a href={registerUrl} target="_blank" rel="noreferrer">{registerUrl}</a>,
+          set its redirect URL to{' '}
+          <span className="mono">{redirectUri || '(set APP_URL)'}</span>, then
+          paste the Client ID and Secret below.
+        </p>
+        <Field label="Client ID">
+          <Input
+            value={value.clientId}
+            onChange={(e) => onChange({ ...value, clientId: e.target.value })}
+          />
+        </Field>
+        <Field label={`Client secret${value.clientSecretSet ? ' (stored — leave blank to keep)' : ''}`}>
+          <Input
+            type="password"
+            autoComplete="new-password"
+            placeholder={value.clientSecretSet ? '••••••••' : ''}
+            onChange={(e) => {
+              onSecretTouch(true);
+              onChange({
+                ...value,
+                clientSecret: e.target.value,
+                clientSecretSet: e.target.value !== '' || value.clientSecretSet,
+              });
+            }}
+          />
+          {value.clientSecretSet && !secretTouched && (
+            <button
+              type="button"
+              className="t-small"
+              style={{
+                marginTop: 4,
+                background: 'none',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+                color: 'var(--color-accent)',
+                alignSelf: 'flex-start',
+              }}
+              onClick={() => {
+                onSecretTouch(true);
+                onChange({ ...value, clientSecret: '', clientSecretSet: false });
+              }}
+            >
+              Clear stored secret
+            </button>
+          )}
+        </Field>
+        <div style={{ marginTop: 10 }}>
+          <Button variant="outline" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
+            {testMut.isPending ? 'Testing…' : 'Test connection'}
+          </Button>
+        </div>
+        {testResult && <TestResultBlock result={testResult} />}
+      </Card>
+    </>
+  );
+}
+
+function GooglePanel(props: {
+  value: OAuthPresetValue;
+  onChange: (v: OAuthPresetValue) => void;
+  redirectUri: string;
+  secretTouched: boolean;
+  onSecretTouch: (v: boolean) => void;
+}) {
+  return (
+    <PresetProviderPanel
+      title="Google"
+      slug="google"
+      registerUrl="https://console.cloud.google.com/apis/credentials"
+      intro="Lets users sign in with their Google account. Scopes and claims are baked in."
+      {...props}
+    />
+  );
+}
+
+function GitHubPanel(props: {
+  value: OAuthPresetValue;
+  onChange: (v: OAuthPresetValue) => void;
+  redirectUri: string;
+  secretTouched: boolean;
+  onSecretTouch: (v: boolean) => void;
+}) {
+  return (
+    <PresetProviderPanel
+      title="GitHub"
+      slug="github"
+      registerUrl="https://github.com/settings/developers"
+      intro="Lets users sign in with their GitHub account. Endpoints, scopes, and the user API are baked in."
+      {...props}
+    />
+  );
+}
+
+function GenericOidcPanel({
+  value,
+  onChange,
+  redirectUri,
+  secretTouched,
+  onSecretTouch,
+}: {
+  value: OidcAdminSettings['generic'];
+  onChange: (v: OidcAdminSettings['generic']) => void;
+  redirectUri: string;
+  secretTouched: boolean;
+  onSecretTouch: (v: boolean) => void;
+}) {
+  const [testResult, setTestResult] = useState<OidcTestResult | null>(null);
+  const testMut = useMutation({
+    mutationFn: () =>
+      testOidcProvider('generic', {
+        generic: {
+          clientId: value.clientId,
+          clientSecret: value.clientSecret ?? '',
+          issuerUri: value.issuerUri,
+          scopes: value.scopes,
+          claimMapping: value.claimMapping,
+        },
+      }),
+    onSuccess: (res) => setTestResult(res),
+  });
+
+  const canEnable =
+    value.clientId.trim() !== '' &&
+    value.issuerUri.trim() !== '' &&
+    value.claimMapping.username.trim() !== '' &&
+    value.claimMapping.email.trim() !== '' &&
+    value.claimMapping.name.trim() !== '';
+
+  return (
+    <>
+      <h3 className="t-h3" style={{ marginTop: 24, marginBottom: 8 }}>Custom OIDC provider</h3>
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 10 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 500 }}>Enable</div>
+            <div className="t-small" style={{ fontSize: 11.5 }}>
+              Authentik, Authelia, Keycloak, Pocket ID, or any OpenID Connect
+              provider with a <span className="mono">/.well-known/openid-configuration</span> document.
+            </div>
+          </div>
+          <Switch
+            checked={value.enabled}
+            disabled={!canEnable}
+            onCheckedChange={(v) => onChange({ ...value, enabled: v })}
+          />
+        </div>
+        <Field label="Provider display name">
+          <Input
+            value={value.providerName}
+            onChange={(e) => onChange({ ...value, providerName: e.target.value })}
+            placeholder="Authentik"
+          />
+        </Field>
+        <Field label="Issuer URI">
+          <Input
+            value={value.issuerUri}
+            onChange={(e) => onChange({ ...value, issuerUri: e.target.value })}
+            placeholder="https://auth.example.com/application/o/embookshelf/"
+          />
+        </Field>
+        <Field label="Client ID">
+          <Input
+            value={value.clientId}
+            onChange={(e) => onChange({ ...value, clientId: e.target.value })}
+          />
+        </Field>
+        <Field label={`Client secret${value.clientSecretSet ? ' (stored — leave blank to keep)' : ''}`}>
+          <Input
+            type="password"
+            autoComplete="new-password"
+            placeholder={value.clientSecretSet ? '••••••••' : ''}
+            onChange={(e) => {
+              onSecretTouch(true);
+              onChange({
+                ...value,
+                clientSecret: e.target.value,
+                clientSecretSet: e.target.value !== '' || value.clientSecretSet,
+              });
+            }}
+          />
+          {value.clientSecretSet && !secretTouched && (
+            <button
+              type="button"
+              className="t-small"
+              style={{
+                marginTop: 4,
+                background: 'none',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+                color: 'var(--color-accent)',
+                alignSelf: 'flex-start',
+              }}
+              onClick={() => {
+                onSecretTouch(true);
+                onChange({ ...value, clientSecret: '', clientSecretSet: false });
+              }}
+            >
+              Clear stored secret
+            </button>
+          )}
+        </Field>
+        <Field label="Scopes (space-separated)">
+          <Input
+            value={value.scopes}
+            onChange={(e) => onChange({ ...value, scopes: e.target.value })}
+            placeholder="openid profile email"
+          />
+        </Field>
+        <div className="t-label" style={{ marginTop: 12 }}>Claim mapping</div>
+        <Field label="Username claim">
+          <Input
+            value={value.claimMapping.username}
+            onChange={(e) =>
+              onChange({
+                ...value,
+                claimMapping: { ...value.claimMapping, username: e.target.value },
+              })
+            }
+          />
+        </Field>
+        <Field label="Email claim">
+          <Input
+            value={value.claimMapping.email}
+            onChange={(e) =>
+              onChange({
+                ...value,
+                claimMapping: { ...value.claimMapping, email: e.target.value },
+              })
+            }
+          />
+        </Field>
+        <Field label="Display name claim">
+          <Input
+            value={value.claimMapping.name}
+            onChange={(e) =>
+              onChange({
+                ...value,
+                claimMapping: { ...value.claimMapping, name: e.target.value },
+              })
+            }
+          />
+        </Field>
+        <p className="t-small" style={{ marginTop: 10, fontStyle: 'italic' }}>
+          Redirect URI: <span className="mono">{redirectUri || '(set APP_URL)'}</span>
+        </p>
+        <div style={{ marginTop: 10 }}>
+          <Button variant="outline" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
+            {testMut.isPending ? 'Testing…' : 'Test connection'}
+          </Button>
+        </div>
+        {testResult && <TestResultBlock result={testResult} />}
+      </Card>
+    </>
+  );
+}
+
+function TestResultBlock({ result }: { result: OidcTestResult }) {
+  return (
+    <div style={{ marginTop: 14 }}>
+      <Notice kind={result.success ? 'ok' : 'err'}>
+        {result.success ? 'All critical checks passed.' : 'One or more checks failed.'}
+      </Notice>
+      <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {result.checks.map((c: OidcTestCheck, i: number) => (
+          <div
+            key={i}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '70px 1fr',
+              gap: 10,
+              fontSize: 13,
+              padding: '6px 10px',
+              border: '1px solid var(--color-rule-soft)',
+              borderRadius: 2,
+              background: 'var(--color-paper-0)',
+            }}
+          >
+            <span
+              className="mono"
+              style={{
+                color:
+                  c.status === 'PASS'
+                    ? 'oklch(0.58 0.12 140)'
+                    : c.status === 'WARN'
+                      ? 'oklch(0.72 0.14 70)'
+                      : 'oklch(0.62 0.22 25)',
+                fontWeight: 600,
+              }}
+            >
+              {c.status}
+            </span>
+            <div>
+              <div style={{ fontWeight: 500 }}>{c.name}</div>
+              <div className="t-small" style={{ fontSize: 11.5 }}>{c.message}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

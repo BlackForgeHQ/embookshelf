@@ -60,14 +60,21 @@ export async function signupStatus(): Promise<SignupStatus> {
   return api<SignupStatus>('/api/v1/auth/signup');
 }
 
-// OIDCConfig mirrors the public config the server exposes to the login
-// page — enough to render the SSO button and obey force-only mode. It
-// never carries the client secret.
+// OIDCPublicProvider is one login option surfaced to the login page.
+// The browser follows `loginUrl` to kick off the flow for that provider.
+export type OIDCPublicProvider = {
+  slug: 'google' | 'github' | 'generic';
+  name: string;
+  kind: 'google' | 'github' | 'oidc';
+  loginUrl: string;
+};
+
+// OIDCConfig is the anonymous login-page view: one entry per enabled
+// provider plus the force-only flag. Empty `providers` means "local
+// login only".
 export type OIDCConfig = {
-  enabled: boolean;
+  providers: Array<OIDCPublicProvider>;
   forceOnly: boolean;
-  configured: boolean;
-  providerName?: string;
 };
 
 export async function oidcConfig(): Promise<OIDCConfig> {
