@@ -231,9 +231,6 @@ export function AppSidebar() {
 
         <SidebarGroup>
           <SidebarGroupLabel>Libraries</SidebarGroupLabel>
-          <SidebarGroupAction title="New library" aria-label="New library">
-            <Icon name="plus" size={12} />
-          </SidebarGroupAction>
           <SidebarGroupContent>
             <SidebarMenu>
               {libs.map((lib) => (
@@ -311,6 +308,20 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+        {me.data?.role === 'admin' && (
+          <SidebarGroup className="mt-auto">
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <NavItem
+                  to="/admin"
+                  icon="settings"
+                  label="Settings"
+                  active={pathname.startsWith('/admin')}
+                />
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
 
       <SidebarFooter>
@@ -555,11 +566,11 @@ function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
         asChild
         variant="ghost"
         size="icon-sm"
-        title="Settings"
+        title="My account"
         className="group-data-[collapsible=icon]:hidden"
       >
         <Link to="/settings">
-          <Icon name="settings" size={14} />
+          <Icon name="user" size={14} />
         </Link>
       </Button>
       <Button

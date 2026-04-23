@@ -23,26 +23,23 @@ import (
 // processor results). All state transitions go through here so SSE events,
 // cover-file side effects, and the state machine stay in one place.
 type BookDropService struct {
-	bdrop    *repo.BookDropRepo
-	libs     *repo.LibraryRepo
-	libPaths *repo.LibraryPathRepo
-	covers   *coverstore.Store
-	hub      *sse.Hub
+	bdrop  *repo.BookDropRepo
+	libs   *repo.LibraryRepo
+	covers *coverstore.Store
+	hub    *sse.Hub
 }
 
 func NewBookDropService(
 	bdrop *repo.BookDropRepo,
 	libs *repo.LibraryRepo,
-	libPaths *repo.LibraryPathRepo,
 	covers *coverstore.Store,
 	hub *sse.Hub,
 ) *BookDropService {
 	return &BookDropService{
-		bdrop:    bdrop,
-		libs:     libs,
-		libPaths: libPaths,
-		covers:   covers,
-		hub:      hub,
+		bdrop:  bdrop,
+		libs:   libs,
+		covers: covers,
+		hub:    hub,
 	}
 }
 
@@ -211,31 +208,31 @@ func (s *BookDropService) ClearProcessed(ctx context.Context) (int, error) {
 	return len(ids), nil
 }
 
-// applyNamingPattern resolves the target library's file-naming pattern (if
-// set) against a bookdrop item's metadata and physically moves the file to
-// its new home under the first registered library path. Returns the new
-// absolute path on success; (false) means "leave the file alone, keep the
-// original path" — no-op for libraries without a pattern, libraries without
-// registered paths, or on any filesystem error.
+// applyNamingPattern places an approved bookdrop file under its
+// target library's path. The library's FileNamingPattern (when set)
+// decides the sub-path and filename; otherwise the original filename
+// is reused. Returns (new absolute path, true) when the file was
+// moved, or (false) when the file is already sitting where it should
+// be and no move is needed.
 //
-// The move uses os.Rename where possible and falls back to copy+remove when
-// source/destination straddle different filesystems (EXDEV). Destination
-// collisions are resolved by appending " (2)", " (3)", etc.
+// The move uses os.Rename where possible and falls back to copy+remove
+// when source/destination straddle different filesystems (EXDEV).
+// Destination collisions are resolved by appending " (2)", " (3)", etc.
 func (s *BookDropService) applyNamingPattern(
 	ctx context.Context,
 	libraryID string,
 	item model.BookDropItem,
 ) (string, bool) {
 	lib, err := s.libs.GetByID(ctx, libraryID)
-	if err != nil || lib.FileNamingPattern == nil {
+	if err != nil {
+		slog.Warn("skip library placement: library lookup failed", "library_id", libraryID, "err", err)
 		return "", false
 	}
-	paths, err := s.libPaths.ListForLibrary(ctx, libraryID)
-	if err != nil || len(paths) == 0 {
-		slog.Warn("skip naming pattern: no library paths", "library_id", libraryID, "err", err)
+	root := strings.TrimRight(lib.Path, "/")
+	if root == "" {
+		slog.Warn("skip library placement: library has no path", "library_id", libraryID)
 		return "", false
 	}
-	root := paths[0].Path
 
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(item.Path)), ".")
 	in := pattern.Input{
@@ -245,11 +242,15 @@ func (s *BookDropService) applyNamingPattern(
 		Extension:       ext,
 		CurrentFilename: filepath.Base(item.Path),
 	}
-	resolved := pattern.Resolve(*lib.FileNamingPattern, in)
-	if resolved == "" || resolved == in.CurrentFilename && filepath.Dir(item.Path) == root {
-		// Nothing to move — either the resolver fell back to the original
-		// filename or the file is already under the library root.
-		return "", false
+	var resolved string
+	if lib.FileNamingPattern != nil {
+		resolved = pattern.Resolve(*lib.FileNamingPattern, in)
+	}
+	// Fallback to the original filename when no pattern is set or the
+	// resolver returned empty — books still land under the library
+	// root, just without a rename.
+	if resolved == "" {
+		resolved = in.CurrentFilename
 	}
 
 	// Forward-slash-only resolver output → OS-native path separator.

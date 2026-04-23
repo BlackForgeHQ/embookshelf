@@ -18,6 +18,7 @@ import { Route as AppSettingsRouteImport } from './routes/_app.settings'
 import { Route as AppNotebookRouteImport } from './routes/_app.notebook'
 import { Route as AppLibraryRouteImport } from './routes/_app.library'
 import { Route as AppBookdropRouteImport } from './routes/_app.bookdrop'
+import { Route as AppAdminRouteImport } from './routes/_app.admin'
 import { Route as AppBookIdRouteImport } from './routes/_app.book.$id'
 import { Route as AppBookIdEditRouteImport } from './routes/_app.book.$id_.edit'
 
@@ -65,6 +66,11 @@ const AppBookdropRoute = AppBookdropRouteImport.update({
   path: '/bookdrop',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAdminRoute = AppAdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppBookIdRoute = AppBookIdRouteImport.update({
   id: '/book/$id',
   path: '/book/$id',
@@ -79,6 +85,7 @@ const AppBookIdEditRoute = AppBookIdEditRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof LoginRoute
+  '/admin': typeof AppAdminRoute
   '/bookdrop': typeof AppBookdropRoute
   '/library': typeof AppLibraryRoute
   '/notebook': typeof AppNotebookRoute
@@ -90,6 +97,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
+  '/admin': typeof AppAdminRoute
   '/bookdrop': typeof AppBookdropRoute
   '/library': typeof AppLibraryRoute
   '/notebook': typeof AppNotebookRoute
@@ -104,6 +112,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
+  '/_app/admin': typeof AppAdminRoute
   '/_app/bookdrop': typeof AppBookdropRoute
   '/_app/library': typeof AppLibraryRoute
   '/_app/notebook': typeof AppNotebookRoute
@@ -119,6 +128,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/login'
+    | '/admin'
     | '/bookdrop'
     | '/library'
     | '/notebook'
@@ -130,6 +140,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
+    | '/admin'
     | '/bookdrop'
     | '/library'
     | '/notebook'
@@ -143,6 +154,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_app'
     | '/login'
+    | '/_app/admin'
     | '/_app/bookdrop'
     | '/_app/library'
     | '/_app/notebook'
@@ -225,6 +237,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppBookdropRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/admin': {
+      id: '/_app/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AppAdminRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/book/$id': {
       id: '/_app/book/$id'
       path: '/book/$id'
@@ -243,6 +262,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppRouteChildren {
+  AppAdminRoute: typeof AppAdminRoute
   AppBookdropRoute: typeof AppBookdropRoute
   AppLibraryRoute: typeof AppLibraryRoute
   AppNotebookRoute: typeof AppNotebookRoute
@@ -254,6 +274,7 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppAdminRoute: AppAdminRoute,
   AppBookdropRoute: AppBookdropRoute,
   AppLibraryRoute: AppLibraryRoute,
   AppNotebookRoute: AppNotebookRoute,

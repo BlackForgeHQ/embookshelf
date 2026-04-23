@@ -36,10 +36,13 @@ func (h *Handler) serveBookFile(c *gin.Context, path, mime string) error {
 			roots = append(roots, r)
 		}
 	}
-	if h.libPath != nil {
-		if paths, err := h.libPath.List(c.Request.Context()); err == nil {
-			for _, p := range paths {
-				if r, err := filepath.Abs(p.Path); err == nil {
+	if h.lib != nil {
+		if libs, err := h.lib.List(c.Request.Context()); err == nil {
+			for _, l := range libs {
+				if l.Path == "" {
+					continue
+				}
+				if r, err := filepath.Abs(l.Path); err == nil {
 					roots = append(roots, r)
 				}
 			}

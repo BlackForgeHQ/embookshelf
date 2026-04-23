@@ -22,7 +22,6 @@ type Handler struct {
 	bookdrop     *service.BookDropService
 	progress     *service.ProgressService
 	enrich       *service.EnrichmentService
-	libPath      *service.LibraryPathService
 	annotations  *service.AnnotationService
 	stats        *service.StatsService
 	readingStats *service.ReadingSessionService
@@ -43,7 +42,6 @@ type Deps struct {
 	BookDrop     *service.BookDropService
 	Progress     *service.ProgressService
 	Enrich       *service.EnrichmentService
-	LibPath      *service.LibraryPathService
 	Annotations  *service.AnnotationService
 	Stats        *service.StatsService
 	ReadingStats *service.ReadingSessionService
@@ -60,7 +58,7 @@ func New(d Deps) *Handler {
 		cfg: d.Cfg, static: d.Static,
 		lib: d.Lib, shelf: d.Shelf, auth: d.Auth,
 		bookdrop: d.BookDrop, progress: d.Progress, enrich: d.Enrich,
-		libPath: d.LibPath, annotations: d.Annotations, stats: d.Stats,
+		annotations: d.Annotations, stats: d.Stats,
 		readingStats: d.ReadingStats,
 		devices:      d.Devices,
 		oidc:         d.OIDC,

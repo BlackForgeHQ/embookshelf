@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/blackforge/embookshelf/internal/model"
@@ -39,6 +40,11 @@ var ErrNotFound = errors.New("not found")
 // so the UI can prompt the user to pick a different name.
 var ErrLibraryNameTaken = errors.New("library name already taken")
 
+// ErrLibraryPathTaken is returned when the supplied filesystem root is
+// already bound to another library. Two libraries sharing one path would
+// race on scans and naming collisions.
+var ErrLibraryPathTaken = errors.New("library path already in use")
+
 type LibraryRepo struct {
 	pool *pgxpool.Pool
 }
@@ -47,22 +53,44 @@ func NewLibraryRepo(pool *pgxpool.Pool) *LibraryRepo {
 	return &LibraryRepo{pool: pool}
 }
 
-// CreateLibrary inserts a new library row and returns the persisted record.
-// Uniqueness is enforced on `slug` (UNIQUE constraint from 000001_init); a
-// collision returns ErrLibraryNameTaken so the handler can 409.
-func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug string) (model.Library, error) {
+// libCols is the shared SELECT list for library rows. Keep the scan
+// order in scanLibrary() in sync if you add columns here.
+const libCols = `
+	l.id, l.name, l.slug, l.path,
+	l.last_scanned_at, l.file_count, l.discovered_count,
+	l.file_naming_pattern, l.created_at,
+	COALESCE(
+		(SELECT COUNT(*) FROM books b
+		 WHERE b.library_id = l.id AND b.deleted_at IS NULL),
+		0
+	) AS book_count
+`
+
+// CreateLibrary inserts a new library row and returns the persisted
+// record. `slug` is UNIQUE (000001) and `path` is UNIQUE (000018) — a
+// collision on either surfaces as a typed sentinel (ErrLibraryNameTaken
+// or ErrLibraryPathTaken) so the handler can map it to a 409.
+func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug, path string) (model.Library, error) {
 	row := r.pool.QueryRow(ctx, `
-		INSERT INTO libraries (name, slug)
-		VALUES ($1, $2)
-		ON CONFLICT (slug) DO NOTHING
-		RETURNING id, name, slug, file_naming_pattern, created_at
-	`, name, slug)
-	var l model.Library
-	if err := row.Scan(
-		&l.ID, &l.Name, &l.Slug, &l.FileNamingPattern, &l.CreatedAt,
-	); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return model.Library{}, ErrLibraryNameTaken
+		WITH inserted AS (
+			INSERT INTO libraries (name, slug, path)
+			VALUES ($1, $2, $3)
+			RETURNING id
+		)
+		SELECT `+libCols+`
+		FROM libraries l
+		WHERE l.id = (SELECT id FROM inserted)
+	`, name, slug, path)
+	l, err := scanLibrary(row)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			switch pgErr.ConstraintName {
+			case "libraries_slug_key":
+				return model.Library{}, ErrLibraryNameTaken
+			case "libraries_path_key":
+				return model.Library{}, ErrLibraryPathTaken
+			}
 		}
 		return model.Library{}, err
 	}
@@ -71,13 +99,7 @@ func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug string) (mod
 
 func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT
-			l.id, l.name, l.slug, l.file_naming_pattern, l.created_at,
-			COALESCE(
-				(SELECT COUNT(*) FROM books b
-				 WHERE b.library_id = l.id AND b.deleted_at IS NULL),
-				0
-			) AS book_count
+		SELECT `+libCols+`
 		FROM libraries l
 		ORDER BY l.created_at ASC
 	`)
@@ -88,10 +110,8 @@ func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
 
 	var libs []model.Library
 	for rows.Next() {
-		var l model.Library
-		if err := rows.Scan(
-			&l.ID, &l.Name, &l.Slug, &l.FileNamingPattern, &l.CreatedAt, &l.BookCount,
-		); err != nil {
+		l, err := scanLibrary(rows)
+		if err != nil {
 			return nil, err
 		}
 		libs = append(libs, l)
@@ -99,25 +119,15 @@ func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
 	return libs, rows.Err()
 }
 
-// GetByID returns a single library row, with its naming pattern and a
-// COUNT(books) aggregate. Used by pattern-preview + rename flows that need
-// the live pattern without a full listing.
+// GetByID returns a single library row. Used by pattern-preview + scan
+// flows that need the current path/pattern without a full listing.
 func (r *LibraryRepo) GetByID(ctx context.Context, id string) (model.Library, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT
-			l.id, l.name, l.slug, l.file_naming_pattern, l.created_at,
-			COALESCE(
-				(SELECT COUNT(*) FROM books b
-				 WHERE b.library_id = l.id AND b.deleted_at IS NULL),
-				0
-			) AS book_count
+		SELECT `+libCols+`
 		FROM libraries l
 		WHERE l.id = $1
 	`, id)
-	var l model.Library
-	err := row.Scan(
-		&l.ID, &l.Name, &l.Slug, &l.FileNamingPattern, &l.CreatedAt, &l.BookCount,
-	)
+	l, err := scanLibrary(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return model.Library{}, ErrNotFound
@@ -125,6 +135,83 @@ func (r *LibraryRepo) GetByID(ctx context.Context, id string) (model.Library, er
 		return model.Library{}, err
 	}
 	return l, nil
+}
+
+// TouchScan stamps the last-scan aggregate on a library row after a
+// filesystem walk completes. Used by the library-scan worker.
+func (r *LibraryRepo) TouchScan(ctx context.Context, id string, fileCount, discovered int) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE libraries
+		SET last_scanned_at = now(),
+		    file_count       = $2,
+		    discovered_count = $3
+		WHERE id = $1
+	`, id, fileCount, discovered)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func scanLibrary(s scanner) (model.Library, error) {
+	var l model.Library
+	err := s.Scan(
+		&l.ID, &l.Name, &l.Slug, &l.Path,
+		&l.LastScannedAt, &l.FileCount, &l.DiscoveredCount,
+		&l.FileNamingPattern, &l.CreatedAt, &l.BookCount,
+	)
+	return l, err
+}
+
+// DeleteLibrary removes a library row and cascades the deletion through
+// books, library_paths, shelf_books, annotations, reading_sessions, and
+// per-user progress via the existing FK ON DELETE CASCADE chain. The
+// returned []bookIDs lets the caller clean up cover-image files on disk
+// — those aren't owned by the DB so the cascade can't reach them.
+//
+// Book source files are deliberately left alone: library paths point at
+// user-managed filesystem roots, so "unregister this library" is not the
+// same as "wipe the bytes". Admin-driven cleanup belongs outside this
+// path.
+func (r *LibraryRepo) DeleteLibrary(ctx context.Context, id string) ([]string, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx, `SELECT id FROM books WHERE library_id = $1`, id)
+	if err != nil {
+		return nil, err
+	}
+	var bookIDs []string
+	for rows.Next() {
+		var bookID string
+		if err := rows.Scan(&bookID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		bookIDs = append(bookIDs, bookID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	tag, err := tx.Exec(ctx, `DELETE FROM libraries WHERE id = $1`, id)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, ErrNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return bookIDs, nil
 }
 
 // SetFileNamingPattern writes (or clears) the per-library naming pattern.

@@ -93,7 +93,6 @@ func main() {
 	sessionRepo := repo.NewSessionRepo(pool)
 	bdropRepo := repo.NewBookDropRepo(pool)
 	progressRepo := repo.NewProgressRepo(pool)
-	libPathRepo := repo.NewLibraryPathRepo(pool)
 	annotationRepo := repo.NewAnnotationRepo(pool)
 	statsRepo := repo.NewStatsRepo(pool)
 	readingSessionRepo := repo.NewReadingSessionRepo(pool)
@@ -109,9 +108,8 @@ func main() {
 	libSvc := service.NewLibraryService(libRepo)
 	shelfSvc := service.NewShelfService(shelfRepo)
 	authSvc := service.NewAuthService(userRepo, sessionRepo)
-	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, libPathRepo, covers, hub)
+	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, covers, hub)
 	progressSvc := service.NewProgressService(progressRepo, readingSessionRepo)
-	libPathSvc := service.NewLibraryPathService(libPathRepo)
 	annotationSvc := service.NewAnnotationService(annotationRepo)
 	statsSvc := service.NewStatsService(statsRepo)
 	readingStatsSvc := service.NewReadingSessionService(readingSessionRepo)
@@ -183,7 +181,7 @@ func main() {
 	}
 
 	// Background queue (river). Runs its own migrations, then starts workers.
-	q, err := queue.New(ctx, pool, bdropSvc, libPathSvc, libSvc)
+	q, err := queue.New(ctx, pool, bdropSvc, libSvc)
 	if err != nil {
 		slog.Error("queue", "err", err)
 		os.Exit(1)
@@ -218,7 +216,6 @@ func main() {
 		BookDrop:    bdropSvc,
 		Progress:    progressSvc,
 		Enrich:      enrichSvc,
-		LibPath:     libPathSvc,
 		Annotations: annotationSvc,
 		Stats:        statsSvc,
 		ReadingStats: readingStatsSvc,

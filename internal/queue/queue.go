@@ -20,7 +20,7 @@ import (
 // Client is the minimal surface the rest of the app uses.
 type Client interface {
 	EnqueueBookDrop(ctx context.Context, itemID string) error
-	EnqueueLibraryScan(ctx context.Context, pathID string) error
+	EnqueueLibraryScan(ctx context.Context, libraryID string) error
 	Stop(ctx context.Context) error
 }
 
@@ -35,7 +35,6 @@ func New(
 	ctx context.Context,
 	pool *pgxpool.Pool,
 	bdropSvc *service.BookDropService,
-	pathSvc *service.LibraryPathService,
 	libSvc *service.LibraryService,
 ) (*RiverClient, error) {
 	driver := riverpgxv5.New(pool)
@@ -55,7 +54,6 @@ func New(
 	// after the client is constructed (circular dep resolved via the
 	// BookDropEnqueuer interface).
 	scanWorker := &task.LibraryScanWorker{
-		Paths:    pathSvc,
 		BookDrop: bdropSvc,
 		Lib:      libSvc,
 	}
@@ -86,9 +84,9 @@ func (r *RiverClient) EnqueueBookDrop(ctx context.Context, itemID string) error 
 	return err
 }
 
-// EnqueueLibraryScan inserts a library.scan job for the given library_path.
-func (r *RiverClient) EnqueueLibraryScan(ctx context.Context, pathID string) error {
-	_, err := r.c.Insert(ctx, task.LibraryScanArgs{PathID: pathID}, nil)
+// EnqueueLibraryScan inserts a library.scan job for the given library.
+func (r *RiverClient) EnqueueLibraryScan(ctx context.Context, libraryID string) error {
+	_, err := r.c.Insert(ctx, task.LibraryScanArgs{LibraryID: libraryID}, nil)
 	return err
 }
 

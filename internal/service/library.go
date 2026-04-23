@@ -20,17 +20,33 @@ func (s *LibraryService) List(ctx context.Context) ([]model.Library, error) {
 	return s.repo.List(ctx)
 }
 
-// Create inserts a new library row. The slug is derived from the name so the
-// URL space stays predictable; uniqueness is enforced at the DB layer, and
-// the repo surfaces a 409-worthy sentinel (ErrLibraryNameTaken) on collision.
-func (s *LibraryService) Create(ctx context.Context, name string) (model.Library, error) {
+// Create inserts a new library row bound to a single filesystem path.
+// The slug is derived from the name. Uniqueness is enforced at the DB
+// layer for both slug and path; the repo surfaces typed sentinels the
+// handler maps to a 409.
+func (s *LibraryService) Create(ctx context.Context, name, path string) (model.Library, error) {
 	name = strings.TrimSpace(name)
-	return s.repo.CreateLibrary(ctx, name, slugify(name))
+	path = strings.TrimRight(strings.TrimSpace(path), "/")
+	return s.repo.CreateLibrary(ctx, name, slugify(name), path)
+}
+
+// TouchScan stamps the library row with scan-completion aggregates.
+func (s *LibraryService) TouchScan(ctx context.Context, id string, fileCount, discovered int) error {
+	return s.repo.TouchScan(ctx, id, fileCount, discovered)
 }
 
 // GetByID returns a single library (with its naming pattern) by id.
 func (s *LibraryService) GetByID(ctx context.Context, id string) (model.Library, error) {
 	return s.repo.GetByID(ctx, id)
+}
+
+// DeleteLibrary removes a library row and cascades through books,
+// library_paths, and per-book user data via FK ON DELETE CASCADE.
+// Returns the list of book IDs that were transitively deleted so the
+// caller can clean up their cover-image files — those live outside the
+// DB and won't go away on their own.
+func (s *LibraryService) DeleteLibrary(ctx context.Context, id string) ([]string, error) {
+	return s.repo.DeleteLibrary(ctx, id)
 }
 
 // SetFileNamingPattern stores (or clears) the per-library template used by

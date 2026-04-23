@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 
@@ -34,6 +34,16 @@ import { Cover, StarRating } from '@/components/Cover';
 import { Icon } from '@/components/Icon';
 import type { ApiError } from '@/api/client';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -54,6 +64,7 @@ function BookDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<Tab>('overview');
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const book = useQuery({
     queryKey: bookQueryKey(id),
@@ -289,19 +300,22 @@ function BookDetail() {
                       variant="destructive"
                       size="sm"
                       disabled={deleteMut.isPending}
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            `Delete “${b.title}”? This removes the file from disk and everyone’s notes for it.`,
-                          )
-                        ) {
-                          deleteMut.mutate();
-                        }
-                      }}
+                      onClick={() => setDeleteOpen(true)}
                     >
                       <Icon name="close" size={12} />{' '}
                       {deleteMut.isPending ? 'Deleting…' : 'Delete book'}
                     </Button>
+
+                    <DeleteBookDialog
+                      open={deleteOpen}
+                      onOpenChange={setDeleteOpen}
+                      title={b.title}
+                      busy={deleteMut.isPending}
+                      onConfirm={() => {
+                        deleteMut.mutate();
+                        setDeleteOpen(false);
+                      }}
+                    />
                   </div>
                 )}
               </div>
@@ -698,5 +712,78 @@ function SendToDeviceButton({ bookId }: { bookId: string }) {
         </div>
       )}
     </div>
+  );
+}
+
+// DeleteBookDialog confirms a destructive book teardown. The "type the
+// title to confirm" gate matches the weight of the operation — the DB
+// row, its cover, the source file on disk, and every reader's notes,
+// progress, and shelf placements go with it.
+function DeleteBookDialog({
+  open,
+  onOpenChange,
+  title,
+  busy,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  busy: boolean;
+  onConfirm: () => void;
+}) {
+  const [confirmInput, setConfirmInput] = useState('');
+
+  useEffect(() => {
+    if (!open) setConfirmInput('');
+  }, [open]);
+
+  const matches = confirmInput.trim() === title.trim();
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[440px]">
+        <DialogHeader>
+          <DialogTitle>Delete book</DialogTitle>
+          <DialogDescription>
+            Permanently remove <strong>{title}</strong> — the DB row, its
+            cover, its source file on disk, and every reader&apos;s progress,
+            notes, and shelf placements for it. This cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="delete-book-confirm">
+            Type the title to confirm.
+          </Label>
+          <Input
+            id="delete-book-confirm"
+            value={confirmInput}
+            onChange={(e) => setConfirmInput(e.target.value)}
+            placeholder={title}
+            autoFocus
+          />
+        </div>
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+            disabled={busy}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={onConfirm}
+            disabled={!matches || busy}
+          >
+            {busy ? 'Deleting…' : 'Delete book'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

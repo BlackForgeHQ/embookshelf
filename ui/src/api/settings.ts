@@ -2,18 +2,14 @@ import { api } from './client';
 import type { AuthUser } from './auth';
 import type { Library } from './books';
 
-export type SettingsLibraryPath = {
-  id: string;
-  libraryId: string;
+// SettingsLibrary mirrors the server's admin shape. Path is inline
+// because a library owns exactly one filesystem root, fixed at
+// creation.
+export type SettingsLibrary = Library & {
   path: string;
   lastScannedAt: string | null;
   fileCount: number;
   discoveredCount: number;
-  createdAt: string;
-};
-
-export type SettingsLibrary = Library & {
-  paths: SettingsLibraryPath[];
   fileNamingPattern: string | null;
 };
 
@@ -26,7 +22,7 @@ export async function fetchSettingsLibraries(): Promise<SettingsLibrary[]> {
 
 export async function createLibrary(body: {
   name: string;
-  paths: string[];
+  path: string;
   scan?: boolean;
 }): Promise<SettingsLibrary> {
   const { library } = await api<{ library: SettingsLibrary }>(
@@ -50,28 +46,19 @@ export async function prescanLibraryPaths(paths: string[]): Promise<number> {
   return count;
 }
 
-export async function createLibraryPath(
-  libraryId: string,
-  path: string,
-): Promise<SettingsLibraryPath> {
-  const { path: created } = await api<{ path: SettingsLibraryPath }>(
-    '/api/v1/settings/libraries/paths',
-    {
-      method: 'POST',
-      body: JSON.stringify({ libraryId, path }),
-    },
-  );
-  return created;
-}
-
-export async function deleteLibraryPath(id: string): Promise<void> {
-  await api<void>(`/api/v1/settings/libraries/paths/${id}`, {
+// deleteLibrary tears down a library and every book/annotation/etc
+// that depends on it. Source files on disk are left alone (they live
+// under the user-managed root); cover images and DB rows are removed.
+export async function deleteLibrary(id: string): Promise<void> {
+  await api<void>(`/api/v1/settings/libraries/${id}`, {
     method: 'DELETE',
   });
 }
 
-export async function scanLibraryPath(id: string): Promise<void> {
-  await api<void>(`/api/v1/settings/libraries/paths/${id}/scan`, {
+// rescanLibrary enqueues a library.scan job against the library's
+// filesystem root. The response is fire-and-forget (202).
+export async function rescanLibrary(id: string): Promise<void> {
+  await api<void>(`/api/v1/settings/libraries/${id}/rescan`, {
     method: 'POST',
   });
 }

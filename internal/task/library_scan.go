@@ -12,40 +12,47 @@ import (
 	"github.com/blackforge/embookshelf/internal/service"
 )
 
-// LibraryScanArgs is the payload for walking a single library path.
+// LibraryScanArgs is the payload for walking a library's filesystem
+// root. The library id also names the scan — each library owns exactly
+// one path since migration 000018.
 type LibraryScanArgs struct {
-	PathID string `json:"path_id"`
+	LibraryID string `json:"library_id"`
 }
 
 func (LibraryScanArgs) Kind() string { return "library.scan" }
 
-// BookDropEnqueuer is the slice of the queue client that the scan worker
-// needs. Defined here so the task package doesn't import queue (avoids the
-// queue↔task cycle — queue already imports task to register workers).
+// BookDropEnqueuer is the slice of the queue client that the scan
+// worker needs. Defined here so the task package doesn't import queue
+// (avoids the queue↔task cycle — queue already imports task to
+// register workers).
 type BookDropEnqueuer interface {
 	EnqueueBookDrop(ctx context.Context, itemID string) error
 }
 
-// LibraryScanWorker walks a library_paths row and stages every unseen
-// supported file into the bookdrop queue. It doesn't extract metadata
-// itself — that's the BookDropWorker's job, which fires for each enqueued
-// item.
+// LibraryScanWorker walks a library's filesystem root and stages every
+// unseen supported file into the bookdrop queue. It doesn't extract
+// metadata itself — that's the BookDropWorker's job, which fires for
+// each enqueued item.
 type LibraryScanWorker struct {
 	river.WorkerDefaults[LibraryScanArgs]
-	Paths    *service.LibraryPathService
 	BookDrop *service.BookDropService
 	Lib      *service.LibraryService
 	Queue    BookDropEnqueuer
 }
 
 func (w *LibraryScanWorker) Work(ctx context.Context, job *river.Job[LibraryScanArgs]) error {
-	path, err := w.Paths.Get(ctx, job.Args.PathID)
+	lib, err := w.Lib.GetByID(ctx, job.Args.LibraryID)
 	if err != nil {
 		return err
 	}
+	root := lib.Path
+	if root == "" {
+		slog.Warn("library scan: empty path, skipping", "library_id", lib.ID)
+		return nil
+	}
 
 	var fileCount, discovered int
-	walkErr := filepath.WalkDir(path.Path, func(p string, d fs.DirEntry, walkErr error) error {
+	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil // skip unreadable entries without aborting the whole scan
 		}
@@ -91,12 +98,12 @@ func (w *LibraryScanWorker) Work(ctx context.Context, job *river.Job[LibraryScan
 	})
 	if walkErr != nil {
 		// Log but still record what we got — partial scans are useful.
-		slog.Warn("library scan: walk failed", "path", path.Path, "err", walkErr)
+		slog.Warn("library scan: walk failed", "path", root, "err", walkErr)
 	}
 
-	if err := w.Paths.TouchScan(ctx, path.ID, fileCount, discovered); err != nil {
-		slog.Warn("library scan: touch", "id", path.ID, "err", err)
+	if err := w.Lib.TouchScan(ctx, lib.ID, fileCount, discovered); err != nil {
+		slog.Warn("library scan: touch", "id", lib.ID, "err", err)
 	}
-	slog.Info("library scan done", "path", path.Path, "files", fileCount, "discovered", discovered)
+	slog.Info("library scan done", "library", lib.ID, "path", root, "files", fileCount, "discovered", discovered)
 	return nil
 }
