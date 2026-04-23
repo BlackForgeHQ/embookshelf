@@ -24,6 +24,7 @@ import {
 import { AccentPicker, accentColor, type ShelfAccent } from './AccentPicker';
 import { Icon, type IconName } from './Icon';
 import { RuleEditor } from './RuleEditor';
+import { useUserSettingsDialog } from './UserSettingsDialog';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
@@ -34,6 +35,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -313,10 +322,10 @@ export function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu>
                 <NavItem
-                  to="/admin"
+                  to="/settings"
                   icon="settings"
                   label="Settings"
-                  active={pathname.startsWith('/admin')}
+                  active={pathname.startsWith('/settings')}
                 />
               </SidebarMenu>
             </SidebarGroupContent>
@@ -544,47 +553,92 @@ type UserBadgeProps = {
   loggingOut: boolean;
 };
 
+// UserBadge is a single dropdown trigger wrapping the user row (avatar +
+// name/email) in the sidebar footer. The menu exposes "Account" (opens
+// the per-user settings dialog) and "Sign out". No separate /settings
+// route — preferences live entirely in the dialog now.
 function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
+  const { open: openUserSettings } = useUserSettingsDialog();
   // Skip rendering until /me resolves — the beforeLoad guard in _app.tsx
   // ensures a session exists by the time this component mounts, so the
   // null window is brief and avoids flashing fake identity details.
   if (!user) return null;
-  const { display, role, initials } = user;
+  const { display, email, role, initials } = user;
 
   return (
-    <div className="flex items-center gap-2.5 px-2 py-1.5">
-      <Avatar size="sm">
-        <AvatarFallback className="bg-(--color-editorial-accent) text-(--color-paper-0) font-serif font-medium">
-          {initials}
-        </AvatarFallback>
-      </Avatar>
-      <div className="flex-1 overflow-hidden group-data-[collapsible=icon]:hidden">
-        <div className="text-[13px] font-medium leading-tight">{display}</div>
-        <div className="t-micro text-[10px]">{role}</div>
-      </div>
-      <Button
-        asChild
-        variant="ghost"
-        size="icon-sm"
-        title="My account"
-        className="group-data-[collapsible=icon]:hidden"
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-(--color-paper-3) focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--color-accent) group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+          aria-label="Account menu"
+        >
+          <Avatar size="sm">
+            <AvatarFallback className="bg-(--color-editorial-accent) text-(--color-paper-0) font-serif font-medium">
+              {initials}
+            </AvatarFallback>
+          </Avatar>
+          <div className="flex-1 overflow-hidden group-data-[collapsible=icon]:hidden">
+            <div className="truncate text-[13px] font-medium leading-tight">
+              {display}
+            </div>
+            <div className="t-micro truncate text-[10px]">{email || role}</div>
+          </div>
+          <Icon
+            name="more"
+            size={14}
+            aria-hidden
+            className="shrink-0 text-(--color-ink-3) group-data-[collapsible=icon]:hidden"
+          />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        side="right"
+        align="end"
+        sideOffset={8}
+        className="min-w-56"
       >
-        <Link to="/settings">
-          <Icon name="user" size={14} />
-        </Link>
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        title="Sign out"
-        onClick={onLogout}
-        disabled={loggingOut}
-        className="group-data-[collapsible=icon]:hidden"
-      >
-        <Icon name="arrow-right" size={14} />
-      </Button>
-    </div>
+        <DropdownMenuLabel>
+          <div className="flex items-center gap-2.5">
+            <Avatar size="sm">
+              <AvatarFallback className="bg-(--color-editorial-accent) text-(--color-paper-0) font-serif font-medium">
+                {initials}
+              </AvatarFallback>
+            </Avatar>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13px] font-medium leading-tight text-(--color-ink-1)">
+                {display}
+              </div>
+              <div className="t-micro truncate text-[10px]">
+                {email || role}
+              </div>
+            </div>
+          </div>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => openUserSettings('account')}>
+          <Icon name="user" size={13} />
+          Account
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openUserSettings('reading')}>
+          <Icon name="book-open" size={13} />
+          Reading preferences
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openUserSettings('devices')}>
+          <Icon name="device" size={13} />
+          Device sync
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          variant="destructive"
+          disabled={loggingOut}
+          onSelect={() => onLogout()}
+        >
+          <Icon name="arrow-right" size={13} />
+          {loggingOut ? 'Signing out…' : 'Sign out'}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

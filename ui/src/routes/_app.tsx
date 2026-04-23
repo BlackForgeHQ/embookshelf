@@ -8,6 +8,7 @@ import {
   instanceSummaryQueryKey,
 } from '@/api/settings';
 import { AppSidebar } from '@/components/Sidebar';
+import { UserSettingsDialogProvider } from '@/components/UserSettingsDialog';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -50,15 +51,17 @@ function AppLayout() {
   // in icon mode.
   return (
     <TooltipProvider delayDuration={100}>
-      <SidebarProvider className="h-screen overflow-hidden">
-        <AppSidebar />
-        <SidebarInset className="min-h-0 overflow-hidden">
-          <div className="main-content">
-            <Outlet />
-          </div>
-          <StatusBar />
-        </SidebarInset>
-      </SidebarProvider>
+      <UserSettingsDialogProvider>
+        <SidebarProvider className="h-screen overflow-hidden">
+          <AppSidebar />
+          <SidebarInset className="min-h-0 overflow-hidden">
+            <div className="main-content">
+              <Outlet />
+            </div>
+            <StatusBar />
+          </SidebarInset>
+        </SidebarProvider>
+      </UserSettingsDialogProvider>
     </TooltipProvider>
   );
 }

@@ -66,7 +66,6 @@ type OIDCService struct {
 type cachedDiscovery struct {
 	provider *oidc.Provider
 	verifier *oidc.IDTokenVerifier
-	oauth    oauth2.Config
 }
 
 func NewOIDCService(settings *repo.AppSettingsRepo, users *repo.UserRepo, sessions *repo.SessionRepo, appURL string) *OIDCService {
@@ -198,24 +197,34 @@ func (s *OIDCService) Invalidate() {
 // -----------------------------------------------------------------------------
 
 // AuthURL builds the authorization URL for the given provider slug.
-// The state is held server-side and carries the slug so the callback
-// can route back to the right provider.
-func (s *OIDCService) AuthURL(ctx context.Context, slug string) (string, error) {
+// The state is held server-side and carries the slug + redirect URL so
+// the callback can route back to the right provider and rebuild the
+// oauth config with a matching redirect_uri.
+//
+// baseURL is the public origin to reach this server ("https://host[:port]");
+// when APP_URL is configured the handler passes that, otherwise it falls
+// back to the current request's scheme+host so local dev works with no
+// extra config.
+func (s *OIDCService) AuthURL(ctx context.Context, slug, baseURL string) (string, error) {
+	redirect := s.resolveRedirectURL(baseURL)
+	if redirect == "" {
+		return "", ErrOIDCNotConfigured
+	}
 	switch slug {
 	case repo.ProviderSlugGoogle:
-		return s.authURLGoogle(ctx)
+		return s.authURLGoogle(ctx, redirect)
 	case repo.ProviderSlugGitHub:
-		return s.authURLGitHub(ctx)
+		return s.authURLGitHub(ctx, redirect)
 	case repo.ProviderSlugGeneric:
-		return s.authURLGeneric(ctx)
+		return s.authURLGeneric(ctx, redirect)
 	default:
 		return "", ErrOIDCUnknownProvider
 	}
 }
 
 // Exchange completes the callback by inspecting the state (which
-// carries the provider slug), dispatching to the right backend, and
-// issuing a BookLore session.
+// carries the provider slug + original redirect URI), dispatching to
+// the right backend, and issuing a BookLore session.
 func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent string) (model.Session, model.User, error) {
 	entry, ok := s.states.take(state)
 	if !ok {
@@ -225,6 +234,11 @@ func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent strin
 	provision, err := s.settings.GetOIDCAutoProvision(ctx)
 	if err != nil {
 		return model.Session{}, model.User{}, err
+	}
+
+	redirect := entry.RedirectURL
+	if redirect == "" {
+		redirect = s.resolveRedirectURL("")
 	}
 
 	var (
@@ -240,7 +254,7 @@ func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent strin
 		if !googleUsable(cfg) {
 			return model.Session{}, model.User{}, ErrOIDCDisabled
 		}
-		claims, issuer, err = s.oidcCallback(ctx, code, entry, googleOIDCConfig(cfg))
+		claims, issuer, err = s.oidcCallback(ctx, code, entry, googleOIDCConfig(cfg), redirect)
 		if err != nil {
 			return model.Session{}, model.User{}, err
 		}
@@ -252,7 +266,7 @@ func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent strin
 		if !githubUsable(cfg) {
 			return model.Session{}, model.User{}, ErrOIDCDisabled
 		}
-		claims, err = s.githubCallback(ctx, code, entry, cfg)
+		claims, err = s.githubCallback(ctx, code, entry, cfg, redirect)
 		if err != nil {
 			return model.Session{}, model.User{}, err
 		}
@@ -265,7 +279,7 @@ func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent strin
 		if !genericUsable(cfg) {
 			return model.Session{}, model.User{}, ErrOIDCDisabled
 		}
-		claims, issuer, err = s.oidcCallback(ctx, code, entry, cfg)
+		claims, issuer, err = s.oidcCallback(ctx, code, entry, cfg, redirect)
 		if err != nil {
 			return model.Session{}, model.User{}, err
 		}
@@ -291,7 +305,7 @@ func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent strin
 // AuthURL builders
 // -----------------------------------------------------------------------------
 
-func (s *OIDCService) authURLGoogle(ctx context.Context) (string, error) {
+func (s *OIDCService) authURLGoogle(ctx context.Context, redirect string) (string, error) {
 	cfg, err := s.settings.GetGoogle(ctx)
 	if err != nil {
 		return "", err
@@ -299,10 +313,10 @@ func (s *OIDCService) authURLGoogle(ctx context.Context) (string, error) {
 	if !googleUsable(cfg) {
 		return "", ErrOIDCDisabled
 	}
-	return s.authURLOIDC(ctx, repo.ProviderSlugGoogle, googleOIDCConfig(cfg))
+	return s.authURLOIDC(ctx, repo.ProviderSlugGoogle, googleOIDCConfig(cfg), redirect)
 }
 
-func (s *OIDCService) authURLGeneric(ctx context.Context) (string, error) {
+func (s *OIDCService) authURLGeneric(ctx context.Context, redirect string) (string, error) {
 	cfg, err := s.settings.GetGenericOIDC(ctx)
 	if err != nil {
 		return "", err
@@ -310,20 +324,21 @@ func (s *OIDCService) authURLGeneric(ctx context.Context) (string, error) {
 	if !genericUsable(cfg) {
 		return "", ErrOIDCDisabled
 	}
-	return s.authURLOIDC(ctx, repo.ProviderSlugGeneric, cfg)
+	return s.authURLOIDC(ctx, repo.ProviderSlugGeneric, cfg, redirect)
 }
 
-func (s *OIDCService) authURLOIDC(ctx context.Context, slug string, cfg repo.GenericOIDCConfig) (string, error) {
+func (s *OIDCService) authURLOIDC(ctx context.Context, slug string, cfg repo.GenericOIDCConfig, redirect string) (string, error) {
 	disc, err := s.getDiscovery(ctx, cfg)
 	if err != nil {
 		return "", err
 	}
-	state, nonce, verifier, err := s.issueState(slug)
+	state, nonce, verifier, err := s.issueState(slug, redirect)
 	if err != nil {
 		return "", err
 	}
+	oauthCfg := oidcOAuthConfig(cfg, disc.provider, redirect)
 	challenge := pkceChallengeS256(verifier)
-	u := disc.oauth.AuthCodeURL(state,
+	u := oauthCfg.AuthCodeURL(state,
 		oidc.Nonce(nonce),
 		oauth2.SetAuthURLParam("code_challenge", challenge),
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
@@ -333,7 +348,7 @@ func (s *OIDCService) authURLOIDC(ctx context.Context, slug string, cfg repo.Gen
 
 // authURLGitHub builds the GitHub authorize URL by hand; GitHub is not
 // an OIDC provider so there's no discovery document.
-func (s *OIDCService) authURLGitHub(ctx context.Context) (string, error) {
+func (s *OIDCService) authURLGitHub(ctx context.Context, redirect string) (string, error) {
 	cfg, err := s.settings.GetGitHub(ctx)
 	if err != nil {
 		return "", err
@@ -341,13 +356,13 @@ func (s *OIDCService) authURLGitHub(ctx context.Context) (string, error) {
 	if !githubUsable(cfg) {
 		return "", ErrOIDCDisabled
 	}
-	state, _, verifier, err := s.issueState(repo.ProviderSlugGitHub)
+	state, _, verifier, err := s.issueState(repo.ProviderSlugGitHub, redirect)
 	if err != nil {
 		return "", err
 	}
 	v := url.Values{}
 	v.Set("client_id", cfg.ClientID)
-	v.Set("redirect_uri", s.redirectURL())
+	v.Set("redirect_uri", redirect)
 	v.Set("scope", "read:user user:email")
 	v.Set("state", state)
 	v.Set("code_challenge", pkceChallengeS256(verifier))
@@ -356,7 +371,7 @@ func (s *OIDCService) authURLGitHub(ctx context.Context) (string, error) {
 	return "https://github.com/login/oauth/authorize?" + v.Encode(), nil
 }
 
-func (s *OIDCService) issueState(slug string) (state, nonce, verifier string, err error) {
+func (s *OIDCService) issueState(slug, redirect string) (state, nonce, verifier string, err error) {
 	state, err = randomString(32)
 	if err != nil {
 		return "", "", "", err
@@ -374,6 +389,7 @@ func (s *OIDCService) issueState(slug string) (state, nonce, verifier string, er
 		CodeVerifier: verifier,
 		CreatedAt:    time.Now(),
 		ProviderSlug: slug,
+		RedirectURL:  redirect,
 	})
 	return state, nonce, verifier, nil
 }
@@ -382,12 +398,13 @@ func (s *OIDCService) issueState(slug string) (state, nonce, verifier string, er
 // Callbacks
 // -----------------------------------------------------------------------------
 
-func (s *OIDCService) oidcCallback(ctx context.Context, code string, entry stateEntry, cfg repo.GenericOIDCConfig) (resolvedClaims, string, error) {
+func (s *OIDCService) oidcCallback(ctx context.Context, code string, entry stateEntry, cfg repo.GenericOIDCConfig, redirect string) (resolvedClaims, string, error) {
 	disc, err := s.getDiscovery(ctx, cfg)
 	if err != nil {
 		return resolvedClaims{}, "", err
 	}
-	token, err := disc.oauth.Exchange(ctx, code,
+	oauthCfg := oidcOAuthConfig(cfg, disc.provider, redirect)
+	token, err := oauthCfg.Exchange(ctx, code,
 		oauth2.SetAuthURLParam("code_verifier", entry.CodeVerifier),
 	)
 	if err != nil {
@@ -413,12 +430,12 @@ func (s *OIDCService) oidcCallback(ctx context.Context, code string, entry state
 
 // githubCallback runs the GitHub OAuth token exchange + REST user
 // lookup. No ID token; the GitHub user id is the stable subject.
-func (s *OIDCService) githubCallback(ctx context.Context, code string, entry stateEntry, cfg repo.OAuthPresetConfig) (resolvedClaims, error) {
+func (s *OIDCService) githubCallback(ctx context.Context, code string, entry stateEntry, cfg repo.OAuthPresetConfig, redirect string) (resolvedClaims, error) {
 	body := url.Values{}
 	body.Set("client_id", cfg.ClientID)
 	body.Set("client_secret", cfg.ClientSecret)
 	body.Set("code", code)
-	body.Set("redirect_uri", s.redirectURL())
+	body.Set("redirect_uri", redirect)
 	body.Set("code_verifier", entry.CodeVerifier)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://github.com/login/oauth/access_token", strings.NewReader(body.Encode()))
@@ -645,7 +662,7 @@ func (s *OIDCService) getDiscovery(ctx context.Context, cfg repo.GenericOIDCConf
 	if cfg.IssuerURI == "" || cfg.ClientID == "" {
 		return nil, ErrOIDCNotConfigured
 	}
-	key := cfg.IssuerURI + "|" + cfg.ClientID + "|" + cfg.ClientSecret + "|" + cfg.Scopes + "|" + s.redirectURL()
+	key := cfg.IssuerURI + "|" + cfg.ClientID
 
 	s.discoveryMu.Lock()
 	defer s.discoveryMu.Unlock()
@@ -657,22 +674,27 @@ func (s *OIDCService) getDiscovery(ctx context.Context, cfg repo.GenericOIDCConf
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery: %w", err)
 	}
-	oauthCfg := oauth2.Config{
-		ClientID:     cfg.ClientID,
-		ClientSecret: cfg.ClientSecret,
-		RedirectURL:  s.redirectURL(),
-		Endpoint:     provider.Endpoint(),
-		Scopes:       splitScopes(cfg.Scopes),
-	}
 	d := &cachedDiscovery{
 		provider: provider,
 		verifier: provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
-		oauth:    oauthCfg,
 	}
 	s.discoveryKey = key
 	s.discoveryVal = d
 	s.discoveryExp = time.Now().Add(providerCacheTTL)
 	return d, nil
+}
+
+// oidcOAuthConfig builds a fresh oauth2.Config for a request. The
+// redirect URL varies per-request (APP_URL fallback to request origin),
+// so we don't cache it — only the provider discovery is cached.
+func oidcOAuthConfig(cfg repo.GenericOIDCConfig, provider *oidc.Provider, redirect string) oauth2.Config {
+	return oauth2.Config{
+		ClientID:     cfg.ClientID,
+		ClientSecret: cfg.ClientSecret,
+		RedirectURL:  redirect,
+		Endpoint:     provider.Endpoint(),
+		Scopes:       splitScopes(cfg.Scopes),
+	}
 }
 
 // googleOIDCConfig widens Google's tiny preset config into the generic
@@ -694,11 +716,22 @@ func googleOIDCConfig(c repo.OAuthPresetConfig) repo.GenericOIDCConfig {
 	}
 }
 
-func (s *OIDCService) redirectURL() string {
-	if s.appURL == "" {
+// resolveRedirectURL returns the absolute callback URL.
+//   - If APP_URL was configured at boot, that wins (production deploys
+//     behind a reverse proxy set it explicitly so redirect_uri matches
+//     what's registered with Google/GitHub/…).
+//   - Otherwise the handler passes the current request's origin
+//     ("scheme://host[:port]") so local dev and self-hosting work
+//     without any extra config.
+func (s *OIDCService) resolveRedirectURL(fallbackBase string) string {
+	base := s.appURL
+	if base == "" {
+		base = strings.TrimRight(fallbackBase, "/")
+	}
+	if base == "" {
 		return ""
 	}
-	return s.appURL + "/api/v1/auth/oidc/callback"
+	return base + "/api/v1/auth/oidc/callback"
 }
 
 // -----------------------------------------------------------------------------
@@ -920,6 +953,11 @@ type stateEntry struct {
 	CodeVerifier string
 	CreatedAt    time.Time
 	ProviderSlug string
+	// RedirectURL is the exact redirect_uri sent to the IdP when the
+	// authorize URL was built. The callback must pass the same value to
+	// the token endpoint (per OAuth2 spec) and our redirect URL depends
+	// on the request origin when APP_URL is unset, so we stash it here.
+	RedirectURL string
 }
 
 type stateStore struct {

@@ -32,6 +32,7 @@ import {
 } from '@/api/devices';
 import { Cover, StarRating } from '@/components/Cover';
 import { Icon } from '@/components/Icon';
+import { useUserSettingsDialog } from '@/components/UserSettingsDialog';
 import type { ApiError } from '@/api/client';
 import { Button } from '@/components/ui/button';
 import {
@@ -628,9 +629,9 @@ function shortLocator(locator: string): string {
 }
 
 // SendToDeviceButton opens a tiny dropdown of paired devices. If none are
-// paired, the button is a shortcut into Settings → Device sync.
+// paired, the button opens the user settings dialog on the Devices panel.
 function SendToDeviceButton({ bookId }: { bookId: string }) {
-  const navigate = useNavigate();
+  const { open: openUserSettings } = useUserSettingsDialog();
   const queryClient = useQueryClient();
   const devices = useQuery({ queryKey: devicesQueryKey, queryFn: fetchDevices });
   const [open, setOpen] = useState(false);
@@ -659,8 +660,8 @@ function SendToDeviceButton({ bookId }: { bookId: string }) {
       <Button
         variant="outline"
         size="sm"
-        onClick={() => void navigate({ to: '/settings' })}
-        title="No devices paired — add one in Settings"
+        onClick={() => openUserSettings('devices')}
+        title="No devices paired — pair one in Account → Device sync"
       >
         <Icon name="device" size={13} /> Send to device
       </Button>
