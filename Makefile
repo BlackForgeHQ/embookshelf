@@ -133,9 +133,16 @@ up-otlp: obs-up ## Same as `up` but exports OTLP from backend AND browser to gra
 test: ## Run Go tests
 	go test ./...
 
+GOLANGCI_LINT_VERSION ?= v2.11.4
+
 .PHONY: go-lint
-go-lint: ## Run golangci-lint (requires golangci-lint v2 on PATH)
-	golangci-lint run --timeout=5m
+go-lint: ## Run golangci-lint (pinned version fetched via `go run` if not on PATH)
+	@if command -v golangci-lint >/dev/null 2>&1; then \
+		golangci-lint run --timeout=5m; \
+	else \
+		echo "golangci-lint not on PATH; running $(GOLANGCI_LINT_VERSION) via go run"; \
+		go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run --timeout=5m; \
+	fi
 
 .PHONY: ui-lint
 ui-lint: ## Lint the UI (ESLint)
