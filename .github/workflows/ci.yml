@@ -47,7 +47,7 @@ jobs:
 
       - run: go test -race -coverprofile=coverage.out ./...
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: go-coverage
@@ -172,7 +172,7 @@ jobs:
       - run: bun run build
         working-directory: ui
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ui-dist
           path: internal/staticfs/dist
