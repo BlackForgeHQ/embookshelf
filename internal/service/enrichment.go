@@ -98,14 +98,14 @@ func NewEnrichmentService(
 		cipher = crypto.Noop{}
 	}
 	return &EnrichmentService{
-		providers:   providers,
-		settings:    settings,
-		libs:        libs,
-		covers:      covers,
-		http:        &http.Client{Timeout: 15 * time.Second},
-		cipher:      cipher,
-		cache:    make(map[string]cacheEntry),
-		cacheTTL: enrichCacheTTL,
+		providers: providers,
+		settings:  settings,
+		libs:      libs,
+		covers:    covers,
+		http:      &http.Client{Timeout: 15 * time.Second},
+		cipher:    cipher,
+		cache:     make(map[string]cacheEntry),
+		cacheTTL:  enrichCacheTTL,
 	}
 }
 
@@ -982,4 +982,3 @@ func (s *EnrichmentService) recordProviderError(id provider.Source, err error) {
 		}
 	}()
 }
-

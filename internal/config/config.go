@@ -20,7 +20,7 @@ type Config struct {
 	BookDropPath     string
 	BookDropInterval time.Duration
 	DataPath         string
-	MigrateOnStart bool
+	MigrateOnStart   bool
 
 	// AppURL is the public origin of the BookLore instance. It feeds
 	// the OIDC redirect URI (${AppURL}/api/v1/auth/oidc/callback) and
@@ -54,18 +54,18 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		Port:                envInt("EMBOOKSHELF_PORT", 6060),
-		DatabaseURL:         envStr("DATABASE_URL", "postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable"),
-		DatabaseMaxConns:    int32(envInt("DATABASE_MAX_CONNS", 20)),
-		DatabaseMinConns:    int32(envInt("DATABASE_MIN_CONNS", 5)),
-		DiskType:            envStr("DISK_TYPE", "LOCAL"),
-		AllowedOrigins:      strings.Split(envStr("ALLOWED_ORIGINS", "*"), ","),
-		SessionSecret:       envStr("SESSION_SECRET", ""),
-		LogLevel:            envStr("LOG_LEVEL", "info"),
-		BookDropPath:        envStr("BOOKDROP_PATH", "./bookdrop"),
-		BookDropInterval:    time.Duration(envInt("BOOKDROP_POLL_SECONDS", 5)) * time.Second,
-		DataPath:            envStr("DATA_PATH", "./data"),
-		MigrateOnStart: envBool("MIGRATE_ON_START", true),
+		Port:             envInt("EMBOOKSHELF_PORT", 6060),
+		DatabaseURL:      envStr("DATABASE_URL", "postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable"),
+		DatabaseMaxConns: int32(envInt("DATABASE_MAX_CONNS", 20)),
+		DatabaseMinConns: int32(envInt("DATABASE_MIN_CONNS", 5)),
+		DiskType:         envStr("DISK_TYPE", "LOCAL"),
+		AllowedOrigins:   strings.Split(envStr("ALLOWED_ORIGINS", "*"), ","),
+		SessionSecret:    envStr("SESSION_SECRET", ""),
+		LogLevel:         envStr("LOG_LEVEL", "info"),
+		BookDropPath:     envStr("BOOKDROP_PATH", "./bookdrop"),
+		BookDropInterval: time.Duration(envInt("BOOKDROP_POLL_SECONDS", 5)) * time.Second,
+		DataPath:         envStr("DATA_PATH", "./data"),
+		MigrateOnStart:   envBool("MIGRATE_ON_START", true),
 
 		AppURL:    strings.TrimRight(envStr("APP_URL", ""), "/"),
 		SecretKey: envStr("EMBOOKSHELF_SECRET_KEY", ""),

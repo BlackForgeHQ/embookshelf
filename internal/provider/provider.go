@@ -137,4 +137,3 @@ type ConfigOption struct {
 type SchemaProvider interface {
 	ConfigSchema() []ConfigField
 }
-

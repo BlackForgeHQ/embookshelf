@@ -55,7 +55,7 @@ func NewResilientClient(name string, rps float64, burst int) *http.Client {
 			}
 			// Treat 429 and 5xx as breaker failures.
 			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				return nil, fmt.Errorf("%s: upstream returned %d", name, resp.StatusCode)
 			}
 			return resp, nil
