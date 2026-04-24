@@ -6,8 +6,6 @@ package provider
 
 import (
 	"context"
-	"net/http"
-	"time"
 )
 
 // Source tags identify the origin of a match in the UI ("google_books", etc.).
@@ -26,19 +24,28 @@ const (
 // — callers (the bootstrap config in main.go) log + skip those rather
 // than failing startup, so a typo doesn't crash the whole server.
 func Build(name Source) Provider {
+	info, ok := CatalogLookup(string(name))
+	if !ok {
+		return nil
+	}
+	client := NewResilientClient(
+		string(name),
+		info.RateLimit.RPS,
+		info.RateLimit.Burst,
+	)
 	switch name {
 	case SourceGoogleBooks:
-		return NewGoogleBooks()
+		return NewGoogleBooks(client)
 	case SourceOpenLibrary:
-		return NewOpenLibrary()
+		return NewOpenLibrary(client)
 	case SourceAmazon:
-		return NewAmazon()
+		return NewAmazon(client)
 	case SourceDuckDuckGo:
-		return NewDuckDuckGo()
+		return NewDuckDuckGo(client)
 	case SourceHardcover:
-		return NewHardcover()
+		return NewHardcover(client)
 	case SourceGoodReads:
-		return NewGoodReads()
+		return NewGoodReads(client)
 	}
 	return nil
 }
@@ -130,7 +137,3 @@ type ConfigOption struct {
 type SchemaProvider interface {
 	ConfigSchema() []ConfigField
 }
-
-// defaultHTTPClient is shared across providers so connection pools get reused.
-// A 10 s timeout keeps one slow provider from stalling the whole fan-out.
-var defaultHTTPClient = &http.Client{Timeout: 10 * time.Second}

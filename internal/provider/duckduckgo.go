@@ -18,8 +18,8 @@ type DuckDuckGo struct {
 	Client *http.Client
 }
 
-func NewDuckDuckGo() *DuckDuckGo {
-	return &DuckDuckGo{Client: defaultHTTPClient}
+func NewDuckDuckGo(client *http.Client) *DuckDuckGo {
+	return &DuckDuckGo{Client: client}
 }
 
 func (*DuckDuckGo) Name() Source { return SourceDuckDuckGo }

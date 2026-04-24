@@ -20,8 +20,8 @@ type Amazon struct {
 	Client *http.Client
 }
 
-func NewAmazon() *Amazon {
-	return &Amazon{Client: defaultHTTPClient}
+func NewAmazon(client *http.Client) *Amazon {
+	return &Amazon{Client: client}
 }
 
 func (*Amazon) Name() Source { return SourceAmazon }

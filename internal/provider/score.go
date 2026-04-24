@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/agnivade/levenshtein"
+	"golang.org/x/text/unicode/norm"
 )
 
 // scoreMatch is a 0-100 confidence heuristic. It's intentionally naive —
@@ -21,9 +22,9 @@ import (
 // (Hardcover vs. Open Library, author attributions with/without
 // trailing commas) still score meaningfully above the floor.
 func scoreMatch(q Query, title string, authors []string) int {
-	qt := strings.ToLower(strings.TrimSpace(q.Title))
-	qa := strings.ToLower(strings.TrimSpace(q.Author))
-	mt := strings.ToLower(strings.TrimSpace(title))
+	qt := normalizeText(q.Title)
+	qa := normalizeText(q.Author)
+	mt := normalizeText(title)
 
 	// Always give ISBN hits a top score — those are unambiguous.
 	if strings.TrimSpace(q.ISBN) != "" {
@@ -58,7 +59,7 @@ func scoreMatch(q Query, title string, authors []string) int {
 	authorMatch := 0
 	if qa != "" {
 		for _, a := range authors {
-			al := strings.ToLower(strings.TrimSpace(a))
+			al := normalizeText(a)
 			if al == "" {
 				continue
 			}
@@ -106,6 +107,7 @@ func fuzzyRatio(a, b string) float64 {
 }
 
 func wordSet(s string) map[string]struct{} {
+	s = normalizeText(s)
 	out := make(map[string]struct{})
 	for _, w := range strings.FieldsFunc(s, func(r rune) bool {
 		return r == ' ' || r == '\t' || r == ',' || r == '.' || r == ':' || r == ';' || r == '-'
@@ -115,4 +117,12 @@ func wordSet(s string) map[string]struct{} {
 		}
 	}
 	return out
+}
+
+// normalizeText applies Unicode NFC normalization and folds to lowercase
+// for comparison. NFC ensures precomposed ("ü") and decomposed ("u" +
+// combining diaeresis) forms are identical, which matters for titles
+// from international providers (German, French, Japanese sources).
+func normalizeText(s string) string {
+	return strings.ToLower(strings.TrimSpace(norm.NFC.String(s)))
 }

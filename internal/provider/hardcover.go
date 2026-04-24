@@ -26,8 +26,8 @@ type HardcoverConfig struct {
 	APIToken string `json:"apiToken"`
 }
 
-func NewHardcover() *Hardcover {
-	return &Hardcover{Client: defaultHTTPClient}
+func NewHardcover(client *http.Client) *Hardcover {
+	return &Hardcover{Client: client}
 }
 
 func (*Hardcover) Name() Source { return SourceHardcover }

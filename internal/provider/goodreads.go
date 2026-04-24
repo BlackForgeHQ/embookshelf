@@ -24,8 +24,8 @@ type GoodReads struct {
 	Client *http.Client
 }
 
-func NewGoodReads() *GoodReads {
-	return &GoodReads{Client: defaultHTTPClient}
+func NewGoodReads(client *http.Client) *GoodReads {
+	return &GoodReads{Client: client}
 }
 
 func (*GoodReads) Name() Source { return SourceGoodReads }

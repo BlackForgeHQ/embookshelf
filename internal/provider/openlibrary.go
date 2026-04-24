@@ -18,8 +18,8 @@ type OpenLibrary struct {
 	MaxResults int
 }
 
-func NewOpenLibrary() *OpenLibrary {
-	return &OpenLibrary{Client: defaultHTTPClient, MaxResults: 5}
+func NewOpenLibrary(client *http.Client) *OpenLibrary {
+	return &OpenLibrary{Client: client, MaxResults: 5}
 }
 
 func (*OpenLibrary) Name() Source { return SourceOpenLibrary }
