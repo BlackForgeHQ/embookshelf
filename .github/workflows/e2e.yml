@@ -1,20 +1,20 @@
 name: e2e
 
 on:
-  pull_request:
-    paths:
-      - "ui/**"
-      - "internal/handler/**"
-      - "internal/service/**"
-      - "internal/auth/**"
-      - "internal/migrator/migrations/**"
-      - "e2e/**"
-      - "Dockerfile"
-      - "Makefile"
-      - "go.mod"
-      - "go.sum"
-      - ".github/workflows/e2e.yml"
-      - ".github/seed.sql"
+  # pull_request:
+  #   paths:
+  #     - "ui/**"
+  #     - "internal/handler/**"
+  #     - "internal/service/**"
+  #     - "internal/auth/**"
+  #     - "internal/migrator/migrations/**"
+  #     - "e2e/**"
+  #     - "Dockerfile"
+  #     - "Makefile"
+  #     - "go.mod"
+  #     - "go.sum"
+  #     - ".github/workflows/e2e.yml"
+  #     - ".github/seed.sql"
   push:
     branches: [main]
 
