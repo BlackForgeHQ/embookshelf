@@ -10,7 +10,7 @@ COPY ui ./ui
 RUN mkdir -p internal/staticfs && cd ui && bun run build
 
 # ---------- Stage 2: Go build ----------
-FROM golang:1.25-alpine AS gobuild
+FROM golang:1.26-alpine AS gobuild
 WORKDIR /src
 RUN apk add --no-cache git
 COPY go.mod go.sum ./
