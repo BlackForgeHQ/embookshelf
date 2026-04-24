@@ -50,13 +50,6 @@ type EnrichmentService struct {
 	cacheMu  sync.Mutex
 	cache    map[string]cacheEntry
 	cacheTTL time.Duration
-
-	// Per-provider cooldown — when a provider returns 429 we skip it
-	// for this long on subsequent Search calls. Prevents the fan-out
-	// from re-triggering the rate-limiter we just tripped.
-	cooldownMu  sync.Mutex
-	cooldown    map[provider.Source]time.Time
-	cooldownDur time.Duration
 }
 
 type cacheEntry struct {
@@ -65,8 +58,7 @@ type cacheEntry struct {
 }
 
 const (
-	enrichCacheTTL      = 5 * time.Minute
-	enrichCooldownAfter = 60 * time.Second
+	enrichCacheTTL = 5 * time.Minute
 )
 
 // ErrUnknownProvider is returned by SetProviderEnabled when the caller
@@ -112,10 +104,8 @@ func NewEnrichmentService(
 		covers:      covers,
 		http:        &http.Client{Timeout: 15 * time.Second},
 		cipher:      cipher,
-		cache:       make(map[string]cacheEntry),
-		cacheTTL:    enrichCacheTTL,
-		cooldown:    make(map[provider.Source]time.Time),
-		cooldownDur: enrichCooldownAfter,
+		cache:    make(map[string]cacheEntry),
+		cacheTTL: enrichCacheTTL,
 	}
 }
 
@@ -245,9 +235,8 @@ func (s *EnrichmentService) Search(ctx context.Context, q provider.Query) (Searc
 		enabled = nil
 	}
 
-	// Compute the set we'd actually query (pre-cooldown filter) so the
-	// UI can say "we searched these three" consistently across cache
-	// hits and fresh fan-outs.
+	// Compute the set we'd actually query so the UI can say "we searched
+	// these three" consistently across cache hits and fresh fan-outs.
 	queried := make([]provider.Source, 0, len(s.providers))
 	for _, p := range s.providers {
 		if enabled != nil && !enabled[string(p.Name())] {
@@ -271,17 +260,10 @@ func (s *EnrichmentService) Search(ctx context.Context, q provider.Query) (Searc
 		if enabled != nil && !enabled[string(p.Name())] {
 			continue
 		}
-		if s.providerCoolingDown(p.Name()) {
-			// 429 tripped recently — don't re-provoke the rate limiter.
-			continue
-		}
 		g.Go(func() error {
 			matches, err := p.Search(gctx, q)
 			if err != nil {
 				slog.Warn("provider search failed", "provider", p.Name(), "err", err)
-				if isRateLimited(err) {
-					s.markCooldown(p.Name())
-				}
 				s.recordProviderError(p.Name(), err)
 				return nil
 			}
@@ -328,7 +310,7 @@ type StreamEvent struct {
 // SearchStream runs the provider fan-out and pushes results as they
 // arrive. The returned channel is closed after the Done frame is
 // emitted. Cancel the context to abort in-flight HTTP calls. Disabled
-// providers and cooldowns are honored just like Search().
+// providers are skipped just like Search().
 //
 // Unlike Search(), streaming results are NOT cached — each call starts
 // fresh. Batched Search() retains its cache for the non-streaming
@@ -360,9 +342,6 @@ func (s *EnrichmentService) SearchStream(ctx context.Context, q provider.Query) 
 			continue
 		}
 		queried = append(queried, p.Name())
-		if s.providerCoolingDown(p.Name()) {
-			continue
-		}
 		runs = append(runs, run{p: p})
 	}
 
@@ -375,9 +354,6 @@ func (s *EnrichmentService) SearchStream(ctx context.Context, q provider.Query) 
 				matches, err := r.p.Search(gctx, q)
 				if err != nil {
 					slog.Warn("provider search failed", "provider", r.p.Name(), "err", err)
-					if isRateLimited(err) {
-						s.markCooldown(r.p.Name())
-					}
 					s.recordProviderError(r.p.Name(), err)
 					select {
 					case out <- StreamEvent{Provider: r.p.Name(), Err: err}:
@@ -457,15 +433,9 @@ func (s *EnrichmentService) LookupByISBN(ctx context.Context, isbn string) (*pro
 		if rows != nil && !enabled[string(p.Name())] {
 			continue
 		}
-		if s.providerCoolingDown(p.Name()) {
-			continue
-		}
 		matches, err := p.Search(ctx, q)
 		if err != nil {
 			slog.Warn("isbn lookup provider failed", "provider", p.Name(), "err", err)
-			if isRateLimited(err) {
-				s.markCooldown(p.Name())
-			}
 			s.recordProviderError(p.Name(), err)
 			continue
 		}
@@ -985,26 +955,6 @@ func (s *EnrichmentService) cachePut(key string, matches []provider.Match) {
 	s.cache[key] = cacheEntry{matches: stored, at: time.Now()}
 }
 
-func (s *EnrichmentService) providerCoolingDown(id provider.Source) bool {
-	s.cooldownMu.Lock()
-	defer s.cooldownMu.Unlock()
-	until, ok := s.cooldown[id]
-	if !ok {
-		return false
-	}
-	if time.Now().After(until) {
-		delete(s.cooldown, id)
-		return false
-	}
-	return true
-}
-
-func (s *EnrichmentService) markCooldown(id provider.Source) {
-	s.cooldownMu.Lock()
-	defer s.cooldownMu.Unlock()
-	s.cooldown[id] = time.Now().Add(s.cooldownDur)
-}
-
 // recordProviderSuccess and recordProviderError are fire-and-forget
 // telemetry writes. They run on a detached context + goroutine so
 // client disconnects don't cancel the health update, and a DB hiccup
@@ -1033,12 +983,3 @@ func (s *EnrichmentService) recordProviderError(id provider.Source, err error) {
 	}()
 }
 
-// isRateLimited inspects an error string for the 429 signal. Provider
-// Search functions wrap their HTTP errors loosely (e.g. "google books
-// 429") so a substring match is enough — no typed error to unwrap.
-func isRateLimited(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "429")
-}
