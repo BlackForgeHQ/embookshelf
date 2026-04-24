@@ -2,7 +2,6 @@ import { defineConfig } from "vite"
 import { devtools } from "@tanstack/devtools-vite"
 import { tanstackStart } from "@tanstack/react-start/plugin/vite"
 import viteReact from "@vitejs/plugin-react"
-import viteTsConfigPaths from "vite-tsconfig-paths"
 import tailwindcss from "@tailwindcss/vite"
 
 // Proxies dev-server requests for server-owned paths straight to the Go
@@ -16,15 +15,17 @@ const OTLP_HTTP = "http://localhost:4318"
 const config = defineConfig({
   plugins: [
     devtools(),
-    viteTsConfigPaths({
-      projects: ["./tsconfig.json"],
-    }),
     tailwindcss(),
     tanstackStart({
       spa: { enabled: true },
     }),
     viteReact(),
   ],
+  // Vite 7+ reads `paths` from tsconfig.json natively — replaces the
+  // vite-tsconfig-paths plugin.
+  resolve: {
+    tsconfigPaths: true,
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,
