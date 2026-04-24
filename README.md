@@ -264,7 +264,6 @@ live in [internal/config/config.go](internal/config/config.go).
 | `BOOKDROP_PATH` | `./bookdrop` | Watched folder for imports |
 | `DATA_PATH` | `./data` | Covers + on-disk caches |
 | `APP_URL` | _(unset, falls back to request origin)_ | Public origin; required only when behind a proxy that rewrites Host |
-| `ENRICHMENT_PROVIDERS` | `google_books,open_library,amazon,duckduckgo` | First-boot seed for provider toggles; DB is authoritative after |
 | `EMBOOKSHELF_SECRET_KEY` | _(unset — dev only)_ | Base64-encoded 32 bytes (`openssl rand -base64 32`). Encrypts provider API keys / tokens at rest. Unset = plaintext storage + loud boot warning |
 | `OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | _(unset)_ | Seeds the **generic** OIDC row on first boot; admin edits live in UI afterwards |
 | `MIGRATE_ON_START` | `true` | Apply app schema + River migrations on boot |

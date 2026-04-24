@@ -117,8 +117,7 @@ func main() {
 	readingStatsSvc := service.NewReadingSessionService(readingSessionRepo)
 	// Build every provider in the static catalog so the service can
 	// dispatch to any of them at runtime. Which subset is actually
-	// queried per request is decided by provider_settings (DB) — the
-	// env var only seeds defaults on the very first boot.
+	// queried per request is decided by provider_settings (DB).
 	providers := make([]provider.Provider, 0, len(provider.Catalog))
 	for _, c := range provider.Catalog {
 		p := provider.Build(c.ID)
@@ -129,17 +128,12 @@ func main() {
 		providers = append(providers, p)
 	}
 	providerSettingsRepo := repo.NewProviderSettingsRepo(pool)
-	// Seed DB from ENRICHMENT_PROVIDERS on first boot. ON CONFLICT DO
-	// NOTHING means subsequent restarts leave admin toggles alone — the
-	// DB is authoritative after the initial seed.
-	envEnabled := make(map[string]struct{}, len(cfg.EnrichmentProviders))
-	for _, name := range cfg.EnrichmentProviders {
-		envEnabled[name] = struct{}{}
-	}
+	// Seed provider_settings on first boot using catalog defaults.
+	// ON CONFLICT DO NOTHING means subsequent restarts leave admin
+	// toggles alone — the DB is authoritative after the initial seed.
 	defaults := make(map[string]bool, len(provider.Catalog))
 	for _, c := range provider.Catalog {
-		_, on := envEnabled[string(c.ID)]
-		defaults[string(c.ID)] = on
+		defaults[string(c.ID)] = c.DefaultEnabled
 	}
 	if err := providerSettingsRepo.SeedIfAbsent(ctx, defaults); err != nil {
 		slog.Warn("seed provider settings", "err", err)

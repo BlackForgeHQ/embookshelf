@@ -5,21 +5,22 @@ package provider
 // per-instance runtime state and lives in provider_settings (repo layer),
 // not here.
 type Info struct {
-	ID       Source
-	Name     string
-	External bool
+	ID             Source
+	Name           string
+	External       bool
+	DefaultEnabled bool
 }
 
 // Catalog is the single source of truth for which providers this binary
 // knows how to build. Any new source added here must also appear in
 // Build() above; both the handler DTO and the settings seed walk this list.
 var Catalog = []Info{
-	{ID: SourceGoogleBooks, Name: "Google Books", External: true},
-	{ID: SourceOpenLibrary, Name: "Open Library", External: true},
+	{ID: SourceGoogleBooks, Name: "Google Books", External: true, DefaultEnabled: true},
+	{ID: SourceOpenLibrary, Name: "Open Library", External: true, DefaultEnabled: true},
 	{ID: SourceHardcover, Name: "Hardcover", External: true},
 	{ID: SourceGoodReads, Name: "Goodreads", External: true},
-	{ID: SourceAmazon, Name: "Amazon", External: true},
-	{ID: SourceDuckDuckGo, Name: "DuckDuckGo", External: true},
+	{ID: SourceAmazon, Name: "Amazon", External: true, DefaultEnabled: true},
+	{ID: SourceDuckDuckGo, Name: "DuckDuckGo", External: true, DefaultEnabled: true},
 }
 
 // CatalogLookup exposes O(1) id → Info lookup for validation.

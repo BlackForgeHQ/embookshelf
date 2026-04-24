@@ -176,9 +176,9 @@ func (r *ProviderSettingsRepo) SetPriority(ctx context.Context, id string, prior
 }
 
 // SeedIfAbsent inserts any missing rows using the supplied defaults
-// (typically derived from ENRICHMENT_PROVIDERS on first boot). Existing
-// rows are left untouched — that's the whole point: after first boot the
-// DB is authoritative and env changes don't clobber user-made toggles.
+// (derived from the provider catalog). Existing rows are left untouched
+// — after first boot the DB is authoritative and restarts don't clobber
+// admin toggles.
 func (r *ProviderSettingsRepo) SeedIfAbsent(ctx context.Context, defaults map[string]bool) error {
 	for id, enabled := range defaults {
 		if _, err := r.pool.Exec(ctx, `
