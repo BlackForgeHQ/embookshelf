@@ -1,0 +1,86 @@
+#  Production compose for self-hosting embookshelf behind your own
+#  reverse proxy (Caddy, Traefik, nginx, ...). The app container
+#  listens on :6060 and is bound to 127.0.0.1 by default so the
+#  reverse proxy is the only thing exposed to the internet.
+#
+#  Setup:
+#    1. Create a .env file next to this compose file:
+#         POSTGRES_PASSWORD=<strong random>
+#         APP_URL=https://books.example.com
+#         SESSION_SECRET=<`openssl rand -hex 32`>
+#         EMBOOKSHELF_SECRET_KEY=<`openssl rand -base64 32`>
+#    2. docker compose -f compose.prod.yml up -d
+#    3. Visit $APP_URL and create the first admin account.
+#
+#  Migrations run automatically on boot (MIGRATE_ON_START=true).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-embookshelf}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-embookshelf}
+      TZ: UTC
+    volumes:
+      - embookshelf_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-embookshelf}"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  # The app image is distroless/nonroot (uid 65532). Named volumes
+  # are created root-owned by default, which the app then can't
+  # write into — chown them once before the server starts.
+  init:
+    image: busybox:1
+    command: ["sh", "-c", "chown -R 65532:65532 /data /bookdrop"]
+    volumes:
+      - embookshelf_data:/data
+      - embookshelf_bookdrop:/bookdrop
+    restart: "no"
+
+  embookshelf:
+    image: ghcr.io/blackforgehq/embookshelf:${EMBOOKSHELF_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-embookshelf}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-embookshelf}?sslmode=disable
+      EMBOOKSHELF_PORT: "6060"
+      DATA_PATH: /data
+      BOOKDROP_PATH: /bookdrop
+      APP_URL: ${APP_URL:?APP_URL is required (public https origin)}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-${APP_URL}}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required (random 32+ bytes)}
+      EMBOOKSHELF_SECRET_KEY: ${EMBOOKSHELF_SECRET_KEY:?EMBOOKSHELF_SECRET_KEY is required (base64-encoded 32 bytes)}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      MIGRATE_ON_START: ${MIGRATE_ON_START:-true}
+      # OIDC seed (optional). Written to app_settings on first boot and
+      # editable from the UI thereafter.
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      # OpenTelemetry (optional). Point at your collector.
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      OTEL_EXPORTER_OTLP_INSECURE: ${OTEL_EXPORTER_OTLP_INSECURE:-false}
+    volumes:
+      - embookshelf_data:/data
+      - embookshelf_bookdrop:/bookdrop
+    ports:
+      # Bind to loopback so only the reverse proxy on this host can
+      # reach it. Set EMBOOKSHELF_BIND=0.0.0.0 to expose on all
+      # interfaces (e.g. if your proxy lives on another host).
+      - "${EMBOOKSHELF_BIND:-127.0.0.1}:${EMBOOKSHELF_HOST_PORT:-6060}:6060"
+
+volumes:
+  embookshelf_pg:
+  embookshelf_data:
+  embookshelf_bookdrop:
