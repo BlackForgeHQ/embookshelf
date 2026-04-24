@@ -1,49 +1,53 @@
-import { api } from './client';
-import type { AuthUser } from './auth';
-import type { Library } from './books';
+import { api } from "./client"
+import type { AuthUser } from "./auth"
+import type { Library } from "./books"
 
 // SettingsLibrary mirrors the server's admin shape. Path is inline
 // because a library owns exactly one filesystem root, fixed at
 // creation.
 export type SettingsLibrary = Library & {
-  path: string;
-  lastScannedAt: string | null;
-  fileCount: number;
-  discoveredCount: number;
-  fileNamingPattern: string | null;
-};
+  path: string
+  lastScannedAt: string | null
+  fileCount: number
+  discoveredCount: number
+  fileNamingPattern: string | null
+}
 
-export async function fetchSettingsLibraries(): Promise<SettingsLibrary[]> {
-  const { libraries } = await api<{ libraries: SettingsLibrary[] }>(
-    '/api/v1/settings/libraries',
-  );
-  return libraries;
+export async function fetchSettingsLibraries(): Promise<
+  Array<SettingsLibrary>
+> {
+  const { libraries } = await api<{ libraries: Array<SettingsLibrary> }>(
+    "/api/v1/settings/libraries"
+  )
+  return libraries
 }
 
 export async function createLibrary(body: {
-  name: string;
-  path: string;
-  scan?: boolean;
+  name: string
+  path: string
+  scan?: boolean
 }): Promise<SettingsLibrary> {
   const { library } = await api<{ library: SettingsLibrary }>(
-    '/api/v1/settings/libraries',
+    "/api/v1/settings/libraries",
     {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify(body),
-    },
-  );
-  return library;
+    }
+  )
+  return library
 }
 
-export async function prescanLibraryPaths(paths: string[]): Promise<number> {
+export async function prescanLibraryPaths(
+  paths: Array<string>
+): Promise<number> {
   const { count } = await api<{ count: number }>(
-    '/api/v1/settings/libraries/scan',
+    "/api/v1/settings/libraries/scan",
     {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({ paths }),
-    },
-  );
-  return count;
+    }
+  )
+  return count
 }
 
 // deleteLibrary tears down a library and every book/annotation/etc
@@ -51,16 +55,16 @@ export async function prescanLibraryPaths(paths: string[]): Promise<number> {
 // under the user-managed root); cover images and DB rows are removed.
 export async function deleteLibrary(id: string): Promise<void> {
   await api<void>(`/api/v1/settings/libraries/${id}`, {
-    method: 'DELETE',
-  });
+    method: "DELETE",
+  })
 }
 
 // rescanLibrary enqueues a library.scan job against the library's
 // filesystem root. The response is fire-and-forget (202).
 export async function rescanLibrary(id: string): Promise<void> {
   await api<void>(`/api/v1/settings/libraries/${id}/rescan`, {
-    method: 'POST',
-  });
+    method: "POST",
+  })
 }
 
 // updateLibraryNamingPattern stores or clears the per-library file naming
@@ -68,44 +72,44 @@ export async function rescanLibrary(id: string): Promise<void> {
 // filename" on bookdrop approval).
 export async function updateLibraryNamingPattern(
   id: string,
-  pattern: string | null,
+  pattern: string | null
 ): Promise<SettingsLibrary> {
   const { library } = await api<{ library: SettingsLibrary }>(
     `/api/v1/settings/libraries/${id}/file-naming-pattern`,
     {
-      method: 'PATCH',
+      method: "PATCH",
       body: JSON.stringify({ fileNamingPattern: pattern }),
-    },
-  );
-  return library;
+    }
+  )
+  return library
 }
 
 export type PreviewPatternSample = {
-  title?: string;
-  subtitle?: string;
-  authors?: string[];
-  year?: number;
-  series?: string;
-  seriesIndex?: number;
-  language?: string;
-  publisher?: string;
-  isbn?: string;
-  currentFilename?: string;
-  extension?: string;
-};
+  title?: string
+  subtitle?: string
+  authors?: Array<string>
+  year?: number
+  series?: string
+  seriesIndex?: number
+  language?: string
+  publisher?: string
+  isbn?: string
+  currentFilename?: string
+  extension?: string
+}
 
 export async function previewNamingPattern(
   pattern: string,
-  sample?: PreviewPatternSample,
+  sample?: PreviewPatternSample
 ): Promise<string> {
   const { resolved } = await api<{ resolved: string }>(
-    '/api/v1/settings/libraries/pattern/preview',
+    "/api/v1/settings/libraries/pattern/preview",
     {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify({ pattern, sample }),
-    },
-  );
-  return resolved;
+    }
+  )
+  return resolved
 }
 
 // fetchDefaultNamingPattern returns the instance-wide default pattern
@@ -113,31 +117,31 @@ export async function previewNamingPattern(
 // means "keep the original filename on approval".
 export async function fetchDefaultNamingPattern(): Promise<string> {
   const { pattern } = await api<{ pattern: string }>(
-    '/api/v1/settings/libraries/pattern/default',
-  );
-  return pattern;
+    "/api/v1/settings/libraries/pattern/default"
+  )
+  return pattern
 }
 
 export async function updateDefaultNamingPattern(
-  pattern: string,
+  pattern: string
 ): Promise<string> {
   const { pattern: saved } = await api<{ pattern: string }>(
-    '/api/v1/settings/libraries/pattern/default',
+    "/api/v1/settings/libraries/pattern/default",
     {
-      method: 'PUT',
+      method: "PUT",
       body: JSON.stringify({ pattern }),
-    },
-  );
-  return saved;
+    }
+  )
+  return saved
 }
 
 export const defaultNamingPatternQueryKey = [
-  'settings',
-  'libraries',
-  'default-pattern',
-] as const;
+  "settings",
+  "libraries",
+  "default-pattern",
+] as const
 
-export const settingsLibrariesQueryKey = ['settings', 'libraries'] as const;
+export const settingsLibrariesQueryKey = ["settings", "libraries"] as const
 
 // --- Instance info ---------------------------------------------------------
 
@@ -145,155 +149,157 @@ export const settingsLibrariesQueryKey = ['settings', 'libraries'] as const;
 // providerConfigFieldDTO. Kind drives the input renderer; options
 // populate selects.
 export type ProviderConfigField = {
-  key: string;
-  label: string;
-  kind: 'text' | 'password' | 'select' | 'textarea';
-  placeholder?: string;
-  help?: string;
-  options?: { value: string; label: string }[];
-};
+  key: string
+  label: string
+  kind: "text" | "password" | "select" | "textarea"
+  placeholder?: string
+  help?: string
+  options?: Array<{ value: string; label: string }>
+}
 
 export type ProviderInfo = {
-  id: string;
-  name: string;
-  enabled: boolean;
-  external: boolean;
-  priority?: number;
+  id: string
+  name: string
+  enabled: boolean
+  external: boolean
+  priority?: number
   // Stored provider-specific config blob. Keys align with `schema`.
-  config?: Record<string, unknown>;
+  config?: Record<string, unknown>
   // Declared form fields — absent when the provider has no config.
-  schema?: ProviderConfigField[];
+  schema?: Array<ProviderConfigField>
   // Health telemetry — RFC3339 timestamps (or empty) set by the
   // enrichment service on each Search call.
-  lastSuccessAt?: string;
-  lastErrorAt?: string;
-  lastError?: string;
-};
+  lastSuccessAt?: string
+  lastErrorAt?: string
+  lastError?: string
+}
 
 // Patch payload for PATCH /settings/providers/:id. Any subset of the
 // axes may be supplied; the server requires at least one.
 // priorityClear distinguishes "leave alone" from "reset to unranked".
 export type ProviderPatch = {
-  enabled?: boolean;
-  config?: Record<string, unknown>;
-  priority?: number;
-  priorityClear?: boolean;
-};
-
-export type InstanceInfo = {
-  version: string;
-  goVersion: string;
-  diskMode: string;
-  allowedOrigins: string[];
-  bookDropPath: string;
-  dataPath: string;
-  migrateOnStart: boolean;
-  enrichmentProviders: ProviderInfo[];
-  counts: { users: number; libraries: number; books: number };
-};
-
-export async function fetchInstanceInfo(): Promise<InstanceInfo> {
-  return api<InstanceInfo>('/api/v1/settings/instance');
+  enabled?: boolean
+  config?: Record<string, unknown>
+  priority?: number
+  priorityClear?: boolean
 }
 
-export const instanceInfoQueryKey = ['settings', 'instance'] as const;
+export type InstanceInfo = {
+  version: string
+  goVersion: string
+  diskMode: string
+  allowedOrigins: Array<string>
+  bookDropPath: string
+  dataPath: string
+  migrateOnStart: boolean
+  enrichmentProviders: Array<ProviderInfo>
+  counts: { users: number; libraries: number; books: number }
+}
+
+export async function fetchInstanceInfo(): Promise<InstanceInfo> {
+  return api<InstanceInfo>("/api/v1/settings/instance")
+}
+
+export const instanceInfoQueryKey = ["settings", "instance"] as const
 
 // --- Metadata providers (admin) --------------------------------------------
 
-export async function fetchProviderSettings(): Promise<ProviderInfo[]> {
-  const { providers } = await api<{ providers: ProviderInfo[] }>(
-    '/api/v1/settings/providers',
-  );
-  return providers;
+export async function fetchProviderSettings(): Promise<Array<ProviderInfo>> {
+  const { providers } = await api<{ providers: Array<ProviderInfo> }>(
+    "/api/v1/settings/providers"
+  )
+  return providers
 }
 
 export async function updateProviderSetting(
   id: string,
-  patch: ProviderPatch,
-): Promise<ProviderInfo[]> {
-  const { providers } = await api<{ providers: ProviderInfo[] }>(
+  patch: ProviderPatch
+): Promise<Array<ProviderInfo>> {
+  const { providers } = await api<{ providers: Array<ProviderInfo> }>(
     `/api/v1/settings/providers/${encodeURIComponent(id)}`,
     {
-      method: 'PATCH',
+      method: "PATCH",
       body: JSON.stringify(patch),
-    },
-  );
-  return providers;
+    }
+  )
+  return providers
 }
 
-export const providerSettingsQueryKey = ['settings', 'providers'] as const;
+export const providerSettingsQueryKey = ["settings", "providers"] as const
 
 // --- Instance-wide metadata switches --------------------------------------
 
 export type MetadataSettings = {
   // When true, bookdrop approvals trigger an enrichment pass so the
   // imported book lands with provider metadata already applied.
-  autoEnrich: boolean;
-};
+  autoEnrich: boolean
+}
 
 export async function fetchMetadataSettings(): Promise<MetadataSettings> {
-  return api<MetadataSettings>('/api/v1/settings/metadata');
+  return api<MetadataSettings>("/api/v1/settings/metadata")
 }
 
 export async function updateMetadataSettings(
-  body: MetadataSettings,
+  body: MetadataSettings
 ): Promise<MetadataSettings> {
-  return api<MetadataSettings>('/api/v1/settings/metadata', {
-    method: 'PUT',
+  return api<MetadataSettings>("/api/v1/settings/metadata", {
+    method: "PUT",
     body: JSON.stringify(body),
-  });
+  })
 }
 
-export const metadataSettingsQueryKey = ['settings', 'metadata'] as const;
+export const metadataSettingsQueryKey = ["settings", "metadata"] as const
 
 // Lightweight, non-admin-gated version of InstanceInfo. Rendered in the
 // status bar at the bottom of every page, so all signed-in users can call
 // it — mirrors /api/v1/instance on the server.
 export type InstanceSummary = {
-  version: string;
-  diskMode: string;
-  libraries: number;
-  books: number;
-};
-
-export async function fetchInstanceSummary(): Promise<InstanceSummary> {
-  return api<InstanceSummary>('/api/v1/instance');
+  version: string
+  diskMode: string
+  libraries: number
+  books: number
 }
 
-export const instanceSummaryQueryKey = ['instance', 'summary'] as const;
+export async function fetchInstanceSummary(): Promise<InstanceSummary> {
+  return api<InstanceSummary>("/api/v1/instance")
+}
+
+export const instanceSummaryQueryKey = ["instance", "summary"] as const
 
 // --- Users (admin) ---------------------------------------------------------
 
-export async function fetchSettingsUsers(): Promise<AuthUser[]> {
-  const { users } = await api<{ users: AuthUser[] }>('/api/v1/settings/users');
-  return users;
+export async function fetchSettingsUsers(): Promise<Array<AuthUser>> {
+  const { users } = await api<{ users: Array<AuthUser> }>(
+    "/api/v1/settings/users"
+  )
+  return users
 }
 
 export async function createSettingsUser(body: {
-  email: string;
-  name: string;
-  password: string;
-  role: 'admin' | 'user';
+  email: string
+  name: string
+  password: string
+  role: "admin" | "user"
 }): Promise<AuthUser> {
-  const { user } = await api<{ user: AuthUser }>('/api/v1/settings/users', {
-    method: 'POST',
+  const { user } = await api<{ user: AuthUser }>("/api/v1/settings/users", {
+    method: "POST",
     body: JSON.stringify(body),
-  });
-  return user;
+  })
+  return user
 }
 
 export async function updateSettingsUserRole(
   id: string,
-  role: 'admin' | 'user',
+  role: "admin" | "user"
 ): Promise<void> {
   await api<void>(`/api/v1/settings/users/${id}/role`, {
-    method: 'PATCH',
+    method: "PATCH",
     body: JSON.stringify({ role }),
-  });
+  })
 }
 
 export async function deleteSettingsUser(id: string): Promise<void> {
-  await api<void>(`/api/v1/settings/users/${id}`, { method: 'DELETE' });
+  await api<void>(`/api/v1/settings/users/${id}`, { method: "DELETE" })
 }
 
-export const settingsUsersQueryKey = ['settings', 'users'] as const;
+export const settingsUsersQueryKey = ["settings", "users"] as const

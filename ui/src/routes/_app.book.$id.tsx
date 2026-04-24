@@ -1,8 +1,12 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { toast } from 'sonner';
+import { useEffect, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { createFileRoute, useNavigate } from "@tanstack/react-router"
+import { toast } from "sonner"
+import type { ReactNode } from "react"
 
+import type { ApiError } from "@/api/client"
+import type { Annotation } from "@/api/annotations"
+import type { BookDetail as BookDetailPayload } from "@/api/books"
 import {
   annotationKind,
   bookAnnotationsQueryKey,
@@ -10,9 +14,8 @@ import {
   deleteAnnotation,
   fetchBookAnnotations,
   recentAnnotationsQueryKey,
-  type Annotation,
-} from '@/api/annotations';
-import { fetchMe, meQueryKey } from '@/api/auth';
+} from "@/api/annotations"
+import { fetchMe, meQueryKey } from "@/api/auth"
 import {
   addBookToShelf,
   bookQueryKey,
@@ -23,19 +26,17 @@ import {
   librariesQueryKey,
   removeBookFromShelf,
   shelvesQueryKey,
-  type BookDetail as BookDetailPayload,
-} from '@/api/books';
+} from "@/api/books"
 import {
   DEVICE_KIND_LABELS,
   devicesQueryKey,
   fetchDevices,
   sendBookToDevice,
-} from '@/api/devices';
-import { Cover, StarRating } from '@/components/Cover';
-import { Icon } from '@/components/Icon';
-import { useUserSettingsDialog } from '@/components/UserSettingsDialog';
-import type { ApiError } from '@/api/client';
-import { Button } from '@/components/ui/button';
+} from "@/api/devices"
+import { Cover, StarRating } from "@/components/Cover"
+import { Icon } from "@/components/Icon"
+import { useUserSettingsDialog } from "@/components/UserSettingsDialog"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -43,91 +44,101 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from "@/components/ui/dropdown-menu"
 
-type Tab = 'overview' | 'notes' | 'annotations' | 'versions' | 'activity';
+type Tab = "overview" | "notes" | "annotations" | "versions" | "activity"
 
-export const Route = createFileRoute('/_app/book/$id')({
+export const Route = createFileRoute("/_app/book/$id")({
   component: BookDetail,
-});
+})
 
 function BookDetail() {
-  const { id } = Route.useParams();
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const [tab, setTab] = useState<Tab>('overview');
-  const [deleteOpen, setDeleteOpen] = useState(false);
+  const { id } = Route.useParams()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [tab, setTab] = useState<Tab>("overview")
+  const [deleteOpen, setDeleteOpen] = useState(false)
 
   const book = useQuery({
     queryKey: bookQueryKey(id),
     queryFn: () => fetchBook(id),
-  });
-  const me = useQuery({ queryKey: meQueryKey, queryFn: fetchMe, staleTime: 60_000 });
-  const isAdmin = me.data?.role === 'admin';
+  })
+  const me = useQuery({
+    queryKey: meQueryKey,
+    queryFn: fetchMe,
+    staleTime: 60_000,
+  })
+  const isAdmin = me.data?.role === "admin"
 
   const deleteMut = useMutation({
     mutationFn: () => deleteBook(id),
     onSuccess: () => {
-      queryClient.removeQueries({ queryKey: bookQueryKey(id) });
-      queryClient.invalidateQueries({ queryKey: booksQueryKey() });
-      queryClient.invalidateQueries({ queryKey: shelvesQueryKey });
-      queryClient.invalidateQueries({ queryKey: librariesQueryKey });
-      void navigate({ to: '/library' });
+      queryClient.removeQueries({ queryKey: bookQueryKey(id) })
+      queryClient.invalidateQueries({ queryKey: booksQueryKey() })
+      queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
+      queryClient.invalidateQueries({ queryKey: librariesQueryKey })
+      void navigate({ to: "/library" })
     },
-  });
-  const deleteError = deleteMut.error as unknown as ApiError | null;
+  })
+  const deleteError = deleteMut.error as unknown as ApiError | null
 
   if (book.isLoading) {
     return (
       <div style={{ padding: 40 }}>
         <p className="t-small">Loading…</p>
       </div>
-    );
+    )
   }
   if (book.isError) {
-    const err = book.error as unknown as ApiError;
+    const err = book.error as unknown as ApiError
     return (
       <div style={{ padding: 40 }}>
-        <p className="t-small" style={{ color: 'var(--color-accent-ink)' }}>
-          {err?.status === 404 ? 'Book not found.' : 'Failed to load book.'}
+        <p className="t-small" style={{ color: "var(--color-accent-ink)" }}>
+          {err?.status === 404 ? "Book not found." : "Failed to load book."}
         </p>
       </div>
-    );
+    )
   }
-  if (!book.data) return null;
+  if (!book.data) return null
 
-  const b = book.data;
-  const progress = b.progress ?? 0;
+  const b = book.data
+  const progress = b.progress ?? 0
 
   return (
     <div className="fade-in">
       <div
         style={{
-          padding: '16px 32px',
-          borderBottom: '1px solid var(--color-rule-soft)',
-          display: 'flex',
-          alignItems: 'center',
+          padding: "16px 32px",
+          borderBottom: "1px solid var(--color-rule-soft)",
+          display: "flex",
+          alignItems: "center",
           gap: 12,
         }}
       >
-        <Button variant="ghost" size="sm" onClick={() => void navigate({ to: '/library' })}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void navigate({ to: "/library" })}
+        >
           <Icon name="arrow-left" size={14} /> Back to library
         </Button>
         <div className="grow" />
         <Button
           variant="outline"
           size="sm"
-          onClick={() => void navigate({ to: '/book/$id/edit', params: { id } })}
+          onClick={() =>
+            void navigate({ to: "/book/$id/edit", params: { id } })
+          }
         >
           <Icon name="edit" size={13} /> Edit metadata
         </Button>
@@ -145,20 +156,30 @@ function BookDetail() {
         <SendToDeviceButton bookId={id} />
       </div>
 
-      <div className="page-split page-split--cover-main" style={{ padding: '40px 48px' }}>
+      <div
+        className="page-split page-split--cover-main"
+        style={{ padding: "40px 48px" }}
+      >
         {/* Left — cover & actions */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <Cover book={b} size="hero" />
           <Button
             size="lg"
             className="w-full"
-            onClick={() => void navigate({ to: '/read/$id', params: { id } })}
+            onClick={() => void navigate({ to: "/read/$id", params: { id } })}
           >
-            <Icon name="book-open" size={14} /> {progress > 0 && progress < 1 ? 'Continue reading' : 'Open book'}
+            <Icon name="book-open" size={14} />{" "}
+            {progress > 0 && progress < 1 ? "Continue reading" : "Open book"}
           </Button>
           {progress > 0 && progress < 1 && (
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  marginBottom: 6,
+                }}
+              >
                 <span className="t-micro">Progress</span>
                 <span className="mono" style={{ fontSize: 11 }}>
                   {Math.round(progress * 100)}%
@@ -177,19 +198,43 @@ function BookDetail() {
           <div className="t-micro" style={{ marginBottom: 8 }}>
             {b.format} · {b.year}
           </div>
-          <h1 className="t-display" style={{ marginBottom: 6, textWrap: 'balance' }}>{b.title}</h1>
-          <div style={{ fontSize: 17, color: 'var(--color-ink-2)', fontStyle: 'italic', marginBottom: 16 }}>
+          <h1
+            className="t-display"
+            style={{ marginBottom: 6, textWrap: "balance" }}
+          >
+            {b.title}
+          </h1>
+          <div
+            style={{
+              fontSize: 17,
+              color: "var(--color-ink-2)",
+              fontStyle: "italic",
+              marginBottom: 16,
+            }}
+          >
             by {b.author}
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 16,
+              marginBottom: 28,
+            }}
+          >
             <StarRating rating={b.rating} size={15} />
-            <span className="mono" style={{ fontSize: 12, color: 'var(--color-ink-2)' }}>
+            <span
+              className="mono"
+              style={{ fontSize: 12, color: "var(--color-ink-2)" }}
+            >
               {b.rating.toFixed(1)}
             </span>
-            <span style={{ color: 'var(--color-rule)' }}>·</span>
+            <span style={{ color: "var(--color-rule)" }}>·</span>
             {(b.tags ?? []).map((t) => (
-              <span key={t} className="chip">{t}</span>
+              <span key={t} className="chip">
+                {t}
+              </span>
             ))}
           </div>
 
@@ -198,26 +243,40 @@ function BookDetail() {
               style={{
                 fontSize: 16,
                 lineHeight: 1.65,
-                color: 'var(--color-ink-1)',
+                color: "var(--color-ink-1)",
                 marginBottom: 32,
                 maxWidth: 640,
-                textWrap: 'pretty',
+                textWrap: "pretty",
               }}
             >
               {b.description}
             </p>
           )}
 
-          <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="mb-6">
+          <Tabs
+            value={tab}
+            onValueChange={(v) => setTab(v as Tab)}
+            className="mb-6"
+          >
             <TabsList
               variant="line"
               className="h-9 w-full justify-start gap-4 border-b border-(--color-rule-soft) px-0"
             >
-              <TabsTrigger value="overview" className="flex-none px-3">Overview</TabsTrigger>
-              <TabsTrigger value="notes" className="flex-none px-3">Notes</TabsTrigger>
-              <TabsTrigger value="annotations" className="flex-none px-3">Annotations</TabsTrigger>
-              <TabsTrigger value="versions" className="flex-none px-3">Versions</TabsTrigger>
-              <TabsTrigger value="activity" className="flex-none px-3">Activity</TabsTrigger>
+              <TabsTrigger value="overview" className="flex-none px-3">
+                Overview
+              </TabsTrigger>
+              <TabsTrigger value="notes" className="flex-none px-3">
+                Notes
+              </TabsTrigger>
+              <TabsTrigger value="annotations" className="flex-none px-3">
+                Annotations
+              </TabsTrigger>
+              <TabsTrigger value="versions" className="flex-none px-3">
+                Versions
+              </TabsTrigger>
+              <TabsTrigger value="activity" className="flex-none px-3">
+                Activity
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="overview">
@@ -227,17 +286,23 @@ function BookDetail() {
                 {b.series && (
                   <Meta label="Series">
                     {b.series}
-                    {b.seriesNum ? `, Book ${b.seriesNum}` : ''}
+                    {b.seriesNum ? `, Book ${b.seriesNum}` : ""}
                   </Meta>
                 )}
                 <Meta label="Published">{b.year}</Meta>
                 <Meta label="Format">{b.format}</Meta>
                 {b.publisher && <Meta label="Publisher">{b.publisher}</Meta>}
-                <Meta label="Categories">{(b.tags ?? []).join(' · ') || '—'}</Meta>
-                <Meta label="Added">{new Date(b.addedAt).toLocaleDateString()}</Meta>
+                <Meta label="Categories">
+                  {(b.tags ?? []).join(" · ") || "—"}
+                </Meta>
+                <Meta label="Added">
+                  {new Date(b.addedAt).toLocaleDateString()}
+                </Meta>
                 {b.isbn && (
                   <Meta label="ISBN">
-                    <span className="mono" style={{ fontSize: 11.5 }}>{b.isbn}</span>
+                    <span className="mono" style={{ fontSize: 11.5 }}>
+                      {b.isbn}
+                    </span>
                   </Meta>
                 )}
               </div>
@@ -248,21 +313,28 @@ function BookDetail() {
             </TabsContent>
 
             <TabsContent value="annotations">
-              <div className="t-small" style={{ fontStyle: 'italic' }}>
+              <div className="t-small" style={{ fontStyle: "italic" }}>
                 No PDF annotations for this book.
               </div>
             </TabsContent>
 
             <TabsContent value="versions">
-              <div style={{ maxWidth: 640, display: 'flex', flexDirection: 'column', gap: 24 }}>
+              <div
+                style={{
+                  maxWidth: 640,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 24,
+                }}
+              >
                 <div
                   style={{
-                    display: 'flex',
-                    alignItems: 'center',
+                    display: "flex",
+                    alignItems: "center",
                     gap: 16,
-                    padding: '10px 12px',
-                    border: '1px solid var(--color-rule-soft)',
-                    background: 'var(--color-paper-0)',
+                    padding: "10px 12px",
+                    border: "1px solid var(--color-rule-soft)",
+                    background: "var(--color-paper-0)",
                   }}
                 >
                   <Icon name="book" size={16} />
@@ -270,7 +342,10 @@ function BookDetail() {
                     <div className="t-item-title">
                       {b.title}.{b.format.toLowerCase()}
                     </div>
-                    <div className="mono" style={{ fontSize: 11, color: 'var(--color-ink-3)' }}>
+                    <div
+                      className="mono"
+                      style={{ fontSize: 11, color: "var(--color-ink-3)" }}
+                    >
                       Primary · {b.format}
                     </div>
                   </div>
@@ -280,28 +355,34 @@ function BookDetail() {
                   <div
                     style={{
                       padding: 16,
-                      border: '1px solid var(--color-destructive)',
-                      background: 'var(--color-paper-0)',
+                      border: "1px solid var(--color-destructive)",
+                      background: "var(--color-paper-0)",
                     }}
                   >
                     <div
                       className="t-label"
-                      style={{ marginBottom: 6, color: 'var(--color-destructive)' }}
+                      style={{
+                        marginBottom: 6,
+                        color: "var(--color-destructive)",
+                      }}
                     >
                       Danger zone
                     </div>
-                    <p className="t-small" style={{ marginBottom: 10, maxWidth: 520 }}>
-                      Permanently remove this book, its cover, its source file, and every
-                      reader&apos;s progress, notes, and shelf placements for it. This cannot
-                      be undone.
+                    <p
+                      className="t-small"
+                      style={{ marginBottom: 10, maxWidth: 520 }}
+                    >
+                      Permanently remove this book, its cover, its source file,
+                      and every reader&apos;s progress, notes, and shelf
+                      placements for it. This cannot be undone.
                     </p>
                     {deleteError && (
                       <div
                         style={{
-                          padding: '8px 12px',
+                          padding: "8px 12px",
                           marginBottom: 10,
-                          border: '1px solid var(--color-destructive)',
-                          color: 'var(--color-destructive)',
+                          border: "1px solid var(--color-destructive)",
+                          color: "var(--color-destructive)",
                           fontSize: 13,
                         }}
                       >
@@ -315,8 +396,8 @@ function BookDetail() {
                       disabled={deleteMut.isPending}
                       onClick={() => setDeleteOpen(true)}
                     >
-                      <Icon name="close" size={12} />{' '}
-                      {deleteMut.isPending ? 'Deleting…' : 'Delete book'}
+                      <Icon name="close" size={12} />{" "}
+                      {deleteMut.isPending ? "Deleting…" : "Delete book"}
                     </Button>
 
                     <DeleteBookDialog
@@ -325,8 +406,8 @@ function BookDetail() {
                       title={b.title}
                       busy={deleteMut.isPending}
                       onConfirm={() => {
-                        deleteMut.mutate();
-                        setDeleteOpen(false);
+                        deleteMut.mutate()
+                        setDeleteOpen(false)
                       }}
                     />
                   </div>
@@ -335,84 +416,91 @@ function BookDetail() {
             </TabsContent>
 
             <TabsContent value="activity">
-              <div className="t-small" style={{ fontStyle: 'italic' }}>
-                Per-book activity timeline lands once reading sessions are tracked server-side.
+              <div className="t-small" style={{ fontStyle: "italic" }}>
+                Per-book activity timeline lands once reading sessions are
+                tracked server-side.
               </div>
             </TabsContent>
           </Tabs>
         </div>
       </div>
     </div>
-  );
+  )
 }
 
 function Meta({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div
       style={{
-        display: 'flex',
+        display: "flex",
         gap: 14,
-        padding: '7px 0',
-        borderBottom: '1px dashed var(--color-rule-soft)',
+        padding: "7px 0",
+        borderBottom: "1px dashed var(--color-rule-soft)",
       }}
     >
-      <div className="t-label" style={{ width: 96, flexShrink: 0 }}>{label}</div>
-      <div style={{ fontSize: 13.5, color: 'var(--color-ink-1)' }}>{children}</div>
+      <div className="t-label" style={{ width: 96, flexShrink: 0 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 13.5, color: "var(--color-ink-1)" }}>
+        {children}
+      </div>
     </div>
-  );
+  )
 }
 
 // ShelfCard renders the book's current shelf memberships as chips and lets
 // the user add/remove via a tiny picker. Optimistic on add/remove so the
 // chip feedback lands immediately without waiting for the round trip.
 function ShelfCard({ book }: { book: BookDetailPayload }) {
-  const queryClient = useQueryClient();
-  const shelves = useQuery({ queryKey: shelvesQueryKey, queryFn: fetchShelves });
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const queryClient = useQueryClient()
+  const shelves = useQuery({ queryKey: shelvesQueryKey, queryFn: fetchShelves })
+  const [pickerOpen, setPickerOpen] = useState(false)
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: bookQueryKey(book.id) });
-    queryClient.invalidateQueries({ queryKey: shelvesQueryKey });
-    queryClient.invalidateQueries({ queryKey: booksQueryKey() });
-  };
+    queryClient.invalidateQueries({ queryKey: bookQueryKey(book.id) })
+    queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
+    queryClient.invalidateQueries({ queryKey: booksQueryKey() })
+  }
 
   const addMut = useMutation({
     mutationFn: (slug: string) => addBookToShelf(book.id, slug),
     onSuccess: () => {
-      invalidate();
-      setPickerOpen(false);
+      invalidate()
+      setPickerOpen(false)
     },
-  });
+  })
   const removeMut = useMutation({
     mutationFn: (slug: string) => removeBookFromShelf(book.id, slug),
     onSuccess: invalidate,
-  });
+  })
 
-  const currentSlugs = new Set(book.shelves);
+  const currentSlugs = new Set(book.shelves)
   // Smart shelves are excluded — their membership is derived from the
   // rule, so a book is either matched or it isn't. The backend rejects
   // direct adds with 409, but hiding them in the picker avoids the
   // user having to discover that the hard way.
   const availableToAdd = (shelves.data ?? []).filter(
-    (s) => !currentSlugs.has(s.slug) && !s.isSmart,
-  );
+    (s) => !currentSlugs.has(s.slug) && !s.isSmart
+  )
 
   const shelfLabel = (slug: string): string =>
-    shelves.data?.find((s) => s.slug === slug)?.name ?? slug;
+    shelves.data?.find((s) => s.slug === slug)?.name ?? slug
 
   return (
     <div
       style={{
-        border: '1px solid var(--color-rule-soft)',
+        border: "1px solid var(--color-rule-soft)",
         padding: 16,
-        background: 'var(--color-paper-0)',
+        background: "var(--color-paper-0)",
         borderRadius: 2,
       }}
     >
-      <div className="t-label" style={{ marginBottom: 10 }}>Shelves</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+      <div className="t-label" style={{ marginBottom: 10 }}>
+        Shelves
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
         {book.shelves.length === 0 && !pickerOpen && (
-          <span className="t-small" style={{ fontStyle: 'italic' }}>
+          <span className="t-small" style={{ fontStyle: "italic" }}>
             Not on any shelves yet.
           </span>
         )}
@@ -424,7 +512,7 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
             onClick={() => removeMut.mutate(s)}
             disabled={removeMut.isPending}
             title="Remove from shelf"
-            style={{ cursor: 'pointer' }}
+            style={{ cursor: "pointer" }}
           >
             {shelfLabel(s)}
             <Icon name="close" size={10} />
@@ -434,7 +522,7 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
           <button
             type="button"
             className="chip"
-            style={{ cursor: 'pointer' }}
+            style={{ cursor: "pointer" }}
             onClick={() => setPickerOpen(true)}
           >
             <Icon name="plus" size={10} /> Add
@@ -447,25 +535,25 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
           style={{
             marginTop: 10,
             paddingTop: 10,
-            borderTop: '1px dashed var(--color-rule-soft)',
-            display: 'flex',
-            flexDirection: 'column',
+            borderTop: "1px dashed var(--color-rule-soft)",
+            display: "flex",
+            flexDirection: "column",
             gap: 6,
           }}
         >
           <div className="t-micro">Add to shelf</div>
           {availableToAdd.length === 0 ? (
-            <div className="t-small" style={{ fontStyle: 'italic' }}>
+            <div className="t-small" style={{ fontStyle: "italic" }}>
               Already on every shelf. Create one from the sidebar first.
             </div>
           ) : (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {availableToAdd.map((s) => (
                 <button
                   key={s.slug}
                   type="button"
                   className="chip"
-                  style={{ cursor: 'pointer' }}
+                  style={{ cursor: "pointer" }}
                   onClick={() => addMut.mutate(s.slug)}
                   disabled={addMut.isPending}
                 >
@@ -479,14 +567,14 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
             variant="ghost"
             size="sm"
             onClick={() => setPickerOpen(false)}
-            className="self-end mt-1"
+            className="mt-1 self-end"
           >
             Done
           </Button>
         </div>
       )}
     </div>
-  );
+  )
 }
 
 // NotesPanel renders every annotation on this book + an inline "new
@@ -494,46 +582,54 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
 // (`selectedText` stays empty) — highlights come from the EPUB reader's
 // selection flow, not from typing here.
 function NotesPanel({ bookId }: { bookId: string }) {
-  const queryClient = useQueryClient();
+  const queryClient = useQueryClient()
   const annotations = useQuery({
     queryKey: bookAnnotationsQueryKey(bookId),
     queryFn: () => fetchBookAnnotations(bookId),
-  });
+  })
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: bookAnnotationsQueryKey(bookId) });
-    queryClient.invalidateQueries({ queryKey: recentAnnotationsQueryKey });
-  };
+    queryClient.invalidateQueries({ queryKey: bookAnnotationsQueryKey(bookId) })
+    queryClient.invalidateQueries({ queryKey: recentAnnotationsQueryKey })
+  }
 
   const createMut = useMutation({
     mutationFn: (note: string) => createAnnotation(bookId, { note }),
     onSuccess: invalidate,
-  });
+  })
   const deleteMut = useMutation({
     mutationFn: (a: Annotation) => deleteAnnotation(a.id),
     onSuccess: invalidate,
-  });
+  })
 
-  const [draft, setDraft] = useState('');
-  const rows = annotations.data ?? [];
-  const error = (createMut.error ?? deleteMut.error) as unknown as ApiError | null;
+  const [draft, setDraft] = useState("")
+  const rows = annotations.data ?? []
+  const error = (createMut.error ??
+    deleteMut.error) as unknown as ApiError | null
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 640 }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
+        maxWidth: 640,
+      }}
+    >
       <form
         onSubmit={(e) => {
-          e.preventDefault();
-          const value = draft.trim();
-          if (!value) return;
-          createMut.mutate(value);
-          setDraft('');
+          e.preventDefault()
+          const value = draft.trim()
+          if (!value) return
+          createMut.mutate(value)
+          setDraft("")
         }}
         style={{
-          display: 'flex',
-          flexDirection: 'column',
+          display: "flex",
+          flexDirection: "column",
           gap: 8,
-          background: 'var(--color-paper-0)',
-          border: '1px solid var(--color-rule-soft)',
+          background: "var(--color-paper-0)",
+          border: "1px solid var(--color-rule-soft)",
           padding: 12,
           borderRadius: 2,
         }}
@@ -545,13 +641,14 @@ function NotesPanel({ bookId }: { bookId: string }) {
           onChange={(e) => setDraft(e.target.value)}
           className="resize-y"
         />
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <Button
             type="submit"
             size="sm"
-            disabled={createMut.isPending || draft.trim() === ''}
+            disabled={createMut.isPending || draft.trim() === ""}
           >
-            <Icon name="plus" size={12} /> {createMut.isPending ? 'Saving…' : 'Add note'}
+            <Icon name="plus" size={12} />{" "}
+            {createMut.isPending ? "Saving…" : "Add note"}
           </Button>
         </div>
       </form>
@@ -559,10 +656,10 @@ function NotesPanel({ bookId }: { bookId: string }) {
       {error && (
         <div
           style={{
-            padding: '10px 14px',
-            border: '1px solid var(--color-accent-soft)',
-            background: 'var(--color-accent-soft)',
-            color: 'var(--color-accent-ink)',
+            padding: "10px 14px",
+            border: "1px solid var(--color-accent-soft)",
+            background: "var(--color-accent-soft)",
+            color: "var(--color-accent-ink)",
             borderRadius: 2,
             fontSize: 13,
           }}
@@ -572,31 +669,46 @@ function NotesPanel({ bookId }: { bookId: string }) {
       )}
 
       {annotations.isLoading && (
-        <div className="t-small" style={{ fontStyle: 'italic' }}>Loading notes…</div>
+        <div className="t-small" style={{ fontStyle: "italic" }}>
+          Loading notes…
+        </div>
       )}
       {!annotations.isLoading && rows.length === 0 && (
-        <div className="t-small" style={{ fontStyle: 'italic' }}>
-          No notes yet. Highlights and margin notes you take while reading will appear here.
+        <div className="t-small" style={{ fontStyle: "italic" }}>
+          No notes yet. Highlights and margin notes you take while reading will
+          appear here.
         </div>
       )}
       {rows.map((a) => {
-        const kind = annotationKind(a);
+        const kind = annotationKind(a)
         return (
           <div
             key={a.id}
             style={{
-              borderLeft: '3px solid var(--color-accent-soft)',
-              padding: '8px 14px',
-              background: 'var(--color-paper-0)',
+              borderLeft: "3px solid var(--color-accent-soft)",
+              padding: "8px 14px",
+              background: "var(--color-paper-0)",
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                marginBottom: 4,
+              }}
+            >
               <span className="t-micro">
-                {kind === 'highlight' ? 'Highlight' : kind === 'highlight+note' ? 'Highlight · Note' : 'Note'}
+                {kind === "highlight"
+                  ? "Highlight"
+                  : kind === "highlight+note"
+                    ? "Highlight · Note"
+                    : "Note"}
                 {a.locator && ` · ${shortLocator(a.locator)}`}
               </span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span className="t-micro">{new Date(a.createdAt).toLocaleDateString()}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span className="t-micro">
+                  {new Date(a.createdAt).toLocaleDateString()}
+                </span>
                 <Button
                   type="button"
                   variant="ghost"
@@ -615,9 +727,9 @@ function NotesPanel({ bookId }: { bookId: string }) {
                 style={{
                   fontSize: 14.5,
                   lineHeight: 1.55,
-                  fontStyle: 'italic',
-                  background: 'oklch(0.94 0.04 85)',
-                  padding: '4px 8px',
+                  fontStyle: "italic",
+                  background: "oklch(0.94 0.04 85)",
+                  padding: "4px 8px",
                   marginBottom: a.note ? 8 : 0,
                 }}
               >
@@ -628,60 +740,60 @@ function NotesPanel({ bookId }: { bookId: string }) {
               <p style={{ fontSize: 14.5, lineHeight: 1.55 }}>{a.note}</p>
             )}
           </div>
-        );
+        )
       })}
     </div>
-  );
+  )
 }
 
 function shortLocator(locator: string): string {
-  if (locator.startsWith('page:')) return `p.${locator.slice(5)}`;
-  if (locator.startsWith('epubcfi')) return 'EPUB';
-  return locator;
+  if (locator.startsWith("page:")) return `p.${locator.slice(5)}`
+  if (locator.startsWith("epubcfi")) return "EPUB"
+  return locator
 }
 
 // SendToDeviceButton opens a tiny dropdown of paired devices. If none are
 // paired, the button opens the user settings dialog on the Devices panel.
 function SendToDeviceButton({ bookId }: { bookId: string }) {
-  const { open: openUserSettings } = useUserSettingsDialog();
-  const queryClient = useQueryClient();
-  const devices = useQuery({ queryKey: devicesQueryKey, queryFn: fetchDevices });
-  const [open, setOpen] = useState(false);
+  const { open: openUserSettings } = useUserSettingsDialog()
+  const queryClient = useQueryClient()
+  const devices = useQuery({ queryKey: devicesQueryKey, queryFn: fetchDevices })
+  const [open, setOpen] = useState(false)
 
   const sendMut = useMutation({
     mutationFn: (deviceId: string) => sendBookToDevice(bookId, deviceId),
     onSuccess: (_data, deviceId) => {
-      const target = devices.data?.find((d) => d.id === deviceId);
-      toast.success(`Sent to ${target?.name ?? 'device'}.`);
-      queryClient.invalidateQueries({ queryKey: devicesQueryKey });
-      setOpen(false);
+      const target = devices.data?.find((d) => d.id === deviceId)
+      toast.success(`Sent to ${target?.name ?? "device"}.`)
+      queryClient.invalidateQueries({ queryKey: devicesQueryKey })
+      setOpen(false)
     },
     onError: (e) => {
-      toast.error((e as unknown as ApiError).message || 'Send failed.');
+      toast.error((e as unknown as ApiError).message || "Send failed.")
     },
-  });
+  })
 
-  const list = devices.data ?? [];
+  const list = devices.data ?? []
 
   if (list.length === 0) {
     return (
       <Button
         variant="outline"
         size="sm"
-        onClick={() => openUserSettings('devices')}
+        onClick={() => openUserSettings("devices")}
         title="No devices paired — pair one in Account → Device sync"
       >
         <Icon name="device" size={13} /> Send to device
       </Button>
-    );
+    )
   }
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="sm" disabled={sendMut.isPending}>
-          <Icon name="device" size={13} />{' '}
-          {sendMut.isPending ? 'Sending…' : 'Send to device'}
+          <Icon name="device" size={13} />{" "}
+          {sendMut.isPending ? "Sending…" : "Send to device"}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-56">
@@ -699,7 +811,7 @@ function SendToDeviceButton({ bookId }: { bookId: string }) {
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
-  );
+  )
 }
 
 // DeleteBookDialog confirms a destructive book teardown. The "type the
@@ -713,19 +825,19 @@ function DeleteBookDialog({
   busy,
   onConfirm,
 }: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  title: string;
-  busy: boolean;
-  onConfirm: () => void;
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  title: string
+  busy: boolean
+  onConfirm: () => void
 }) {
-  const [confirmInput, setConfirmInput] = useState('');
+  const [confirmInput, setConfirmInput] = useState("")
 
   useEffect(() => {
-    if (!open) setConfirmInput('');
-  }, [open]);
+    if (!open) setConfirmInput("")
+  }, [open])
 
-  const matches = confirmInput.trim() === title.trim();
+  const matches = confirmInput.trim() === title.trim()
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -733,9 +845,9 @@ function DeleteBookDialog({
         <DialogHeader>
           <DialogTitle>Delete book</DialogTitle>
           <DialogDescription>
-            Permanently remove <strong>{title}</strong> — the DB row, its
-            cover, its source file on disk, and every reader&apos;s progress,
-            notes, and shelf placements for it. This cannot be undone.
+            Permanently remove <strong>{title}</strong> — the DB row, its cover,
+            its source file on disk, and every reader&apos;s progress, notes,
+            and shelf placements for it. This cannot be undone.
           </DialogDescription>
         </DialogHeader>
 
@@ -767,10 +879,10 @@ function DeleteBookDialog({
             onClick={onConfirm}
             disabled={!matches || busy}
           >
-            {busy ? 'Deleting…' : 'Delete book'}
+            {busy ? "Deleting…" : "Delete book"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
+  )
 }

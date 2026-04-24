@@ -1,14 +1,17 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
+import { useEffect, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
 
-import type { ApiError } from '@/api/client';
-import {
-  fetchMe,
-  logout as apiLogout,
-  meQueryKey,
-  type AuthUser,
-} from '@/api/auth';
+import { AccentPicker, accentColor } from "./AccentPicker"
+import { Icon } from "./Icon"
+import { RuleEditor } from "./RuleEditor"
+import { useUserSettingsDialog } from "./UserSettingsDialog"
+import type { ShelfAccent } from "./AccentPicker"
+import type { IconName } from "./Icon"
+import type { ReactNode } from "react"
+import type { ApiError } from "@/api/client"
+import type { AuthUser } from "@/api/auth"
+import type { Shelf, ShelfRule } from "@/api/books"
 import {
   createShelf,
   createSmartShelf,
@@ -18,15 +21,10 @@ import {
   librariesQueryKey,
   shelvesQueryKey,
   updateShelf,
-  type Shelf,
-  type ShelfRule,
-} from '@/api/books';
-import { AccentPicker, accentColor, type ShelfAccent } from './AccentPicker';
-import { Icon, type IconName } from './Icon';
-import { RuleEditor } from './RuleEditor';
-import { useUserSettingsDialog } from './UserSettingsDialog';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Button } from '@/components/ui/button';
+} from "@/api/books"
+import { logout as apiLogout, fetchMe, meQueryKey } from "@/api/auth"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -34,7 +32,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
+} from "@/components/ui/dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,9 +40,9 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Sidebar,
   SidebarContent,
@@ -59,54 +57,54 @@ import {
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
-} from '@/components/ui/sidebar';
+} from "@/components/ui/sidebar"
 
 // Library colors are a design concern (no DB column backs them) so we key
 // a stable palette by library slug. Unknown slugs fall back to the accent.
 const LIBRARY_COLORS: Record<string, string> = {
-  main: 'oklch(0.48 0.09 35)',
-  academic: 'oklch(0.42 0.06 110)',
-  comics: 'oklch(0.38 0.05 200)',
-};
+  main: "oklch(0.48 0.09 35)",
+  academic: "oklch(0.42 0.06 110)",
+  comics: "oklch(0.38 0.05 200)",
+}
 
 const BUILTIN_SHELF_ICONS: Record<string, IconName> = {
-  reading: 'book-open',
-  new: 'sparkle',
-  finished: 'check',
-  tofinish: 'flag',
-  wishlist: 'bookmark',
-};
+  reading: "book-open",
+  new: "sparkle",
+  finished: "check",
+  tofinish: "flag",
+  wishlist: "bookmark",
+}
 
 // AppSidebar is mounted once inside the authed shell. Every nav target is a
 // real TanStack Router <Link> so browser back/forward, right-click-open, and
 // deep-link all behave correctly.
 export function AppSidebar() {
-  const state = useRouterState();
-  const pathname = state.location.pathname;
-  const search = state.location.search as { shelf?: string; library?: string };
+  const state = useRouterState()
+  const pathname = state.location.pathname
+  const search = state.location.search as { shelf?: string; library?: string }
 
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const me = useQuery({
     queryKey: meQueryKey,
     queryFn: fetchMe,
     staleTime: 60_000,
-  });
+  })
   const libraries = useQuery({
     queryKey: librariesQueryKey,
     queryFn: fetchLibraries,
-  });
+  })
   const shelves = useQuery({
     queryKey: shelvesQueryKey,
     queryFn: fetchShelves,
-  });
+  })
   const logoutMut = useMutation({
     mutationFn: apiLogout,
     onSuccess: () => {
-      queryClient.setQueryData(meQueryKey, null);
-      void navigate({ to: '/login', replace: true });
+      queryClient.setQueryData(meQueryKey, null)
+      void navigate({ to: "/login", replace: true })
     },
-  });
+  })
 
   // Regular shelves are created through a dedicated Dialog (name + accent
   // picker). Smart shelves keep using the RuleEditor, extended with the
@@ -115,24 +113,27 @@ export function AppSidebar() {
     mutationFn: (args: { name: string; accent: ShelfAccent }) =>
       createShelf(args.name, args.accent),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: shelvesQueryKey });
-      setShelfDraftOpen(false);
+      queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
+      setShelfDraftOpen(false)
     },
-  });
+  })
   const createSmartMut = useMutation({
-    mutationFn: (args: { name: string; rule: ShelfRule; accent: ShelfAccent }) =>
-      createSmartShelf(args.name, args.rule, args.accent),
+    mutationFn: (args: {
+      name: string
+      rule: ShelfRule
+      accent: ShelfAccent
+    }) => createSmartShelf(args.name, args.rule, args.accent),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: shelvesQueryKey });
-      setSmartDraft(null);
+      queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
+      setSmartDraft(null)
     },
-  });
+  })
   const updateSmartMut = useMutation({
     mutationFn: (args: {
-      slug: string;
-      name: string;
-      rule: ShelfRule;
-      accent: ShelfAccent;
+      slug: string
+      name: string
+      rule: ShelfRule
+      accent: ShelfAccent
     }) =>
       updateShelf(args.slug, {
         name: args.name,
@@ -141,47 +142,43 @@ export function AppSidebar() {
         ruleSet: true,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: shelvesQueryKey });
-      setSmartDraft(null);
+      queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
+      setSmartDraft(null)
     },
-  });
+  })
   const deleteShelfMut = useMutation({
     mutationFn: (slug: string) => deleteShelf(slug),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: shelvesQueryKey });
+      queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
     },
-  });
+  })
 
-  const [shelfDraftOpen, setShelfDraftOpen] = useState(false);
+  const [shelfDraftOpen, setShelfDraftOpen] = useState(false)
   const [smartDraft, setSmartDraft] = useState<
-    | { mode: 'create' }
-    | { mode: 'edit'; shelf: Shelf }
-    | null
-  >(null);
+    { mode: "create" } | { mode: "edit"; shelf: Shelf } | null
+  >(null)
 
-  const libs = libraries.data ?? [];
-  const allShelves = shelves.data ?? [];
+  const libs = libraries.data ?? []
+  const allShelves = shelves.data ?? []
   // "reading" is promoted into the Browse section as a first-class nav item,
   // so drop it from the Shelves list to avoid rendering two links to the
   // same filtered view.
-  const shelfList = allShelves.filter((s) => !s.isSmart && s.slug !== 'reading');
-  const smartList = allShelves.filter((s) => s.isSmart);
-  const totalBooks = libs.reduce((n, lib) => n + lib.bookCount, 0);
+  const shelfList = allShelves.filter((s) => !s.isSmart && s.slug !== "reading")
+  const smartList = allShelves.filter((s) => s.isSmart)
+  const totalBooks = libs.reduce((n, lib) => n + lib.bookCount, 0)
 
-  const smartMutError =
-    (createSmartMut.error ?? updateSmartMut.error) as ApiError | null;
+  const smartMutError = (createSmartMut.error ??
+    updateSmartMut.error) as ApiError | null
 
-  const isLibrary = pathname.startsWith('/library');
-  const activeShelf = isLibrary ? search.shelf ?? null : null;
-  const activeLibrary = isLibrary ? search.library ?? null : null;
+  const isLibrary = pathname.startsWith("/library")
+  const activeShelf = isLibrary ? (search.shelf ?? null) : null
+  const activeLibrary = isLibrary ? (search.library ?? null) : null
 
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
         <div className="flex items-center gap-2.5 px-1.5 py-1">
-          <div
-            className="flex size-6 shrink-0 items-center justify-center rounded-sm bg-(--color-ink-1) font-serif text-base font-semibold italic text-(--color-paper-0)"
-          >
+          <div className="flex size-6 shrink-0 items-center justify-center rounded-sm bg-(--color-ink-1) font-serif text-base font-semibold text-(--color-paper-0) italic">
             e
           </div>
           <div className="font-serif text-lg font-medium tracking-tight group-data-[collapsible=icon]:hidden">
@@ -199,7 +196,7 @@ export function AppSidebar() {
                 to="/"
                 icon="home"
                 label="Dashboard"
-                active={pathname === '/'}
+                active={pathname === "/"}
               />
               <NavItem
                 to="/library"
@@ -210,29 +207,29 @@ export function AppSidebar() {
               />
               <NavItem
                 to="/library"
-                search={{ shelf: 'reading' }}
+                search={{ shelf: "reading" }}
                 icon="book-open"
                 label="Reading Now"
-                count={shelfList.find((s) => s.slug === 'reading')?.bookCount}
-                active={activeShelf === 'reading'}
+                count={shelfList.find((s) => s.slug === "reading")?.bookCount}
+                active={activeShelf === "reading"}
               />
               <NavItem
                 to="/notebook"
                 icon="note"
                 label="Notebook"
-                active={pathname === '/notebook'}
+                active={pathname === "/notebook"}
               />
               <NavItem
                 to="/stats"
                 icon="chart"
                 label="Stats"
-                active={pathname === '/stats'}
+                active={pathname === "/stats"}
               />
               <NavItem
                 to="/bookdrop"
                 icon="upload"
                 label="BookDrop"
-                active={pathname === '/bookdrop'}
+                active={pathname === "/bookdrop"}
               />
             </SidebarMenu>
           </SidebarGroupContent>
@@ -249,7 +246,7 @@ export function AppSidebar() {
                   search={{ library: lib.slug }}
                   label={lib.name}
                   count={lib.bookCount}
-                  color={LIBRARY_COLORS[lib.slug] ?? 'var(--color-accent)'}
+                  color={LIBRARY_COLORS[lib.slug] ?? "var(--color-accent)"}
                   active={activeLibrary === lib.slug}
                 />
               ))}
@@ -274,7 +271,7 @@ export function AppSidebar() {
                   key={s.id}
                   to="/library"
                   search={{ shelf: s.slug }}
-                  icon={BUILTIN_SHELF_ICONS[s.slug] ?? 'folder'}
+                  icon={BUILTIN_SHELF_ICONS[s.slug] ?? "folder"}
                   label={s.name}
                   count={s.bookCount}
                   color={accentColor(s.accent)}
@@ -290,14 +287,14 @@ export function AppSidebar() {
           <SidebarGroupAction
             title="New smart shelf"
             aria-label="New smart shelf"
-            onClick={() => setSmartDraft({ mode: 'create' })}
+            onClick={() => setSmartDraft({ mode: "create" })}
           >
             <Icon name="plus" size={12} />
           </SidebarGroupAction>
           <SidebarGroupContent>
             <SidebarMenu>
               {smartList.length === 0 && (
-                <li className="t-small px-2 py-1 italic text-(--color-ink-3) group-data-[collapsible=icon]:hidden">
+                <li className="t-small px-2 py-1 text-(--color-ink-3) italic group-data-[collapsible=icon]:hidden">
                   No smart shelves yet.
                 </li>
               )}
@@ -306,10 +303,10 @@ export function AppSidebar() {
                   key={s.id}
                   shelf={s}
                   active={activeShelf === s.slug}
-                  onEdit={() => setSmartDraft({ mode: 'edit', shelf: s })}
+                  onEdit={() => setSmartDraft({ mode: "edit", shelf: s })}
                   onDelete={() => {
                     if (window.confirm(`Delete smart shelf "${s.name}"?`)) {
-                      deleteShelfMut.mutate(s.slug);
+                      deleteShelfMut.mutate(s.slug)
                     }
                   }}
                 />
@@ -317,7 +314,7 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-        {me.data?.role === 'admin' && (
+        {me.data?.role === "admin" && (
           <SidebarGroup className="mt-auto">
             <SidebarGroupContent>
               <SidebarMenu>
@@ -325,7 +322,7 @@ export function AppSidebar() {
                   to="/settings"
                   icon="settings"
                   label="Settings"
-                  active={pathname.startsWith('/settings')}
+                  active={pathname.startsWith("/settings")}
                 />
               </SidebarMenu>
             </SidebarGroupContent>
@@ -344,8 +341,8 @@ export function AppSidebar() {
       <ShelfCreatorDialog
         open={shelfDraftOpen}
         onOpenChange={(open) => {
-          if (!open) createShelfMut.reset();
-          setShelfDraftOpen(open);
+          if (!open) createShelfMut.reset()
+          setShelfDraftOpen(open)
         }}
         existingNames={allShelves.map((s) => s.name)}
         busy={createShelfMut.isPending}
@@ -355,48 +352,54 @@ export function AppSidebar() {
 
       {smartDraft && (
         <RuleEditor
-          title={smartDraft.mode === 'create' ? 'New smart shelf' : `Edit ${smartDraft.shelf.name}`}
-          submitLabel={smartDraft.mode === 'create' ? 'Create' : 'Save'}
-          initialName={smartDraft.mode === 'edit' ? smartDraft.shelf.name : ''}
-          initialRule={smartDraft.mode === 'edit' ? smartDraft.shelf.rule : undefined}
+          title={
+            smartDraft.mode === "create"
+              ? "New smart shelf"
+              : `Edit ${smartDraft.shelf.name}`
+          }
+          submitLabel={smartDraft.mode === "create" ? "Create" : "Save"}
+          initialName={smartDraft.mode === "edit" ? smartDraft.shelf.name : ""}
+          initialRule={
+            smartDraft.mode === "edit" ? smartDraft.shelf.rule : undefined
+          }
           initialAccent={
-            smartDraft.mode === 'edit'
+            smartDraft.mode === "edit"
               ? (smartDraft.shelf.accent as ShelfAccent)
-              : 'accent'
+              : "accent"
           }
           busy={createSmartMut.isPending || updateSmartMut.isPending}
           error={smartMutError?.message ?? null}
           onSubmit={({ name, rule, accent }) => {
-            if (smartDraft.mode === 'create') {
-              createSmartMut.mutate({ name, rule, accent });
+            if (smartDraft.mode === "create") {
+              createSmartMut.mutate({ name, rule, accent })
             } else {
               updateSmartMut.mutate({
                 slug: smartDraft.shelf.slug,
                 name,
                 rule,
                 accent,
-              });
+              })
             }
           }}
           onCancel={() => {
-            createSmartMut.reset();
-            updateSmartMut.reset();
-            setSmartDraft(null);
+            createSmartMut.reset()
+            updateSmartMut.reset()
+            setSmartDraft(null)
           }}
         />
       )}
     </Sidebar>
-  );
+  )
 }
 
 type ShelfCreatorDialogProps = {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  existingNames: string[];
-  busy: boolean;
-  error: string | null;
-  onSubmit: (draft: { name: string; accent: ShelfAccent }) => void;
-};
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  existingNames: Array<string>
+  busy: boolean
+  error: string | null
+  onSubmit: (draft: { name: string; accent: ShelfAccent }) => void
+}
 
 // ShelfCreatorDialog replaces the old window.prompt-based shelf creation.
 // Matches the LibraryCreatorDialog shape (controlled open, reset on close)
@@ -409,20 +412,20 @@ function ShelfCreatorDialog({
   error,
   onSubmit,
 }: ShelfCreatorDialogProps) {
-  const [name, setName] = useState('');
-  const [accent, setAccent] = useState<ShelfAccent>('accent');
+  const [name, setName] = useState("")
+  const [accent, setAccent] = useState<ShelfAccent>("accent")
 
   useEffect(() => {
-    if (open) return;
-    setName('');
-    setAccent('accent');
-  }, [open]);
+    if (open) return
+    setName("")
+    setAccent("accent")
+  }, [open])
 
-  const trimmed = name.trim();
+  const trimmed = name.trim()
   const collision = existingNames.some(
-    (n) => n.toLowerCase() === trimmed.toLowerCase(),
-  );
-  const valid = trimmed !== '' && !collision;
+    (n) => n.toLowerCase() === trimmed.toLowerCase()
+  )
+  const valid = trimmed !== "" && !collision
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -445,7 +448,7 @@ function ShelfCreatorDialog({
               placeholder="e.g. To finish"
               autoFocus
             />
-            {trimmed !== '' && collision && (
+            {trimmed !== "" && collision && (
               <div className="t-small text-(--color-accent-ink)">
                 A shelf with that name already exists.
               </div>
@@ -458,9 +461,7 @@ function ShelfCreatorDialog({
           </div>
 
           {error && (
-            <div
-              className="t-small rounded-sm border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink)"
-            >
+            <div className="t-small rounded-sm border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink)">
               {error}
             </div>
           )}
@@ -480,12 +481,12 @@ function ShelfCreatorDialog({
             onClick={() => onSubmit({ name: trimmed, accent })}
             disabled={!valid || busy}
           >
-            {busy ? 'Creating…' : 'Create shelf'}
+            {busy ? "Creating…" : "Create shelf"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
+  )
 }
 
 // SmartShelfRow is a NavItem with hover-revealed edit/delete affordances.
@@ -497,15 +498,15 @@ function SmartShelfRow({
   onEdit,
   onDelete,
 }: {
-  shelf: Shelf;
-  active: boolean;
-  onEdit: () => void;
-  onDelete: () => void;
+  shelf: Shelf
+  active: boolean
+  onEdit: () => void
+  onDelete: () => void
 }) {
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={shelf.name}>
-        <Link to="/library" search={{ shelf: shelf.slug } as never}>
+        <Link to="/library" search={{ shelf: shelf.slug }}>
           <span
             aria-hidden
             className="relative size-1.5 shrink-0 rounded-full"
@@ -515,7 +516,7 @@ function SmartShelfRow({
           <span>{shelf.name}</span>
         </Link>
       </SidebarMenuButton>
-      <SidebarMenuBadge className="group-hover/menu-item:hidden group-focus-within/menu-item:hidden">
+      <SidebarMenuBadge className="group-focus-within/menu-item:hidden group-hover/menu-item:hidden">
         {shelf.bookCount}
       </SidebarMenuBadge>
       <SidebarMenuAction
@@ -523,9 +524,9 @@ function SmartShelfRow({
         title="Edit rule"
         aria-label={`Edit ${shelf.name}`}
         onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          onEdit();
+          e.preventDefault()
+          e.stopPropagation()
+          onEdit()
         }}
       >
         <Icon name="edit" size={11} />
@@ -536,50 +537,50 @@ function SmartShelfRow({
         title="Delete"
         aria-label={`Delete ${shelf.name}`}
         onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          onDelete();
+          e.preventDefault()
+          e.stopPropagation()
+          onDelete()
         }}
       >
         <Icon name="close" size={11} />
       </SidebarMenuAction>
     </SidebarMenuItem>
-  );
+  )
 }
 
 type UserBadgeProps = {
-  user: AuthUser | null;
-  onLogout: () => void;
-  loggingOut: boolean;
-};
+  user: AuthUser | null
+  onLogout: () => void
+  loggingOut: boolean
+}
 
 // UserBadge is a single dropdown trigger wrapping the user row (avatar +
 // name/email) in the sidebar footer. The menu exposes "Account" (opens
 // the per-user settings dialog) and "Sign out". No separate /settings
 // route — preferences live entirely in the dialog now.
 function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
-  const { open: openUserSettings } = useUserSettingsDialog();
+  const { open: openUserSettings } = useUserSettingsDialog()
   // Skip rendering until /me resolves — the beforeLoad guard in _app.tsx
   // ensures a session exists by the time this component mounts, so the
   // null window is brief and avoids flashing fake identity details.
-  if (!user) return null;
-  const { display, email, role, initials } = user;
+  if (!user) return null
+  const { display, email, role, initials } = user
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-(--color-paper-3) focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--color-accent) group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+          className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 hover:bg-(--color-paper-3) focus-visible:ring-2 focus-visible:ring-(--color-accent) focus-visible:outline-none"
           aria-label="Account menu"
         >
           <Avatar size="sm">
-            <AvatarFallback className="bg-(--color-editorial-accent) text-(--color-paper-0) font-serif font-medium">
+            <AvatarFallback className="bg-(--color-editorial-accent) font-serif font-medium text-(--color-paper-0)">
               {initials}
             </AvatarFallback>
           </Avatar>
           <div className="flex-1 overflow-hidden group-data-[collapsible=icon]:hidden">
-            <div className="truncate text-[13px] font-medium leading-tight">
+            <div className="truncate text-[13px] leading-tight font-medium">
               {display}
             </div>
             <div className="t-micro truncate text-[10px]">{email || role}</div>
@@ -601,12 +602,12 @@ function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
         <DropdownMenuLabel>
           <div className="flex items-center gap-2.5">
             <Avatar size="sm">
-              <AvatarFallback className="bg-(--color-editorial-accent) text-(--color-paper-0) font-serif font-medium">
+              <AvatarFallback className="bg-(--color-editorial-accent) font-serif font-medium text-(--color-paper-0)">
                 {initials}
               </AvatarFallback>
             </Avatar>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[13px] font-medium leading-tight text-(--color-ink-1)">
+              <div className="truncate text-[13px] leading-tight font-medium text-(--color-ink-1)">
                 {display}
               </div>
               <div className="t-micro truncate text-[10px]">
@@ -616,15 +617,15 @@ function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
           </div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => openUserSettings('account')}>
+        <DropdownMenuItem onSelect={() => openUserSettings("account")}>
           <Icon name="user" size={13} />
           Account
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => openUserSettings('reading')}>
+        <DropdownMenuItem onSelect={() => openUserSettings("reading")}>
           <Icon name="book-open" size={13} />
           Reading preferences
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => openUserSettings('devices')}>
+        <DropdownMenuItem onSelect={() => openUserSettings("devices")}>
           <Icon name="device" size={13} />
           Device sync
         </DropdownMenuItem>
@@ -635,28 +636,36 @@ function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
           onSelect={() => onLogout()}
         >
           <Icon name="arrow-right" size={13} />
-          {loggingOut ? 'Signing out…' : 'Sign out'}
+          {loggingOut ? "Signing out…" : "Sign out"}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
-  );
+  )
 }
 
 type NavItemProps = {
-  to: string;
-  search?: Record<string, string | undefined>;
-  icon?: IconName;
-  label: string;
-  count?: number;
-  color?: string;
-  active?: boolean;
-};
+  to: string
+  search?: Record<string, string | undefined>
+  icon?: IconName
+  label: string
+  count?: number
+  color?: string
+  active?: boolean
+}
 
-function NavItem({ to, search, icon, label, count, color, active }: NavItemProps) {
+function NavItem({
+  to,
+  search,
+  icon,
+  label,
+  count,
+  color,
+  active,
+}: NavItemProps) {
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={label}>
-        <Link to={to} search={search as never}>
+        <Link to={to} search={search}>
           {color && (
             <span
               aria-hidden
@@ -670,9 +679,9 @@ function NavItem({ to, search, icon, label, count, color, active }: NavItemProps
       </SidebarMenuButton>
       {count != null && <SidebarMenuBadge>{count}</SidebarMenuBadge>}
     </SidebarMenuItem>
-  );
+  )
 }
 
 function NavLabel({ children }: { children: ReactNode }) {
-  return <span>{children}</span>;
+  return <span>{children}</span>
 }

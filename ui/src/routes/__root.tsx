@@ -1,5 +1,4 @@
 /// <reference types="vite/client" />
-import type { QueryClient } from "@tanstack/react-query"
 import { QueryClientProvider } from "@tanstack/react-query"
 import {
   HeadContent,
@@ -12,6 +11,7 @@ import { TanStackDevtools } from "@tanstack/react-devtools"
 
 import appCss from "../styles.css?url"
 import { setupTelemetry } from "../telemetry"
+import type { QueryClient } from "@tanstack/react-query"
 import { Toaster } from "@/components/ui/sonner"
 
 // Initialize browser OTel as early as possible — document-load spans need

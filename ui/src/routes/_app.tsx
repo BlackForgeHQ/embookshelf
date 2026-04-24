@@ -1,16 +1,13 @@
-import { useQuery } from '@tanstack/react-query';
-import { Outlet, createFileRoute, redirect } from '@tanstack/react-router';
+import { useQuery } from "@tanstack/react-query"
+import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 
-import { fetchMe, meQueryKey } from '@/api/auth';
-import { useRealtime } from '@/api/realtime';
-import {
-  fetchInstanceSummary,
-  instanceSummaryQueryKey,
-} from '@/api/settings';
-import { AppSidebar } from '@/components/Sidebar';
-import { UserSettingsDialogProvider } from '@/components/UserSettingsDialog';
-import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
-import { TooltipProvider } from '@/components/ui/tooltip';
+import { fetchMe, meQueryKey } from "@/api/auth"
+import { useRealtime } from "@/api/realtime"
+import { fetchInstanceSummary, instanceSummaryQueryKey } from "@/api/settings"
+import { AppSidebar } from "@/components/Sidebar"
+import { UserSettingsDialogProvider } from "@/components/UserSettingsDialog"
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { TooltipProvider } from "@/components/ui/tooltip"
 
 // Pathless layout: every in-app screen (dashboard, library, book detail,
 // bookdrop, settings, notebook, metadata editor) renders inside this shell
@@ -21,29 +18,29 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 // beforeLoad enforces authentication: any in-app route redirects to /login
 // when no session exists. The me query is cached in the router's
 // QueryClient so sibling routes reuse it without refetching.
-export const Route = createFileRoute('/_app')({
+export const Route = createFileRoute("/_app")({
   beforeLoad: async ({ context, location }) => {
     const me = await context.queryClient.ensureQueryData({
       queryKey: meQueryKey,
       queryFn: fetchMe,
       staleTime: 60_000,
-    });
+    })
     if (!me) {
       throw redirect({
-        to: '/login',
+        to: "/login",
         search: { next: location.href },
-      });
+      })
     }
-    return { me };
+    return { me }
   },
   component: AppLayout,
-});
+})
 
 function AppLayout() {
   // Only runs inside the authed shell — unauth'd visitors hit the
   // beforeLoad redirect above and never mount this component, so the
   // EventSource never fires without a valid session cookie.
-  useRealtime();
+  useRealtime()
 
   // SidebarProvider owns the expanded/collapsed state and persists it to
   // a cookie so the sidebar survives page reloads. TooltipProvider is
@@ -63,7 +60,7 @@ function AppLayout() {
         </SidebarProvider>
       </UserSettingsDialogProvider>
     </TooltipProvider>
-  );
+  )
 }
 
 function StatusBar() {
@@ -74,22 +71,24 @@ function StatusBar() {
     queryKey: instanceSummaryQueryKey,
     queryFn: fetchInstanceSummary,
     staleTime: 5 * 60_000,
-  });
+  })
 
-  const version = instance.data?.version ?? '…';
-  const mode = instance.data?.diskMode ?? '…';
-  const libCount = instance.data?.libraries;
-  const bookCount = instance.data?.books;
+  const version = instance.data?.version ?? "…"
+  const mode = instance.data?.diskMode ?? "…"
+  const libCount = instance.data?.libraries
+  const bookCount = instance.data?.books
 
   const catalog =
     libCount != null && bookCount != null
-      ? `${libCount} ${libCount === 1 ? 'library' : 'libraries'} · ${bookCount.toLocaleString()} ${bookCount === 1 ? 'volume' : 'volumes'}`
-      : null;
+      ? `${libCount} ${libCount === 1 ? "library" : "libraries"} · ${bookCount.toLocaleString()} ${bookCount === 1 ? "volume" : "volumes"}`
+      : null
 
   return (
     <div className="status-bar">
       <span className="status-dot green" />
-      <span>embookshelf {version} · {mode} mode</span>
+      <span>
+        embookshelf {version} · {mode} mode
+      </span>
       {catalog && (
         <>
           <span>·</span>
@@ -101,5 +100,5 @@ function StatusBar() {
       <div className="grow" />
       <span>⌘K to search</span>
     </div>
-  );
+  )
 }

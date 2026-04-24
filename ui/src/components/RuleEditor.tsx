@@ -1,5 +1,8 @@
 import { useState } from "react"
 
+import { AccentPicker } from "./AccentPicker"
+import { Icon } from "./Icon"
+import type { ShelfAccent } from "./AccentPicker"
 import type {
   RuleField,
   RuleMatch,
@@ -7,8 +10,6 @@ import type {
   ShelfPredicate,
   ShelfRule,
 } from "@/api/books"
-import { AccentPicker, type ShelfAccent } from "./AccentPicker"
-import { Icon } from "./Icon"
 import {
   Dialog,
   DialogContent,
@@ -113,7 +114,7 @@ const FIELDS: Record<RuleField, FieldMeta> = {
   },
 }
 
-const FIELD_ORDER: RuleField[] = [
+const FIELD_ORDER: Array<RuleField> = [
   "author",
   "title",
   "series",
