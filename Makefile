@@ -133,6 +133,25 @@ up-otlp: obs-up ## Same as `up` but exports OTLP from backend AND browser to gra
 test: ## Run Go tests
 	go test ./...
 
+.PHONY: go-lint
+go-lint: ## Run golangci-lint (requires golangci-lint v2 on PATH)
+	golangci-lint run --timeout=5m
+
+.PHONY: ui-lint
+ui-lint: ## Lint the UI (ESLint)
+	cd ui && bun run lint
+
+.PHONY: ui-typecheck
+ui-typecheck: ## Typecheck the UI (tsc --noEmit)
+	cd ui && bun run typecheck
+
+.PHONY: ui-test
+ui-test: ## Run UI unit tests (Vitest)
+	cd ui && bun run test
+
+.PHONY: ci-local
+ci-local: go-lint test ui-install ui-lint ui-typecheck ui-test ui-build build ## Run the same checks CI runs on a PR
+
 .PHONY: e2e-install
 e2e-install: ## Install Playwright deps + Chromium
 	cd e2e && npm install && npx playwright install --with-deps chromium

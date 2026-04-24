@@ -1,0 +1,159 @@
+name: e2e
+
+on:
+  pull_request:
+    paths:
+      - "ui/**"
+      - "internal/handler/**"
+      - "internal/service/**"
+      - "internal/auth/**"
+      - "internal/migrator/migrations/**"
+      - "e2e/**"
+      - "Dockerfile"
+      - "Makefile"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/e2e.yml"
+      - ".github/seed.sql"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playwright:
+    name: playwright
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: embookshelf
+          POSTGRES_PASSWORD: embookshelf
+          POSTGRES_DB: embookshelf
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U embookshelf"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable
+      EMBOOKSHELF_PORT: "6060"
+      MIGRATE_ON_START: "false"
+      BOOKDROP_PATH: ./bookdrop
+      DATA_PATH: ./data
+      LOG_LEVEL: warn
+      OTEL_ENABLED: "false"
+      BASE_URL: http://localhost:6060
+      ADMIN_EMAIL: admin@local
+      ADMIN_PASSWORD: changeme
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.x"
+
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('ui/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      - name: Apply migrations
+        run: go run ./cmd/migrate up
+
+      - name: Load seed
+        run: PGPASSWORD=embookshelf psql -h localhost -U embookshelf -d embookshelf -f .github/seed.sql
+
+      - name: Install UI deps
+        working-directory: ui
+        run: bun install --frozen-lockfile
+
+      - name: Build UI
+        working-directory: ui
+        run: |
+          mkdir -p ../internal/staticfs/dist
+          bun run build
+
+      - name: Build binary
+        run: go build -o ./tmp/embookshelf ./cmd/embookshelf
+
+      - name: Install e2e deps
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Start binary
+        run: |
+          mkdir -p bookdrop data
+          ./tmp/embookshelf > server.log 2>&1 &
+          echo "$!" > server.pid
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:6060/api/v1/healthcheck >/dev/null 2>&1; then
+              echo "server ready"
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "server did not become ready in 30s"
+          cat server.log
+          exit 1
+
+      - name: Run Playwright
+        working-directory: e2e
+        run: npm test
+
+      - name: Stop binary
+        if: always()
+        run: |
+          if [ -f server.pid ]; then
+            kill "$(cat server.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload server log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log
+          path: server.log
+          if-no-files-found: ignore
+          retention-days: 14

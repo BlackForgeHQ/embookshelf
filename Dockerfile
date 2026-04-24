@@ -17,13 +17,24 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 COPY --from=assets /app/internal/staticfs/dist ./internal/staticfs/dist
+ARG VERSION=dev
+ARG COMMIT=unknown
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath \
+        -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
         -o /out/embookshelf ./cmd/embookshelf
 
 # ---------- Stage 3: Runtime ----------
 FROM gcr.io/distroless/static-debian12:nonroot
+ARG VERSION=dev
+ARG COMMIT=unknown
+LABEL org.opencontainers.image.title="embookshelf" \
+      org.opencontainers.image.description="Self-hosted, multi-user digital library" \
+      org.opencontainers.image.source="https://github.com/BlackForgeHQ/embookshelf" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}" \
+      org.opencontainers.image.licenses="MIT"
 WORKDIR /app
 COPY --from=gobuild /out/embookshelf /app/embookshelf
 EXPOSE 6060
