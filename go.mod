@@ -3,14 +3,16 @@ module github.com/blackforge/embookshelf
 go 1.25.0
 
 require (
+	github.com/PuerkitoBio/goquery v1.12.0
+	github.com/agnivade/levenshtein v1.2.1
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/gin-contrib/cors v1.7.7
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/joho/godotenv v1.5.1
-	github.com/riverqueue/river v0.34.0
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.34.0
+	github.com/riverqueue/river v0.35.0
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.35.0
 	go.opentelemetry.io/contrib/bridges/otelslog v0.18.0
 	go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin v0.68.0
 	go.opentelemetry.io/otel v1.43.0
@@ -31,8 +33,6 @@ require (
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
-	github.com/PuerkitoBio/goquery v1.12.0 // indirect
-	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/air-verse/air v1.65.1 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
@@ -77,9 +77,9 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
-	github.com/riverqueue/river/riverdriver v0.34.0 // indirect
-	github.com/riverqueue/river/rivershared v0.34.0 // indirect
-	github.com/riverqueue/river/rivertype v0.34.0 // indirect
+	github.com/riverqueue/river/riverdriver v0.35.0 // indirect
+	github.com/riverqueue/river/rivershared v0.35.0 // indirect
+	github.com/riverqueue/river/rivertype v0.35.0 // indirect
 	github.com/spf13/afero v1.14.0 // indirect
 	github.com/spf13/cast v1.9.2 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
@@ -100,7 +100,7 @@ require (
 	golang.org/x/arch v0.25.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	google.golang.org/grpc v1.80.0 // indirect
