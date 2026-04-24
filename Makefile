@@ -64,6 +64,47 @@ seed: ## Load dev seed data (runs psql inside the postgres container)
 build: ui-build ## Build the server binary (includes embedded SPA)
 	go build -o ./tmp/embookshelf ./cmd/embookshelf
 
+# ---- Docker image ----------------------------------------------------------
+# Mirrors the shape of .github/workflows/image.yml: VERSION + COMMIT get
+# baked into the binary via -ldflags and into OCI labels. Override
+# IMAGE_NAME / IMAGE_PLATFORMS from the CLI for ad-hoc builds.
+IMAGE_NAME       ?= embookshelf
+IMAGE_VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+IMAGE_COMMIT     ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+IMAGE_SHA_SHORT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+
+.PHONY: docker-build
+docker-build: ## Build the container image for the host arch and load it into docker
+	docker buildx build \
+		--build-arg VERSION=$(IMAGE_VERSION) \
+		--build-arg COMMIT=$(IMAGE_COMMIT) \
+		--tag $(IMAGE_NAME):dev \
+		--tag $(IMAGE_NAME):sha-$(IMAGE_SHA_SHORT) \
+		--load \
+		.
+
+.PHONY: docker-build-multi
+docker-build-multi: ## Multi-arch (amd64+arm64) build matching CI publish; doesn't load (buildx limitation)
+	docker buildx build \
+		--platform linux/amd64,linux/arm64 \
+		--build-arg VERSION=$(IMAGE_VERSION) \
+		--build-arg COMMIT=$(IMAGE_COMMIT) \
+		--tag $(IMAGE_NAME):dev \
+		--tag $(IMAGE_NAME):sha-$(IMAGE_SHA_SHORT) \
+		.
+
+.PHONY: docker-run
+docker-run: ## Run the last-built :dev image against the dev Postgres (expects `make db-up`)
+	docker run --rm -it \
+		--network host \
+		-e DATABASE_URL=postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable \
+		-e EMBOOKSHELF_PORT=6060 \
+		-v $(CURDIR)/data:/data \
+		-v $(CURDIR)/bookdrop:/bookdrop \
+		-e DATA_PATH=/data \
+		-e BOOKDROP_PATH=/bookdrop \
+		$(IMAGE_NAME):dev
+
 .PHONY: run
 run: ## Run the server (expects SPA already built)
 	go run ./cmd/embookshelf
