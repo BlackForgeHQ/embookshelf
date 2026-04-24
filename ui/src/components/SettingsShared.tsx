@@ -98,9 +98,9 @@ export function Toggle({
       }}
     >
       <Switch checked={checked} onCheckedChange={onChange} />
-      <div style={{ flex: 1 }}>
+      <div className="grow">
         <div style={{ fontSize: 13.5 }}>{label}</div>
-        {hint && <div className="t-small" style={{ fontSize: 11.5 }}>{hint}</div>}
+        {hint && <div className="t-item-sub">{hint}</div>}
       </div>
     </label>
   );

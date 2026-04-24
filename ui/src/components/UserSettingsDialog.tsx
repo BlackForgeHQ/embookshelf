@@ -391,9 +391,9 @@ function AccountPanel() {
                 background: a.on ? 'oklch(0.58 0.12 140)' : 'var(--color-ink-4)',
               }}
             />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 500 }}>{a.n}</div>
-              <div className="t-small" style={{ fontSize: 11.5 }}>{a.sub}</div>
+            <div className="grow">
+              <div className="t-item-title">{a.n}</div>
+              <div className="t-item-sub">{a.sub}</div>
             </div>
             <span className="t-micro">{a.on ? 'enabled' : 'disabled'}</span>
           </div>
@@ -534,7 +534,7 @@ function DevicesPanel() {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'baseline', marginBottom: 8 }}>
-        <h2 className="t-h2" style={{ flex: 1 }}>Device sync</h2>
+        <h2 className="t-h2 grow">Device sync</h2>
         <Button
           type="button"
           variant="outline"
@@ -659,8 +659,8 @@ function DeviceRow({
         }}
       />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 500 }}>{device.name}</div>
-        <div className="t-small" style={{ fontSize: 11.5 }}>
+        <div className="t-item-title">{device.name}</div>
+        <div className="t-item-sub">
           {DEVICE_KIND_LABELS[device.kind]}
           {lastSent && ` · last sent ${lastSent}`}
           {!lastSent && ' · no pushes yet'}

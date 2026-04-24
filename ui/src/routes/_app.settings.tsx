@@ -24,12 +24,10 @@ import {
   fetchSettingsUsers,
   instanceInfoQueryKey,
   prescanLibraryPaths,
-  previewNamingPattern,
   providerSettingsQueryKey,
   rescanLibrary,
   settingsLibrariesQueryKey,
   settingsUsersQueryKey,
-  updateLibraryNamingPattern,
   fetchMetadataSettings,
   metadataSettingsQueryKey,
   updateMetadataSettings,
@@ -174,7 +172,7 @@ function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
     <>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 8 }}>
         <h2 className="t-h2">Libraries</h2>
-        <div style={{ flex: 1 }} />
+        <div className="grow" />
         <Button variant="outline" onClick={() => setCreatorOpen(true)}>
           <Icon name="plus" size={13} /> New library
         </Button>
@@ -338,7 +336,7 @@ function LibraryCreatorDialog({
                 borderRadius: 2,
               }}
             >
-              <div style={{ flex: 1 }}>
+              <div className="grow">
                 <div className="t-small" style={{ fontWeight: 500 }}>
                   Pre-create scan
                 </div>
@@ -437,7 +435,7 @@ function LibraryCard({
             /{library.slug}
           </div>
         </div>
-        <div style={{ flex: 1 }} />
+        <div className="grow" />
         <span className="t-micro">{library.bookCount} volumes</span>
         <Button
           type="button"
@@ -680,10 +678,10 @@ function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13.5, fontWeight: 500 }}>
+          <div className="t-item-title">
             Auto-enrich on bookdrop approve
           </div>
-          <div className="t-small" style={{ fontSize: 11.5 }}>
+          <div className="t-item-sub">
             When enabled, approving a bookdrop item triggers a provider
             fan-out and writes the top match (empty fields only, respecting locks).
           </div>
@@ -802,8 +800,8 @@ function ProviderRow({
           }}
         />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13.5, fontWeight: 500 }}>{provider.name}</div>
-          <div className="t-small" style={{ fontSize: 11.5 }}>
+          <div className="t-item-title">{provider.name}</div>
+          <div className="t-item-sub">
             <span className="mono">{provider.id}</span>
             {provider.external && ' · external API'}
             {provider.priority != null && ` · priority ${provider.priority}`}
@@ -1127,7 +1125,7 @@ function UsersPanel({ isAdmin, me }: { isAdmin: boolean; me: AuthUser | null }) 
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'baseline', marginBottom: 8 }}>
-        <h2 className="t-h2" style={{ flex: 1 }}>Users &amp; roles</h2>
+        <h2 className="t-h2 grow">Users &amp; roles</h2>
         <Button
           type="button"
           variant="outline"
@@ -1222,10 +1220,10 @@ function UsersPanel({ isAdmin, me }: { isAdmin: boolean; me: AuthUser | null }) 
             >
               <Avatar initials={u.initials} size={32} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 500 }}>
+                <div className="t-item-title">
                   {u.display} {isMe && <span className="t-micro">you</span>}
                 </div>
-                <div className="t-small" style={{ fontSize: 11.5 }}>
+                <div className="t-item-sub">
                   {u.email} · joined{' '}
                   {new Date(u.createdAt).toLocaleDateString(undefined, {
                     month: 'short',
@@ -1335,9 +1333,9 @@ function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
 
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 500 }}>Force SSO (hide local login)</div>
-            <div className="t-small" style={{ fontSize: 11.5 }}>
+          <div className="grow">
+            <div className="t-item-title">Force SSO (hide local login)</div>
+            <div className="t-item-sub">
               Hides the password form. Escape hatch:{' '}
               <span className="mono">/login?local=true</span>. Requires at least
               one provider enabled.
@@ -1380,9 +1378,9 @@ function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
       <Card>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 500 }}>Auto-create users on first login</div>
-              <div className="t-small" style={{ fontSize: 11.5 }}>
+            <div className="grow">
+              <div className="t-item-title">Auto-create users on first login</div>
+              <div className="t-item-sub">
                 When off, unknown SSO users are rejected unless linked to an existing local account.
               </div>
             </div>
@@ -1397,9 +1395,9 @@ function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
             />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 500 }}>Link by email</div>
-              <div className="t-small" style={{ fontSize: 11.5 }}>
+            <div className="grow">
+              <div className="t-item-title">Link by email</div>
+              <div className="t-item-sub">
                 Permits linking an existing local account to an SSO identity on first login when emails match.
               </div>
             </div>
@@ -1491,9 +1489,9 @@ function PresetProviderPanel({
       <h3 className="t-h3" style={{ marginTop: 24, marginBottom: 8 }}>{title}</h3>
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 10 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 500 }}>Enable</div>
-            <div className="t-small" style={{ fontSize: 11.5 }}>{intro}</div>
+          <div className="grow">
+            <div className="t-item-title">Enable</div>
+            <div className="t-item-sub">{intro}</div>
           </div>
           <Switch
             checked={value.enabled}
@@ -1645,9 +1643,9 @@ function GenericOidcPanel({
       <h3 className="t-h3" style={{ marginTop: 24, marginBottom: 8 }}>Custom OIDC provider</h3>
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 10 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 500 }}>Enable</div>
-            <div className="t-small" style={{ fontSize: 11.5 }}>
+          <div className="grow">
+            <div className="t-item-title">Enable</div>
+            <div className="t-item-sub">
               Authentik, Authelia, Keycloak, Pocket ID, or any OpenID Connect
               provider with a <span className="mono">/.well-known/openid-configuration</span> document.
             </div>
@@ -1803,7 +1801,7 @@ function TestResultBlock({ result }: { result: OidcTestResult }) {
             </span>
             <div>
               <div style={{ fontWeight: 500 }}>{c.name}</div>
-              <div className="t-small" style={{ fontSize: 11.5 }}>{c.message}</div>
+              <div className="t-item-sub">{c.message}</div>
             </div>
           </div>
         ))}

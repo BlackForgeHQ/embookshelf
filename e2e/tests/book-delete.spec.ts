@@ -1,7 +1,3 @@
-import { access, constants as fsConstants } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import type { APIRequestContext } from '@playwright/test';
 
 import { test, expect } from '../fixtures/api';
@@ -10,25 +6,21 @@ import { ADMIN_STATE_PATH } from '../fixtures/constants';
 
 test.use({ storageState: ADMIN_STATE_PATH });
 
-// Mirrors BOOKDROP_DIR in fixtures/bookdrop.ts — the binary's cwd is the
-// repo root, so the drop directory lives one level above e2e/.
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const BOOKDROP_DIR = resolve(__dirname, '..', '..', 'bookdrop');
-
 type BookLite = { id: string; title: string; format: string };
 
 // createBookViaBookdrop drops an EPUB, waits for it to reach 'ready', and
-// approves it. Returns the book + the on-disk path so the test can assert
-// the file is unlinked after delete.
+// approves it. Returns the created book. The file is moved out of bookdrop/
+// on approve — libraries with a fileNamingPattern relocate into the library
+// root, so this spec drives the "file is gone on delete" check through the
+// API instead of hard-coding a disk path.
 async function createBookViaBookdrop(
   adminApi: APIRequestContext,
   label: string,
-): Promise<{ book: BookLite; filename: string; diskPath: string }> {
+): Promise<{ book: BookLite; filename: string }> {
   const { filename, cleanup: cleanupDropFile } = await dropFixture(
     'epub',
     label,
   );
-  const diskPath = resolve(BOOKDROP_DIR, filename);
 
   try {
     const deadline = Date.now() + 20_000;
@@ -56,7 +48,7 @@ async function createBookViaBookdrop(
     const approve = await adminApi.post(`/api/v1/bookdrop/${dropId}/approve`);
     expect(approve.ok()).toBeTruthy();
     const { book } = (await approve.json()) as { book: BookLite };
-    return { book, filename, diskPath };
+    return { book, filename };
   } catch (err) {
     // If we never got to approve, the source file is still on disk and
     // will otherwise leak. Approved books own their path, so the caller
@@ -66,17 +58,8 @@ async function createBookViaBookdrop(
   }
 }
 
-async function fileExists(path: string): Promise<boolean> {
-  try {
-    await access(path, fsConstants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 test.describe('book delete', () => {
-  test('admin deletes a book: UI redirects, API 404s, disk file is gone', async ({
+  test('admin deletes a book: UI redirects, API 404s, file fetch 404s', async ({
     page,
     adminApi,
   }) => {
@@ -85,25 +68,29 @@ test.describe('book delete', () => {
     // comfortable headroom.
     test.setTimeout(60_000);
 
-    const { book, diskPath } = await createBookViaBookdrop(adminApi, 'delete');
+    const { book } = await createBookViaBookdrop(adminApi, 'delete');
 
-    // Sanity: the approved file exists on disk before we delete.
-    expect(await fileExists(diskPath)).toBe(true);
+    // Sanity: the approved book's file is servable before we delete.
+    const fileBefore = await adminApi.get(`/api/v1/books/${book.id}/file`);
+    expect(fileBefore.ok()).toBeTruthy();
 
     await page.goto(`/book/${book.id}`);
     await expect(page.getByRole('heading', { name: book.title })).toBeVisible();
 
-    // Danger zone lives in the Versions tab.
-    await page.getByRole('button', { name: 'versions' }).click();
+    // Danger zone lives in the Versions tab — shadcn TabsTrigger uses
+    // role="tab" and the label is capitalized.
+    await page.getByRole('tab', { name: 'Versions' }).click();
     await expect(page.getByText('Danger zone', { exact: true })).toBeVisible();
 
-    // window.confirm is the gate in front of the mutation — accept once.
-    page.once('dialog', (dialog) => {
-      expect(dialog.type()).toBe('confirm');
-      void dialog.accept();
-    });
-
+    // The destructive action opens a shadcn Dialog that requires the
+    // user to retype the title — this replaced window.confirm.
     await page.getByRole('button', { name: /Delete book/ }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(
+      dialog.getByRole('heading', { name: 'Delete book' }),
+    ).toBeVisible();
+    await dialog.getByLabel('Type the title to confirm.').fill(book.title);
+    await dialog.getByRole('button', { name: /Delete book/ }).click();
 
     // On success the page invalidates caches and navigates to /library.
     await expect(page).toHaveURL(/\/library$/, { timeout: 10_000 });
@@ -112,10 +99,10 @@ test.describe('book delete', () => {
     const after = await adminApi.get(`/api/v1/books/${book.id}`);
     expect(after.status()).toBe(404);
 
-    // Source file is gone from disk (delete handler unlinks it best-effort
-    // after the DB write). Give it a short window — the file unlink runs
-    // before the 204 response is written, so one access check is enough.
-    expect(await fileExists(diskPath)).toBe(false);
+    // The file endpoint 404s too — the delete handler unlinks the source
+    // best-effort after the DB write.
+    const fileAfter = await adminApi.get(`/api/v1/books/${book.id}/file`);
+    expect(fileAfter.status()).toBe(404);
   });
 
   test('DELETE /books/:id on a missing id returns 404', async ({ adminApi }) => {

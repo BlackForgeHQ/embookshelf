@@ -222,7 +222,7 @@ function MetadataEditor() {
         >
           <Icon name="arrow-left" size={14} /> Back to book
         </Button>
-        <div style={{ flex: 1 }} />
+        <div className="grow" />
         <Button
           variant="outline"
           onClick={() => void navigate({ to: '/book/$id', params: { id } })}
@@ -254,7 +254,7 @@ function MetadataEditor() {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 40, padding: '32px 40px' }}>
+      <div className="page-split page-split--main-sidebar" style={{ padding: '32px 40px' }}>
         <div style={{ maxWidth: 720 }}>
           <div className="t-label" style={{ marginBottom: 6 }}>Editing metadata</div>
           <h1 className="t-h1" style={{ marginBottom: 28 }}>{b.title}</h1>
@@ -543,7 +543,7 @@ function EnrichmentPanel({
   const [streaming, setStreaming] = useState(false);
   const [providers, setProviders] = useState<string[]>([]);
   const [streamError, setStreamError] = useState<string | null>(null);
-  const cancelRef = useRef<() => void>();
+  const cancelRef = useRef<() => void>(undefined);
 
   // Version bumps whenever the user hits "re-search" so streaming effect
   // knows to tear down the old EventSource and open a fresh one.
@@ -590,7 +590,7 @@ function EnrichmentPanel({
       queryClient.invalidateQueries({ queryKey: ['books'] });
       toast.success('Cover updated.');
     },
-    onError: (err) => toast.error((err as ApiError).message || 'Cover import failed.'),
+    onError: (err) => toast.error((err as unknown as ApiError).message || 'Cover import failed.'),
   });
 
   // applyMut writes the selected match server-side via PUT
@@ -619,7 +619,7 @@ function EnrichmentPanel({
       queryClient.invalidateQueries({ queryKey: ['books'] });
       toast.success('Metadata applied.');
     },
-    onError: (err) => toast.error((err as ApiError).message || 'Apply failed.'),
+    onError: (err) => toast.error((err as unknown as ApiError).message || 'Apply failed.'),
   });
 
   return (
@@ -720,7 +720,7 @@ function LockToggle({
     onSuccess: (fresh) => {
       queryClient.setQueryData(bookQueryKey(bookId), fresh);
     },
-    onError: (err) => toast.error((err as ApiError).message || 'Lock update failed.'),
+    onError: (err) => toast.error((err as unknown as ApiError).message || 'Lock update failed.'),
   });
   return (
     <button

@@ -42,7 +42,7 @@ export function TopBar({ title, subtitle, search, setSearch, right, crumbs }: To
         </div>
       )}
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 24 }}>
-        <div style={{ flex: 1 }}>
+        <div className="grow">
           <h1 className="t-h1" style={{ fontWeight: 500 }}>{title}</h1>
           {subtitle && (
             <div style={{ color: 'var(--color-ink-3)', fontSize: 14, marginTop: 4, fontStyle: 'italic' }}>

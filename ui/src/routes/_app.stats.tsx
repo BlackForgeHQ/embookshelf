@@ -129,7 +129,7 @@ function StatsPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 28 }}>
               <Card title="Top authors" subtitle="most-represented in your library">
                 {stats.data.topAuthors.length === 0 ? (
-                  <EmptyRow>—</EmptyRow>
+                  <EmptyRow>No authors yet — add books to your library.</EmptyRow>
                 ) : (
                   <BarList buckets={stats.data.topAuthors} />
                 )}

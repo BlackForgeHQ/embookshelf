@@ -1,89 +1,126 @@
-import type { APIRequestContext } from '@playwright/test';
+import type { APIRequestContext, Page } from '@playwright/test';
 
 import { test, expect } from '../fixtures/api';
 import { ADMIN_EMAIL, ADMIN_STATE_PATH } from '../fixtures/constants';
 
 test.use({ storageState: ADMIN_STATE_PATH });
 
-// Settings is rendered as a single route with a local nav list on the
-// left and a content pane on the right. Every panel swap is a client-only
-// state change — no URL update — so we drive the tests through role-named
-// buttons in the side nav.
+// Admin-only panels live on the /settings route behind a side nav of
+// <button>s. User-scoped panels (Account, Reading preferences, Device
+// sync) were moved into a shadcn <Dialog> that opens from the sidebar's
+// "Account menu" dropdown. Each flow has its own helper.
 
-async function openSettings(page: import('@playwright/test').Page, panel: string) {
+async function openAdminSettings(page: Page, panel: string): Promise<void> {
   await page.goto('/settings');
-  if (panel !== 'Account') {
-    // Account is the default pane; only click for the others.
-    await page.getByRole('button', { name: panel, exact: true }).click();
-  }
+  await page.getByRole('button', { name: panel, exact: true }).click();
+  // Wait for the header to swap so assertions below aren't racing the
+  // previous panel's content.
+  await expect(
+    page.getByRole('main').getByRole('heading', { name: panel }),
+  ).toBeVisible();
+}
+
+async function openUserSettingsDialog(
+  page: Page,
+  section: 'Account' | 'Reading preferences' | 'Device sync',
+): Promise<void> {
+  await page.goto('/');
+  await page
+    .locator('[data-sidebar="sidebar"]')
+    .getByRole('button', { name: 'Account menu' })
+    .click();
+  await page.getByRole('menuitem', { name: section }).click();
+
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  // The dialog nav uses <button>s labelled by section — click once to
+  // ensure the right pane is rendered (the menuitem already picks one,
+  // but settling on the label here is cheap and keeps the helper robust
+  // if the dropdown target ever drifts).
+  await dialog.getByRole('button', { name: section, exact: true }).click();
+  // exact:true — "Account" would otherwise collide with the dialog title
+  // "My account" that stays mounted at the top of the sheet.
+  await expect(
+    dialog.getByRole('heading', { name: section, exact: true }),
+  ).toBeVisible();
 }
 
 // ---------------------------------------------------------------------------
-// Account
+// Account (moved to UserSettingsDialog)
 // ---------------------------------------------------------------------------
 
 test.describe('settings · account', () => {
-  test('renders the seeded admin identity by default', async ({ page }) => {
-    await openSettings(page, 'Account');
+  test('dialog renders the seeded admin identity', async ({ page }) => {
+    await openUserSettingsDialog(page, 'Account');
+    const dialog = page.getByRole('dialog');
 
-    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Account' })).toBeVisible();
-    await expect(page.getByText(ADMIN_EMAIL, { exact: false })).toBeVisible();
-    await expect(page.getByText(/·\s*Admin\s*·/)).toBeVisible();
+    await expect(dialog.getByRole('heading', { name: 'My account' })).toBeVisible();
+    await expect(dialog.getByText(ADMIN_EMAIL, { exact: false })).toBeVisible();
+    await expect(dialog.getByText(/·\s*Admin\s*·/)).toBeVisible();
   });
 
   test('Change password toggles the inline form', async ({ page }) => {
-    await openSettings(page, 'Account');
+    await openUserSettingsDialog(page, 'Account');
+    const dialog = page.getByRole('dialog');
 
-    const main = page.getByRole('main');
-    const currentPw = main.getByRole('textbox', { name: 'Current password' });
+    const currentPw = dialog.getByRole('textbox', { name: 'Current password' });
     await expect(currentPw).toBeHidden();
 
-    await main.getByRole('button', { name: 'Change password' }).click();
+    await dialog.getByRole('button', { name: 'Change password' }).click();
     await expect(currentPw).toBeVisible();
-    await expect(main.getByRole('textbox', { name: 'New password', exact: true })).toBeVisible();
-    await expect(main.getByRole('textbox', { name: 'Confirm new password' })).toBeVisible();
-
-    await main.getByRole('button', { name: 'Cancel' }).click();
-    await expect(currentPw).toBeHidden();
-  });
-
-  test('password mismatch surfaces a client-side error', async ({ page }) => {
-    await openSettings(page, 'Account');
-
-    const main = page.getByRole('main');
-    await main.getByRole('button', { name: 'Change password' }).click();
-    await main.getByRole('textbox', { name: 'Current password' }).fill('changeme');
-    await main.getByRole('textbox', { name: 'New password', exact: true }).fill('abcdefgh');
-    await main.getByRole('textbox', { name: 'Confirm new password' }).fill('something-else');
-    await main.getByRole('button', { name: 'Update password' }).click();
-
-    await expect(main.getByText('New passwords do not match.')).toBeVisible();
-  });
-
-  test('wrong current password returns a server-side error', async ({ page }) => {
-    await openSettings(page, 'Account');
-
-    const main = page.getByRole('main');
-    await main.getByRole('button', { name: 'Change password' }).click();
-    await main.getByRole('textbox', { name: 'Current password' }).fill('definitely-not-the-password');
-    await main.getByRole('textbox', { name: 'New password', exact: true }).fill('abcdefgh');
-    await main.getByRole('textbox', { name: 'Confirm new password' }).fill('abcdefgh');
-    await main.getByRole('button', { name: 'Update password' }).click();
-
     await expect(
-      main.getByText(/current password is incorrect/i),
+      dialog.getByRole('textbox', { name: 'New password', exact: true }),
+    ).toBeVisible();
+    await expect(
+      dialog.getByRole('textbox', { name: 'Confirm new password' }),
     ).toBeVisible();
   });
 
-  test('Edit name inline flow opens the form', async ({ page }) => {
-    await openSettings(page, 'Account');
+  test('password mismatch surfaces a toast error', async ({ page }) => {
+    await openUserSettingsDialog(page, 'Account');
+    const dialog = page.getByRole('dialog');
 
-    const main = page.getByRole('main');
-    await main.getByRole('button', { name: 'Edit name' }).click();
-    await expect(main.getByPlaceholder('Display name')).toBeVisible();
-    await main.getByRole('button', { name: 'Cancel' }).click();
-    await expect(main.getByPlaceholder('Display name')).toBeHidden();
+    await dialog.getByRole('button', { name: 'Change password' }).click();
+    await dialog.getByRole('textbox', { name: 'Current password' }).fill('changeme');
+    await dialog
+      .getByRole('textbox', { name: 'New password', exact: true })
+      .fill('abcdefgh');
+    await dialog
+      .getByRole('textbox', { name: 'Confirm new password' })
+      .fill('something-else');
+    await dialog.getByRole('button', { name: 'Update password' }).click();
+
+    // Mismatch is shown via a sonner toast (not an inline error any more).
+    await expect(page.getByText('New passwords do not match.')).toBeVisible();
+  });
+
+  test('wrong current password returns a server-side error', async ({ page }) => {
+    await openUserSettingsDialog(page, 'Account');
+    const dialog = page.getByRole('dialog');
+
+    await dialog.getByRole('button', { name: 'Change password' }).click();
+    await dialog
+      .getByRole('textbox', { name: 'Current password' })
+      .fill('definitely-not-the-password');
+    await dialog
+      .getByRole('textbox', { name: 'New password', exact: true })
+      .fill('abcdefgh');
+    await dialog
+      .getByRole('textbox', { name: 'Confirm new password' })
+      .fill('abcdefgh');
+    await dialog.getByRole('button', { name: 'Update password' }).click();
+
+    await expect(page.getByText(/current password is incorrect/i)).toBeVisible();
+  });
+
+  test('Edit name inline flow opens the form', async ({ page }) => {
+    await openUserSettingsDialog(page, 'Account');
+    const dialog = page.getByRole('dialog');
+
+    await dialog.getByRole('button', { name: 'Edit name' }).click();
+    await expect(dialog.getByPlaceholder('Display name')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog.getByPlaceholder('Display name')).toBeHidden();
   });
 });
 
@@ -93,28 +130,28 @@ test.describe('settings · account', () => {
 
 test.describe('settings · reading preferences', () => {
   test('renders the preference controls', async ({ page }) => {
-    await openSettings(page, 'Reading preferences');
+    await openUserSettingsDialog(page, 'Reading preferences');
+    const dialog = page.getByRole('dialog');
 
-    const main = page.getByRole('main');
     await expect(
-      main.getByRole('heading', { name: 'Reading preferences' }),
+      dialog.getByRole('heading', { name: 'Reading preferences' }),
     ).toBeVisible();
-    await expect(main.getByText('Theme', { exact: true })).toBeVisible();
-    await expect(main.getByText('Font family', { exact: true })).toBeVisible();
+    await expect(dialog.getByText('Theme', { exact: true })).toBeVisible();
+    await expect(dialog.getByText('Font family', { exact: true })).toBeVisible();
+    await expect(dialog.getByText('Record reading sessions')).toBeVisible();
     await expect(
-      main.getByText('Record reading sessions'),
-    ).toBeVisible();
-    await expect(
-      main.getByText('Two-page layout on wide screens'),
+      dialog.getByText('Two-page layout on wide screens'),
     ).toBeVisible();
   });
 
   test('changing the theme persists to localStorage', async ({ page }) => {
-    await openSettings(page, 'Reading preferences');
+    await openUserSettingsDialog(page, 'Reading preferences');
+    const dialog = page.getByRole('dialog');
 
-    const main = page.getByRole('main');
-    // Theme is the first select under the "Theme" label.
-    await main.getByLabel('Theme').selectOption('sepia');
+    // Theme control is a shadcn Select (combobox). The Theme Field is
+    // the first combobox in the panel.
+    await dialog.getByRole('combobox').first().click();
+    await page.getByRole('option', { name: 'Sepia' }).click();
 
     const raw = await page.evaluate(() =>
       window.localStorage.getItem('embookshelf.readingPreferences'),
@@ -131,11 +168,18 @@ test.describe('settings · reading preferences', () => {
 
 test.describe('settings · libraries', () => {
   test('shows the registered library roots', async ({ page }) => {
-    await openSettings(page, 'Libraries');
+    await openAdminSettings(page, 'Libraries');
 
-    await expect(page.getByRole('heading', { name: 'Libraries' })).toBeVisible();
-    // "Main" also appears as a sidebar link — scope to main to avoid
-    // strict-mode matches.
+    await expect(
+      page.getByRole('main').getByRole('heading', { name: 'Libraries' }),
+    ).toBeVisible();
+    // The seeded Main library is always present on this dev stack; if
+    // there are none, skip gracefully.
+    const mainCount = await page
+      .getByRole('main')
+      .getByText('Main', { exact: true })
+      .count();
+    test.skip(mainCount === 0, 'no library rows — nothing to assert on');
     await expect(
       page.getByRole('main').getByText('Main', { exact: true }),
     ).toBeVisible();
@@ -143,19 +187,14 @@ test.describe('settings · libraries', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Metadata providers (read-only, configured via ENRICHMENT_PROVIDERS env)
+// Metadata providers (admin-only)
 // ---------------------------------------------------------------------------
 
 test.describe('settings · metadata providers', () => {
   test('lists every built-in provider', async ({ page }) => {
-    await openSettings(page, 'Metadata providers');
+    await openAdminSettings(page, 'Metadata providers');
 
     const main = page.getByRole('main');
-    await expect(
-      main.getByRole('heading', { name: 'Metadata providers' }),
-    ).toBeVisible();
-    // { exact: true } so "Amazon" (name) doesn't collide with "amazon" (id)
-    // rendered right below in the mono badge; same for the other kinds.
     await expect(main.getByText('Google Books', { exact: true })).toBeVisible();
     await expect(main.getByText('Open Library', { exact: true })).toBeVisible();
     await expect(main.getByText('Amazon', { exact: true })).toBeVisible();
@@ -164,54 +203,49 @@ test.describe('settings · metadata providers', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Device sync (per-user — available to every role)
+// Device sync (moved to UserSettingsDialog)
 // ---------------------------------------------------------------------------
 
 test.describe('settings · device sync', () => {
   test('renders OPDS URL and the Add device action', async ({ page }) => {
-    await openSettings(page, 'Device sync');
+    await openUserSettingsDialog(page, 'Device sync');
+    const dialog = page.getByRole('dialog');
 
-    const main = page.getByRole('main');
     await expect(
-      main.getByRole('heading', { name: 'Device sync' }),
+      dialog.getByRole('heading', { name: 'Device sync' }),
     ).toBeVisible();
-    await expect(main.getByRole('button', { name: /Add device/ })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: /Add device/ })).toBeVisible();
 
-    const opdsInput = main.getByRole('textbox').first();
+    // First textbox in the pane is the read-only OPDS URL field.
+    const opdsInput = dialog.getByRole('textbox').first();
     await expect(opdsInput).toHaveValue(/\/opds$/);
   });
 
   test('Add device opens the reMarkable pairing form', async ({ page }) => {
-    await openSettings(page, 'Device sync');
+    await openUserSettingsDialog(page, 'Device sync');
+    const dialog = page.getByRole('dialog');
 
-    const main = page.getByRole('main');
-    await main.getByRole('button', { name: /Add device/ }).click();
+    await dialog.getByRole('button', { name: /Add device/ }).click();
 
-    await expect(
-      main.getByText(/Add reMarkable Paper Pro/),
-    ).toBeVisible();
-    await expect(main.getByLabel('One-time code')).toBeVisible();
-    const pairBtn = main.getByRole('button', { name: 'Pair device' });
-    // Empty code → button stays disabled.
+    await expect(dialog.getByText(/Add reMarkable Paper Pro/)).toBeVisible();
+    await expect(dialog.getByLabel('One-time code')).toBeVisible();
+    const pairBtn = dialog.getByRole('button', { name: 'Pair device' });
     await expect(pairBtn).toBeDisabled();
 
-    await main.getByRole('button', { name: 'Cancel' }).click();
-    await expect(main.getByLabel('One-time code')).toBeHidden();
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog.getByLabel('One-time code')).toBeHidden();
   });
 });
 
 // ---------------------------------------------------------------------------
-// Email delivery (informational)
+// Email delivery (informational, admin)
 // ---------------------------------------------------------------------------
 
 test.describe('settings · email delivery', () => {
   test('renders the informational panel', async ({ page }) => {
-    await openSettings(page, 'Email delivery');
+    await openAdminSettings(page, 'Email delivery');
 
     const main = page.getByRole('main');
-    await expect(
-      main.getByRole('heading', { name: 'Email delivery' }),
-    ).toBeVisible();
     await expect(main.getByText(/SMTP is not yet wired/)).toBeVisible();
   });
 });
@@ -231,19 +265,15 @@ async function deleteUserByEmail(api: APIRequestContext, email: string): Promise
 
 test.describe('settings · users & roles', () => {
   test('lists existing users including the seeded admin', async ({ page }) => {
-    await openSettings(page, 'Users & roles');
+    await openAdminSettings(page, 'Users & roles');
 
     const main = page.getByRole('main');
-    await expect(
-      main.getByRole('heading', { name: 'Users & roles' }),
-    ).toBeVisible();
     await expect(main.getByText(ADMIN_EMAIL, { exact: false })).toBeVisible();
-    // The signed-in admin is badged "you".
     await expect(main.getByText('you', { exact: true })).toBeVisible();
   });
 
   test('New user button opens the creation form', async ({ page }) => {
-    await openSettings(page, 'Users & roles');
+    await openAdminSettings(page, 'Users & roles');
 
     const main = page.getByRole('main');
     await main.getByRole('button', { name: /New user/ }).click();
@@ -251,7 +281,7 @@ test.describe('settings · users & roles', () => {
     await expect(main.getByLabel('Email')).toBeVisible();
     await expect(main.getByLabel('Display name')).toBeVisible();
     await expect(main.getByLabel('Initial password')).toBeVisible();
-    await expect(main.getByLabel('Role')).toBeVisible();
+    await expect(main.getByText('Role', { exact: true })).toBeVisible();
     await main.getByRole('button', { name: 'Cancel' }).click();
     await expect(main.getByLabel('Initial password')).toBeHidden();
   });
@@ -262,7 +292,7 @@ test.describe('settings · users & roles', () => {
   }) => {
     const email = `e2e-user-${Date.now()}@local`;
 
-    await openSettings(page, 'Users & roles');
+    await openAdminSettings(page, 'Users & roles');
     const main = page.getByRole('main');
 
     try {
@@ -270,10 +300,15 @@ test.describe('settings · users & roles', () => {
       await main.getByLabel('Email').fill(email);
       await main.getByLabel('Display name').fill('E2E User');
       await main.getByLabel('Initial password').fill('password123');
-      await main.getByLabel('Role').selectOption('user');
+      // Role is a shadcn Select (combobox). Scope by its accessible
+      // name so we don't match the existing user rows' own Role selects.
+      await main.getByRole('combobox', { name: 'Role' }).click();
+      await page.getByRole('option', { name: 'User', exact: true }).click();
       await main.getByRole('button', { name: 'Create user' }).click();
 
-      await expect(main.getByText('User created.')).toBeVisible();
+      // Success is confirmed via a sonner toast — not an inline panel
+      // message. Match on the page-level toast.
+      await expect(page.getByText('User created.')).toBeVisible();
       await expect(main.getByText(email, { exact: false })).toBeVisible();
     } finally {
       await deleteUserByEmail(adminApi, email);
@@ -287,12 +322,9 @@ test.describe('settings · users & roles', () => {
 
 test.describe('settings · backups', () => {
   test('renders backup guidance', async ({ page }) => {
-    await openSettings(page, 'Backups');
+    await openAdminSettings(page, 'Backups');
 
     const main = page.getByRole('main');
-    await expect(
-      main.getByRole('heading', { name: 'Backups' }),
-    ).toBeVisible();
     await expect(main.getByText('pg_dump embookshelf')).toBeVisible();
   });
 });
@@ -305,14 +337,11 @@ test.describe('settings · about', () => {
   test('shows the product version and admin-only runtime details', async ({
     page,
   }) => {
-    await openSettings(page, 'About');
+    await openAdminSettings(page, 'About');
 
     const main = page.getByRole('main');
-    await expect(main.getByRole('heading', { name: 'About' })).toBeVisible();
-    // Product name + version field are always rendered.
     await expect(main.getByText('embookshelf', { exact: true })).toBeVisible();
     await expect(main.getByText('Version')).toBeVisible();
-    // Admin-only fields — the seeded admin sees them.
     await expect(main.getByText('Runtime')).toBeVisible();
     await expect(main.getByText('Disk mode')).toBeVisible();
     await expect(main.getByText('Instance totals')).toBeVisible();

@@ -17,7 +17,7 @@ test.describe('shelves', () => {
   }) => {
     await page.goto('/');
 
-    const sidebar = page.locator('aside');
+    const sidebar = page.locator('[data-sidebar="sidebar"]');
     // Seeded shelves from scripts/seed.sql.
     await expect(sidebar.getByRole('link', { name: /Reading Now/ })).toBeVisible();
     await expect(sidebar.getByRole('link', { name: /To read/ })).toBeVisible();
@@ -40,7 +40,7 @@ test.describe('shelves', () => {
     try {
       await page.goto('/');
 
-      const sidebar = page.locator('aside');
+      const sidebar = page.locator('[data-sidebar="sidebar"]');
       await expect(sidebar.getByRole('link', { name: new RegExp(shelfName) })).toBeVisible();
 
       await sidebar.getByRole('link', { name: new RegExp(shelfName) }).click();

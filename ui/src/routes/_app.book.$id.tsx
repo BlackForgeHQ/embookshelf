@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { toast } from 'sonner';
 
 import {
   annotationKind,
@@ -122,7 +123,7 @@ function BookDetail() {
         <Button variant="ghost" size="sm" onClick={() => void navigate({ to: '/library' })}>
           <Icon name="arrow-left" size={14} /> Back to library
         </Button>
-        <div style={{ flex: 1 }} />
+        <div className="grow" />
         <Button
           variant="outline"
           size="sm"
@@ -144,7 +145,7 @@ function BookDetail() {
         <SendToDeviceButton bookId={id} />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 48, padding: '40px 48px' }}>
+      <div className="page-split page-split--cover-main" style={{ padding: '40px 48px' }}>
         {/* Left — cover & actions */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <Cover book={b} size="hero" />
@@ -265,26 +266,30 @@ function BookDetail() {
                   }}
                 >
                   <Icon name="book" size={16} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 500 }}>
+                  <div className="grow">
+                    <div className="t-item-title">
                       {b.title}.{b.format.toLowerCase()}
                     </div>
                     <div className="mono" style={{ fontSize: 11, color: 'var(--color-ink-3)' }}>
                       Primary · {b.format}
                     </div>
                   </div>
-                  <Button variant="outline" size="sm">Replace</Button>
                 </div>
 
                 {isAdmin && (
                   <div
                     style={{
                       padding: 16,
-                      border: '1px solid var(--color-accent-soft)',
+                      border: '1px solid var(--color-destructive)',
                       background: 'var(--color-paper-0)',
                     }}
                   >
-                    <div className="t-label" style={{ marginBottom: 6 }}>Danger zone</div>
+                    <div
+                      className="t-label"
+                      style={{ marginBottom: 6, color: 'var(--color-destructive)' }}
+                    >
+                      Danger zone
+                    </div>
                     <p className="t-small" style={{ marginBottom: 10, maxWidth: 520 }}>
                       Permanently remove this book, its cover, its source file, and every
                       reader&apos;s progress, notes, and shelf placements for it. This cannot
@@ -295,9 +300,8 @@ function BookDetail() {
                         style={{
                           padding: '8px 12px',
                           marginBottom: 10,
-                          border: '1px solid var(--color-accent-soft)',
-                          background: 'var(--color-accent-soft)',
-                          color: 'var(--color-accent-ink)',
+                          border: '1px solid var(--color-destructive)',
+                          color: 'var(--color-destructive)',
                           fontSize: 13,
                         }}
                       >
@@ -643,21 +647,17 @@ function SendToDeviceButton({ bookId }: { bookId: string }) {
   const queryClient = useQueryClient();
   const devices = useQuery({ queryKey: devicesQueryKey, queryFn: fetchDevices });
   const [open, setOpen] = useState(false);
-  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
 
   const sendMut = useMutation({
     mutationFn: (deviceId: string) => sendBookToDevice(bookId, deviceId),
     onSuccess: (_data, deviceId) => {
       const target = devices.data?.find((d) => d.id === deviceId);
-      setToast({
-        kind: 'ok',
-        msg: `Sent to ${target?.name ?? 'device'}.`,
-      });
+      toast.success(`Sent to ${target?.name ?? 'device'}.`);
       queryClient.invalidateQueries({ queryKey: devicesQueryKey });
       setOpen(false);
     },
     onError: (e) => {
-      setToast({ kind: 'err', msg: (e as unknown as ApiError).message });
+      toast.error((e as unknown as ApiError).message || 'Send failed.');
     },
   });
 
@@ -677,50 +677,28 @@ function SendToDeviceButton({ bookId }: { bookId: string }) {
   }
 
   return (
-    <div style={{ position: 'relative' }}>
-      <DropdownMenu open={open} onOpenChange={setOpen}>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" disabled={sendMut.isPending}>
-            <Icon name="device" size={13} />{' '}
-            {sendMut.isPending ? 'Sending…' : 'Send to device'}
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-56">
-          {list.map((d) => (
-            <DropdownMenuItem
-              key={d.id}
-              onSelect={() => sendMut.mutate(d.id)}
-              className="flex flex-col items-start gap-0.5"
-            >
-              <span style={{ fontSize: 13.5, fontWeight: 500 }}>{d.name}</span>
-              <span className="t-small" style={{ fontSize: 11 }}>
-                {DEVICE_KIND_LABELS[d.kind]}
-              </span>
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-      {toast && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 6px)',
-            right: 0,
-            padding: '8px 12px',
-            background: 'var(--color-paper-0)',
-            border: `1px solid ${toast.kind === 'ok' ? 'oklch(0.58 0.12 140)' : 'var(--color-editorial-accent)'}`,
-            color: toast.kind === 'ok' ? 'oklch(0.45 0.12 140)' : 'var(--color-accent-ink)',
-            fontSize: 12.5,
-            maxWidth: 320,
-            zIndex: 21,
-          }}
-          onClick={() => setToast(null)}
-          role="status"
-        >
-          {toast.msg}
-        </div>
-      )}
-    </div>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" disabled={sendMut.isPending}>
+          <Icon name="device" size={13} />{' '}
+          {sendMut.isPending ? 'Sending…' : 'Send to device'}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-56">
+        {list.map((d) => (
+          <DropdownMenuItem
+            key={d.id}
+            onSelect={() => sendMut.mutate(d.id)}
+            className="flex flex-col items-start gap-0.5"
+          >
+            <span className="t-item-title">{d.name}</span>
+            <span className="t-small" style={{ fontSize: 11 }}>
+              {DEVICE_KIND_LABELS[d.kind]}
+            </span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

@@ -124,6 +124,8 @@ function LibraryView() {
       size="icon-sm"
       onClick={() => setLayout(name)}
       title={label}
+      aria-label={`${label} layout`}
+      aria-pressed={layout === name}
     >
       <Icon name={name === 'shelf' ? 'shelf' : name === 'grid' ? 'grid' : 'list'} size={13} />
     </Button>
@@ -162,12 +164,12 @@ function LibraryView() {
             key={f ?? 'all'}
             className={`chip ${filterFormat === f ? 'active' : ''}`}
             onClick={() => setFilterFormat(f)}
-            style={{ cursor: 'pointer', border: 'none' }}
+            style={{ border: 'none' }}
           >
             {f ?? 'All formats'}
           </button>
         ))}
-        <div style={{ flex: 1 }} />
+        <div className="grow" />
         <span className="t-label">Sort</span>
         <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
           <SelectTrigger size="sm" className="w-auto">
@@ -279,14 +281,14 @@ function BookCard({ book, onOpen, layout }: { book: Book; onOpen: (id: string) =
       gap: 16,
       padding: '10px 16px',
       borderBottom: '1px solid var(--color-rule-soft)',
-      cursor: 'pointer',
     };
     return (
-      <div
+      <button
+        type="button"
         onClick={() => onOpen(book.id)}
+        className="card-row"
+        aria-label={`Open ${book.title}`}
         style={rowStyle}
-        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-paper-2)')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = '')}
       >
         <Cover book={book} size="xs" />
         <div>
@@ -302,13 +304,16 @@ function BookCard({ book, onOpen, layout }: { book: Book; onOpen: (id: string) =
         <div className="mono" style={{ fontSize: 11, color: 'var(--color-ink-3)' }}>{book.format}</div>
         <StarRating rating={book.rating} size={11} />
         <div className="mono" style={{ fontSize: 11, color: 'var(--color-ink-3)' }}>{book.year}</div>
-      </div>
+      </button>
     );
   }
   return (
-    <div
+    <button
+      type="button"
       onClick={() => onOpen(book.id)}
-      style={{ display: 'flex', flexDirection: 'column', gap: 10, width: 130, cursor: 'pointer' }}
+      className="card-tile"
+      aria-label={`Open ${book.title}`}
+      style={{ display: 'flex', flexDirection: 'column', gap: 10, width: 130 }}
     >
       <Cover book={book} size="md" />
       <div>
@@ -320,7 +325,7 @@ function BookCard({ book, onOpen, layout }: { book: Book; onOpen: (id: string) =
           </div>
         )}
       </div>
-    </div>
+    </button>
   );
 }
 

@@ -98,7 +98,7 @@ function StatusBar() {
       )}
       <span>·</span>
       <span>PostgreSQL · connected</span>
-      <div style={{ flex: 1 }} />
+      <div className="grow" />
       <span>⌘K to search</span>
     </div>
   );

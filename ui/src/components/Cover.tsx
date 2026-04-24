@@ -108,7 +108,7 @@ function CoverInner({ book, size }: { book: CoverBook; size: CoverSize }) {
     case 'stacked-serif':
       return (
         <>
-          <div style={{ flex: 1 }} />
+          <div className="grow" />
           <div>
             <div className="c-title" style={{ fontFamily: 'var(--font-serif)', fontWeight: 600, letterSpacing: '-0.01em' }}>{book.title}</div>
             <div className="c-ornament" style={{ margin: '8px 0', width: '20%' }} />

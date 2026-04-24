@@ -31,7 +31,13 @@ test.describe('dashboard', () => {
   test('clicking All Books in the sidebar navigates to /library', async ({ page }) => {
     await page.goto('/');
 
-    await page.locator('aside').getByRole('link', { name: /All Books/ }).click();
+    // Scoped to the shadcn Sidebar primitive — it renders as a <div>
+    // with data-sidebar="sidebar", not <aside>.
+    await page
+      .locator('[data-sidebar="sidebar"]')
+      .getByRole('link', { name: /All Books/ })
+      .first()
+      .click();
     await expect(page).toHaveURL(/\/library$/);
     await expect(page.getByRole('heading', { name: 'All Books' })).toBeVisible();
   });

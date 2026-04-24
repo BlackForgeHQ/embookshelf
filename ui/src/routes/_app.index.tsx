@@ -190,7 +190,7 @@ function Dashboard() {
                   >
                     {s.value}
                   </div>
-                  <div className="t-small" style={{ fontSize: 11.5 }}>{s.sub}</div>
+                  <div className="t-item-sub">{s.sub}</div>
                 </div>
               ))}
             </div>
@@ -247,8 +247,8 @@ function Dashboard() {
                     }}
                   >
                     <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-accent)' }} />
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 13.5, fontWeight: 500 }}>{lib.name}</div>
+                    <div className="grow">
+                      <div className="t-item-title">{lib.name}</div>
                       <div className="mono" style={{ fontSize: 10.5, color: 'var(--color-ink-3)' }}>
                         /{lib.slug}
                       </div>
@@ -270,19 +270,12 @@ function Dashboard() {
 function ReadingCard({ book, onOpen }: { book: Book; onOpen: (id: string) => void }) {
   const progress = book.progress ?? 0;
   return (
-    <div
+    <button
+      type="button"
       onClick={() => onOpen(book.id)}
-      style={{
-        display: 'flex',
-        gap: 18,
-        padding: 18,
-        background: 'var(--color-paper-0)',
-        border: '1px solid var(--color-rule-soft)',
-        borderRadius: 2,
-        cursor: 'pointer',
-      }}
-      onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--color-ink-3)')}
-      onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--color-rule-soft)')}
+      className="card-link"
+      aria-label={`Continue reading ${book.title}`}
+      style={{ display: 'flex', gap: 18, padding: 18 }}
     >
       <Cover book={book} size="sm" />
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
@@ -301,20 +294,23 @@ function ReadingCard({ book, onOpen }: { book: Book; onOpen: (id: string) => voi
           </div>
         </div>
       </div>
-    </div>
+    </button>
   );
 }
 
 function RecentTile({ book, onOpen }: { book: Book; onOpen: (id: string) => void }) {
   return (
-    <div
+    <button
+      type="button"
       onClick={() => onOpen(book.id)}
-      style={{ flexShrink: 0, width: 110, cursor: 'pointer' }}
+      className="card-tile"
+      aria-label={`Open ${book.title}`}
+      style={{ flexShrink: 0, width: 110 }}
     >
       <Cover book={book} size="sm" style={{ width: 110, height: 165 }} />
       <div style={{ fontSize: 12, fontWeight: 500, marginTop: 8, lineHeight: 1.3 }}>{book.title}</div>
       <div className="t-small" style={{ fontSize: 11, fontStyle: 'italic' }}>{book.author}</div>
-    </div>
+    </button>
   );
 }
 

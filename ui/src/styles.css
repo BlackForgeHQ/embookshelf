@@ -193,6 +193,13 @@
   .t-small { font-size: 13px; line-height: 1.5; color: var(--color-ink-2); }
   .t-micro { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--color-ink-3); }
   .t-label { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-ink-3); font-weight: 500; }
+  /* Row / list item title — used in settings panels, library lists,
+     dropdown rows. Sits between .t-body and .t-small; medium weight to
+     distinguish the primary label from a subtitle directly under it. */
+  .t-item-title { font-size: 13.5px; font-weight: 500; line-height: 1.35; }
+  /* Secondary line under .t-item-title. Slightly smaller than .t-small
+     because these rows tend to be dense. */
+  .t-item-sub { font-size: 11.5px; line-height: 1.4; color: var(--color-ink-3); }
   .italic { font-style: italic; }
 
   /* Layout shell — main content inside SidebarInset is a flex-column with
@@ -356,6 +363,75 @@
 
   /* Rule / helpers */
   .rule { height: 1px; background: var(--color-rule-soft); border: none; margin: 0; }
+
+  /* Interactive card / row wrappers
+     Used wherever a whole card is clickable. The underlying element is a
+     <button> so keyboard + screen-reader support comes for free; these
+     classes strip the browser's native button chrome and add our own
+     hover / focus-visible states in CSS (not inline mouseEnter handlers).
+
+     .card-link → bordered card whose border darkens on hover.
+     .card-row  → list row that tints its background on hover.
+     .card-tile → chrome-free tile (recent covers etc.).
+  */
+  .card-link,
+  .card-row,
+  .card-tile {
+    appearance: none;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    display: block;
+    width: 100%;
+  }
+  .card-link {
+    background: var(--color-paper-0);
+    border: 1px solid var(--color-rule-soft);
+    border-radius: 2px;
+    transition: border-color 120ms ease;
+  }
+  .card-link:hover { border-color: var(--color-ink-3); }
+  .card-row {
+    transition: background 120ms ease;
+  }
+  .card-row:hover { background: var(--color-paper-2); }
+  .card-link:focus-visible,
+  .card-row:focus-visible,
+  .card-tile:focus-visible {
+    outline: 2px solid var(--color-ink-3);
+    outline-offset: 2px;
+  }
+
+  /* Two-column split that collapses to single column on tablet/phone.
+     Variants:
+       .page-split--cover-main   — cover-or-rail column left, main right
+                                   (book detail). Default left: 280px.
+       .page-split--main-sidebar — main content left, sidebar right
+                                   (book edit). Default right: 320px.
+     Stacks below 900px so the cover / sidebar drop underneath.
+  */
+  .page-split {
+    display: grid;
+    gap: 40px;
+  }
+  .page-split--cover-main {
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
+  .page-split--main-sidebar {
+    grid-template-columns: minmax(0, 1fr) 320px;
+  }
+  @media (max-width: 900px) {
+    .page-split--cover-main,
+    .page-split--main-sidebar {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 24px;
+    }
+  }
   .row { display: flex; align-items: center; }
   .col { display: flex; flex-direction: column; }
   .gap-1 { gap: 4px; } .gap-2 { gap: 8px; } .gap-3 { gap: 12px; } .gap-4 { gap: 16px; } .gap-5 { gap: 24px; } .gap-6 { gap: 32px; }
@@ -512,80 +588,6 @@
   .toolbar-search { min-width: 220px; }
   .toolbar-sort { display: flex; align-items: center; gap: 8px; }
   .toolbar-filters { display: flex; gap: 6px; flex-wrap: wrap; }
-
-  /* Book detail + edit */
-  .book-detail {
-    display: grid;
-    grid-template-columns: 260px 1fr;
-    gap: 40px;
-    align-items: start;
-  }
-  .book-detail-cover { display: flex; justify-content: center; }
-  .book-detail-meta { max-width: 720px; }
-  .book-detail-actions { align-items: center; }
-  .book-detail-progress { max-width: 360px; }
-  .book-detail-desc { white-space: pre-wrap; }
-  .book-detail-tags { flex-wrap: wrap; }
-  .rating { display: flex; align-items: center; gap: 8px; }
-  .rating .mono { color: var(--color-accent-ink); font-size: 14px; letter-spacing: 0.1em; }
-
-  .book-edit {
-    display: grid;
-    grid-template-columns: 1fr 300px;
-    gap: 40px;
-    align-items: start;
-  }
-  .book-edit-left { max-width: 640px; }
-  .book-edit-right { text-align: center; }
-  .book-edit-desc { min-height: 140px; resize: vertical; font-family: var(--font-reader); line-height: 1.5; }
-
-  .palette-grid {
-    display: grid;
-    grid-template-columns: repeat(10, 1fr);
-    gap: 6px;
-    max-width: 360px;
-  }
-  .palette-swatch {
-    position: relative;
-    aspect-ratio: 2/3;
-    border-radius: 2px;
-    box-shadow: inset 0 0 0 1px oklch(0 0 0 / 0.08);
-    cursor: pointer;
-    overflow: hidden;
-  }
-  .palette-swatch input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
-  .palette-swatch.active { outline: 2px solid var(--color-ink-1); outline-offset: 2px; }
-
-  /* Progress form (book detail) */
-  .progress-form {
-    border-top: 1px solid var(--color-rule-soft);
-    padding-top: 14px;
-    max-width: 420px;
-  }
-  .progress-form input[type="range"] {
-    width: 100%;
-    margin-top: 6px;
-    accent-color: var(--color-editorial-accent);
-  }
-  .progress-form [data-progress-label] {
-    color: var(--color-accent-ink);
-    font-weight: 500;
-  }
-
-  .shelf-toggles .row { flex-wrap: wrap; }
-  .shelf-toggles form { display: inline-flex; }
-  .shelf-toggles .chip { border: 1px solid var(--color-rule); cursor: pointer; }
-  .shelf-toggles .chip:hover { border-color: var(--color-ink-3); }
-
-  .shelf-create {
-    display: flex; flex-direction: column; gap: 6px;
-    padding: 10px;
-    background: var(--color-paper-3);
-    border-radius: 2px;
-  }
-  .shelf-create.hidden { display: none; }
-  .shelf-create .input { font-size: 13px; padding: 5px 8px; }
-  .shelf-create .btn { align-self: flex-end; }
 
   /* Cover mini progress + extracted-image variant */
   .cover[data-progress]::after {
