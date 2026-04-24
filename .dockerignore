@@ -1,0 +1,60 @@
+# Git / VCS
+.git
+.gitignore
+.gitattributes
+
+# OS / editor
+.DS_Store
+*.swp
+.idea
+.vscode
+
+# Env / secrets — never bake these into the image
+.env
+.env.*
+!.env.example
+
+# Local build/runtime state
+tmp/
+data/
+bookdrop/
+coverage.out
+test-results/
+
+# Node / Bun — deps are installed inside the container; host copies
+# contain platform-native binaries (e.g. rollup-darwin-arm64) that
+# break Linux builds when they clobber the in-container install.
+node_modules/
+ui/node_modules/
+e2e/node_modules/
+
+# Build outputs — regenerated inside the container
+ui/dist/
+ui/.output/
+ui/.tanstack/
+internal/staticfs/dist/*
+!internal/staticfs/dist/.gitkeep
+
+# Embedded generated code
+internal/repo/generated/
+
+# Local auth / playwright state
+e2e/.auth/
+e2e/test-results/
+e2e/playwright-report/
+e2e/playwright/.cache/
+
+# CI / dev-only config we don't need in the image
+.github/
+.agents/
+.claude/
+.air.toml
+compose.dev.yml
+skills-lock.json
+
+# Spec / docs — not needed at runtime
+spec/
+docs/
+
+# Logs
+*.log

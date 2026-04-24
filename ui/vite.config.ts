@@ -42,6 +42,15 @@ const config = defineConfig({
       "/v1": { target: OTLP_HTTP, changeOrigin: true },
     },
   },
+  // TanStack Start's SPA-mode build spins up a Vite preview server and
+  // fetches its own routes to prerender the `_shell.html`. By default
+  // that server binds to `localhost`, which resolves to ::1 first under
+  // Bun-in-Docker while Bun's fetch hits 127.0.0.1 → ECONNREFUSED
+  // (TanStack/router#6275). Pinning preview to 127.0.0.1 sidesteps the
+  // mismatch. Safe in dev too — the preview server is a build-time tool.
+  preview: {
+    host: "127.0.0.1",
+  },
 })
 
 export default config
