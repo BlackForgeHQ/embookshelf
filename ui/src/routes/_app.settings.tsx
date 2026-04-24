@@ -255,6 +255,8 @@ function LibraryCreatorDialog({
   // Reset local state whenever the dialog closes so re-opening is a blank slate.
   useEffect(() => {
     if (open) return
+    // Prop→state sync on close; not a cascading render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setName("")
     setPath("")
     setScanOnCreate(true)
@@ -577,6 +579,8 @@ function DeleteLibraryDialog({
   const [confirmInput, setConfirmInput] = useState("")
 
   useEffect(() => {
+    // Reset the typed confirmation on close — prop→state sync.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!open) setConfirmInput("")
   }, [open])
 
@@ -802,13 +806,14 @@ function ProviderRow({
   // config hash changes.
   const configHash = JSON.stringify(provider.config ?? {})
   useEffect(() => {
+    // Prop→state rehydration when another admin saves; not a cascading render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setValues(schemaToForm(schema, provider.config ?? {}))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configHash])
 
   const dirty = schema.some(
-    (f) =>
-      (values[f.key] ?? "") !== (valueToString(provider.config?.[f.key]) ?? "")
+    (f) => (values[f.key] ?? "") !== valueToString(provider.config?.[f.key])
   )
 
   return (
@@ -1382,6 +1387,8 @@ function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
 
   useEffect(() => {
     if (query.data && !draft) {
+      // Prop→state sync on first load; not a cascading render.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDraft(query.data)
     }
   }, [query.data, draft])

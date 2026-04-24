@@ -179,16 +179,16 @@ export function AdminGate({ label }: { label: string }) {
 // SettingsShell is the two-column nav layout shared by /settings and
 // /admin: left nav of section labels, right content slot. Callers
 // control the section list, active section, and the content render.
-export function SettingsShell<K extends string>({
+export function SettingsShell<TKey extends string>({
   sections,
   active,
   onSelect,
   isAdmin,
   children,
 }: {
-  sections: ReadonlyArray<{ key: K; label: string; adminOnly?: boolean }>
-  active: K
-  onSelect: (key: K) => void
+  sections: ReadonlyArray<{ key: TKey; label: string; adminOnly?: boolean }>
+  active: TKey
+  onSelect: (key: TKey) => void
   isAdmin: boolean
   children: ReactNode
 }) {

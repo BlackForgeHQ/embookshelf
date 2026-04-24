@@ -25,7 +25,7 @@ export async function fetchMe(): Promise<AuthUser | null> {
     return user
   } catch (e) {
     const err = e as ApiError
-    if (err?.status === 401) return null
+    if (err.status === 401) return null
     throw e
   }
 }

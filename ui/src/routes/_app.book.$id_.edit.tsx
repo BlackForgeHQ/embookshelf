@@ -83,9 +83,9 @@ function blankForm(): FormState {
 function bookToForm(b: BookDetail): FormState {
   const pr = b.publicReviews
   return {
-    title: b.title ?? "",
+    title: b.title,
     subtitle: b.subtitle ?? "",
-    author: b.author ?? "",
+    author: b.author,
     description: b.description ?? "",
     year: b.year ? String(b.year) : "",
     publishDate: b.publishDate ?? "",
@@ -96,9 +96,9 @@ function bookToForm(b: BookDetail): FormState {
     series: b.series ?? "",
     seriesNum: b.seriesNum ? String(b.seriesNum) : "",
     seriesTotal: b.seriesTotal ? String(b.seriesTotal) : "",
-    genres: (b.genres ?? []).join(", "),
-    moods: (b.moods ?? []).join(", "),
-    tags: (b.tags ?? []).join(", "),
+    genres: b.genres.join(", "),
+    moods: b.moods.join(", "),
+    tags: b.tags.join(", "),
     ageRating: b.ageRating ?? "",
     contentRating: b.contentRating ?? "",
     pages: b.pages ? String(b.pages) : "",
@@ -161,9 +161,11 @@ function MetadataEditor() {
 
   const [form, setForm] = useState<FormState>(blankForm())
   // Sync form state once when the book loads. Subsequent refetches don't
-  // overwrite in-flight edits.
+  // overwrite in-flight edits. This is a prop→state sync, not a
+  // cascading render — the intended use of setState-in-effect.
   useEffect(() => {
     if (book.data) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm((prev) =>
         // Only initialize if we haven't customized yet — an empty title
         // is the sentinel that the form is fresh.
@@ -172,7 +174,7 @@ function MetadataEditor() {
     }
   }, [book.data])
 
-  const set = <K extends keyof FormState>(k: K, v: string) =>
+  const set = <TKey extends keyof FormState>(k: TKey, v: string) =>
     setForm((f) => ({ ...f, [k]: v }))
 
   const saveMut = useMutation({
@@ -665,6 +667,9 @@ function EnrichmentPanel({
 
   useEffect(() => {
     if (!opened) return
+    // Reset the enrichment stream state on each (re)open — prop→state
+    // sync, not a cascading render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMatches([])
     setProviders([])
     setStreamError(null)
@@ -688,7 +693,8 @@ function EnrichmentPanel({
         })
       } else if (ev.type === "provider-error") {
         setStreamError(`${ev.provider}: ${ev.error}`)
-      } else if (ev.type === "done") {
+      } else {
+        // ev.type is narrowed to "done" here.
         setProviders(ev.providers)
         setStreaming(false)
       }

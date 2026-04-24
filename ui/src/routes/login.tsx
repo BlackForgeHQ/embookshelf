@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router"
 import type { FormEvent } from "react"
@@ -114,7 +114,9 @@ function LoginPage() {
   // login card (but hide the local form) so the user picks one. The
   // `?local=true` escape hatch and any OIDC error bail out to the
   // normal card — matches the spec recovery path.
-  const providers = oidc.data?.providers ?? []
+  // Memoized so the useEffect dep array below doesn't see a new array
+  // reference on every render (the `?? []` fallback allocates fresh).
+  const providers = useMemo(() => oidc.data?.providers ?? [], [oidc.data])
   const canAutoRedirect =
     oidc.data?.forceOnly === true &&
     providers.length === 1 &&

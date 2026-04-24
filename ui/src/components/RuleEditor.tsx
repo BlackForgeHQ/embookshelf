@@ -379,7 +379,7 @@ function ValueInput({
   if (predicate.field === "format") {
     return (
       <Select
-        value={String(predicate.value ?? "EPUB")}
+        value={String(predicate.value || "EPUB")}
         onValueChange={(v) => onChange({ ...predicate, value: v })}
       >
         <SelectTrigger className="w-full">
@@ -398,7 +398,7 @@ function ValueInput({
 
   if (predicate.field === "progress") {
     // Wire format is 0..1 float; render as a percent input for clarity.
-    const pct = Math.round(Number(predicate.value ?? 0) * 100)
+    const pct = Math.round(Number(predicate.value) * 100)
     return (
       <div className="flex items-center gap-2">
         <Input
@@ -425,7 +425,7 @@ function ValueInput({
     return (
       <Input
         type="number"
-        value={Number(predicate.value ?? 0)}
+        value={Number(predicate.value)}
         onChange={(e) =>
           onChange({ ...predicate, value: Number(e.target.value) })
         }
@@ -436,7 +436,7 @@ function ValueInput({
   // String + tags
   return (
     <Input
-      value={String(predicate.value ?? "")}
+      value={String(predicate.value)}
       onChange={(e) => onChange({ ...predicate, value: e.target.value })}
       placeholder={meta.kind === "tags" ? "Tag name" : "Value"}
     />

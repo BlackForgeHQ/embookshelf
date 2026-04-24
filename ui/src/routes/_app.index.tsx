@@ -52,7 +52,7 @@ function Dashboard() {
 
   const greeting = timeOfDayGreeting()
   const displayName =
-    me.data?.name?.split(" ")[0] ?? me.data?.display ?? "there"
+    me.data?.name.split(" ")[0] ?? me.data?.display ?? "there"
 
   const readingList = reading.data?.books ?? []
   // The recent endpoint returns every book sorted by creation time; cap the
@@ -396,7 +396,7 @@ function ReadingCard({
   book: Book
   onOpen: (id: string) => void
 }) {
-  const progress = book.progress ?? 0
+  const progress = book.progress
   return (
     <button
       type="button"

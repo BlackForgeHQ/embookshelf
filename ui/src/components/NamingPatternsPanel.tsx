@@ -521,6 +521,10 @@ function PatternEditor({
   const [draft, setDraft] = useState(saved)
 
   useEffect(() => {
+    // Resync the editable draft whenever the saved value flips upstream
+    // (another admin saved, or the parent reset it). Prop→state sync,
+    // not a cascading render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDraft(saved)
   }, [saved])
 

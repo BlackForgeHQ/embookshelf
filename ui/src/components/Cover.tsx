@@ -93,7 +93,7 @@ function CoverInner({ book, size }: { book: CoverBook; size: CoverSize }) {
       return (
         <>
           <div className="c-top">
-            <div className="c-author">{book.author?.toUpperCase()}</div>
+            <div className="c-author">{book.author.toUpperCase()}</div>
             <div className="c-ornament" />
           </div>
           <div className="c-title" style={{ textAlign: "left" }}>

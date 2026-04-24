@@ -104,7 +104,7 @@ function BookDetail() {
     return (
       <div style={{ padding: 40 }}>
         <p className="t-small" style={{ color: "var(--color-accent-ink)" }}>
-          {err?.status === 404 ? "Book not found." : "Failed to load book."}
+          {err.status === 404 ? "Book not found." : "Failed to load book."}
         </p>
       </div>
     )
@@ -112,7 +112,7 @@ function BookDetail() {
   if (!book.data) return null
 
   const b = book.data
-  const progress = b.progress ?? 0
+  const progress = b.progress
 
   return (
     <div className="fade-in">
@@ -231,7 +231,7 @@ function BookDetail() {
               {b.rating.toFixed(1)}
             </span>
             <span style={{ color: "var(--color-rule)" }}>·</span>
-            {(b.tags ?? []).map((t) => (
+            {b.tags.map((t) => (
               <span key={t} className="chip">
                 {t}
               </span>
@@ -293,7 +293,7 @@ function BookDetail() {
                 <Meta label="Format">{b.format}</Meta>
                 {b.publisher && <Meta label="Publisher">{b.publisher}</Meta>}
                 <Meta label="Categories">
-                  {(b.tags ?? []).join(" · ") || "—"}
+                  {b.tags.join(" · ") || "—"}
                 </Meta>
                 <Meta label="Added">
                   {new Date(b.addedAt).toLocaleDateString()}
@@ -834,6 +834,9 @@ function DeleteBookDialog({
   const [confirmInput, setConfirmInput] = useState("")
 
   useEffect(() => {
+    // Reset the typed confirmation on close — prop→state sync, not
+    // cascading renders; this is the intended use of setState-in-effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!open) setConfirmInput("")
   }, [open])
 

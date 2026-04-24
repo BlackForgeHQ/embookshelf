@@ -131,7 +131,7 @@ export function streamEnrichment(
       const data = JSON.parse(e.data) as {
         providers: Array<string>
       }
-      onEvent({ type: "done", providers: data.providers ?? [] })
+      onEvent({ type: "done", providers: data.providers })
     } catch {
       onEvent({ type: "done", providers: [] })
     }

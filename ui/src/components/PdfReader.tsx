@@ -42,10 +42,11 @@ type Props = {
 // container. Only the currently-visible page (plus one ahead / one behind)
 // is rasterized at a time — keeps memory flat for large PDFs without
 // needing a virtualized list.
-export const PdfReader = forwardRef<PdfReaderHandle, Props>(function PdfReader(
-  { url, initialPage, onReady, onProgress, onError },
-  ref
-) {
+export const PdfReader = forwardRef<PdfReaderHandle, Props>(
+  function PdfReaderImpl(
+    { url, initialPage, onReady, onProgress, onError },
+    ref
+  ) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [docInfo, setDocInfo] = useState<{
     doc: PDFDocumentProxy
@@ -55,7 +56,11 @@ export const PdfReader = forwardRef<PdfReaderHandle, Props>(function PdfReader(
   const initialScrollDone = useRef(false)
 
   useEffect(() => {
-    let cancelled = false
+    // Explicit `: boolean` widens the type so the linter doesn't
+    // narrow to literal-false — the cleanup closure mutates it.
+    // `as boolean` widens the inferred literal-false so the
+    // `if (cancelled)` guards below don't trip no-unnecessary-condition.
+    let cancelled = false as boolean
     let loaded: PDFDocumentProxy | null = null
 
     ;(async () => {
@@ -189,7 +194,9 @@ function PdfPage({
   // Resolve page dimensions once so the placeholder has the right height
   // before we commit to a real render.
   useEffect(() => {
-    let cancelled = false
+    // `as boolean` widens the inferred literal-false so the
+    // `if (cancelled)` guards below don't trip no-unnecessary-condition.
+    let cancelled = false as boolean
     doc.getPage(pageNumber).then((page) => {
       if (cancelled) return
       const viewport = page.getViewport({ scale: 1.2 })
@@ -214,7 +221,9 @@ function PdfPage({
       return
     }
 
-    let cancelled = false
+    // `as boolean` widens the inferred literal-false so the
+    // `if (cancelled)` guards below don't trip no-unnecessary-condition.
+    let cancelled = false as boolean
     let renderTask: ReturnType<PDFDocumentProxy["getPage"]> | null = null
     ;(async () => {
       const page = await doc.getPage(pageNumber)

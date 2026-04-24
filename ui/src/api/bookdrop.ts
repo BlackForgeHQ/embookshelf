@@ -111,7 +111,7 @@ export function uploadBookDrop(
       }
       reject({
         status: xhr.status,
-        message: body?.error ?? xhr.statusText ?? "upload failed",
+        message: body?.error || xhr.statusText || "upload failed",
       })
     }
 

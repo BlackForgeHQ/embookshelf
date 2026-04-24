@@ -51,7 +51,7 @@ type Props = {
 // can stay declarative. Rendering is paginated ("book-spread") inside a
 // fixed-size container — the parent controls layout.
 export const EpubReader = forwardRef<EpubReaderHandle, Props>(
-  function EpubReader(
+  function EpubReaderImpl(
     {
       url,
       initialCfi,
@@ -72,7 +72,11 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(
 
     useEffect(() => {
       if (!containerRef.current) return
-      let cancelled = false
+      // Mutable flag captured by cleanup. Boxed in an object so
+      // TS control-flow analysis doesn't narrow it across the
+      // async waits below (otherwise no-unnecessary-condition
+      // flags the guards as unreachable).
+      const flag = { cancelled: false }
       let book: any
       let rendition: any
 
@@ -84,7 +88,7 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(
           // binary zip — explicitly pass openAs: 'epub' so jszip
           // unpacks it in-browser.
           book = ePub(url, { openAs: "epub" })
-          if (cancelled) return
+          if (flag.cancelled) return
 
           rendition = book.renderTo(containerRef.current, {
             width: "100%",
@@ -141,19 +145,23 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(
           book.locations.generate(1024).catch(() => undefined)
 
           await rendition.display(initialCfi || undefined)
-          if (cancelled) return
+          // TS narrows flag.cancelled to false after the earlier guard,
+          // even across `await` — but the cleanup mutates it at any
+          // await resumption point, so the check still fires at runtime.
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+          if (flag.cancelled) return
 
           const toc: Array<EpubTocEntry> =
             book.navigation?.toc?.map(mapToc) ?? []
           onReady?.({ toc, totalPages: book.locations?.total ?? 0 })
           setBooted(true)
         } catch (err) {
-          if (!cancelled) onError?.(err)
+          if (!flag.cancelled) onError?.(err)
         }
       })()
 
       return () => {
-        cancelled = true
+        flag.cancelled = true
         try {
           rendition?.destroy()
           book?.destroy()

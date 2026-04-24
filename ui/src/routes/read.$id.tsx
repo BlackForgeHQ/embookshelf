@@ -177,8 +177,8 @@ function ReaderShell({ book }: { book: BookDetail }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const queueProgress = (progress: number, resumeCfi: string) => {
-    pendingRef.current = { progress, resumeCfi }
+  const queueProgress = (progress: number, cfi: string) => {
+    pendingRef.current = { progress, resumeCfi: cfi }
     if (timerRef.current) window.clearTimeout(timerRef.current)
     timerRef.current = window.setTimeout(() => {
       const snapshot = pendingRef.current

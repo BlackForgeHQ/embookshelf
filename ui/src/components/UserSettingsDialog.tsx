@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react"
+import { createContext, useContext, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import type { ReactNode } from "react"
@@ -37,7 +37,6 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
-  defaultReadingPreferences,
   loadReadingPreferences,
   saveReadingPreferences,
 } from "@/lib/readingPreferences"
@@ -409,18 +408,17 @@ function AccountPanel() {
 // ---------------------------------------------------------------------------
 
 function ReadingPreferencesPanel() {
-  const [prefs, setPrefs] = useState<ReadingPreferences>(
-    defaultReadingPreferences
+  // Lazy initializer reads from localStorage exactly once on mount,
+  // avoiding the useEffect→setState handshake (set-state-in-effect)
+  // and a throwaway first render with defaults.
+  const [prefs, setPrefs] = useState<ReadingPreferences>(() =>
+    loadReadingPreferences()
   )
   const [saved, setSaved] = useState(false)
 
-  useEffect(() => {
-    setPrefs(loadReadingPreferences())
-  }, [])
-
-  const update = <K extends keyof ReadingPreferences>(
-    key: K,
-    value: ReadingPreferences[K]
+  const update = <TKey extends keyof ReadingPreferences>(
+    key: TKey,
+    value: ReadingPreferences[TKey]
   ) => {
     const next = { ...prefs, [key]: value }
     setPrefs(next)

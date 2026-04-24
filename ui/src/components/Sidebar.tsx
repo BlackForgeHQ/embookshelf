@@ -417,6 +417,9 @@ function ShelfCreatorDialog({
 
   useEffect(() => {
     if (open) return
+    // Reset form on close — legitimate use of setState-in-effect
+    // (external "prop" state → local state synchronisation).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setName("")
     setAccent("accent")
   }, [open])
