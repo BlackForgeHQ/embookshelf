@@ -29,7 +29,7 @@ jobs:
       id-token: write        # SLSA provenance
       attestations: write    # SLSA provenance attestation
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: docker/setup-qemu-action@v4
 
