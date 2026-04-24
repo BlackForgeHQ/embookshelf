@@ -170,7 +170,7 @@ func (h *Handler) EnrichStream(c *gin.Context) {
 					queried = append(queried, string(p))
 				}
 				payload, _ := json.Marshal(gin.H{"providers": queried})
-				fmt.Fprintf(c.Writer, "event: done\ndata: %s\n\n", payload)
+				_, _ = fmt.Fprintf(c.Writer, "event: done\ndata: %s\n\n", payload)
 				c.Writer.Flush()
 				return
 			}
@@ -179,7 +179,7 @@ func (h *Handler) EnrichStream(c *gin.Context) {
 					"provider": string(ev.Provider),
 					"error":    ev.Err.Error(),
 				})
-				fmt.Fprintf(c.Writer, "event: provider-error\ndata: %s\n\n", payload)
+				_, _ = fmt.Fprintf(c.Writer, "event: provider-error\ndata: %s\n\n", payload)
 				c.Writer.Flush()
 				continue
 			}
@@ -191,7 +191,7 @@ func (h *Handler) EnrichStream(c *gin.Context) {
 			if err != nil {
 				continue
 			}
-			fmt.Fprintf(c.Writer, "event: match\ndata: %s\n\n", payload)
+			_, _ = fmt.Fprintf(c.Writer, "event: match\ndata: %s\n\n", payload)
 			c.Writer.Flush()
 		}
 	}

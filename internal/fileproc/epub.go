@@ -74,7 +74,7 @@ func (EPUBProcessor) Extract(ctx context.Context, filePath string) (Metadata, er
 	if err != nil {
 		return Metadata{}, fmt.Errorf("open epub: %w", err)
 	}
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 
 	opfPath, err := rootfilePath(&zr.Reader)
 	if err != nil {
@@ -202,7 +202,7 @@ func readZipFile(zr *zip.Reader, name string) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			defer rc.Close()
+			defer func() { _ = rc.Close() }()
 			return io.ReadAll(rc)
 		}
 	}

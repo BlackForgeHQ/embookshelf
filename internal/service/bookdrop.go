@@ -336,12 +336,12 @@ func copyFile(src, dest string) error {
 	if err != nil {
 		return fmt.Errorf("open src: %w", err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	out, err := os.Create(dest)
 	if err != nil {
 		return fmt.Errorf("create dest: %w", err)
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	if _, err := io.Copy(out, in); err != nil {
 		return fmt.Errorf("copy: %w", err)
 	}

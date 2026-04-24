@@ -124,7 +124,7 @@ func (g *GoogleBooks) Search(ctx context.Context, q Query) ([]Match, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("google books %d", resp.StatusCode)
 	}

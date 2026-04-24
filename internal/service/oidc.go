@@ -86,10 +86,10 @@ func NewOIDCService(settings *repo.AppSettingsRepo, users *repo.UserRepo, sessio
 // login page — enough to render "Sign in with X" without leaking
 // secrets.
 type PublicProvider struct {
-	Slug         string `json:"slug"`
-	Name         string `json:"name"`
-	Kind         string `json:"kind"` // "oidc" | "google" | "github"
-	LoginURL     string `json:"loginUrl"`
+	Slug     string `json:"slug"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"` // "oidc" | "google" | "github"
+	LoginURL string `json:"loginUrl"`
 }
 
 // PublicConfig is what the login page reads anonymously.
@@ -449,7 +449,7 @@ func (s *OIDCService) githubCallback(ctx context.Context, code string, entry sta
 	if err != nil {
 		return resolvedClaims{}, fmt.Errorf("github token exchange: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		return resolvedClaims{}, fmt.Errorf("github token exchange returned %d", resp.StatusCode)
 	}
@@ -503,7 +503,7 @@ func githubFetchUser(ctx context.Context, userURL, accessToken string) (githubUs
 	if err != nil {
 		return githubUserResp{}, fmt.Errorf("github user fetch: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		return githubUserResp{}, fmt.Errorf("github user fetch: status %d", resp.StatusCode)
 	}
@@ -522,7 +522,7 @@ func githubFetchPrimaryEmail(ctx context.Context, emailsURL, accessToken string)
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("github emails fetch: status %d", resp.StatusCode)
 	}
@@ -792,7 +792,7 @@ func (s *OIDCService) TestGitHub(ctx context.Context, cfg repo.OAuthPresetConfig
 			out.add(ep.name, CheckFail, err.Error())
 			continue
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		out.add(ep.name, CheckPass, fmt.Sprintf("%s reachable (%d)", ep.url, resp.StatusCode))
 	}
 	if cfg.ClientSecret == "" {
@@ -832,7 +832,7 @@ func testOIDCIssuer(ctx context.Context, issuer, clientID string) TestResult {
 		out.add("Discovery", CheckFail, fmt.Sprintf("fetch %s: %v", discoveryURL, err))
 		return out
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		out.add("Discovery", CheckFail, fmt.Sprintf("%s returned %d", discoveryURL, resp.StatusCode))
 		return out
@@ -908,7 +908,7 @@ func testOIDCIssuer(ctx context.Context, issuer, clientID string) TestResult {
 		if err != nil {
 			out.add("JWKS fetch", CheckFail, err.Error())
 		} else {
-			defer jresp.Body.Close()
+			defer func() { _ = jresp.Body.Close() }()
 			if jresp.StatusCode != 200 {
 				out.add("JWKS fetch", CheckFail, fmt.Sprintf("%s returned %d", doc.JWKSURI, jresp.StatusCode))
 			} else {

@@ -108,7 +108,7 @@ func (h *Hardcover) Search(ctx context.Context, q Query) ([]Match, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("hardcover %d", resp.StatusCode)
 	}
@@ -140,19 +140,19 @@ func (h *Hardcover) Search(ctx context.Context, q Query) ([]Match, error) {
 	var inner struct {
 		Hits []struct {
 			Document struct {
-				ID            string   `json:"id"`
-				Title         string   `json:"title"`
-				Subtitle      string   `json:"subtitle"`
-				AuthorNames   []string `json:"author_names"`
-				ReleaseYear   int      `json:"release_year"`
-				Description   string   `json:"description"`
-				ISBNs         []string `json:"isbns"`
-				Image         struct {
+				ID          string   `json:"id"`
+				Title       string   `json:"title"`
+				Subtitle    string   `json:"subtitle"`
+				AuthorNames []string `json:"author_names"`
+				ReleaseYear int      `json:"release_year"`
+				Description string   `json:"description"`
+				ISBNs       []string `json:"isbns"`
+				Image       struct {
 					URL string `json:"url"`
 				} `json:"image"`
-				Genres   []string `json:"genres"`
-				Moods    []string `json:"moods"`
-				Series   []struct {
+				Genres []string `json:"genres"`
+				Moods  []string `json:"moods"`
+				Series []struct {
 					Name string `json:"name"`
 				} `json:"featured_series"`
 			} `json:"document"`

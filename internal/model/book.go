@@ -3,9 +3,9 @@ package model
 import "time"
 
 type Library struct {
-	ID        string
-	Name      string
-	Slug      string
+	ID   string
+	Name string
+	Slug string
 	// Path is the filesystem root this library owns. Set at creation
 	// time and immutable afterwards — book approvals physically move
 	// files under here and rename them via FileNamingPattern.
@@ -23,13 +23,13 @@ type Library struct {
 }
 
 type Book struct {
-	ID           string
-	LibraryID    string
-	Title        string
-	Subtitle     string
-	Author       string
-	Format       string
-	Year         int
+	ID        string
+	LibraryID string
+	Title     string
+	Subtitle  string
+	Author    string
+	Format    string
+	Year      int
 	// PublishDate is the full publication date when known. Year is kept
 	// alongside it as a cheap sort/display field — it's populated from
 	// the date when PublishDate is set, otherwise preserved as-is.
@@ -44,16 +44,16 @@ type Book struct {
 	Description  string
 	// ISBN is the legacy single-ISBN column; the edit UI now treats it as
 	// the ISBN-13 slot. ISBN10 is a separate, optional column.
-	ISBN        string
-	ISBN10      string
-	Publisher   string
-	Series      string
-	SeriesIndex int
-	SeriesTotal int
-	Genres      []string
-	Moods       []string
-	Tags        []string
-	AgeRating   string
+	ISBN          string
+	ISBN10        string
+	Publisher     string
+	Series        string
+	SeriesIndex   int
+	SeriesTotal   int
+	Genres        []string
+	Moods         []string
+	Tags          []string
+	AgeRating     string
 	ContentRating string
 	Pages         int
 	// PublicReviews is tri-state: nil = unset, non-nil = explicit

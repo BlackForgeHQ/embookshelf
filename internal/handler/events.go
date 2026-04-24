@@ -39,7 +39,7 @@ func (h *Handler) Events(c *gin.Context) {
 
 	// Send the user's id once so the client knows which session the
 	// stream is bound to. Useful if we ever want per-user fan-out later.
-	fmt.Fprint(c.Writer, ": connected\n\n")
+	_, _ = fmt.Fprint(c.Writer, ": connected\n\n")
 	c.Writer.Flush()
 
 	const heartbeatInterval = 25 * time.Second

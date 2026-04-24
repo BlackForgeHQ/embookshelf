@@ -10,26 +10,26 @@ import (
 // is one "claim about how a pattern resolves".
 func TestResolve(t *testing.T) {
 	full := Input{
-		Title:     "The Name of the Wind",
-		Authors:   []string{"Patrick Rothfuss"},
-		Year:      2007,
-		Series:    "The Kingkiller Chronicle",
-		SeriesIndex: 1,
-		Extension: "epub",
+		Title:           "The Name of the Wind",
+		Authors:         []string{"Patrick Rothfuss"},
+		Year:            2007,
+		Series:          "The Kingkiller Chronicle",
+		SeriesIndex:     1,
+		Extension:       "epub",
 		CurrentFilename: "the_name_of_the_wind.epub",
 	}
 	standalone := Input{
-		Title:     "Project Hail Mary",
-		Authors:   []string{"Andy Weir"},
-		Extension: "epub",
+		Title:           "Project Hail Mary",
+		Authors:         []string{"Andy Weir"},
+		Extension:       "epub",
 		CurrentFilename: "phm.epub",
 	}
 	decimal := Input{
-		Title:       "Half Volume",
-		Authors:     []string{"X"},
-		Series:      "S",
-		SeriesIndex: 2.5,
-		Extension:   "epub",
+		Title:           "Half Volume",
+		Authors:         []string{"X"},
+		Series:          "S",
+		SeriesIndex:     2.5,
+		Extension:       "epub",
 		CurrentFilename: "half.epub",
 	}
 
@@ -91,9 +91,9 @@ func TestResolve(t *testing.T) {
 			name:    "modifier: first",
 			pattern: "{authors:first}/{title}",
 			in: Input{
-				Authors:   []string{"Doe Jane", "Smith Bob"},
-				Title:     "T",
-				Extension: "epub",
+				Authors:         []string{"Doe Jane", "Smith Bob"},
+				Title:           "T",
+				Extension:       "epub",
 				CurrentFilename: "t.epub",
 			},
 			want: "Doe Jane/T.epub",
@@ -120,8 +120,8 @@ func TestResolve(t *testing.T) {
 			name:    "invalid filesystem characters stripped per component",
 			pattern: "{title}",
 			in: Input{
-				Title:     "Hello: World / Goodbye*",
-				Extension: "epub",
+				Title:           "Hello: World / Goodbye*",
+				Extension:       "epub",
 				CurrentFilename: "hw.epub",
 			},
 			want: "Hello World Goodbye.epub",
@@ -130,8 +130,8 @@ func TestResolve(t *testing.T) {
 			name:    "trailing dots trimmed from components",
 			pattern: "{title}",
 			in: Input{
-				Title:     "Dr. Strangelove...",
-				Extension: "epub",
+				Title:           "Dr. Strangelove...",
+				Extension:       "epub",
 				CurrentFilename: "ds.epub",
 			},
 			want: "Dr. Strangelove.epub",

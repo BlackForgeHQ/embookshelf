@@ -94,8 +94,8 @@ func (h *Handler) ShelfCreate(c *gin.Context) {
 }
 
 type patchShelfReq struct {
-	Name   *string          `json:"name,omitempty"`
-	Accent *string          `json:"accent,omitempty"`
+	Name   *string `json:"name,omitempty"`
+	Accent *string `json:"accent,omitempty"`
 	// Distinguishing "omitted" from "explicit null" requires raw json
 	// peeking; for simplicity we treat a present `rule` field as
 	// ruleChanged=true. A regular shelf that sends `rule` gets 400 from

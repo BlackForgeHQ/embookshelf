@@ -54,7 +54,7 @@ func (g *GoodReads) Search(ctx context.Context, q Query) ([]Match, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	// 403/429 both mean "try later"; signal via a 429-substring error
 	// so the service's cooldown kicks in.
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {

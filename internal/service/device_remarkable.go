@@ -87,7 +87,7 @@ func (d *RemarkableDriver) Pair(ctx context.Context, params map[string]any) (mod
 	if err != nil {
 		return model.Device{}, fmt.Errorf("pair reMarkable: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode/100 != 2 {
@@ -151,7 +151,7 @@ func (d *RemarkableDriver) Send(ctx context.Context, dev model.Device, content i
 	if err != nil {
 		return fmt.Errorf("upload to reMarkable: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode/100 != 2 {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -175,7 +175,7 @@ func (d *RemarkableDriver) refreshUserToken(ctx context.Context, deviceToken str
 	if err != nil {
 		return "", fmt.Errorf("refresh reMarkable user token: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode/100 != 2 {

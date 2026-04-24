@@ -118,7 +118,7 @@ func (h *Handler) BookDropCover(c *gin.Context) {
 		writeServerError(c, "bookdrop cover open", err)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	mime := item.CoverMime
 	if mime == "" {
@@ -187,8 +187,8 @@ func (h *Handler) BookDropApprove(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"book": bookDetailDTO{
-			bookDTO:  toBookDTO(fresh),
-			Shelves:  []string{},
+			bookDTO: toBookDTO(fresh),
+			Shelves: []string{},
 		},
 	})
 }
@@ -315,14 +315,14 @@ func saveUniqueUpload(dir, originalName string, fh *multipart.FileHeader) (strin
 	if err != nil {
 		return "", err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
 	dst, err := os.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return "", err
 	}
 	if _, err := io.Copy(dst, src); err != nil {
-		dst.Close()
+		_ = dst.Close()
 		_ = os.Remove(candidate)
 		return "", err
 	}

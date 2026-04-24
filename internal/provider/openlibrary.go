@@ -56,7 +56,7 @@ func (o *OpenLibrary) Search(ctx context.Context, q Query) ([]Match, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("open library %d", resp.StatusCode)
 	}

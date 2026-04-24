@@ -184,9 +184,9 @@ func (h *Handler) OPDSSearch(c *gin.Context) {
 func (h *Handler) OPDSSearchDescription(c *gin.Context) {
 	base := opdsBase(c)
 	desc := opds.OpenSearchDescription{
-		Xmlns:       "http://a9.com/-/spec/opensearch/1.1/",
-		ShortName:   "embookshelf",
-		Description: "Search the embookshelf catalog",
+		Xmlns:         "http://a9.com/-/spec/opensearch/1.1/",
+		ShortName:     "embookshelf",
+		Description:   "Search the embookshelf catalog",
 		InputEncoding: "UTF-8",
 		URL: opds.OSURL{
 			Type:     opds.MimeAcquisition,
@@ -251,7 +251,7 @@ func (h *Handler) OPDSCover(c *gin.Context) {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	mime := book.CoverMime
 	if mime == "" {
 		mime = "application/octet-stream"
@@ -277,7 +277,6 @@ type opdsAcquisitionContext struct {
 // when additional pages exist.
 func (h *Handler) writeAcquisition(c *gin.Context, ctx opdsAcquisitionContext, books []model.Book) {
 	page := clampInt(parseIntOr(c.Query("page"), 1), 1, 1_000_000)
-	total := len(books)
 
 	// Drop books without downloadable paths.
 	filtered := books[:0]
@@ -287,7 +286,7 @@ func (h *Handler) writeAcquisition(c *gin.Context, ctx opdsAcquisitionContext, b
 		}
 	}
 	books = filtered
-	total = len(books)
+	total := len(books)
 
 	start := (page - 1) * opdsPageSize
 	if start >= total {

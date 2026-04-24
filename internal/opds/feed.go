@@ -68,20 +68,20 @@ type Link struct {
 // Entry is an Atom <entry> — represents one catalog navigation link or one
 // book in an acquisition feed.
 type Entry struct {
-	XMLName   xml.Name    `xml:"entry"`
-	ID        string      `xml:"id"`
-	Title     string      `xml:"title"`
-	Updated   string      `xml:"updated"`
-	Published string      `xml:"published,omitempty"`
-	Authors   []Author    `xml:"author,omitempty"`
-	Summary   *TextField  `xml:"summary,omitempty"`
-	Content   *TextField  `xml:"content,omitempty"`
-	Language  string      `xml:"dc:language,omitempty"`
-	Publisher string      `xml:"dc:publisher,omitempty"`
-	Issued    string      `xml:"dc:issued,omitempty"`
+	XMLName    xml.Name   `xml:"entry"`
+	ID         string     `xml:"id"`
+	Title      string     `xml:"title"`
+	Updated    string     `xml:"updated"`
+	Published  string     `xml:"published,omitempty"`
+	Authors    []Author   `xml:"author,omitempty"`
+	Summary    *TextField `xml:"summary,omitempty"`
+	Content    *TextField `xml:"content,omitempty"`
+	Language   string     `xml:"dc:language,omitempty"`
+	Publisher  string     `xml:"dc:publisher,omitempty"`
+	Issued     string     `xml:"dc:issued,omitempty"`
 	Identifier string     `xml:"dc:identifier,omitempty"`
 	Categories []Category `xml:"category,omitempty"`
-	Links     []Link      `xml:"link"`
+	Links      []Link     `xml:"link"`
 }
 
 // TextField is used for <summary> / <content> — type="text" or "html".
@@ -99,12 +99,12 @@ type Category struct {
 // OpenSearchDescription powers the search-link discovery that OPDS clients
 // use. Served at /opds/search.xml.
 type OpenSearchDescription struct {
-	XMLName     xml.Name `xml:"OpenSearchDescription"`
-	Xmlns       string   `xml:"xmlns,attr"`
-	ShortName   string   `xml:"ShortName"`
-	Description string   `xml:"Description"`
-	URL         OSURL    `xml:"Url"`
-	InputEncoding string `xml:"InputEncoding,omitempty"`
+	XMLName       xml.Name `xml:"OpenSearchDescription"`
+	Xmlns         string   `xml:"xmlns,attr"`
+	ShortName     string   `xml:"ShortName"`
+	Description   string   `xml:"Description"`
+	URL           OSURL    `xml:"Url"`
+	InputEncoding string   `xml:"InputEncoding,omitempty"`
 }
 
 // OSURL is the OpenSearch <Url> template entry.

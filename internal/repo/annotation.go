@@ -100,8 +100,8 @@ func (r *AnnotationRepo) Create(ctx context.Context, a model.Annotation) (model.
 func (r *AnnotationRepo) Update(ctx context.Context, userID, id string, note, selectedText, color *string) (model.Annotation, error) {
 	// Build the SET list dynamically so unset pointers stay untouched.
 	var (
-		sets  []string
-		args  = []any{userID, id}
+		sets []string
+		args = []any{userID, id}
 	)
 	if note != nil {
 		args = append(args, *note)
@@ -175,4 +175,3 @@ func collectAnnotations(rows pgx.Rows) ([]model.Annotation, error) {
 	}
 	return out, rows.Err()
 }
-

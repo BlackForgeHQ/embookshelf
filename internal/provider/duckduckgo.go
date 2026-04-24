@@ -43,7 +43,7 @@ func (d *DuckDuckGo) Search(ctx context.Context, q Query) ([]Match, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	// 202 = DDG couldn't derive an Instant Answer with confidence. That's
 	// "no result" for our purposes, not an error — other providers in the
 	// fan-out may still have a hit.

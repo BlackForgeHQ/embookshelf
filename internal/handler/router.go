@@ -209,7 +209,7 @@ func (h *Handler) mountSPA(r *gin.Engine) {
 			c.String(http.StatusNotFound, "frontend bundle not built — run `npm run build` in web/")
 			return
 		}
-		defer index.Close()
+		defer func() { _ = index.Close() }()
 		c.Writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 		// Gin seeds NoRoute responses with 404; override to 200 so the SPA
 		// shell is served with a success status on deep links like /login.

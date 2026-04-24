@@ -11,13 +11,13 @@ import (
 // ReadingStats is the payload the Dashboard + /stats page consume.
 // One service call; every field independently fetched in parallel.
 type ReadingStats struct {
-	HeatmapDays      int
-	HeatmapMinutes   []int
-	ThisWeekMinutes  int
-	CurrentStreak    int
-	QuarterMinutes   int
-	QuarterSessions  int
-	AllTimeMinutes   int
+	HeatmapDays     int
+	HeatmapMinutes  []int
+	ThisWeekMinutes int
+	CurrentStreak   int
+	QuarterMinutes  int
+	QuarterSessions int
+	AllTimeMinutes  int
 }
 
 type ReadingSessionService struct {

@@ -85,7 +85,7 @@ func (s *DeviceService) Send(ctx context.Context, userID, deviceID, bookID strin
 	if err != nil {
 		return fmt.Errorf("open book file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {

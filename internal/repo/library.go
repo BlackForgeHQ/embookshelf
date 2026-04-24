@@ -194,7 +194,7 @@ func (r *LibraryRepo) DeleteLibrary(ctx context.Context, id string) ([]string, e
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	rows, err := tx.Query(ctx, `SELECT id FROM books WHERE library_id = $1`, id)
 	if err != nil {

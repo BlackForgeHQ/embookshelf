@@ -851,12 +851,12 @@ var AllowedCoverHosts = map[string]struct{}{
 	// DuckDuckGo (Wikipedia-sourced covers).
 	"duckduckgo.com": {},
 	// Hardcover — covers sit on their asset CDN or fallback GCS bucket.
-	"assets.hardcover.app": {},
+	"assets.hardcover.app":   {},
 	"storage.googleapis.com": {},
 	// Goodreads CDNs. The search-results page serves the thumbnail
 	// from a handful of rotating subdomains under these roots.
-	".gr-assets.com":              {},
-	".photo.goodreads.com":        {},
+	".gr-assets.com":       {},
+	".photo.goodreads.com": {},
 }
 
 // hostAllowed reports whether a URL host clears the allow-list. An
@@ -911,7 +911,7 @@ func (s *EnrichmentService) ImportCoverFromURL(ctx context.Context, bookID, rawU
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", errors.New("cover fetch non-200")
 	}

@@ -113,9 +113,9 @@ func (r *DeviceRepo) MarkSendResult(ctx context.Context, userID, id string, send
 
 func scanDevice(s scanner) (model.Device, error) {
 	var (
-		d       model.Device
-		kind    string
-		rawCfg  []byte
+		d      model.Device
+		kind   string
+		rawCfg []byte
 	)
 	err := s.Scan(
 		&d.ID, &d.UserID, &kind, &d.Name, &d.Secret, &rawCfg,

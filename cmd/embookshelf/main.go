@@ -236,23 +236,23 @@ func main() {
 
 	// HTTP.
 	h := handler.New(handler.Deps{
-		Cfg:         cfg,
-		Static:      staticfs.FS,
-		Lib:         libSvc,
-		Shelf:       shelfSvc,
-		Auth:        authSvc,
-		BookDrop:    bdropSvc,
-		Progress:    progressSvc,
-		Enrich:      enrichSvc,
-		Annotations: annotationSvc,
+		Cfg:          cfg,
+		Static:       staticfs.FS,
+		Lib:          libSvc,
+		Shelf:        shelfSvc,
+		Auth:         authSvc,
+		BookDrop:     bdropSvc,
+		Progress:     progressSvc,
+		Enrich:       enrichSvc,
+		Annotations:  annotationSvc,
 		Stats:        statsSvc,
 		ReadingStats: readingStatsSvc,
 		Devices:      deviceSvc,
 		OIDC:         oidcSvc,
 		AppSettings:  appSettingsRepo,
 		Covers:       covers,
-		Hub:         hub,
-		Queue:       q,
+		Hub:          hub,
+		Queue:        q,
 	})
 
 	srv := &http.Server{

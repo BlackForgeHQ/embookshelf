@@ -4,8 +4,8 @@
 // alongside has_cover, so on serve we just set Content-Type and hand off to
 // http.ServeFile. Two logical namespaces:
 //
-//   ${root}/bookdrop/{bookdropID}  — pre-approval, shown in the queue preview
-//   ${root}/books/{bookID}         — post-approval, shown everywhere else
+//	${root}/bookdrop/{bookdropID}  — pre-approval, shown in the queue preview
+//	${root}/books/{bookID}         — post-approval, shown everywhere else
 //
 // On approve, the file moves from bookdrop/ to books/ (rename on the same
 // filesystem = atomic). Writes use a temp-file-and-rename dance so a crash

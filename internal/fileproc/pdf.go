@@ -33,7 +33,7 @@ func (PDFProcessor) Extract(ctx context.Context, filePath string) (Metadata, err
 	if err != nil {
 		return Metadata{}, fmt.Errorf("open pdf: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Sniff the magic so a non-PDF file with a .pdf extension surfaces as
 	// a processor error instead of silently producing empty metadata.

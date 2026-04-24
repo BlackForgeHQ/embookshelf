@@ -355,8 +355,8 @@ func (h *Handler) BookPatch(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"book": bookDetailDTO{
-			bookDTO:  toBookDTO(fresh),
-			Shelves:  shelves,
+			bookDTO: toBookDTO(fresh),
+			Shelves: shelves,
 		},
 	})
 }
@@ -666,8 +666,8 @@ func (h *Handler) BookDetail(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"book": bookDetailDTO{
-			bookDTO:  toBookDTO(b),
-			Shelves:  shelves,
+			bookDTO: toBookDTO(b),
+			Shelves: shelves,
 		},
 	})
 }

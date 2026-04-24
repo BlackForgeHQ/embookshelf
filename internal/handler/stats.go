@@ -12,14 +12,14 @@ import (
 // the TS client; the buckets reuse the repo's tiny struct shape since
 // there's nothing worth translating.
 type statsDTO struct {
-	Totals        statsTotalsDTO          `json:"totals"`
-	User          statsUserDTO            `json:"user"`
-	Libraries     []bucketDTO             `json:"libraries"`
-	Formats       []bucketDTO             `json:"formats"`
-	TopAuthors    []bucketDTO             `json:"topAuthors"`
-	TopTags       []bucketDTO             `json:"topTags"`
-	YearHistogram []statsYearBucketDTO    `json:"yearHistogram"`
-	Ratings       []statsRatingBucketDTO  `json:"ratings"`
+	Totals        statsTotalsDTO         `json:"totals"`
+	User          statsUserDTO           `json:"user"`
+	Libraries     []bucketDTO            `json:"libraries"`
+	Formats       []bucketDTO            `json:"formats"`
+	TopAuthors    []bucketDTO            `json:"topAuthors"`
+	TopTags       []bucketDTO            `json:"topTags"`
+	YearHistogram []statsYearBucketDTO   `json:"yearHistogram"`
+	Ratings       []statsRatingBucketDTO `json:"ratings"`
 }
 
 type statsTotalsDTO struct {

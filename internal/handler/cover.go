@@ -42,7 +42,7 @@ func (h *Handler) BookCover(c *gin.Context) {
 		writeServerError(c, "cover open", err)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	mime := book.CoverMime
 	if mime == "" {
