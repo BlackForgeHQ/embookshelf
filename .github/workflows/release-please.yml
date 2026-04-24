@@ -1,0 +1,29 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write         # create commits, tags, releases
+  pull-requests: write    # open / update the release PR
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          # Falls back to GITHUB_TOKEN; no PAT needed for a single-repo
+          # setup because branch protection is satisfied by the
+          # release-please-action's contents: write scope.
+          token: ${{ secrets.GITHUB_TOKEN }}

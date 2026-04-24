@@ -86,10 +86,32 @@ jobs:
           output-file: embookshelf_${{ github.ref_name }}_spdx.json
           upload-artifact: false
 
-      - name: Create GitHub Release (tag only)
+      # release-please creates the GitHub Release when its PR merges; we
+      # attach the SBOM to that existing Release. If release-please's
+      # Release hasn't propagated yet (webhook ordering), retry briefly.
+      # If a tag was pushed manually (release-please bypassed), create
+      # the Release ourselves with auto-generated notes as a fallback.
+      - name: Attach SBOM to Release (tag only)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v3
-        with:
-          generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          files: embookshelf_${{ github.ref_name }}_spdx.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SBOM_FILE: embookshelf_${{ github.ref_name }}_spdx.json
+          PRERELEASE: ${{ contains(github.ref_name, '-') }}
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6; do
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              gh release upload "$GITHUB_REF_NAME" "$SBOM_FILE" --clobber
+              exit 0
+            fi
+            echo "waiting for release $GITHUB_REF_NAME (attempt $i/6)"
+            sleep 10
+          done
+          echo "release $GITHUB_REF_NAME not found after 60s; creating"
+          if [ "$PRERELEASE" = "true" ]; then
+            gh release create "$GITHUB_REF_NAME" "$SBOM_FILE" \
+              --generate-notes --prerelease
+          else
+            gh release create "$GITHUB_REF_NAME" "$SBOM_FILE" \
+              --generate-notes
+          fi
