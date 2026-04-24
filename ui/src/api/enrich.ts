@@ -41,10 +41,11 @@ export const PROVIDER_LABELS: Record<string, string> = {
 
 export function formatProviderList(ids: ReadonlyArray<string>): string {
   const labels = ids.map((id) => PROVIDER_LABELS[id] ?? id)
-  if (labels.length === 0) return ""
-  if (labels.length === 1) return labels[0]
-  if (labels.length === 2) return `${labels[0]} or ${labels[1]}`
-  return `${labels.slice(0, -1).join(", ")}, or ${labels[labels.length - 1]}`
+  // `a` / `a or b` fall through Array.prototype.join cleanly, avoiding
+  // a stack of index accesses that noUncheckedIndexedAccess flags.
+  if (labels.length <= 2) return labels.join(" or ")
+  const last = labels.at(-1)!
+  return `${labels.slice(0, -1).join(", ")}, or ${last}`
 }
 
 export type EnrichQuery = {

@@ -699,6 +699,9 @@ function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
     if (target < 0 || target >= ordered.length) return
     const a = ordered[idx]
     const b = ordered[target]
+    // The bounds check above guarantees both are defined; the guard
+    // keeps noUncheckedIndexedAccess happy without duplicating logic.
+    if (!a || !b) return
     const aPrio = a.priority ?? idx
     const bPrio = b.priority ?? target
     patchMut.mutate({ id: a.id, patch: { priority: bPrio } })

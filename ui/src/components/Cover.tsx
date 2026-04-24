@@ -309,8 +309,10 @@ type SpineProps = {
 export function Spine({ book, index = 0, onClick }: SpineProps) {
   const palette = PALETTES[coercePalette(book.palette)]
   const isPlaceholder = Boolean(book.placeholder)
-  const w = SPINE_WIDTHS[index % SPINE_WIDTHS.length]
-  const h = SPINE_HEIGHTS[index % SPINE_HEIGHTS.length]
+  // Modulo keeps the index in range; the `??` fallbacks appease
+  // noUncheckedIndexedAccess without changing the chosen value.
+  const w = SPINE_WIDTHS[index % SPINE_WIDTHS.length] ?? 28
+  const h = SPINE_HEIGHTS[index % SPINE_HEIGHTS.length] ?? 220
   return (
     <div
       onClick={onClick}

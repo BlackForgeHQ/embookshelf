@@ -89,14 +89,9 @@ function BookDrop() {
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
   // Auto-select the first actionable row on first load + whenever the
-  // current selection disappears (approved / rejected / deleted). TS
-  // infers `Array<T>[number]` as `T` (noUncheckedIndexedAccess is off),
-  // so the fallbacks look always-truthy to the linter; they aren't at
-  // runtime when all three sources are empty.
-  const current: BookDropItem | undefined =
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+  // current selection disappears (approved / rejected / deleted).
+  const current =
     queue.data?.find((i) => i.id === selectedId) ?? active[0] ?? finished[0]
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   if (current && current.id !== selectedId) {
     // setState-in-render is a defensible TanStack Query pattern for sync
     // effects; React will flush on the same commit.
@@ -270,7 +265,6 @@ function BookDrop() {
         </div>
 
         {/* Right — detail */}
-        {/* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition */}
         {current && (
           <div style={{ overflow: "auto", padding: "32px 40px" }}>
             {error && (

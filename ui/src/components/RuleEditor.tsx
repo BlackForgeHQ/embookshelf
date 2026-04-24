@@ -129,7 +129,9 @@ const FIELD_ORDER: Array<RuleField> = [
 // field so the user never sees an invalid combo even for a split second.
 function blankPredicate(field: RuleField = "author"): ShelfPredicate {
   const meta = FIELDS[field]
-  const op = meta.ops[0].op
+  // Every FieldMeta is seeded above with at least one op; the `!` is
+  // load-bearing under noUncheckedIndexedAccess.
+  const op = meta.ops[0]!.op
   const value: string | number =
     meta.kind === "string" || meta.kind === "tags" ? "" : 0
   return { field, op, value }
