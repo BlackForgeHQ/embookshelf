@@ -116,7 +116,7 @@ jobs:
           mkdir -p bookdrop data
           ./tmp/embookshelf > server.log 2>&1 &
           echo "$!" > server.pid
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if curl -fsS http://localhost:6060/api/v1/healthcheck >/dev/null 2>&1; then
               echo "server ready"
               exit 0
