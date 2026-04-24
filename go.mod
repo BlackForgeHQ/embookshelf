@@ -3,11 +3,13 @@ module github.com/blackforge/embookshelf
 go 1.25.0
 
 require (
+	github.com/PuerkitoBio/goquery v1.12.0
+	github.com/agnivade/levenshtein v1.2.1
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/gin-contrib/cors v1.7.7
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-migrate/migrate/v4 v4.19.1
-	github.com/jackc/pgx/v5 v5.9.1
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/joho/godotenv v1.5.1
 	github.com/riverqueue/river v0.34.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.34.0
@@ -31,8 +33,6 @@ require (
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
-	github.com/PuerkitoBio/goquery v1.12.0 // indirect
-	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/air-verse/air v1.65.1 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
