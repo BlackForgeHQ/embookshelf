@@ -35,8 +35,8 @@ type GoogleBooksConfig struct {
 	Language string `json:"language"`
 }
 
-func NewGoogleBooks() *GoogleBooks {
-	return &GoogleBooks{Client: defaultHTTPClient, MaxResults: 5}
+func NewGoogleBooks(client *http.Client) *GoogleBooks {
+	return &GoogleBooks{Client: client, MaxResults: 5}
 }
 
 func (*GoogleBooks) Name() Source { return SourceGoogleBooks }
