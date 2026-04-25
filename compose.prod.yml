@@ -15,8 +15,9 @@
 #  Migrations run automatically on boot (MIGRATE_ON_START=true).
 
 services:
-  postgres:
+  postgres-embookshelf:
     image: postgres:16-alpine
+    container_name: postgres-embookshelf
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-embookshelf}
@@ -46,12 +47,12 @@ services:
     image: ghcr.io/blackforgehq/embookshelf:${EMBOOKSHELF_VERSION:-latest}
     restart: unless-stopped
     depends_on:
-      postgres:
+      postgres-embookshelf:
         condition: service_healthy
       init:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-embookshelf}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-embookshelf}?sslmode=disable
+      DATABASE_URL: postgres://${POSTGRES_USER:-embookshelf}:${POSTGRES_PASSWORD}@postgres-embookshelf:5432/${POSTGRES_DB:-embookshelf}?sslmode=disable
       EMBOOKSHELF_PORT: "6060"
       DATA_PATH: /data
       BOOKDROP_PATH: /bookdrop
