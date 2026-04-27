@@ -46,7 +46,7 @@ func (r *ProviderSettingsRepo) List(ctx context.Context) ([]ProviderSetting, err
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make([]ProviderSetting, 0)
 	for rows.Next() {
 		var s ProviderSetting
@@ -68,7 +68,7 @@ func (r *ProviderSettingsRepo) AllConfigs(ctx context.Context) (map[string]json.
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make(map[string]json.RawMessage)
 	for rows.Next() {
 		var id string
@@ -88,7 +88,7 @@ func (r *ProviderSettingsRepo) EnabledIDs(ctx context.Context) (map[string]bool,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make(map[string]bool)
 	for rows.Next() {
 		var id string

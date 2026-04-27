@@ -115,7 +115,7 @@ func (r *StatsRepo) YearHistogram(ctx context.Context) ([]StatsYearBucket, error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []StatsYearBucket
 	for rows.Next() {
 		var b StatsYearBucket
@@ -146,7 +146,7 @@ func (r *StatsRepo) RatingDistribution(ctx context.Context) ([]StatsRatingBucket
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []StatsRatingBucket
 	for rows.Next() {
 		var b StatsRatingBucket
@@ -197,7 +197,7 @@ func (r *StatsRepo) query(ctx context.Context, sql string, args ...any) ([]Stats
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []StatsBucket
 	for rows.Next() {
 		var b StatsBucket

@@ -53,7 +53,7 @@ func main() {
 	if err != nil {
 		fatal("db open: %v", err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 
 	m, err := migrator.New(d.Dialect, d.SQL)
 	if err != nil {

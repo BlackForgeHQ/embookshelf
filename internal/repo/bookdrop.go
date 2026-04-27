@@ -64,7 +64,7 @@ func (r *BookDropRepo) List(ctx context.Context) ([]model.BookDropItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return collectBookDrop(rows)
 }
 
@@ -105,7 +105,7 @@ func (r *BookDropRepo) DeleteProcessed(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var ids []string
 	for rows.Next() {
 		var id string

@@ -90,7 +90,7 @@ func (r *ReadingSessionRepo) Heatmap(ctx context.Context, userID string, days in
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := make([]int, 0, days)
 	for rows.Next() {
@@ -146,7 +146,7 @@ func (r *ReadingSessionRepo) CurrentStreak(ctx context.Context, userID string) (
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var days []time.Time
 	for rows.Next() {

@@ -56,7 +56,7 @@ func (r *ShelfRepo) ListForUser(ctx context.Context, userID string) ([]model.She
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []model.Shelf
 	for rows.Next() {
@@ -102,7 +102,7 @@ func (r *ShelfRepo) BooksInShelfForUser(ctx context.Context, userID, shelfSlug s
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return collectBooks(rows)
 }
 
@@ -149,7 +149,7 @@ func (r *ShelfRepo) booksMatchingRule(ctx context.Context, userID string, rule *
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return collectBooks(rows)
 }
 
@@ -335,7 +335,7 @@ func (r *ShelfRepo) ShelfSlugsForBook(ctx context.Context, userID, bookID string
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []string
 	for rows.Next() {
 		var s string
@@ -553,7 +553,7 @@ func (r *ShelfRepo) SearchSuggest(ctx context.Context, userID, q string, limit i
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []SuggestShelf
 	for rows.Next() {
 		var s SuggestShelf

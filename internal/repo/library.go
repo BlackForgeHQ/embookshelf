@@ -117,7 +117,7 @@ func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var libs []model.Library
 	for rows.Next() {
@@ -206,12 +206,12 @@ func (r *LibraryRepo) DeleteLibrary(ctx context.Context, id string) ([]string, e
 	for rows.Next() {
 		var bookID string
 		if err := rows.Scan(&bookID); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
 		bookIDs = append(bookIDs, bookID)
 	}
-	rows.Close()
+	_ = rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -301,7 +301,7 @@ func (r *LibraryRepo) Search(ctx context.Context, userID, librarySlug string, p 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return collectBooks(rows)
 }
 
@@ -602,7 +602,7 @@ func (r *LibraryRepo) SearchSuggestBooks(ctx context.Context, q string, limit in
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []SuggestBook
 	for rows.Next() {
 		var b SuggestBook
@@ -629,7 +629,7 @@ func (r *LibraryRepo) SearchSuggestLibraries(ctx context.Context, q string, limi
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []SuggestLibrary
 	for rows.Next() {
 		var l SuggestLibrary

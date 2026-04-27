@@ -17,9 +17,9 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/blackforge/embookshelf/internal/config"
-	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/crypto"
+	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/handler"
 	"github.com/blackforge/embookshelf/internal/ingest"
 	"github.com/blackforge/embookshelf/internal/migrator"

@@ -39,7 +39,7 @@ func (r *AnnotationRepo) ListForBook(ctx context.Context, userID, bookID string)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return collectAnnotations(rows)
 }
 
@@ -59,7 +59,7 @@ func (r *AnnotationRepo) ListRecent(ctx context.Context, userID string, limit in
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return collectAnnotations(rows)
 }
 

@@ -64,7 +64,7 @@ func (r *UserRepo) List(ctx context.Context) ([]model.User, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []model.User
 	for rows.Next() {
