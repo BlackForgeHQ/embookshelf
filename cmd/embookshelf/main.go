@@ -109,7 +109,7 @@ func main() {
 	annotationRepo := repo.NewAnnotationRepo(dbh)
 	statsRepo := repo.NewStatsRepo(dbh)
 	readingSessionRepo := repo.NewReadingSessionRepo(dbh)
-	deviceRepo := repo.NewDeviceRepo(pool)
+	deviceRepo := repo.NewDeviceRepo(dbh)
 	appSettingsRepo := repo.NewAppSettingsRepo(pool)
 
 	// SSE hub — shared between services that broadcast and the handler that serves /events.
