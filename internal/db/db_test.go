@@ -15,6 +15,9 @@ func TestDetectDialect(t *testing.T) {
 		{"./data.db", DialectSQLite, false},
 		{"mysql://u:p@host/db", "", true},
 		{"", "", true},
+		{"redis:something", "", true},
+		{"mysql:user@host/db", "", true},
+		{"foo:bar", "", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.url, func(t *testing.T) {

@@ -50,6 +50,18 @@ func DetectDialect(url string) (Dialect, error) {
 		return DialectSQLite, nil
 	case strings.Contains(low, "://"):
 		return "", fmt.Errorf("unsupported database URL scheme: %q", url)
+	case strings.Contains(low, ":") && !strings.HasPrefix(low, "file:"):
+		// Reject strings that look like a malformed/unknown scheme (e.g.
+		// "redis:something") but lack "://". The explicit !HasPrefix("file:")
+		// guard is belt-and-suspenders: file: is matched earlier and never
+		// reaches here, but it prevents a future reordering from accidentally
+		// classifying a file: URI as an unknown scheme.
+		//
+		// Note: Windows absolute paths (e.g. C:\data.db) also contain ":"
+		// and would be rejected. The project documents SQLite paths using
+		// forward-slash forms (./data/embookshelf.db, sqlite:///…, file:./…),
+		// so Windows-style paths are not a supported input.
+		return "", fmt.Errorf("unsupported database URL scheme: %q", url)
 	default:
 		// Bare path → SQLite
 		return DialectSQLite, nil
