@@ -58,8 +58,12 @@ func newApproveTestSetup() (*fakeUserStatusRepo, model.User, model.User) {
 func TestApproveUserFlipsPendingToActive(t *testing.T) {
 	repo, admin, pending := newApproveTestSetup()
 
-	if err := approveUser(context.Background(), repo, admin.ID, pending.ID); err != nil {
+	changed, err := approveUser(context.Background(), repo, pending.ID)
+	if err != nil {
 		t.Fatalf("approveUser: %v", err)
+	}
+	if !changed {
+		t.Fatalf("changed = false, want true on pending → active")
 	}
 	got := repo.users[pending.ID]
 	if got.Status != model.UserStatusActive {
@@ -68,22 +72,31 @@ func TestApproveUserFlipsPendingToActive(t *testing.T) {
 	if got.StatusChangedAt == nil {
 		t.Fatalf("status_changed_at not set")
 	}
+	_ = admin
 }
 
 func TestApproveUserIsIdempotentOnActive(t *testing.T) {
-	repo, admin, pending := newApproveTestSetup()
+	repo, _, pending := newApproveTestSetup()
 	pending.Status = model.UserStatusActive
 	repo.users[pending.ID] = pending
 
-	if err := approveUser(context.Background(), repo, admin.ID, pending.ID); err != nil {
+	changed, err := approveUser(context.Background(), repo, pending.ID)
+	if err != nil {
 		t.Fatalf("approveUser idempotent: %v", err)
+	}
+	if changed {
+		t.Fatalf("changed = true, want false on already-active")
 	}
 }
 
 func TestDenyUserFlipsPendingToDenied(t *testing.T) {
 	repo, admin, pending := newApproveTestSetup()
-	if err := denyUser(context.Background(), repo, admin.ID, pending.ID); err != nil {
+	changed, err := denyUser(context.Background(), repo, admin.ID, pending.ID)
+	if err != nil {
 		t.Fatalf("denyUser: %v", err)
+	}
+	if !changed {
+		t.Fatalf("changed = false, want true on pending → denied")
 	}
 	if repo.users[pending.ID].Status != model.UserStatusDenied {
 		t.Fatalf("status = %q, want denied", repo.users[pending.ID].Status)
@@ -92,7 +105,7 @@ func TestDenyUserFlipsPendingToDenied(t *testing.T) {
 
 func TestDenyUserRefusesSelf(t *testing.T) {
 	repo, admin, _ := newApproveTestSetup()
-	err := denyUser(context.Background(), repo, admin.ID, admin.ID)
+	_, err := denyUser(context.Background(), repo, admin.ID, admin.ID)
 	if !errors.Is(err, ErrCannotTargetSelf) {
 		t.Fatalf("err = %v, want ErrCannotTargetSelf", err)
 	}
@@ -103,14 +116,14 @@ func TestDenyUserRefusesLastAdmin(t *testing.T) {
 	other := model.User{ID: "admin-2", Email: "b@x", Role: model.RoleAdmin, Status: model.UserStatusActive}
 	repo.users[other.ID] = other
 
-	// Two admins exist — denying the second admin should succeed.
-	if err := denyUser(context.Background(), repo, admin.ID, other.ID); err != nil {
+	// Two active admins exist — denying the second admin should succeed.
+	if _, err := denyUser(context.Background(), repo, admin.ID, other.ID); err != nil {
 		t.Fatalf("denying second admin should succeed: %v", err)
 	}
 	// Now only `admin` (admin-1) remains active. Denying them via an
 	// arbitrary other-admin path should be blocked by the last-admin guard.
 	repo.users[admin.ID] = admin
-	if err := denyUser(context.Background(), repo, "ghost", admin.ID); !errors.Is(err, ErrLastAdmin) {
+	if _, err := denyUser(context.Background(), repo, "ghost", admin.ID); !errors.Is(err, ErrLastAdmin) {
 		t.Fatalf("err = %v, want ErrLastAdmin", err)
 	}
 }

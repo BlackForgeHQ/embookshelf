@@ -129,11 +129,15 @@ func (r *UserRepo) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// CountByRole returns how many users currently hold the given role. Used to
-// refuse the last-admin demotion/delete path.
+// CountByRole returns how many active users hold the given role. Used to
+// refuse the last-admin demotion / delete / deny path. Pending and denied
+// admins do not count — only an active admin can sign in and recover the
+// instance, so the guard tracks active admins specifically.
 func (r *UserRepo) CountByRole(ctx context.Context, role model.Role) (int, error) {
 	var n int
-	err := r.pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE role = $1`, string(role)).Scan(&n)
+	err := r.pool.QueryRow(ctx,
+		`SELECT count(*) FROM users WHERE role = $1 AND status = 'active'`,
+		string(role)).Scan(&n)
 	return n, err
 }
 

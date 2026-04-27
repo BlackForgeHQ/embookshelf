@@ -247,69 +247,77 @@ func (s *AuthService) DeleteUser(ctx context.Context, userID string) error {
 
 // approveUser/denyUser are pure helpers operating against any repo that
 // satisfies userStatusRepo. They contain the guard logic and are unit
-// tested in auth_test.go without a database. The exported method wrappers
-// add SSE broadcast on success.
+// tested in auth_test.go without a database. They report whether the row
+// actually changed so the exported method wrappers can suppress the SSE
+// broadcast on idempotent no-ops.
 
-func approveUser(ctx context.Context, r userStatusRepo, callerID, targetID string) error {
+func approveUser(ctx context.Context, r userStatusRepo, targetID string) (changed bool, err error) {
 	u, err := r.GetByID(ctx, targetID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if u.Status == model.UserStatusActive {
-		return nil // idempotent
+		return false, nil // idempotent
 	}
-	return r.UpdateStatus(ctx, targetID, model.UserStatusActive)
+	return true, r.UpdateStatus(ctx, targetID, model.UserStatusActive)
 }
 
-func denyUser(ctx context.Context, r userStatusRepo, callerID, targetID string) error {
+func denyUser(ctx context.Context, r userStatusRepo, callerID, targetID string) (changed bool, err error) {
 	if callerID == targetID {
-		return ErrCannotTargetSelf
+		return false, ErrCannotTargetSelf
 	}
 	u, err := r.GetByID(ctx, targetID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if u.Status == model.UserStatusDenied {
-		return nil // idempotent
+		return false, nil // idempotent
 	}
 	if u.Role == model.RoleAdmin && u.Status == model.UserStatusActive {
 		n, err := r.CountByRole(ctx, model.RoleAdmin)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if n <= 1 {
-			return ErrLastAdmin
+			return false, ErrLastAdmin
 		}
 	}
-	return r.UpdateStatus(ctx, targetID, model.UserStatusDenied)
+	return true, r.UpdateStatus(ctx, targetID, model.UserStatusDenied)
 }
 
 // ApproveUser flips a pending or denied user back to active. Idempotent
-// for already-active users. Broadcasts a users.updated SSE event
-// so open admin tabs refresh.
+// for already-active users. Broadcasts a users.updated SSE event when
+// the status actually changed so open admin tabs refresh.
 func (s *AuthService) ApproveUser(ctx context.Context, callerID, targetID string) (model.User, error) {
-	if err := approveUser(ctx, s.users, callerID, targetID); err != nil {
+	_ = callerID // approve has no caller-vs-target guards today
+	changed, err := approveUser(ctx, s.users, targetID)
+	if err != nil {
 		return model.User{}, err
 	}
 	u, err := s.users.GetByID(ctx, targetID)
 	if err != nil {
 		return model.User{}, err
 	}
-	s.broadcastUsersUpdate()
+	if changed {
+		s.broadcastUsersUpdate()
+	}
 	return u, nil
 }
 
 // DenyUser flips a pending user to denied. Idempotent. Refuses to deny
 // the caller's own row or the last remaining admin.
 func (s *AuthService) DenyUser(ctx context.Context, callerID, targetID string) (model.User, error) {
-	if err := denyUser(ctx, s.users, callerID, targetID); err != nil {
+	changed, err := denyUser(ctx, s.users, callerID, targetID)
+	if err != nil {
 		return model.User{}, err
 	}
 	u, err := s.users.GetByID(ctx, targetID)
 	if err != nil {
 		return model.User{}, err
 	}
-	s.broadcastUsersUpdate()
+	if changed {
+		s.broadcastUsersUpdate()
+	}
 	return u, nil
 }
 
