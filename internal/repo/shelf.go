@@ -521,3 +521,38 @@ func sqlOp(op model.RuleOp) (string, error) {
 	}
 	return "", fmt.Errorf("%w: op %q not a comparison operator", model.ErrInvalidRule, op)
 }
+
+// SuggestShelf is the slim shape returned by SearchSuggest for the
+// autocomplete surfaces.
+type SuggestShelf struct {
+	Slug   string
+	Name   string
+	Accent string
+}
+
+// SearchSuggest returns the user's shelves whose name matches `q`. Used by
+// the global command palette; per-user scoping is enforced via the
+// user_id WHERE clause.
+func (r *ShelfRepo) SearchSuggest(ctx context.Context, userID, q string, limit int) ([]SuggestShelf, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT s.slug, s.name, s.accent
+		FROM shelves s
+		WHERE s.user_id = $1
+		  AND s.name ILIKE '%' || $2 || '%'
+		ORDER BY s.name ASC
+		LIMIT $3
+	`, userID, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SuggestShelf
+	for rows.Next() {
+		var s SuggestShelf
+		if err := rows.Scan(&s.Slug, &s.Name, &s.Accent); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
