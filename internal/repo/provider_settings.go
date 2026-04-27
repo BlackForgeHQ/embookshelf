@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/blackforge/embookshelf/internal/db"
 )
 
 // ProviderSetting is the per-provider row shape. Config is opaque
@@ -26,18 +26,18 @@ type ProviderSetting struct {
 }
 
 type ProviderSettingsRepo struct {
-	pool *pgxpool.Pool
+	db *db.DB
 }
 
-func NewProviderSettingsRepo(pool *pgxpool.Pool) *ProviderSettingsRepo {
-	return &ProviderSettingsRepo{pool: pool}
+func NewProviderSettingsRepo(d *db.DB) *ProviderSettingsRepo {
+	return &ProviderSettingsRepo{db: d}
 }
 
 // List returns every row with config + priority + health. Order is by
 // priority ASC (NULLs last) then id — matches the chain-walk behavior
 // callers actually want for ISBN lookup and future bookdrop auto-enrich.
 func (r *ProviderSettingsRepo) List(ctx context.Context) ([]ProviderSetting, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
 		SELECT id, enabled, config, priority, updated_at,
 		       last_success_at, last_error_at, last_error
 		FROM provider_settings
@@ -64,7 +64,7 @@ func (r *ProviderSettingsRepo) List(ctx context.Context) ([]ProviderSetting, err
 // AllConfigs returns id → config for every known provider. Used on
 // service boot to push stored configs into provider instances.
 func (r *ProviderSettingsRepo) AllConfigs(ctx context.Context) (map[string]json.RawMessage, error) {
-	rows, err := r.pool.Query(ctx, `SELECT id, config FROM provider_settings`)
+	rows, err := r.db.SQL.QueryContext(ctx, `SELECT id, config FROM provider_settings`)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func (r *ProviderSettingsRepo) AllConfigs(ctx context.Context) (map[string]json.
 // EnabledIDs is the hot-path helper — returns id → enabled so the
 // enrichment service can filter its provider fan-out in one query.
 func (r *ProviderSettingsRepo) EnabledIDs(ctx context.Context) (map[string]bool, error) {
-	rows, err := r.pool.Query(ctx, `SELECT id, enabled FROM provider_settings`)
+	rows, err := r.db.SQL.QueryContext(ctx, `SELECT id, enabled FROM provider_settings`)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +104,7 @@ func (r *ProviderSettingsRepo) EnabledIDs(ctx context.Context) (map[string]bool,
 // SetEnabled upserts a single row. Used by the PATCH endpoint when an
 // admin toggles a provider.
 func (r *ProviderSettingsRepo) SetEnabled(ctx context.Context, id string, enabled bool) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.db.SQL.ExecContext(ctx, `
 		INSERT INTO provider_settings (id, enabled, updated_at)
 		VALUES ($1, $2, now())
 		ON CONFLICT (id) DO UPDATE
@@ -121,7 +121,7 @@ func (r *ProviderSettingsRepo) SetConfig(ctx context.Context, id string, config 
 	if len(config) == 0 {
 		config = []byte("{}")
 	}
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.db.SQL.ExecContext(ctx, `
 		INSERT INTO provider_settings (id, enabled, config, updated_at)
 		VALUES ($1, false, $2, now())
 		ON CONFLICT (id) DO UPDATE
@@ -136,7 +136,7 @@ func (r *ProviderSettingsRepo) SetConfig(ctx context.Context, id string, config 
 // after a provider returns — writes are best-effort; caller logs
 // errors but never aborts on them.
 func (r *ProviderSettingsRepo) RecordSuccess(ctx context.Context, id string) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.db.SQL.ExecContext(ctx, `
 		INSERT INTO provider_settings (id, enabled, last_success_at, last_error, updated_at)
 		VALUES ($1, false, now(), '', now())
 		ON CONFLICT (id) DO UPDATE
@@ -152,7 +152,7 @@ func (r *ProviderSettingsRepo) RecordError(ctx context.Context, id, msg string) 
 	if len(msg) > 500 {
 		msg = msg[:500]
 	}
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.db.SQL.ExecContext(ctx, `
 		INSERT INTO provider_settings (id, enabled, last_error_at, last_error, updated_at)
 		VALUES ($1, false, now(), $2, now())
 		ON CONFLICT (id) DO UPDATE
@@ -165,7 +165,7 @@ func (r *ProviderSettingsRepo) RecordError(ctx context.Context, id, msg string) 
 // SetPriority stores the sort priority. nil clears the slot (reverts
 // the provider to catalog-order fallback).
 func (r *ProviderSettingsRepo) SetPriority(ctx context.Context, id string, priority *int) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.db.SQL.ExecContext(ctx, `
 		INSERT INTO provider_settings (id, enabled, priority, updated_at)
 		VALUES ($1, false, $2, now())
 		ON CONFLICT (id) DO UPDATE
@@ -181,7 +181,7 @@ func (r *ProviderSettingsRepo) SetPriority(ctx context.Context, id string, prior
 // admin toggles.
 func (r *ProviderSettingsRepo) SeedIfAbsent(ctx context.Context, defaults map[string]bool) error {
 	for id, enabled := range defaults {
-		if _, err := r.pool.Exec(ctx, `
+		if _, err := r.db.SQL.ExecContext(ctx, `
 			INSERT INTO provider_settings (id, enabled)
 			VALUES ($1, $2)
 			ON CONFLICT (id) DO NOTHING

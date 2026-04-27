@@ -140,7 +140,7 @@ func main() {
 		}
 		providers = append(providers, p)
 	}
-	providerSettingsRepo := repo.NewProviderSettingsRepo(pool)
+	providerSettingsRepo := repo.NewProviderSettingsRepo(dbh)
 	// Seed provider_settings on first boot using catalog defaults.
 	// ON CONFLICT DO NOTHING means subsequent restarts leave admin
 	// toggles alone — the DB is authoritative after the initial seed.
