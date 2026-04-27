@@ -1280,8 +1280,6 @@ git tag --annotate plan1-foundation -m "DB abstraction landed; SQLite work begin
 - `dberr.IsNotFound(err) bool` signature matches usage in Tasks 5–17.
 - `migrator.New(d db.Dialect, sqlDB *sql.DB)` signature defined in Task 4, called identically in Task 4 Step 4 and Task 4 Step 5.
 
-**Estimated total:** 20 tasks, ~80 commits, ~1 week of focused work for one engineer. Fits comfortably in subagent-driven execution (one subagent per task, review between).
-
 **Next plans (sketched, not committed):**
 - **Plan 2 — SQLite Migration Tree + Dialect Queries:** modernc.org/sqlite driver in `internal/db`, squashed `migrations/sqlite/0000_init.up.sql`, FTS5 schema, dialect-tagged query strings repo-by-repo, `repotest` harness for the test matrix, `DATABASE_URL` default flip.
 - **Plan 3 — Queue Split:** `Queue` interface in `internal/queue`, task functions extracted from River workers, SQLite polling worker, restart recovery.

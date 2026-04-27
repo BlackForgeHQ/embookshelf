@@ -355,22 +355,7 @@ None removed. `DATABASE_MAX_CONNS` / `DATABASE_MIN_CONNS` become no-ops on SQLit
 - **CHANGELOG / release-please breaking-change footer** flags the default-DB flip explicitly. Anyone with `DATABASE_URL` already set is unaffected; anyone relying on the bare default is told to set it explicitly.
 - **Migration tool from PG → SQLite (and vice versa):** out of scope for this spec. Tracked as a follow-up.
 
-## 9. Effort Estimate
-
-| Block                                          | Estimate           |
-|------------------------------------------------|--------------------|
-| `internal/db` + repo constructor refactor      | small (1–2 days)   |
-| Dialect-tagged queries across 14 repos         | medium (4–6 days)  |
-| Squashed SQLite init + JSONB/UUID/TIME audit   | medium (3–4 days)  |
-| FTS5 schema + query helper                     | small (1–2 days)   |
-| Queue interface + SQLite worker                | medium (3–5 days)  |
-| Task-function refactor (River-agnostic)        | small (1–2 days)   |
-| Tests: repo matrix, migration parity, queue    | medium (3–4 days)  |
-| CI lanes + e2e against SQLite                  | small (1–2 days)   |
-| Docs + compose                                 | small (~1 day)     |
-| **Total**                                      | **3–5 weeks**      |
-
-## 10. Open Questions / Follow-ups
+## 9. Open Questions / Follow-ups
 
 - **Read pool split on SQLite** — start with single-pool `MaxOpenConns=1`; revisit if read latency degrades.
 - **PG → SQLite (or reverse) data migration tool** — deferred; needs its own spec.
