@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
+import { Link, useRouterState } from "@tanstack/react-router"
 
 import { AccentPicker, accentColor } from "./AccentPicker"
 import { Icon } from "./Icon"
@@ -22,7 +22,8 @@ import {
   shelvesQueryKey,
   updateShelf,
 } from "@/api/books"
-import { logout as apiLogout, fetchMe, meQueryKey } from "@/api/auth"
+import { fetchMe, meQueryKey } from "@/api/auth"
+import { useLogout } from "@/hooks/useLogout"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import {
@@ -83,7 +84,6 @@ export function AppSidebar() {
   const pathname = state.location.pathname
   const search = state.location.search as { shelf?: string; library?: string }
 
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const me = useQuery({
     queryKey: meQueryKey,
@@ -98,13 +98,7 @@ export function AppSidebar() {
     queryKey: shelvesQueryKey,
     queryFn: fetchShelves,
   })
-  const logoutMut = useMutation({
-    mutationFn: apiLogout,
-    onSuccess: () => {
-      queryClient.setQueryData(meQueryKey, null)
-      void navigate({ to: "/login", replace: true })
-    },
-  })
+  const logoutMut = useLogout()
 
   // Regular shelves are created through a dedicated Dialog (name + accent
   // picker). Smart shelves keep using the RuleEditor, extended with the
