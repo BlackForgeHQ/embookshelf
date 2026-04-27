@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.4](https://github.com/BlackForgeHQ/embookshelf/compare/v0.1.3...v0.1.4) (2026-04-27)
+
+
+### Features
+
+* OIDC admin-approval flow ([#37](https://github.com/BlackForgeHQ/embookshelf/issues/37)) ([1f662d2](https://github.com/BlackForgeHQ/embookshelf/commit/1f662d2bd0d1483139f4bcb786d7e665a9aad18c))
+* update logo and manifest for embookshelf ([12eefe3](https://github.com/BlackForgeHQ/embookshelf/commit/12eefe3e47599516bcae7f8a641cad3a2726cb96))
+
 ## [0.1.3](https://github.com/BlackForgeHQ/embookshelf/compare/v0.1.2...v0.1.3) (2026-04-27)
 
 
