@@ -102,7 +102,7 @@ func main() {
 	// Repositories.
 	libRepo := repo.NewLibraryRepo(dbh)
 	shelfRepo := repo.NewShelfRepo(dbh)
-	userRepo := repo.NewUserRepo(pool)
+	userRepo := repo.NewUserRepo(dbh)
 	sessionRepo := repo.NewSessionRepo(pool)
 	bdropRepo := repo.NewBookDropRepo(pool)
 	progressRepo := repo.NewProgressRepo(pool)
