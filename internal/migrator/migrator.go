@@ -22,10 +22,10 @@ import (
 var FS embed.FS
 
 // New builds a *migrate.Migrate bound to the embedded migrations for the
-// given dialect and the provided *sql.DB. The caller owns sqlDB's
-// lifecycle. Note: m.Close() does close the underlying *sql.DB for the Postgres
-// driver. The caller's defer on the *db.DB's Close() is a
-// belt-and-suspenders no-op (sql.DB.Close is idempotent).
+// given dialect and the provided *sql.DB. Ownership of sqlDB transfers to
+// the Postgres driver: m.Close() will call sqlDB.Close(). Callers must
+// therefore pass a dedicated connection (db.DB.OpenMigrationDB) rather than
+// the shared application *sql.DB.
 func New(d db.Dialect, sqlDB *sql.DB) (*migrate.Migrate, error) {
 	subpath, err := subpathFor(d)
 	if err != nil {

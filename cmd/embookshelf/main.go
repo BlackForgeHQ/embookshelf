@@ -12,8 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
 
 	"github.com/blackforge/embookshelf/internal/config"
@@ -73,22 +71,12 @@ func main() {
 		slog.Info("OpenTelemetry enabled", "endpoint", cfg.OTELEndpoint, "protocol", cfg.OTELProtocol, "service", cfg.OTELServiceName)
 	}
 
-	pool, err := newPool(ctx, cfg)
+	dbh, err := db.Open(ctx, cfg)
 	if err != nil {
 		slog.Error("db connect", "err", err)
 		os.Exit(1)
 	}
-	defer pool.Close()
-
-	// Temporary bridge: build a *db.DB from the existing pgxpool so that
-	// runAppMigrations can use the new dialect-aware migrator signature.
-	// Task 19 deletes newPool entirely and uses db.Open, eliminating this.
-	dbh := &db.DB{
-		SQL:     stdlib.OpenDBFromPool(pool),
-		Dialect: db.DialectPostgres,
-		PG:      pool,
-	}
-	defer func() { _ = dbh.SQL.Close() }()
+	defer func() { _ = dbh.Close() }()
 
 	// Apply app schema migrations before any repo runs queries. River's own
 	// migrations are applied separately inside queue.New().
@@ -299,9 +287,23 @@ func main() {
 
 // runAppMigrations applies every pending schema migration using the embedded
 // migration files. Idempotent — a no-op when the DB is already up-to-date.
+//
+// It opens a dedicated *sql.DB for migrations and closes it at the end via
+// m.Close() (the golang-migrate postgres driver closes the sql.DB it owns).
+// This keeps the shared dbh.SQL alive for the rest of the application.
 func runAppMigrations(ctx context.Context, d *db.DB) error {
-	m, err := migrator.New(d.Dialect, d.SQL)
+	// Open a short-lived, dedicated connection for the migrator so that
+	// m.Close() (which golang-migrate's Postgres driver calls sql.DB.Close on)
+	// does not close the shared application pool.
+	migDB, err := d.OpenMigrationDB()
 	if err != nil {
+		return fmt.Errorf("migration db: %w", err)
+	}
+
+	m, err := migrator.New(d.Dialect, migDB)
+	if err != nil {
+		// migDB not yet owned by migrator — close it ourselves.
+		_ = migDB.Close()
 		return err
 	}
 	defer func() {
@@ -323,25 +325,4 @@ func runAppMigrations(ctx context.Context, d *db.DB) error {
 	}
 	_ = ctx
 	return nil
-}
-
-func newPool(ctx context.Context, cfg config.Config) (*pgxpool.Pool, error) {
-	poolCfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
-	if err != nil {
-		return nil, err
-	}
-	poolCfg.MaxConns = cfg.DatabaseMaxConns
-	poolCfg.MinConns = cfg.DatabaseMinConns
-
-	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
-	if err != nil {
-		return nil, err
-	}
-	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err := pool.Ping(pingCtx); err != nil {
-		pool.Close()
-		return nil, err
-	}
-	return pool, nil
 }

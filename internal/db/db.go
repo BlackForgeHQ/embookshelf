@@ -117,6 +117,23 @@ func openPostgres(ctx context.Context, cfg config.Config) (*DB, error) {
 	}, nil
 }
 
+// OpenMigrationDB returns a fresh *sql.DB that shares the underlying pool
+// but is not the shared db.SQL handle. The caller (or the tool that receives
+// it, e.g. golang-migrate's Postgres driver via m.Close()) is responsible for
+// closing it. This prevents the migrator from closing the application-wide
+// *sql.DB when it calls m.Close().
+func (d *DB) OpenMigrationDB() (*sql.DB, error) {
+	switch d.Dialect {
+	case DialectPostgres:
+		if d.PG == nil {
+			return nil, errors.New("db: PG pool is nil")
+		}
+		return stdlib.OpenDBFromPool(d.PG), nil
+	default:
+		return nil, fmt.Errorf("db: OpenMigrationDB not supported for dialect %q", d.Dialect)
+	}
+}
+
 // Close releases all underlying handles. Safe to call multiple times.
 func (db *DB) Close() error {
 	if db == nil {
