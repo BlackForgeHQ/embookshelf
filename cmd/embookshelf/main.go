@@ -108,7 +108,7 @@ func main() {
 	progressRepo := repo.NewProgressRepo(dbh)
 	annotationRepo := repo.NewAnnotationRepo(dbh)
 	statsRepo := repo.NewStatsRepo(dbh)
-	readingSessionRepo := repo.NewReadingSessionRepo(pool)
+	readingSessionRepo := repo.NewReadingSessionRepo(dbh)
 	deviceRepo := repo.NewDeviceRepo(pool)
 	appSettingsRepo := repo.NewAppSettingsRepo(pool)
 
