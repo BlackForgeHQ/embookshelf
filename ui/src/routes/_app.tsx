@@ -5,6 +5,7 @@ import { fetchMe, meQueryKey } from "@/api/auth"
 import { useRealtime } from "@/api/realtime"
 import { fetchInstanceSummary, instanceSummaryQueryKey } from "@/api/settings"
 import { AppSidebar } from "@/components/Sidebar"
+import { ShelfDraftProvider } from "@/components/ShelfDraftProvider"
 import { UserSettingsDialogProvider } from "@/components/UserSettingsDialog"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -49,6 +50,7 @@ function AppLayout() {
   return (
     <TooltipProvider delayDuration={100}>
       <UserSettingsDialogProvider>
+        <ShelfDraftProvider>
         <SidebarProvider className="h-screen overflow-hidden">
           <AppSidebar />
           <SidebarInset className="min-h-0 overflow-hidden">
@@ -58,6 +60,7 @@ function AppLayout() {
             <StatusBar />
           </SidebarInset>
         </SidebarProvider>
+        </ShelfDraftProvider>
       </UserSettingsDialogProvider>
     </TooltipProvider>
   )

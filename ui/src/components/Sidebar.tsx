@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useRouterState } from "@tanstack/react-router"
 
-import { AccentPicker, accentColor } from "./AccentPicker"
+import { accentColor } from "./AccentPicker"
 import { Icon } from "./Icon"
 import { RuleEditor } from "./RuleEditor"
 import { useUserSettingsDialog } from "./UserSettingsDialog"
@@ -13,7 +13,6 @@ import type { ApiError } from "@/api/client"
 import type { AuthUser } from "@/api/auth"
 import type { Shelf, ShelfRule } from "@/api/books"
 import {
-  createShelf,
   createSmartShelf,
   deleteShelf,
   fetchLibraries,
@@ -24,16 +23,8 @@ import {
 } from "@/api/books"
 import { fetchMe, meQueryKey } from "@/api/auth"
 import { useLogout } from "@/hooks/useLogout"
+import { useShelfDraftDialog } from "@/components/ShelfDraftProvider"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,8 +33,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import {
   Sidebar,
   SidebarContent,
@@ -99,18 +88,10 @@ export function AppSidebar() {
     queryFn: fetchShelves,
   })
   const logoutMut = useLogout()
+  const shelfDraft = useShelfDraftDialog()
 
-  // Regular shelves are created through a dedicated Dialog (name + accent
-  // picker). Smart shelves keep using the RuleEditor, extended with the
+  // Smart shelves keep using the RuleEditor, extended with the
   // same accent picker so both shelf types share one design language.
-  const createShelfMut = useMutation({
-    mutationFn: (args: { name: string; accent: ShelfAccent }) =>
-      createShelf(args.name, args.accent),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
-      setShelfDraftOpen(false)
-    },
-  })
   const createSmartMut = useMutation({
     mutationFn: (args: {
       name: string
@@ -147,7 +128,6 @@ export function AppSidebar() {
     },
   })
 
-  const [shelfDraftOpen, setShelfDraftOpen] = useState(false)
   const [smartDraft, setSmartDraft] = useState<
     { mode: "create" } | { mode: "edit"; shelf: Shelf } | null
   >(null)
@@ -253,8 +233,7 @@ export function AppSidebar() {
           <SidebarGroupAction
             title="New shelf"
             aria-label="New shelf"
-            onClick={() => setShelfDraftOpen(true)}
-            disabled={createShelfMut.isPending}
+            onClick={() => shelfDraft.open()}
           >
             <Icon name="plus" size={12} />
           </SidebarGroupAction>
@@ -332,18 +311,6 @@ export function AppSidebar() {
         />
       </SidebarFooter>
 
-      <ShelfCreatorDialog
-        open={shelfDraftOpen}
-        onOpenChange={(open) => {
-          if (!open) createShelfMut.reset()
-          setShelfDraftOpen(open)
-        }}
-        existingNames={allShelves.map((s) => s.name)}
-        busy={createShelfMut.isPending}
-        error={(createShelfMut.error as ApiError | null)?.message ?? null}
-        onSubmit={(draft) => createShelfMut.mutate(draft)}
-      />
-
       {smartDraft && (
         <RuleEditor
           title={
@@ -383,106 +350,6 @@ export function AppSidebar() {
         />
       )}
     </Sidebar>
-  )
-}
-
-type ShelfCreatorDialogProps = {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  existingNames: Array<string>
-  busy: boolean
-  error: string | null
-  onSubmit: (draft: { name: string; accent: ShelfAccent }) => void
-}
-
-// ShelfCreatorDialog replaces the old window.prompt-based shelf creation.
-// Matches the LibraryCreatorDialog shape (controlled open, reset on close)
-// so the two creation flows feel like part of the same family.
-function ShelfCreatorDialog({
-  open,
-  onOpenChange,
-  existingNames,
-  busy,
-  error,
-  onSubmit,
-}: ShelfCreatorDialogProps) {
-  const [name, setName] = useState("")
-  const [accent, setAccent] = useState<ShelfAccent>("accent")
-
-  useEffect(() => {
-    if (open) return
-    // Reset form on close — legitimate use of setState-in-effect
-    // (external "prop" state → local state synchronisation).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setName("")
-    setAccent("accent")
-  }, [open])
-
-  const trimmed = name.trim()
-  const collision = existingNames.some(
-    (n) => n.toLowerCase() === trimmed.toLowerCase()
-  )
-  const valid = trimmed !== "" && !collision
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[420px]">
-        <DialogHeader>
-          <DialogTitle>New shelf</DialogTitle>
-          <DialogDescription>
-            A place to group books by hand. Smart shelves live alongside these
-            and fill themselves from rules.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="shelf-name">Name</Label>
-            <Input
-              id="shelf-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. To finish"
-              autoFocus
-            />
-            {trimmed !== "" && collision && (
-              <div className="t-small text-(--color-accent-ink)">
-                A shelf with that name already exists.
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <Label>Accent</Label>
-            <AccentPicker value={accent} onChange={setAccent} />
-          </div>
-
-          {error && (
-            <div className="t-small rounded-sm border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink)">
-              {error}
-            </div>
-          )}
-        </div>
-
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => onOpenChange(false)}
-            disabled={busy}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            onClick={() => onSubmit({ name: trimmed, accent })}
-            disabled={!valid || busy}
-          >
-            {busy ? "Creating…" : "Create shelf"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }
 
