@@ -104,7 +104,7 @@ func main() {
 	shelfRepo := repo.NewShelfRepo(dbh)
 	userRepo := repo.NewUserRepo(dbh)
 	sessionRepo := repo.NewSessionRepo(dbh)
-	bdropRepo := repo.NewBookDropRepo(pool)
+	bdropRepo := repo.NewBookDropRepo(dbh)
 	progressRepo := repo.NewProgressRepo(pool)
 	annotationRepo := repo.NewAnnotationRepo(pool)
 	statsRepo := repo.NewStatsRepo(pool)

@@ -2,20 +2,20 @@ package repo
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-
+	"github.com/blackforge/embookshelf/internal/db"
+	"github.com/blackforge/embookshelf/internal/db/dberr"
 	"github.com/blackforge/embookshelf/internal/model"
 )
 
 type BookDropRepo struct {
-	pool *pgxpool.Pool
+	db *db.DB
 }
 
-func NewBookDropRepo(pool *pgxpool.Pool) *BookDropRepo {
-	return &BookDropRepo{pool: pool}
+func NewBookDropRepo(d *db.DB) *BookDropRepo {
+	return &BookDropRepo{db: d}
 }
 
 const bdCols = `id, path, file_size, format, state, progress, error_msg,
@@ -27,7 +27,7 @@ const bdCols = `id, path, file_size, format, state, progress, error_msg,
 var ErrAlreadyExists = errors.New("already exists")
 
 func (r *BookDropRepo) Insert(ctx context.Context, path, format string, size int64) (model.BookDropItem, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.SQL.QueryRowContext(ctx, `
 		INSERT INTO bookdrop_items (path, file_size, format)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (path) DO NOTHING
@@ -45,17 +45,17 @@ func (r *BookDropRepo) Insert(ctx context.Context, path, format string, size int
 }
 
 func (r *BookDropRepo) GetByID(ctx context.Context, id string) (model.BookDropItem, error) {
-	row := r.pool.QueryRow(ctx, `SELECT `+bdCols+` FROM bookdrop_items WHERE id = $1`, id)
+	row := r.db.SQL.QueryRowContext(ctx, `SELECT `+bdCols+` FROM bookdrop_items WHERE id = $1`, id)
 	return scanBookDrop(row)
 }
 
 func (r *BookDropRepo) GetByPath(ctx context.Context, path string) (model.BookDropItem, error) {
-	row := r.pool.QueryRow(ctx, `SELECT `+bdCols+` FROM bookdrop_items WHERE path = $1`, path)
+	row := r.db.SQL.QueryRowContext(ctx, `SELECT `+bdCols+` FROM bookdrop_items WHERE path = $1`, path)
 	return scanBookDrop(row)
 }
 
 func (r *BookDropRepo) List(ctx context.Context) ([]model.BookDropItem, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
 		SELECT `+bdCols+`
 		FROM bookdrop_items
 		ORDER BY discovered_at DESC
@@ -69,7 +69,7 @@ func (r *BookDropRepo) List(ctx context.Context) ([]model.BookDropItem, error) {
 }
 
 func (r *BookDropRepo) SetState(ctx context.Context, id string, state model.BookDropState, progress int, errorMsg string) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.db.SQL.ExecContext(ctx, `
 		UPDATE bookdrop_items
 		SET state = $2, progress = $3, error_msg = $4, updated_at = now()
 		WHERE id = $1
@@ -80,7 +80,7 @@ func (r *BookDropRepo) SetState(ctx context.Context, id string, state model.Book
 // SetMetadata records metadata extracted by the fileproc worker and flips the
 // item into 'ready' state. cover_mime is empty when no cover was extracted.
 func (r *BookDropRepo) SetMetadata(ctx context.Context, id, title, author, description, language string, hasCover bool, coverMime string) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.db.SQL.ExecContext(ctx, `
 		UPDATE bookdrop_items
 		SET title = $2, author = $3, description = $4, language = $5,
 		    has_cover = $6, cover_mime = $7,
@@ -97,7 +97,7 @@ func (r *BookDropRepo) SetMetadata(ctx context.Context, id, title, author, descr
 // (discovered/processing/ready/failed) are untouched — clearing those
 // would drop in-flight work.
 func (r *BookDropRepo) DeleteProcessed(ctx context.Context) ([]string, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
 		DELETE FROM bookdrop_items
 		WHERE state IN ('imported','rejected')
 		RETURNING id
@@ -119,7 +119,7 @@ func (r *BookDropRepo) DeleteProcessed(ctx context.Context) ([]string, error) {
 
 // MarkImported links the bookdrop item to the newly-created book row.
 func (r *BookDropRepo) MarkImported(ctx context.Context, id, bookID string) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.db.SQL.ExecContext(ctx, `
 		UPDATE bookdrop_items
 		SET state = 'imported', progress = 100, book_id = $2, updated_at = now()
 		WHERE id = $1
@@ -138,7 +138,7 @@ func scanBookDrop(s scanner) (model.BookDropItem, error) {
 		&item.DiscoveredAt, &item.UpdatedAt,
 	)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if dberr.IsNotFound(err) {
 			return item, ErrNotFound
 		}
 		return item, err
@@ -147,7 +147,7 @@ func scanBookDrop(s scanner) (model.BookDropItem, error) {
 	return item, nil
 }
 
-func collectBookDrop(rows pgx.Rows) ([]model.BookDropItem, error) {
+func collectBookDrop(rows *sql.Rows) ([]model.BookDropItem, error) {
 	var out []model.BookDropItem
 	for rows.Next() {
 		item, err := scanBookDrop(rows)
