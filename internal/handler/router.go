@@ -62,6 +62,10 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.POST("/me/password", h.AccountChangePassword)
 			authed.GET("/instance", h.InstanceSummary)
 
+			// Cross-entity search powering the global command palette
+			// and the library page combobox.
+			authed.GET("/search", h.Search)
+
 			// Library + catalog
 			authed.GET("/libraries", h.Libraries)
 			authed.GET("/books", h.Books)

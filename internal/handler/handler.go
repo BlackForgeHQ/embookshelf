@@ -27,6 +27,7 @@ type Handler struct {
 	readingStats *service.ReadingSessionService
 	devices      *service.DeviceService
 	oidc         *service.OIDCService
+	search       *service.SearchService
 	appSettings  *repo.AppSettingsRepo
 	covers       *coverstore.Store
 	hub          *sse.Hub
@@ -47,6 +48,7 @@ type Deps struct {
 	ReadingStats *service.ReadingSessionService
 	Devices      *service.DeviceService
 	OIDC         *service.OIDCService
+	Search       *service.SearchService
 	AppSettings  *repo.AppSettingsRepo
 	Covers       *coverstore.Store
 	Hub          *sse.Hub
@@ -62,6 +64,7 @@ func New(d Deps) *Handler {
 		readingStats: d.ReadingStats,
 		devices:      d.Devices,
 		oidc:         d.OIDC,
+		search:       d.Search,
 		appSettings:  d.AppSettings,
 		covers:       d.Covers,
 		hub:          d.Hub, queue: d.Queue,
