@@ -168,24 +168,16 @@ function LoginPage() {
             gap: 10,
           }}
         >
-          <div
+          <img
+            src="/logo.png"
+            alt="embookshelf"
             style={{
               width: 40,
               height: 40,
-              background: "var(--color-ink-1)",
-              color: "var(--color-paper-0)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontFamily: "var(--font-serif)",
-              fontWeight: 600,
-              fontSize: 24,
-              fontStyle: "italic",
+              objectFit: "contain",
               borderRadius: 2,
             }}
-          >
-            e
-          </div>
+          />
           <div
             style={{
               fontFamily: "var(--font-serif)",

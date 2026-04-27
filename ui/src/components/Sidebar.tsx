@@ -152,9 +152,11 @@ export function AppSidebar() {
     <Sidebar collapsible="icon">
       <SidebarHeader>
         <div className="flex items-center gap-2.5 px-1.5 py-1">
-          <div className="flex size-6 shrink-0 items-center justify-center rounded-sm bg-(--color-ink-1) font-serif text-base font-semibold text-(--color-paper-0) italic">
-            e
-          </div>
+          <img
+            src="/logo.png"
+            alt="embookshelf"
+            className="size-6 shrink-0 rounded-sm object-contain"
+          />
           <div className="font-serif text-lg font-medium tracking-tight group-data-[collapsible=icon]:hidden">
             embookshelf
           </div>
