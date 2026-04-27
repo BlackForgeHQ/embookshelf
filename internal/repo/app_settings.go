@@ -6,8 +6,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/blackforge/embookshelf/internal/db"
+	"github.com/blackforge/embookshelf/internal/db/dberr"
 )
 
 // Settings keys. Each built-in integration has its own key so admins
@@ -44,11 +44,11 @@ const (
 // from the UI at runtime. Values are JSONB so scalars, arrays, and objects
 // can share the one table.
 type AppSettingsRepo struct {
-	pool *pgxpool.Pool
+	db *db.DB
 }
 
-func NewAppSettingsRepo(pool *pgxpool.Pool) *AppSettingsRepo {
-	return &AppSettingsRepo{pool: pool}
+func NewAppSettingsRepo(d *db.DB) *AppSettingsRepo {
+	return &AppSettingsRepo{db: d}
 }
 
 // ClaimMapping names the ID-token / userinfo claims we read for each
@@ -125,9 +125,9 @@ func DefaultOIDCAutoProvisionDetails() OIDCAutoProvisionDetails {
 // fatal or a "use default" signal.
 func (r *AppSettingsRepo) GetRaw(ctx context.Context, name string) (json.RawMessage, error) {
 	var raw json.RawMessage
-	err := r.pool.QueryRow(ctx, `SELECT value FROM app_settings WHERE name = $1`, name).Scan(&raw)
+	err := r.db.SQL.QueryRowContext(ctx, `SELECT value FROM app_settings WHERE name = $1`, name).Scan(&raw)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if dberr.IsNotFound(err) {
 			return nil, ErrNotFound
 		}
 		return nil, err
@@ -137,7 +137,7 @@ func (r *AppSettingsRepo) GetRaw(ctx context.Context, name string) (json.RawMess
 
 // SetRaw upserts one setting. Validation is the caller's problem.
 func (r *AppSettingsRepo) SetRaw(ctx context.Context, name string, value json.RawMessage) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.db.SQL.ExecContext(ctx, `
 		INSERT INTO app_settings (name, value, updated_at)
 		VALUES ($1, $2::jsonb, now())
 		ON CONFLICT (name) DO UPDATE
