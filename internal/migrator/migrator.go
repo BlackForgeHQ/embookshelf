@@ -1,39 +1,48 @@
-// Package migrator wraps golang-migrate/migrate with the embedded migrations
-// and the Postgres driver so the same code can run migrations from the CLI
-// tool and from the server binary on boot.
+// Package migrator wraps golang-migrate/migrate with the embedded
+// migrations and a dialect-aware driver. Callers (the migrate CLI and
+// the server's runAppMigrations) supply a db.Dialect and *sql.DB; the
+// migrator picks the right migration subpath and driver instance.
 package migrator
 
 import (
+	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
 
 	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
+
+	"github.com/blackforge/embookshelf/internal/db"
 )
 
-// New builds a *migrate.Migrate bound to the given migration FS subpath and
-// Postgres pool. The caller owns the pool lifecycle; we open a sql.DB handle
-// from it for the migrate driver and close it when m.Close() is called.
-func New(files embed.FS, subpath string, pool *pgxpool.Pool) (*migrate.Migrate, error) {
-	src, err := iofs.New(files, subpath)
+//go:embed all:migrations
+var FS embed.FS
+
+// New builds a *migrate.Migrate bound to the embedded migrations for the
+// given dialect and the provided *sql.DB. The caller owns sqlDB's
+// lifecycle. m.Close() does NOT close sqlDB — that's the caller's job
+// (closing the *db.DB closes both).
+func New(d db.Dialect, sqlDB *sql.DB) (*migrate.Migrate, error) {
+	subpath, err := subpathFor(d)
 	if err != nil {
-		return nil, fmt.Errorf("migrate source: %w", err)
+		return nil, err
 	}
 
-	db := stdlib.OpenDBFromPool(pool)
-	driver, err := postgres.WithInstance(db, &postgres.Config{})
+	src, err := iofs.New(FS, subpath)
 	if err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("migrate postgres driver: %w", err)
+		return nil, fmt.Errorf("migrate source %q: %w", subpath, err)
 	}
 
-	m, err := migrate.NewWithInstance("iofs", src, "postgres", driver)
+	driver, dbName, err := driverFor(d, sqlDB)
 	if err != nil {
-		_ = db.Close()
+		return nil, err
+	}
+
+	m, err := migrate.NewWithInstance("iofs", src, dbName, driver)
+	if err != nil {
 		return nil, fmt.Errorf("migrate instance: %w", err)
 	}
 	return m, nil
@@ -45,4 +54,30 @@ func Up(m *migrate.Migrate) error {
 		return err
 	}
 	return nil
+}
+
+func subpathFor(d db.Dialect) (string, error) {
+	switch d {
+	case db.DialectPostgres:
+		return "migrations/postgres", nil
+	case db.DialectSQLite:
+		return "migrations/sqlite", nil
+	default:
+		return "", fmt.Errorf("migrator: unknown dialect %q", d)
+	}
+}
+
+func driverFor(d db.Dialect, sqlDB *sql.DB) (database.Driver, string, error) {
+	switch d {
+	case db.DialectPostgres:
+		drv, err := postgres.WithInstance(sqlDB, &postgres.Config{})
+		if err != nil {
+			return nil, "", fmt.Errorf("migrate postgres driver: %w", err)
+		}
+		return drv, "postgres", nil
+	case db.DialectSQLite:
+		return nil, "", errors.New("sqlite migrator driver not yet supported (Plan 2)")
+	default:
+		return nil, "", fmt.Errorf("migrator: unknown dialect %q", d)
+	}
 }

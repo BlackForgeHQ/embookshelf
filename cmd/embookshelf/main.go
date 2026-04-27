@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
 
 	"github.com/blackforge/embookshelf/internal/config"
+	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/crypto"
 	"github.com/blackforge/embookshelf/internal/handler"
@@ -78,10 +80,20 @@ func main() {
 	}
 	defer pool.Close()
 
+	// Temporary bridge: build a *db.DB from the existing pgxpool so that
+	// runAppMigrations can use the new dialect-aware migrator signature.
+	// Task 19 deletes newPool entirely and uses db.Open, eliminating this.
+	dbh := &db.DB{
+		SQL:     stdlib.OpenDBFromPool(pool),
+		Dialect: db.DialectPostgres,
+		PG:      pool,
+	}
+	defer func() { _ = dbh.SQL.Close() }()
+
 	// Apply app schema migrations before any repo runs queries. River's own
 	// migrations are applied separately inside queue.New().
 	if cfg.MigrateOnStart {
-		if err := runAppMigrations(ctx, pool); err != nil {
+		if err := runAppMigrations(ctx, dbh); err != nil {
 			slog.Error("migrate", "err", err)
 			os.Exit(1)
 		}
@@ -287,8 +299,8 @@ func main() {
 
 // runAppMigrations applies every pending schema migration using the embedded
 // migration files. Idempotent — a no-op when the DB is already up-to-date.
-func runAppMigrations(ctx context.Context, pool *pgxpool.Pool) error {
-	m, err := migrator.New(migrator.FS, migrator.Subpath, pool)
+func runAppMigrations(ctx context.Context, d *db.DB) error {
+	m, err := migrator.New(d.Dialect, d.SQL)
 	if err != nil {
 		return err
 	}

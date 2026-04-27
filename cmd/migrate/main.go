@@ -19,16 +19,17 @@ import (
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 
+	"github.com/blackforge/embookshelf/internal/config"
+	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/migrator"
 )
 
 func main() {
 	_ = godotenv.Load()
 
-	dsn := flag.String("dsn", os.Getenv("DATABASE_URL"), "Postgres connection URL (defaults to $DATABASE_URL)")
+	dsn := flag.String("dsn", os.Getenv("DATABASE_URL"), "database URL (defaults to $DATABASE_URL)")
 	flag.Parse()
 
 	if *dsn == "" {
@@ -43,13 +44,18 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, *dsn)
-	if err != nil {
-		fatal("pool: %v", err)
+	cfg := config.Config{
+		DatabaseURL:      *dsn,
+		DatabaseMaxConns: 2,
+		DatabaseMinConns: 1,
 	}
-	defer pool.Close()
+	d, err := db.Open(ctx, cfg)
+	if err != nil {
+		fatal("db open: %v", err)
+	}
+	defer d.Close()
 
-	m, err := migrator.New(migrator.FS, migrator.Subpath, pool)
+	m, err := migrator.New(d.Dialect, d.SQL)
 	if err != nil {
 		fatal("migrator: %v", err)
 	}
