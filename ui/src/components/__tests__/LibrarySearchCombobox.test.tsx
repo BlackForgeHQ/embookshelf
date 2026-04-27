@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import type { ReactElement } from "react"
-import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+import { LibrarySearchCombobox } from "../LibrarySearchCombobox"
+import type { ReactElement } from "react"
 
 // Polyfill ResizeObserver (used by cmdk/Radix)
 global.ResizeObserver = class ResizeObserver {
@@ -13,8 +15,6 @@ global.ResizeObserver = class ResizeObserver {
 
 // Polyfill scrollIntoView (used by cmdk)
 Element.prototype.scrollIntoView = vi.fn()
-
-import { LibrarySearchCombobox } from "../LibrarySearchCombobox"
 
 const navigateMock = vi.fn()
 vi.mock("@tanstack/react-router", () => ({

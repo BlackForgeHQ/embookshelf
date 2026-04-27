@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+import { CommandPalette } from "../CommandPalette"
 
 // Polyfill ResizeObserver (used by cmdk/Radix)
 global.ResizeObserver = class ResizeObserver {
@@ -12,8 +14,6 @@ global.ResizeObserver = class ResizeObserver {
 
 // Polyfill scrollIntoView (used by cmdk)
 Element.prototype.scrollIntoView = vi.fn()
-
-import { CommandPalette } from "../CommandPalette"
 
 const navigateMock = vi.fn()
 vi.mock("@tanstack/react-router", () => ({
@@ -27,12 +27,11 @@ vi.mock("@/api/search", () => ({
 }))
 
 const fetchMeMock = vi.fn()
-vi.mock("@/api/auth", async () => {
-  const actual = await vi.importActual<typeof import("@/api/auth")>(
-    "@/api/auth"
-  )
-  return { ...actual, fetchMe: () => fetchMeMock() }
-})
+vi.mock("@/api/auth", () => ({
+  fetchMe: () => fetchMeMock(),
+  meQueryKey: ["me"] as const,
+  logout: vi.fn(),
+}))
 
 const shelfDraftOpen = vi.fn()
 vi.mock("@/components/ShelfDraftProvider", () => ({
