@@ -302,4 +302,20 @@ export async function deleteSettingsUser(id: string): Promise<void> {
   await api<void>(`/api/v1/settings/users/${id}`, { method: "DELETE" })
 }
 
+export async function approveSettingsUser(id: string): Promise<AuthUser> {
+  const { user } = await api<{ user: AuthUser }>(
+    `/api/v1/settings/users/${id}/approve`,
+    { method: "POST" }
+  )
+  return user
+}
+
+export async function denySettingsUser(id: string): Promise<AuthUser> {
+  const { user } = await api<{ user: AuthUser }>(
+    `/api/v1/settings/users/${id}/deny`,
+    { method: "POST" }
+  )
+  return user
+}
+
 export const settingsUsersQueryKey = ["settings", "users"] as const
