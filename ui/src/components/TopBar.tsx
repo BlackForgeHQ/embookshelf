@@ -1,14 +1,20 @@
 import { Fragment } from "react"
-import { Icon } from "./Icon"
-import type { ReactNode } from "react"
 
+import { Icon } from "./Icon"
+import { LibrarySearchCombobox } from "./LibrarySearchCombobox"
+
+import type { ReactNode } from "react"
 import { Input } from "@/components/ui/input"
+
+type SearchVariant = "input" | "command"
 
 type TopBarProps = {
   title: ReactNode
   subtitle?: ReactNode
   search?: string
   setSearch?: (value: string) => void
+  searchVariant?: SearchVariant
+  commandHint?: boolean
   right?: ReactNode
   crumbs?: Array<string>
 }
@@ -20,6 +26,8 @@ export function TopBar({
   subtitle,
   search,
   setSearch,
+  searchVariant = "input",
+  commandHint = true,
   right,
   crumbs,
 }: TopBarProps) {
@@ -81,7 +89,15 @@ export function TopBar({
             </div>
           )}
         </div>
-        {setSearch && (
+
+        {setSearch && searchVariant === "command" && (
+          <LibrarySearchCombobox
+            value={search ?? ""}
+            onSearchChange={setSearch}
+          />
+        )}
+
+        {setSearch && searchVariant === "input" && (
           <div style={{ position: "relative", width: 280 }}>
             <Input
               placeholder="Search library…"
@@ -103,6 +119,24 @@ export function TopBar({
             </div>
           </div>
         )}
+
+        {commandHint && (
+          <button
+            type="button"
+            onClick={() =>
+              window.dispatchEvent(new CustomEvent("embookshelf:open-command"))
+            }
+            className="inline-flex h-9 items-center gap-2 rounded-md border px-3 text-xs text-(--color-ink-3) hover:text-(--color-ink-1)"
+            aria-label="Open command palette"
+          >
+            <Icon name="search" size={12} />
+            <span>Search</span>
+            <kbd className="rounded bg-(--color-paper-2) px-1.5 py-0.5 font-mono text-[10px]">
+              ⌘K
+            </kbd>
+          </button>
+        )}
+
         {right}
       </div>
     </div>

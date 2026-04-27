@@ -544,3 +544,75 @@ func collectBooks(rows pgx.Rows) ([]model.Book, error) {
 	}
 	return books, rows.Err()
 }
+
+// SuggestBook is the slim shape returned by SearchSuggestBooks. No progress,
+// no locks, no extended metadata — just enough for an autocomplete row.
+type SuggestBook struct {
+	ID       string
+	Title    string
+	Author   string
+	HasCover bool
+}
+
+// SuggestLibrary is the slim shape for library autocomplete rows.
+type SuggestLibrary struct {
+	ID   string
+	Name string
+	Slug string
+}
+
+// SearchSuggestBooks returns the top `limit` books matching `q` for the
+// autocomplete surfaces. Reuses the same tsv FTS column the main book
+// listing uses (idx_books_tsv GIN). `limit` is assumed already clamped
+// by the caller (service caps at 20).
+func (r *LibraryRepo) SearchSuggestBooks(ctx context.Context, q string, limit int) ([]SuggestBook, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT b.id, b.title, b.author, b.has_cover
+		FROM books b
+		WHERE b.deleted_at IS NULL
+		  AND b.tsv @@ websearch_to_tsquery('english', $1)
+		ORDER BY ts_rank(b.tsv, websearch_to_tsquery('english', $1)) DESC,
+		         b.title ASC
+		LIMIT $2
+	`, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SuggestBook
+	for rows.Next() {
+		var b SuggestBook
+		if err := rows.Scan(&b.ID, &b.Title, &b.Author, &b.HasCover); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// SearchSuggestLibraries returns libraries whose name matches `q`. Today
+// every authenticated user can see every library (mirrors GET /libraries),
+// so there is no per-user filter here — adopt one if/when library
+// visibility becomes user-scoped.
+func (r *LibraryRepo) SearchSuggestLibraries(ctx context.Context, q string, limit int) ([]SuggestLibrary, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT l.id, l.name, l.slug
+		FROM libraries l
+		WHERE l.name ILIKE '%' || $1 || '%'
+		ORDER BY l.name ASC
+		LIMIT $2
+	`, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SuggestLibrary
+	for rows.Next() {
+		var l SuggestLibrary
+		if err := rows.Scan(&l.ID, &l.Name, &l.Slug); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}

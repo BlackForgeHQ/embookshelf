@@ -109,6 +109,7 @@ func main() {
 	// Services.
 	libSvc := service.NewLibraryService(libRepo)
 	shelfSvc := service.NewShelfService(shelfRepo)
+	searchSvc := service.NewSearchService(libRepo, shelfRepo)
 	authSvc := service.NewAuthService(userRepo, sessionRepo)
 	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, appSettingsRepo, covers, hub)
 	progressSvc := service.NewProgressService(progressRepo, readingSessionRepo)
@@ -243,6 +244,7 @@ func main() {
 		ReadingStats: readingStatsSvc,
 		Devices:      deviceSvc,
 		OIDC:         oidcSvc,
+		Search:       searchSvc,
 		AppSettings:  appSettingsRepo,
 		Covers:       covers,
 		Hub:          hub,
