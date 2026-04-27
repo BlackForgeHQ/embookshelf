@@ -106,6 +106,10 @@ func openPostgres(ctx context.Context, cfg config.Config) (*DB, error) {
 		return nil, fmt.Errorf("pg ping: %w", err)
 	}
 
+	// stdlib.OpenDBFromPool registers pgx's type codecs (including text[]
+	// → []string) with the *sql.DB. Repos that scan PostgreSQL array
+	// columns rely on this. Plan 2's SQLite branch will need its own
+	// equivalent or per-column manual decoding.
 	return &DB{
 		SQL:     stdlib.OpenDBFromPool(pool),
 		Dialect: DialectPostgres,

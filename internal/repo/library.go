@@ -94,8 +94,8 @@ func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug, path string
 	`, name, slug, path)
 	l, err := scanLibrary(row)
 	if err != nil {
-		if ok, name := dberr.IsUniqueViolation(err); ok {
-			switch name {
+		if ok, constraint := dberr.IsUniqueViolation(err); ok {
+			switch constraint {
 			case "libraries_slug_key":
 				return model.Library{}, ErrLibraryNameTaken
 			case "libraries_path_key":
@@ -160,7 +160,10 @@ func (r *LibraryRepo) TouchScan(ctx context.Context, id string, fileCount, disco
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
 	if n == 0 {
 		return ErrNotFound
 	}
@@ -216,7 +219,10 @@ func (r *LibraryRepo) DeleteLibrary(ctx context.Context, id string) ([]string, e
 	if err != nil {
 		return nil, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("rows affected: %w", err)
+	}
 	if n == 0 {
 		return nil, ErrNotFound
 	}
@@ -235,7 +241,10 @@ func (r *LibraryRepo) SetFileNamingPattern(ctx context.Context, id string, patte
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
 	if n == 0 {
 		return ErrNotFound
 	}
@@ -403,7 +412,10 @@ func (r *LibraryRepo) SetCover(ctx context.Context, bookID string, hasCover bool
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
 	if n == 0 {
 		return ErrNotFound
 	}
@@ -420,7 +432,10 @@ func (r *LibraryRepo) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
 	if n == 0 {
 		return ErrNotFound
 	}
@@ -502,7 +517,10 @@ func (r *LibraryRepo) UpdateMetadata(ctx context.Context, b model.Book) error {
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
 	if n == 0 {
 		return ErrNotFound
 	}
@@ -545,6 +563,8 @@ func scanBook(s scanner) (model.Book, error) {
 	return b, err
 }
 
+// collectBooks iterates rows into a slice of Book values. The caller is
+// responsible for closing rows (typically via defer) before or after this call.
 func collectBooks(rows rowsIterator) ([]model.Book, error) {
 	var books []model.Book
 	for rows.Next() {
