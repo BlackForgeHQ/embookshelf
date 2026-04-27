@@ -100,7 +100,7 @@ func main() {
 	}
 
 	// Repositories.
-	libRepo := repo.NewLibraryRepo(pool)
+	libRepo := repo.NewLibraryRepo(dbh)
 	shelfRepo := repo.NewShelfRepo(pool)
 	userRepo := repo.NewUserRepo(pool)
 	sessionRepo := repo.NewSessionRepo(pool)
