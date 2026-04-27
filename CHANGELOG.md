@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/BlackForgeHQ/embookshelf/compare/v0.1.2...v0.1.3) (2026-04-27)
+
+
+### Features
+
+* command-powered search palette and library combobox ([#34](https://github.com/BlackForgeHQ/embookshelf/issues/34)) ([65db034](https://github.com/BlackForgeHQ/embookshelf/commit/65db0347b36a4f3de6eefdc23ac24557696e947f))
+
 ## [0.1.2](https://github.com/BlackForgeHQ/embookshelf/compare/v0.1.1...v0.1.2) (2026-04-24)
 
 
