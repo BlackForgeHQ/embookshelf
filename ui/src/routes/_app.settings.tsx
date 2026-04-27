@@ -1541,6 +1541,29 @@ function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
               }
             />
           </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <div className="grow">
+              <div className="t-item-title">Require admin approval</div>
+              <div className="t-item-sub">
+                New SSO users are created in a pending state and cannot sign in
+                until an admin approves them in Users &amp; roles. Disabling
+                this later does not auto-promote already-pending users.
+              </div>
+            </div>
+            <Switch
+              checked={draft.autoProvision.requireAdminApproval}
+              disabled={!draft.autoProvision.enableAutoProvisioning}
+              onCheckedChange={(v) =>
+                setDraft({
+                  ...draft,
+                  autoProvision: {
+                    ...draft.autoProvision,
+                    requireAdminApproval: v,
+                  },
+                })
+              }
+            />
+          </div>
           <Field label="Default role for new users">
             <Select
               value={draft.autoProvision.defaultRole}
