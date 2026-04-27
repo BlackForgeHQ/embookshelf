@@ -73,6 +73,10 @@ func (h *Handler) OIDCCallback(c *gin.Context) {
 
 	sess, _, err := h.oidc.Exchange(c.Request.Context(), code, state, c.Request.UserAgent())
 	if err != nil {
+		if errors.Is(err, service.ErrOIDCPendingApproval) {
+			c.Redirect(http.StatusFound, "/login/pending")
+			return
+		}
 		c.Redirect(http.StatusFound, "/login?oidcError="+oidcErrorCode(err))
 		return
 	}
@@ -121,6 +125,8 @@ func oidcErrorCode(err error) string {
 		return "notConfigured"
 	case errors.Is(err, service.ErrOIDCUnknownProvider):
 		return "notConfigured"
+	case errors.Is(err, service.ErrOIDCPendingApproval):
+		return "pendingApproval"
 	default:
 		return "unknown"
 	}

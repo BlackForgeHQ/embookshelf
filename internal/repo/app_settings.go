@@ -90,6 +90,7 @@ type OIDCAutoProvisionDetails struct {
 	EnableAutoProvisioning   bool   `json:"enableAutoProvisioning"`
 	AllowLocalAccountLinking bool   `json:"allowLocalAccountLinking"`
 	DefaultRole              string `json:"defaultRole"` // "admin" | "user"
+	RequireAdminApproval     bool   `json:"requireAdminApproval"`
 }
 
 // -------- defaults --------
@@ -113,6 +114,7 @@ func DefaultOIDCAutoProvisionDetails() OIDCAutoProvisionDetails {
 		EnableAutoProvisioning:   false,
 		AllowLocalAccountLinking: true,
 		DefaultRole:              "user",
+		RequireAdminApproval:     false,
 	}
 }
 

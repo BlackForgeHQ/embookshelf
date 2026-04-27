@@ -186,7 +186,12 @@ export function SettingsShell<TKey extends string>({
   isAdmin,
   children,
 }: {
-  sections: ReadonlyArray<{ key: TKey; label: string; adminOnly?: boolean }>
+  sections: ReadonlyArray<{
+    key: TKey
+    label: string
+    adminOnly?: boolean
+    badge?: ReactNode
+  }>
   active: TKey
   onSelect: (key: TKey) => void
   isAdmin: boolean
@@ -229,10 +234,14 @@ export function SettingsShell<TKey extends string>({
                     ? "var(--color-ink-1)"
                     : "var(--color-ink-2)",
                 opacity: gated ? 0.6 : 1,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
               }}
               title={gated ? "Admin-only" : undefined}
             >
-              {s.label}
+              <span style={{ flex: 1 }}>{s.label}</span>
+              {s.badge}
             </button>
           )
         })}

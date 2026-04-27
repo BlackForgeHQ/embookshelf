@@ -31,6 +31,7 @@ export type OidcAutoProvision = {
   enableAutoProvisioning: boolean
   allowLocalAccountLinking: boolean
   defaultRole: "admin" | "user"
+  requireAdminApproval: boolean
 }
 
 export type OidcAdminSettings = {

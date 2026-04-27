@@ -13,6 +13,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app.index'
 import { Route as ReadIdRouteImport } from './routes/read.$id'
+import { Route as LoginPendingRouteImport } from './routes/login.pending'
 import { Route as AppStatsRouteImport } from './routes/_app.stats'
 import { Route as AppSettingsRouteImport } from './routes/_app.settings'
 import { Route as AppNotebookRouteImport } from './routes/_app.notebook'
@@ -39,6 +40,11 @@ const ReadIdRoute = ReadIdRouteImport.update({
   id: '/read/$id',
   path: '/read/$id',
   getParentRoute: () => rootRouteImport,
+} as any)
+const LoginPendingRoute = LoginPendingRouteImport.update({
+  id: '/pending',
+  path: '/pending',
+  getParentRoute: () => LoginRoute,
 } as any)
 const AppStatsRoute = AppStatsRouteImport.update({
   id: '/stats',
@@ -78,23 +84,25 @@ const AppBookIdEditRoute = AppBookIdEditRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
-  '/login': typeof LoginRoute
+  '/login': typeof LoginRouteWithChildren
   '/bookdrop': typeof AppBookdropRoute
   '/library': typeof AppLibraryRoute
   '/notebook': typeof AppNotebookRoute
   '/settings': typeof AppSettingsRoute
   '/stats': typeof AppStatsRoute
+  '/login/pending': typeof LoginPendingRoute
   '/read/$id': typeof ReadIdRoute
   '/book/$id': typeof AppBookIdRoute
   '/book/$id/edit': typeof AppBookIdEditRoute
 }
 export interface FileRoutesByTo {
-  '/login': typeof LoginRoute
+  '/login': typeof LoginRouteWithChildren
   '/bookdrop': typeof AppBookdropRoute
   '/library': typeof AppLibraryRoute
   '/notebook': typeof AppNotebookRoute
   '/settings': typeof AppSettingsRoute
   '/stats': typeof AppStatsRoute
+  '/login/pending': typeof LoginPendingRoute
   '/read/$id': typeof ReadIdRoute
   '/': typeof AppIndexRoute
   '/book/$id': typeof AppBookIdRoute
@@ -103,12 +111,13 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
-  '/login': typeof LoginRoute
+  '/login': typeof LoginRouteWithChildren
   '/_app/bookdrop': typeof AppBookdropRoute
   '/_app/library': typeof AppLibraryRoute
   '/_app/notebook': typeof AppNotebookRoute
   '/_app/settings': typeof AppSettingsRoute
   '/_app/stats': typeof AppStatsRoute
+  '/login/pending': typeof LoginPendingRoute
   '/read/$id': typeof ReadIdRoute
   '/_app/': typeof AppIndexRoute
   '/_app/book/$id': typeof AppBookIdRoute
@@ -124,6 +133,7 @@ export interface FileRouteTypes {
     | '/notebook'
     | '/settings'
     | '/stats'
+    | '/login/pending'
     | '/read/$id'
     | '/book/$id'
     | '/book/$id/edit'
@@ -135,6 +145,7 @@ export interface FileRouteTypes {
     | '/notebook'
     | '/settings'
     | '/stats'
+    | '/login/pending'
     | '/read/$id'
     | '/'
     | '/book/$id'
@@ -148,6 +159,7 @@ export interface FileRouteTypes {
     | '/_app/notebook'
     | '/_app/settings'
     | '/_app/stats'
+    | '/login/pending'
     | '/read/$id'
     | '/_app/'
     | '/_app/book/$id'
@@ -156,7 +168,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
-  LoginRoute: typeof LoginRoute
+  LoginRoute: typeof LoginRouteWithChildren
   ReadIdRoute: typeof ReadIdRoute
 }
 
@@ -189,6 +201,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/read/$id'
       preLoaderRoute: typeof ReadIdRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/login/pending': {
+      id: '/login/pending'
+      path: '/pending'
+      fullPath: '/login/pending'
+      preLoaderRoute: typeof LoginPendingRouteImport
+      parentRoute: typeof LoginRoute
     }
     '/_app/stats': {
       id: '/_app/stats'
@@ -266,9 +285,19 @@ const AppRouteChildren: AppRouteChildren = {
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
+interface LoginRouteChildren {
+  LoginPendingRoute: typeof LoginPendingRoute
+}
+
+const LoginRouteChildren: LoginRouteChildren = {
+  LoginPendingRoute: LoginPendingRoute,
+}
+
+const LoginRouteWithChildren = LoginRoute._addFileChildren(LoginRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
-  LoginRoute: LoginRoute,
+  LoginRoute: LoginRouteWithChildren,
   ReadIdRoute: ReadIdRoute,
 }
 export const routeTree = rootRouteImport

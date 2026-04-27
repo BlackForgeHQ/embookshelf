@@ -9,6 +9,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/sse"
 )
 
 // SessionTTL is how long a freshly-issued session remains valid.
@@ -21,15 +22,27 @@ var (
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrSignupClosed       = errors.New("signup is disabled — an administrator must create your account")
 	ErrEmailTaken         = errors.New("that email is already registered")
+	ErrCannotTargetSelf   = errors.New("cannot change your own approval status")
 )
+
+// userStatusRepo is the slice of UserRepo that ApproveUser and DenyUser
+// touch. Defining it as a tiny interface lets the service test substitute
+// an in-memory fake without spinning up a database — the rest of
+// AuthService keeps using the concrete *repo.UserRepo via embedding.
+type userStatusRepo interface {
+	GetByID(ctx context.Context, id string) (model.User, error)
+	UpdateStatus(ctx context.Context, id string, status model.UserStatus) error
+	CountByRole(ctx context.Context, role model.Role) (int, error)
+}
 
 type AuthService struct {
 	users    *repo.UserRepo
 	sessions *repo.SessionRepo
+	hub      *sse.Hub
 }
 
-func NewAuthService(users *repo.UserRepo, sessions *repo.SessionRepo) *AuthService {
-	return &AuthService{users: users, sessions: sessions}
+func NewAuthService(users *repo.UserRepo, sessions *repo.SessionRepo, hub *sse.Hub) *AuthService {
+	return &AuthService{users: users, sessions: sessions, hub: hub}
 }
 
 // Login verifies credentials and issues a new session.
@@ -230,4 +243,87 @@ func (s *AuthService) DeleteUser(ctx context.Context, userID string) error {
 		}
 	}
 	return s.users.Delete(ctx, userID)
+}
+
+// approveUser/denyUser are pure helpers operating against any repo that
+// satisfies userStatusRepo. They contain the guard logic and are unit
+// tested in auth_test.go without a database. They report whether the row
+// actually changed so the exported method wrappers can suppress the SSE
+// broadcast on idempotent no-ops.
+
+func approveUser(ctx context.Context, r userStatusRepo, targetID string) (changed bool, err error) {
+	u, err := r.GetByID(ctx, targetID)
+	if err != nil {
+		return false, err
+	}
+	if u.Status == model.UserStatusActive {
+		return false, nil // idempotent
+	}
+	return true, r.UpdateStatus(ctx, targetID, model.UserStatusActive)
+}
+
+func denyUser(ctx context.Context, r userStatusRepo, callerID, targetID string) (changed bool, err error) {
+	if callerID == targetID {
+		return false, ErrCannotTargetSelf
+	}
+	u, err := r.GetByID(ctx, targetID)
+	if err != nil {
+		return false, err
+	}
+	if u.Status == model.UserStatusDenied {
+		return false, nil // idempotent
+	}
+	if u.Role == model.RoleAdmin && u.Status == model.UserStatusActive {
+		n, err := r.CountByRole(ctx, model.RoleAdmin)
+		if err != nil {
+			return false, err
+		}
+		if n <= 1 {
+			return false, ErrLastAdmin
+		}
+	}
+	return true, r.UpdateStatus(ctx, targetID, model.UserStatusDenied)
+}
+
+// ApproveUser flips a pending or denied user back to active. Idempotent
+// for already-active users. Broadcasts a users.updated SSE event when
+// the status actually changed so open admin tabs refresh.
+func (s *AuthService) ApproveUser(ctx context.Context, callerID, targetID string) (model.User, error) {
+	_ = callerID // approve has no caller-vs-target guards today
+	changed, err := approveUser(ctx, s.users, targetID)
+	if err != nil {
+		return model.User{}, err
+	}
+	u, err := s.users.GetByID(ctx, targetID)
+	if err != nil {
+		return model.User{}, err
+	}
+	if changed {
+		s.broadcastUsersUpdate()
+	}
+	return u, nil
+}
+
+// DenyUser flips a pending user to denied. Idempotent. Refuses to deny
+// the caller's own row or the last remaining admin.
+func (s *AuthService) DenyUser(ctx context.Context, callerID, targetID string) (model.User, error) {
+	changed, err := denyUser(ctx, s.users, callerID, targetID)
+	if err != nil {
+		return model.User{}, err
+	}
+	u, err := s.users.GetByID(ctx, targetID)
+	if err != nil {
+		return model.User{}, err
+	}
+	if changed {
+		s.broadcastUsersUpdate()
+	}
+	return u, nil
+}
+
+func (s *AuthService) broadcastUsersUpdate() {
+	if s.hub == nil {
+		return
+	}
+	s.hub.Broadcast(sse.Event{Name: "users.updated", Data: "{}"})
 }

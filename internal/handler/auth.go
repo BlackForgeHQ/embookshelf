@@ -15,14 +15,16 @@ import (
 // userDTO is the canonical user shape the SPA consumes. camelCase on the
 // wire matches the TS types that frontend/src/data/mock.ts already exports.
 type userDTO struct {
-	ID         string `json:"id"`
-	Email      string `json:"email"`
-	Name       string `json:"name"`
-	Role       string `json:"role"`
-	Display    string `json:"display"`
-	Initials   string `json:"initials"`
-	CreatedAt  string `json:"createdAt"`
-	LastSeenAt string `json:"lastSeenAt,omitempty"`
+	ID              string `json:"id"`
+	Email           string `json:"email"`
+	Name            string `json:"name"`
+	Role            string `json:"role"`
+	Status          string `json:"status"`
+	StatusChangedAt string `json:"statusChangedAt,omitempty"`
+	Display         string `json:"display"`
+	Initials        string `json:"initials"`
+	CreatedAt       string `json:"createdAt"`
+	LastSeenAt      string `json:"lastSeenAt,omitempty"`
 }
 
 func toUserDTO(u model.User) userDTO {
@@ -31,9 +33,17 @@ func toUserDTO(u model.User) userDTO {
 		Email:     u.Email,
 		Name:      u.Name,
 		Role:      string(u.Role),
+		Status:    string(u.Status),
 		Display:   u.Display(),
 		Initials:  u.Initials(),
 		CreatedAt: u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+	}
+	if d.Status == "" {
+		// Defensive default — older rows or test fakes may leave Status zero.
+		d.Status = string(model.UserStatusActive)
+	}
+	if u.StatusChangedAt != nil {
+		d.StatusChangedAt = u.StatusChangedAt.UTC().Format("2006-01-02T15:04:05Z")
 	}
 	if u.LastSeenAt != nil {
 		d.LastSeenAt = u.LastSeenAt.UTC().Format("2006-01-02T15:04:05Z")

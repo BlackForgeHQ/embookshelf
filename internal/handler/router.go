@@ -149,6 +149,8 @@ func (h *Handler) Engine() *gin.Engine {
 				admin.GET("/users", h.SettingsUsersList)
 				admin.POST("/users", h.SettingsUsersCreate)
 				admin.PATCH("/users/:id/role", h.SettingsUsersUpdateRole)
+				admin.POST("/users/:id/approve", h.SettingsUsersApprove)
+				admin.POST("/users/:id/deny", h.SettingsUsersDeny)
 				admin.DELETE("/users/:id", h.SettingsUsersDelete)
 			}
 		}

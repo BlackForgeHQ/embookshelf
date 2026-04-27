@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -94,5 +95,47 @@ func (h *Handler) SettingsUsersDelete(c *gin.Context) {
 		writeError(c, http.StatusConflict, service.ErrLastAdmin.Error())
 	default:
 		writeServerError(c, "settings users delete", err)
+	}
+}
+
+// callerID returns the authenticated user's ID, or "" when no session is
+// attached. The admin guard upstream guarantees a session exists, but
+// returning "" instead of panicking keeps this defensive.
+func callerID(c *gin.Context) string {
+	u := auth.UserFromContext(c.Request.Context())
+	if u == nil {
+		return ""
+	}
+	return u.ID
+}
+
+// SettingsUsersApprove flips a pending or denied user to active.
+func (h *Handler) SettingsUsersApprove(c *gin.Context) {
+	u, err := h.auth.ApproveUser(c.Request.Context(), callerID(c), c.Param("id"))
+	switch {
+	case err == nil:
+		c.JSON(http.StatusOK, gin.H{"user": toUserDTO(u)})
+	case errors.Is(err, repo.ErrNotFound):
+		writeError(c, http.StatusNotFound, "user not found")
+	default:
+		writeServerError(c, "settings users approve", err)
+	}
+}
+
+// SettingsUsersDeny flips a pending user to denied. Refuses to deny the
+// caller themselves or the last remaining admin.
+func (h *Handler) SettingsUsersDeny(c *gin.Context) {
+	u, err := h.auth.DenyUser(c.Request.Context(), callerID(c), c.Param("id"))
+	switch {
+	case err == nil:
+		c.JSON(http.StatusOK, gin.H{"user": toUserDTO(u)})
+	case errors.Is(err, repo.ErrNotFound):
+		writeError(c, http.StatusNotFound, "user not found")
+	case errors.Is(err, service.ErrCannotTargetSelf):
+		writeError(c, http.StatusBadRequest, service.ErrCannotTargetSelf.Error())
+	case errors.Is(err, service.ErrLastAdmin):
+		writeError(c, http.StatusConflict, service.ErrLastAdmin.Error())
+	default:
+		writeServerError(c, "settings users deny", err)
 	}
 }

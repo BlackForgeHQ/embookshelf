@@ -30,6 +30,7 @@ var (
 	ErrOIDCLoginNotAllowed  = errors.New("this OIDC identity is not allowed to log in")
 	ErrOIDCForceOnlyBlocked = errors.New("OIDC-only mode cannot be enabled without at least one configured provider")
 	ErrOIDCUnknownProvider  = errors.New("unknown OIDC provider")
+	ErrOIDCPendingApproval  = errors.New("this OIDC account is awaiting administrator approval")
 )
 
 const (
@@ -289,6 +290,11 @@ func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent strin
 
 	u, err := s.findOrProvisionUser(ctx, issuer, claims, provision)
 	if err != nil {
+		if errors.Is(err, ErrOIDCPendingApproval) {
+			// Return the user so callers (handlers, tests) can see who is
+			// pending, but no session is issued.
+			return model.Session{}, u, ErrOIDCPendingApproval
+		}
 		return model.Session{}, model.User{}, err
 	}
 	_ = s.users.SyncOIDCProfile(ctx, u.ID, claims.Name, claims.Picture)
@@ -603,13 +609,24 @@ func extractClaims(ctx context.Context, disc *cachedDiscovery, token *oauth2.Tok
 // -----------------------------------------------------------------------------
 
 func (s *OIDCService) findOrProvisionUser(ctx context.Context, issuer string, claims resolvedClaims, provision repo.OIDCAutoProvisionDetails) (model.User, error) {
-	// 1) Match by OIDC identity.
+	// 1) Match by OIDC identity. Existing users still need to clear
+	//    the status gate — pending users have not been approved yet,
+	//    denied users have been explicitly refused.
 	u, err := s.users.GetByOIDC(ctx, issuer, claims.Subject)
 	if err != nil && !errors.Is(err, repo.ErrNotFound) {
 		return model.User{}, err
 	}
 	if err == nil {
-		return u, nil
+		switch u.Status {
+		case model.UserStatusActive:
+			return u, nil
+		case model.UserStatusPending:
+			return u, ErrOIDCPendingApproval
+		case model.UserStatusDenied:
+			return model.User{}, ErrOIDCLoginNotAllowed
+		default:
+			return u, nil
+		}
 	}
 
 	// 2) Match by email and link.
@@ -644,12 +661,24 @@ func (s *OIDCService) findOrProvisionUser(ctx context.Context, issuer string, cl
 	if provision.DefaultRole == "admin" {
 		role = model.RoleAdmin
 	}
+	// First-user-becomes-admin shortcut bypasses approval — otherwise
+	// an admin-less instance with approval-required is unrecoverable.
+	firstUser := false
 	if n, err := s.users.Count(ctx); err == nil && n == 0 {
 		role = model.RoleAdmin
+		firstUser = true
 	}
 
 	if claims.Email == "" {
 		return model.User{}, errors.New("OIDC provider did not return an email claim and email is required")
+	}
+
+	if provision.RequireAdminApproval && !firstUser {
+		created, err := s.users.CreateOIDCPending(ctx, claims.Email, claims.Name, role, issuer, claims.Subject)
+		if err != nil {
+			return model.User{}, err
+		}
+		return created, ErrOIDCPendingApproval
 	}
 	return s.users.CreateOIDC(ctx, claims.Email, claims.Name, role, issuer, claims.Subject)
 }

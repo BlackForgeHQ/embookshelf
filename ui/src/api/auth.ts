@@ -1,12 +1,16 @@
 import { api } from "./client"
 import type { ApiError } from "./client"
 
+export type UserStatus = "active" | "pending" | "denied"
+
 // Mirrors internal/handler/auth.go userDTO.
 export type AuthUser = {
   id: string
   email: string
   name: string
   role: "admin" | "user"
+  status: UserStatus
+  statusChangedAt?: string
   display: string
   initials: string
   createdAt: string

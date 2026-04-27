@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 import { toast } from "sonner"
@@ -20,10 +20,12 @@ import type {
 } from "@/api/oidc"
 import type { AuthUser } from "@/api/auth"
 import {
+  approveSettingsUser,
   createLibrary,
   createSettingsUser,
   deleteLibrary,
   deleteSettingsUser,
+  denySettingsUser,
   fetchInstanceInfo,
   fetchMetadataSettings,
   fetchProviderSettings,
@@ -86,7 +88,12 @@ type SectionKey =
   | "backups"
   | "about"
 
-type SectionSpec = { key: SectionKey; label: string; adminOnly?: boolean }
+type SectionSpec = {
+  key: SectionKey
+  label: string
+  adminOnly?: boolean
+  badge?: ReactNode
+}
 
 const SECTIONS: Array<SectionSpec> = [
   { key: "libraries", label: "Libraries", adminOnly: true },
@@ -108,6 +115,28 @@ function Admin() {
   const isAdmin = me.data?.role === "admin"
   const [active, setActive] = useState<SectionKey>("libraries")
 
+  const usersQuery = useQuery({
+    queryKey: settingsUsersQueryKey,
+    queryFn: fetchSettingsUsers,
+    enabled: isAdmin,
+  })
+
+  const pendingCount = useMemo(
+    () =>
+      (usersQuery.data ?? []).filter((u) => u.status === "pending").length,
+    [usersQuery.data]
+  )
+
+  const sections = useMemo<Array<SectionSpec>>(
+    () =>
+      SECTIONS.map((s) =>
+        s.key === "users" && pendingCount > 0
+          ? { ...s, badge: <PendingBadge count={pendingCount} /> }
+          : s
+      ),
+    [pendingCount]
+  )
+
   return (
     <div className="fade-in">
       <TopBar
@@ -115,7 +144,7 @@ function Admin() {
         subtitle="Instance, users, metadata providers, SSO."
       />
       <SettingsShell
-        sections={SECTIONS}
+        sections={sections}
         active={active}
         onSelect={setActive}
         isAdmin={isAdmin}
@@ -1137,6 +1166,25 @@ function EmailPanel({ isAdmin }: { isAdmin: boolean }) {
 // Users & roles (admin CRUD)
 // ---------------------------------------------------------------------------
 
+function PendingBadge({ count }: { count: number }) {
+  return (
+    <span
+      data-testid="users-tab-badge"
+      style={{
+        padding: "1px 6px",
+        borderRadius: 999,
+        background: "var(--color-amber-bg, #fff5cc)",
+        color: "var(--color-amber-ink, #8a5b00)",
+        fontSize: 10,
+        fontWeight: 600,
+        lineHeight: 1.6,
+      }}
+    >
+      {count}
+    </span>
+  )
+}
+
 function UsersPanel({
   isAdmin,
   me,
@@ -1150,6 +1198,23 @@ function UsersPanel({
     queryFn: fetchSettingsUsers,
     enabled: isAdmin,
   })
+
+  const sortedUsers = useMemo(() => {
+    const all = users.data ?? []
+    const rank = (s: AuthUser["status"]) =>
+      s === "pending" ? 0 : s === "active" ? 1 : 2
+    return [...all].sort((a, b) => {
+      const r = rank(a.status) - rank(b.status)
+      if (r !== 0) return r
+      if (a.status === "pending" && b.status === "pending") {
+        return (
+          new Date(a.statusChangedAt ?? a.createdAt).getTime() -
+          new Date(b.statusChangedAt ?? b.createdAt).getTime()
+        )
+      }
+      return a.email.localeCompare(b.email)
+    })
+  }, [users.data])
 
   const [createOpen, setCreateOpen] = useState(false)
   const [draft, setDraft] = useState({
@@ -1192,6 +1257,24 @@ function UsersPanel({
     onSuccess: () => {
       invalidate()
       toast.success("User deleted.")
+    },
+    onError: (e) => toast.error((e as unknown as ApiError).message),
+  })
+
+  const approveMut = useMutation({
+    mutationFn: (id: string) => approveSettingsUser(id),
+    onSuccess: () => {
+      invalidate()
+      toast.success("User approved.")
+    },
+    onError: (e) => toast.error((e as unknown as ApiError).message),
+  })
+
+  const denyMut = useMutation({
+    mutationFn: (id: string) => denySettingsUser(id),
+    onSuccess: () => {
+      invalidate()
+      toast.success("User denied.")
     },
     onError: (e) => toast.error((e as unknown as ApiError).message),
   })
@@ -1295,11 +1378,13 @@ function UsersPanel({
           marginTop: 16,
         }}
       >
-        {(users.data ?? []).map((u) => {
+        {sortedUsers.map((u) => {
           const isMe = u.id === me?.id
           return (
             <div
               key={u.id}
+              data-row="user"
+              data-user-id={u.id}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -1310,6 +1395,27 @@ function UsersPanel({
               }}
             >
               <Avatar initials={u.initials} size={32} />
+              {u.status !== "active" && (
+                <span
+                  data-row-status={u.status}
+                  style={{
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    background:
+                      u.status === "pending"
+                        ? "var(--color-amber-bg, #fff5cc)"
+                        : "var(--color-paper-2)",
+                    color:
+                      u.status === "pending"
+                        ? "var(--color-amber-ink, #8a5b00)"
+                        : "var(--color-ink-soft)",
+                    fontSize: 11,
+                    fontWeight: 500,
+                  }}
+                >
+                  {u.status === "pending" ? "Pending" : "Denied"}
+                </span>
+              )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="t-item-title">
                   {u.display} {isMe && <span className="t-micro">you</span>}
@@ -1324,38 +1430,73 @@ function UsersPanel({
                     ` · last seen ${new Date(u.lastSeenAt).toLocaleDateString()}`}
                 </div>
               </div>
-              <Select
-                value={u.role}
-                onChange={(v) =>
-                  roleMut.mutate({ id: u.id, role: v as "admin" | "user" })
-                }
-                options={[
-                  { value: "user", label: "User" },
-                  { value: "admin", label: "Admin" },
-                ]}
-                disabled={isMe || roleMut.isPending}
-                triggerClassName="w-[110px] shrink-0"
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                disabled={isMe || deleteMut.isPending}
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      `Delete ${u.display}? This cannot be undone.`
-                    )
-                  ) {
-                    deleteMut.mutate(u.id)
-                  }
-                }}
-                className="text-(--color-accent-ink)"
-                aria-label="Delete user"
-                title={isMe ? "You can't delete yourself" : "Delete user"}
-              >
-                <Icon name="close" size={12} />
-              </Button>
+              {u.status === "active" && (
+                <>
+                  <Select
+                    value={u.role}
+                    onChange={(v) =>
+                      roleMut.mutate({ id: u.id, role: v as "admin" | "user" })
+                    }
+                    options={[
+                      { value: "user", label: "User" },
+                      { value: "admin", label: "Admin" },
+                    ]}
+                    disabled={isMe || roleMut.isPending}
+                    triggerClassName="w-[110px] shrink-0"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={isMe || deleteMut.isPending}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `Delete ${u.display}? This cannot be undone.`
+                        )
+                      ) {
+                        deleteMut.mutate(u.id)
+                      }
+                    }}
+                    className="text-(--color-accent-ink)"
+                    aria-label="Delete user"
+                    title={isMe ? "You can't delete yourself" : "Delete user"}
+                  >
+                    <Icon name="close" size={12} />
+                  </Button>
+                </>
+              )}
+              {u.status === "pending" && (
+                <>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => approveMut.mutate(u.id)}
+                    disabled={approveMut.isPending}
+                  >
+                    Approve
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => denyMut.mutate(u.id)}
+                    disabled={denyMut.isPending || isMe}
+                  >
+                    Deny
+                  </Button>
+                </>
+              )}
+              {u.status === "denied" && (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => approveMut.mutate(u.id)}
+                  disabled={approveMut.isPending}
+                >
+                  Approve
+                </Button>
+              )}
             </div>
           )
         })}
@@ -1536,6 +1677,29 @@ function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
                   autoProvision: {
                     ...draft.autoProvision,
                     allowLocalAccountLinking: v,
+                  },
+                })
+              }
+            />
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <div className="grow">
+              <div className="t-item-title">Require admin approval</div>
+              <div className="t-item-sub">
+                New SSO users are created in a pending state and cannot sign in
+                until an admin approves them in Users &amp; roles. Disabling
+                this later does not auto-promote already-pending users.
+              </div>
+            </div>
+            <Switch
+              checked={draft.autoProvision.requireAdminApproval}
+              disabled={!draft.autoProvision.enableAutoProvisioning}
+              onCheckedChange={(v) =>
+                setDraft({
+                  ...draft,
+                  autoProvision: {
+                    ...draft.autoProvision,
+                    requireAdminApproval: v,
                   },
                 })
               }

@@ -3,10 +3,11 @@ import { useQueryClient } from "@tanstack/react-query"
 
 import { bookdropQueryKey } from "./bookdrop"
 import { booksQueryKey, librariesQueryKey } from "./books"
+import { settingsUsersQueryKey } from "./settings"
 
 // Event names the server publishes. Keep the union narrow so the dispatch
 // map below is exhaustive — TypeScript will catch a typo before it ships.
-type RealtimeEvent = "bookdrop.updated" | "bookdrop.cleared"
+type RealtimeEvent = "bookdrop.updated" | "bookdrop.cleared" | "users.updated"
 
 type Handler = () => void
 
@@ -31,6 +32,9 @@ export function useRealtime() {
       // to refetch; books/libraries are unaffected by history deletion.
       "bookdrop.cleared": () => {
         queryClient.invalidateQueries({ queryKey: bookdropQueryKey })
+      },
+      "users.updated": () => {
+        queryClient.invalidateQueries({ queryKey: settingsUsersQueryKey })
       },
     }
 
