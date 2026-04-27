@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -532,15 +533,6 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
-// rowsIterator is a minimal interface satisfied by both *sql.Rows and
-// pgx.Rows. collectBooks accepts it so that shelf.go (not yet refactored)
-// can continue to pass pgx.Rows until its own Task refactor lands.
-type rowsIterator interface {
-	Next() bool
-	Scan(dest ...any) error
-	Err() error
-}
-
 func scanBook(s scanner) (model.Book, error) {
 	var b model.Book
 	err := s.Scan(
@@ -565,7 +557,7 @@ func scanBook(s scanner) (model.Book, error) {
 
 // collectBooks iterates rows into a slice of Book values. The caller is
 // responsible for closing rows (typically via defer) before or after this call.
-func collectBooks(rows rowsIterator) ([]model.Book, error) {
+func collectBooks(rows *sql.Rows) ([]model.Book, error) {
 	var books []model.Book
 	for rows.Next() {
 		b, err := scanBook(rows)

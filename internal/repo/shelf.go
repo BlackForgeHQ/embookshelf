@@ -2,14 +2,14 @@ package repo
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-
+	"github.com/blackforge/embookshelf/internal/db"
+	"github.com/blackforge/embookshelf/internal/db/dberr"
 	"github.com/blackforge/embookshelf/internal/model"
 )
 
@@ -18,11 +18,11 @@ import (
 var ErrShelfSlugTaken = errors.New("shelf slug already exists for this user")
 
 type ShelfRepo struct {
-	pool *pgxpool.Pool
+	db *db.DB
 }
 
-func NewShelfRepo(pool *pgxpool.Pool) *ShelfRepo {
-	return &ShelfRepo{pool: pool}
+func NewShelfRepo(d *db.DB) *ShelfRepo {
+	return &ShelfRepo{db: d}
 }
 
 // shelfCols keeps the book_count cheap for regular shelves by pulling it
@@ -47,7 +47,7 @@ const shelfColsReturning = `id, user_id, name, slug, accent, created_at,
                            END AS book_count`
 
 func (r *ShelfRepo) ListForUser(ctx context.Context, userID string) ([]model.Shelf, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
 		SELECT `+shelfCols+`
 		FROM shelves s
 		WHERE s.user_id = $1
@@ -70,7 +70,7 @@ func (r *ShelfRepo) ListForUser(ctx context.Context, userID string) ([]model.She
 }
 
 func (r *ShelfRepo) GetBySlugForUser(ctx context.Context, userID, slug string) (model.Shelf, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.SQL.QueryRowContext(ctx, `
 		SELECT `+shelfCols+`
 		FROM shelves s
 		WHERE s.user_id = $1 AND s.slug = $2
@@ -91,7 +91,7 @@ func (r *ShelfRepo) BooksInShelfForUser(ctx context.Context, userID, shelfSlug s
 		return r.booksMatchingRule(ctx, userID, sh.Rule)
 	}
 
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
 		SELECT `+bookCols+`
 		`+bookFrom+`
 		JOIN shelf_books sb ON sb.book_id = b.id
@@ -123,7 +123,7 @@ func (r *ShelfRepo) CountForSmartShelf(ctx context.Context, userID string, rule 
 		query += " AND (" + compiled.where + ")"
 	}
 	var n int
-	if err := r.pool.QueryRow(ctx, query, args...).Scan(&n); err != nil {
+	if err := r.db.SQL.QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
 		return 0, err
 	}
 	return n, nil
@@ -145,7 +145,7 @@ func (r *ShelfRepo) booksMatchingRule(ctx context.Context, userID string, rule *
 	}
 	query += " ORDER BY b.created_at DESC LIMIT 500"
 
-	rows, err := r.pool.Query(ctx, query, args...)
+	rows, err := r.db.SQL.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -185,14 +185,14 @@ func (r *ShelfRepo) Create(ctx context.Context, userID, name, accent string, rul
 		if attempt > 0 {
 			slug = fmt.Sprintf("%s-%d", baseSlug, attempt+1)
 		}
-		row := r.pool.QueryRow(ctx, `
+		row := r.db.SQL.QueryRowContext(ctx, `
 			INSERT INTO shelves (user_id, name, slug, accent, is_smart, rule)
 			VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT (user_id, slug) DO NOTHING
 			RETURNING `+shelfColsReturning,
 			userID, name, slug, accent, isSmart, nullOrJSON(ruleJSON))
 		s, err := scanShelf(row)
-		if errors.Is(err, pgx.ErrNoRows) {
+		if dberr.IsNotFound(err) {
 			continue // collision, try next -N
 		}
 		return s, err
@@ -254,18 +254,22 @@ func (r *ShelfRepo) Update(ctx context.Context, userID, slug string, name, accen
 	// Re-fetch via GetBySlugForUser so we consistently compute book_count
 	// through the same CASE expression. Cheaper than wrestling with a
 	// RETURNING list that can't reference the `s` alias shelfCols uses.
-	if _, err := r.pool.Exec(ctx, query, args...); err != nil {
+	if _, err := r.db.SQL.ExecContext(ctx, query, args...); err != nil {
 		return model.Shelf{}, err
 	}
 	return r.GetBySlugForUser(ctx, userID, slug)
 }
 
 func (r *ShelfRepo) Delete(ctx context.Context, userID, slug string) error {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM shelves WHERE user_id = $1 AND slug = $2`, userID, slug)
+	res, err := r.db.SQL.ExecContext(ctx, `DELETE FROM shelves WHERE user_id = $1 AND slug = $2`, userID, slug)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -284,7 +288,7 @@ func (r *ShelfRepo) AddBook(ctx context.Context, userID, slug, bookID string) er
 	if sh.IsSmart {
 		return ErrSmartShelfImmutable
 	}
-	tag, err := r.pool.Exec(ctx, `
+	res, err := r.db.SQL.ExecContext(ctx, `
 		INSERT INTO shelf_books (shelf_id, book_id)
 		VALUES ($1, $2)
 		ON CONFLICT DO NOTHING
@@ -292,7 +296,11 @@ func (r *ShelfRepo) AddBook(ctx context.Context, userID, slug, bookID string) er
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
 		// Row already existed — idempotent no-op.
 		return nil
 	}
@@ -307,7 +315,7 @@ func (r *ShelfRepo) RemoveBook(ctx context.Context, userID, slug, bookID string)
 	if sh.IsSmart {
 		return ErrSmartShelfImmutable
 	}
-	_, err = r.pool.Exec(ctx, `
+	_, err = r.db.SQL.ExecContext(ctx, `
 		DELETE FROM shelf_books
 		WHERE shelf_id = $1 AND book_id = $2
 	`, sh.ID, bookID)
@@ -318,7 +326,7 @@ func (r *ShelfRepo) RemoveBook(ctx context.Context, userID, slug, bookID string)
 // contain a book. Smart shelves are deliberately excluded — a book's
 // "is it in this smart shelf" relationship is query-time, not stored.
 func (r *ShelfRepo) ShelfSlugsForBook(ctx context.Context, userID, bookID string) ([]string, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
 		SELECT s.slug
 		FROM shelf_books sb
 		JOIN shelves s ON s.id = sb.shelf_id
@@ -349,7 +357,7 @@ func scanShelf(s scanner) (model.Shelf, error) {
 		&sh.IsSmart, &ruleJS, &sh.BookCount,
 	)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if dberr.IsNotFound(err) {
 			return sh, ErrNotFound
 		}
 		return sh, err
@@ -534,7 +542,7 @@ type SuggestShelf struct {
 // the global command palette; per-user scoping is enforced via the
 // user_id WHERE clause.
 func (r *ShelfRepo) SearchSuggest(ctx context.Context, userID, q string, limit int) ([]SuggestShelf, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
 		SELECT s.slug, s.name, s.accent
 		FROM shelves s
 		WHERE s.user_id = $1
@@ -556,3 +564,6 @@ func (r *ShelfRepo) SearchSuggest(ctx context.Context, userID, q string, limit i
 	}
 	return out, rows.Err()
 }
+
+// ensure *sql.Rows satisfies scanner at compile time (used by collectBooks).
+var _ scanner = (*sql.Rows)(nil)
