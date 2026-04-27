@@ -1,9 +1,11 @@
+import { useEffect, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 
 import { fetchMe, meQueryKey } from "@/api/auth"
 import { useRealtime } from "@/api/realtime"
 import { fetchInstanceSummary, instanceSummaryQueryKey } from "@/api/settings"
+import { CommandPalette } from "@/components/CommandPalette"
 import { AppSidebar } from "@/components/Sidebar"
 import { ShelfDraftProvider } from "@/components/ShelfDraftProvider"
 import { UserSettingsDialogProvider } from "@/components/UserSettingsDialog"
@@ -43,23 +45,40 @@ function AppLayout() {
   // EventSource never fires without a valid session cookie.
   useRealtime()
 
-  // SidebarProvider owns the expanded/collapsed state and persists it to
-  // a cookie so the sidebar survives page reloads. TooltipProvider is
-  // required by shadcn's SidebarMenuButton tooltips when the sidebar is
-  // in icon mode.
+  const [paletteOpen, setPaletteOpen] = useState(false)
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault()
+        setPaletteOpen((prev) => !prev)
+      }
+    }
+    function onCustom() {
+      setPaletteOpen(true)
+    }
+    window.addEventListener("keydown", onKey)
+    window.addEventListener("embookshelf:open-command", onCustom)
+    return () => {
+      window.removeEventListener("keydown", onKey)
+      window.removeEventListener("embookshelf:open-command", onCustom)
+    }
+  }, [])
+
   return (
     <TooltipProvider delayDuration={100}>
       <UserSettingsDialogProvider>
         <ShelfDraftProvider>
-        <SidebarProvider className="h-screen overflow-hidden">
-          <AppSidebar />
-          <SidebarInset className="min-h-0 overflow-hidden">
-            <div className="main-content">
-              <Outlet />
-            </div>
-            <StatusBar />
-          </SidebarInset>
-        </SidebarProvider>
+          <SidebarProvider className="h-screen overflow-hidden">
+            <AppSidebar />
+            <SidebarInset className="min-h-0 overflow-hidden">
+              <div className="main-content">
+                <Outlet />
+              </div>
+              <StatusBar />
+            </SidebarInset>
+            <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+          </SidebarProvider>
         </ShelfDraftProvider>
       </UserSettingsDialogProvider>
     </TooltipProvider>
@@ -101,7 +120,6 @@ function StatusBar() {
       <span>·</span>
       <span>PostgreSQL · connected</span>
       <div className="grow" />
-      <span>⌘K to search</span>
     </div>
   )
 }
