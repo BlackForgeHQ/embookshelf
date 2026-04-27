@@ -216,7 +216,7 @@ func main() {
 	}
 
 	// Background queue (river). Runs its own migrations, then starts workers.
-	q, err := queue.New(ctx, pool, bdropSvc, libSvc)
+	q, err := queue.New(ctx, dbh, bdropSvc, libSvc)
 	if err != nil {
 		slog.Error("queue", "err", err)
 		os.Exit(1)
