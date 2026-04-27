@@ -789,6 +789,7 @@ For every repo file, perform these substitutions:
 | `tx.Query(ctx, …)`, `tx.QueryRow(ctx, …)`, `tx.Exec(ctx, …)` | `tx.QueryContext(ctx, …)`, `tx.QueryRowContext(ctx, …)`, `tx.ExecContext(ctx, …)` |
 | `tx.Rollback(ctx)` | `tx.Rollback()` (sql.Tx takes no ctx) |
 | `tx.Commit(ctx)` | `tx.Commit()` |
+| `tag.RowsAffected() == 0` (pgx CommandTag) | `n, err := res.RowsAffected(); if err != nil { return …err… }; if n == 0 { … }` — `database/sql.Result.RowsAffected()` returns `(int64, error)`; never discard the error |
 | `errors.Is(err, pgx.ErrNoRows)` | `dberr.IsNotFound(err)` |
 | `var pgErr *pgconn.PgError; if errors.As(err, &pgErr) && pgErr.Code == "23505"` | `if ok, name := dberr.IsUniqueViolation(err); ok` (use `name` where `pgErr.ConstraintName` was used) |
 | Type `pgx.Rows` (in helper signatures) | `*sql.Rows` |
