@@ -23,10 +23,16 @@ var FS embed.FS
 
 // New builds a *migrate.Migrate bound to the embedded migrations for the
 // given dialect and the provided *sql.DB. The caller owns sqlDB's
-// lifecycle. m.Close() does NOT close sqlDB — that's the caller's job
-// (closing the *db.DB closes both).
+// lifecycle. Note: m.Close() does close the underlying *sql.DB for the Postgres
+// driver. The caller's defer on the *db.DB's Close() is a
+// belt-and-suspenders no-op (sql.DB.Close is idempotent).
 func New(d db.Dialect, sqlDB *sql.DB) (*migrate.Migrate, error) {
 	subpath, err := subpathFor(d)
+	if err != nil {
+		return nil, err
+	}
+
+	driver, dbName, err := driverFor(d, sqlDB)
 	if err != nil {
 		return nil, err
 	}
@@ -34,11 +40,6 @@ func New(d db.Dialect, sqlDB *sql.DB) (*migrate.Migrate, error) {
 	src, err := iofs.New(FS, subpath)
 	if err != nil {
 		return nil, fmt.Errorf("migrate source %q: %w", subpath, err)
-	}
-
-	driver, dbName, err := driverFor(d, sqlDB)
-	if err != nil {
-		return nil, err
 	}
 
 	m, err := migrate.NewWithInstance("iofs", src, dbName, driver)
