@@ -9,18 +9,28 @@ const (
 	RoleUser  Role = "user"
 )
 
+type UserStatus string
+
+const (
+	UserStatusActive  UserStatus = "active"
+	UserStatusPending UserStatus = "pending"
+	UserStatusDenied  UserStatus = "denied"
+)
+
 type User struct {
-	ID           string
-	Email        string
-	Name         string
-	Role         Role
-	PasswordHash string  // never rendered; repo populates but handlers don't leak it.
-	OIDCSubject  *string // OIDC sub claim — non-nil when linked to an external identity.
-	OIDCIssuer   *string // OIDC issuer URL.
-	AvatarURL    *string // OIDC picture claim, when the provider supplies one.
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	LastSeenAt   *time.Time
+	ID              string
+	Email           string
+	Name            string
+	Role            Role
+	PasswordHash    string  // never rendered; repo populates but handlers don't leak it.
+	OIDCSubject     *string // OIDC sub claim — non-nil when linked to an external identity.
+	OIDCIssuer      *string // OIDC issuer URL.
+	AvatarURL       *string // OIDC picture claim, when the provider supplies one.
+	Status          UserStatus
+	StatusChangedAt *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	LastSeenAt      *time.Time
 }
 
 // Display returns a friendly name, falling back to the email.
