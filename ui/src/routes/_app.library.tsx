@@ -152,6 +152,7 @@ function LibraryView() {
         subtitle={subtitle}
         search={search}
         setSearch={setSearch}
+        searchVariant="command"
         right={
           <div style={{ display: "flex", gap: 4 }}>
             {layoutBtn("shelf", "Shelf")}
