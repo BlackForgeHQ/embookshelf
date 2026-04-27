@@ -2,22 +2,22 @@ package repo
 
 import (
 	"context"
-	"errors"
+	"database/sql"
+	"fmt"
 	"strconv"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-
+	"github.com/blackforge/embookshelf/internal/db"
+	"github.com/blackforge/embookshelf/internal/db/dberr"
 	"github.com/blackforge/embookshelf/internal/model"
 )
 
 type AnnotationRepo struct {
-	pool *pgxpool.Pool
+	db *db.DB
 }
 
-func NewAnnotationRepo(pool *pgxpool.Pool) *AnnotationRepo {
-	return &AnnotationRepo{pool: pool}
+func NewAnnotationRepo(db *db.DB) *AnnotationRepo {
+	return &AnnotationRepo{db: db}
 }
 
 const annotationCols = `
@@ -30,7 +30,7 @@ const annotationCols = `
 // ordered by creation time ascending so the client list reads like a
 // chronological reading log.
 func (r *AnnotationRepo) ListForBook(ctx context.Context, userID, bookID string) ([]model.Annotation, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
         SELECT `+annotationCols+`
         FROM annotations a
         WHERE a.user_id = $1 AND a.book_id = $2
@@ -49,7 +49,7 @@ func (r *AnnotationRepo) ListRecent(ctx context.Context, userID string, limit in
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
         SELECT `+annotationCols+`
         FROM annotations a
         WHERE a.user_id = $1
@@ -67,7 +67,7 @@ func (r *AnnotationRepo) ListRecent(ctx context.Context, userID string, limit in
 // expected to pass the session user's id so a user can't PATCH/DELETE
 // another user's row even if they guess the uuid.
 func (r *AnnotationRepo) Get(ctx context.Context, userID, id string) (model.Annotation, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.SQL.QueryRowContext(ctx, `
         SELECT `+annotationCols+`
         FROM annotations a
         WHERE a.user_id = $1 AND a.id = $2
@@ -82,7 +82,7 @@ func (r *AnnotationRepo) Create(ctx context.Context, a model.Annotation) (model.
 	if a.Color == "" {
 		a.Color = "accent"
 	}
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.SQL.QueryRowContext(ctx, `
         WITH inserted AS (
             INSERT INTO annotations (user_id, book_id, locator, selected_text, note, color)
             VALUES ($1, $2, $3, $4, $5, $6)
@@ -126,9 +126,9 @@ func (r *AnnotationRepo) Update(ctx context.Context, userID, id string, note, se
         WHERE user_id = $1 AND id = $2
         RETURNING ` + annotationCols + `
     `
-	row := r.pool.QueryRow(ctx, query, args...)
+	row := r.db.SQL.QueryRowContext(ctx, query, args...)
 	a, err := scanAnnotation(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if dberr.IsNotFound(err) {
 		return model.Annotation{}, ErrNotFound
 	}
 	return a, err
@@ -137,19 +137,23 @@ func (r *AnnotationRepo) Update(ctx context.Context, userID, id string, note, se
 // Delete removes one annotation. Scoping by user_id prevents a user
 // from deleting someone else's row even if they fish the uuid out.
 func (r *AnnotationRepo) Delete(ctx context.Context, userID, id string) error {
-	tag, err := r.pool.Exec(ctx, `
+	res, err := r.db.SQL.ExecContext(ctx, `
         DELETE FROM annotations WHERE user_id = $1 AND id = $2
     `, userID, id)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
 		return ErrNotFound
 	}
 	return nil
 }
 
-// scanAnnotation hydrates a pgx row into the model shape. Mirrors the
+// scanAnnotation hydrates a sql row into the model shape. Mirrors the
 // scanBook / scanShelf pattern.
 func scanAnnotation(s scanner) (model.Annotation, error) {
 	var a model.Annotation
@@ -158,13 +162,13 @@ func scanAnnotation(s scanner) (model.Annotation, error) {
 		&a.SelectedText, &a.Note, &a.Color,
 		&a.CreatedAt, &a.UpdatedAt,
 	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if dberr.IsNotFound(err) {
 		return model.Annotation{}, ErrNotFound
 	}
 	return a, err
 }
 
-func collectAnnotations(rows pgx.Rows) ([]model.Annotation, error) {
+func collectAnnotations(rows *sql.Rows) ([]model.Annotation, error) {
 	out := make([]model.Annotation, 0)
 	for rows.Next() {
 		a, err := scanAnnotation(rows)
