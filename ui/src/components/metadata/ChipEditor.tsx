@@ -29,6 +29,9 @@ export function ChipEditor({
   }
 
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    // While the user is composing in an IME, Enter / comma are being
+    // consumed by the composer to accept candidates — don't commit.
+    if (e.nativeEvent.isComposing) return
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault()
       commit(draft)
@@ -71,7 +74,6 @@ export function ChipEditor({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKey}
-          onBlur={() => commit(draft)}
           placeholder={value.length === 0 ? placeholder : ""}
           className="min-w-[80px] flex-1 bg-transparent px-1 py-0.5 text-[13px] outline-none"
         />

@@ -79,4 +79,25 @@ describe("ChipEditor", () => {
     expect(screen.queryByRole("textbox")).toBeNull()
     expect(screen.queryByLabelText("Remove a")).toBeNull()
   })
+
+  it("does not commit on Enter while IME is composing", () => {
+    const onChange = vi.fn()
+    render(<ChipEditor value={[]} onChange={onChange} />)
+    const input = screen.getByRole("textbox")
+    fireEvent.change(input, { target: { value: "essays" } })
+    // Simulate an IME-active keydown — isComposing is exposed on the
+    // native KeyboardEvent. React's synthetic event surfaces it via
+    // nativeEvent.
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true })
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it("does not commit when the input loses focus", () => {
+    const onChange = vi.fn()
+    render(<ChipEditor value={[]} onChange={onChange} />)
+    const input = screen.getByRole("textbox")
+    fireEvent.change(input, { target: { value: "draft-text" } })
+    fireEvent.blur(input)
+    expect(onChange).not.toHaveBeenCalled()
+  })
 })
