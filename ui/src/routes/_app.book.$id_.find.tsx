@@ -74,7 +74,7 @@ function FindMetadata() {
   const [tab, setTab] = useState<"matches" | "covers">("matches")
   const [selected, setSelected] = useState<EnrichMatch | null>(null)
   const cancelRef = useRef<() => void>(undefined)
-  const [runId, setRunId] = useState(0)
+  const autoStartedRef = useRef(false)
 
   // Cancel-on-unmount preserves the existing SSE wiring contract.
   useEffect(() => () => cancelRef.current?.(), [])
@@ -131,13 +131,14 @@ function FindMetadata() {
       }
     )
     cancelRef.current = cancel
-    setRunId((n) => n + 1)
   }
 
   // Auto-start the first search once the book and inputs hydrate.
+  // The autoStartedRef latch prevents re-firing if hydrated ever flips
+  // back-and-forth (it doesn't, but the ref makes the intent explicit).
   useEffect(() => {
-    if (hydrated && runId === 0) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (hydrated && !autoStartedRef.current) {
+      autoStartedRef.current = true
       startSearch()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

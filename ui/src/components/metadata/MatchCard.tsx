@@ -81,7 +81,13 @@ export function MatchCard({
           </button>
         )}
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          <Button type="button" size="sm" onClick={onCompare} disabled={busy}>
+          <Button
+            type="button"
+            size="sm"
+            onClick={onCompare}
+            disabled={busy}
+            className="hidden xl:inline-flex"
+          >
             Compare →
           </Button>
           {match.coverUrl && (
