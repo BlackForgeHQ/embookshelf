@@ -105,7 +105,7 @@ inside `ui/`).
 
 ### Database backends
 
-embookshelf runs against either Postgres or SQLite, selected by `DATABASE_URL`. The same binary, same UI, and same feature set work on both backends. Postgres is required for multi-user / multi-writer installs (the queue uses River). SQLite is the zero-dependency default and serves single-user installs end-to-end except for bookdrop ingest and library scans, which require Postgres until the SQLite queue worker lands (Plan 3 of the SQLite-support effort).
+embookshelf runs against either Postgres or SQLite, selected by `DATABASE_URL`. The same binary, same UI, and same feature set work on both backends — including bookdrop ingest and library scans, which run on River (Postgres) or a single-goroutine polling worker (SQLite) behind a shared `queue.Client` interface. Postgres is recommended for multi-user / multi-writer installs (River supports horizontal scaling and dashboards). SQLite is the zero-dependency default and serves single-user installs end-to-end.
 
 Design rationale and per-dialect implementation notes live in [`docs/superpowers/specs/2026-04-28-sqlite-support-design.md`](superpowers/specs/2026-04-28-sqlite-support-design.md).
 
