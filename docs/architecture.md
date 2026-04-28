@@ -70,7 +70,7 @@ so the session cookie the Go server issues rides along.
 |-------|-----------|---------|
 | **Runtime** | Go | 1.25 |
 | **HTTP Router** | Gin ([gin-gonic/gin](https://github.com/gin-gonic/gin)) | 1.x |
-| **Database** | PostgreSQL | 16+ |
+| **Database** | PostgreSQL 16+ (multi-user) or SQLite via modernc.org/sqlite (single-user, default) | 16+ / — |
 | **DB Driver** | pgx | v5 |
 | **Migrations** | [golang-migrate/migrate](https://github.com/golang-migrate/migrate) | 4.x |
 | **Sessions** | Hand-rolled `sessions` table (see §4.5) | — |
@@ -102,6 +102,12 @@ for end-to-end browser coverage under [e2e/](../e2e/) — see
 [docs/testing-playwright.md](./testing-playwright.md). UI unit tests
 are wired with **Vitest** + **@testing-library/react** (`bun run test`
 inside `ui/`).
+
+### Database backends
+
+embookshelf runs against either Postgres or SQLite, selected by `DATABASE_URL`. The same binary, same UI, and same feature set work on both backends. Postgres is required for multi-user / multi-writer installs (the queue uses River). SQLite is the zero-dependency default and serves single-user installs end-to-end except for bookdrop ingest and library scans, which require Postgres until the SQLite queue worker lands (Plan 3 of the SQLite-support effort).
+
+Design rationale and per-dialect implementation notes live in [`docs/superpowers/specs/2026-04-28-sqlite-support-design.md`](superpowers/specs/2026-04-28-sqlite-support-design.md).
 
 ---
 
@@ -999,7 +1005,7 @@ All configuration flows through environment variables (optionally sourced from a
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `EMBOOKSHELF_PORT` | `6060` | Application port |
-| `DATABASE_URL` | `postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable` | Database connection |
+| `DATABASE_URL` | `sqlite://./data/embookshelf.db` | Database connection. SQLite by default; set to a `postgres://…` DSN for Postgres |
 | `DATABASE_MAX_CONNS` | `20` | pgxpool max connections |
 | `DATABASE_MIN_CONNS` | `5` | pgxpool min idle connections |
 | `MIGRATE_ON_START` | `true` | Apply pending app migrations on boot. Set `false` to manage externally via `go run ./cmd/migrate up`. |
@@ -1030,7 +1036,7 @@ Library filesystem roots beyond `BOOKDROP_PATH` are managed in the database
 | **Tailwind via `@tailwindcss/vite`** | First-class Vite integration, no CLI watcher side-process, no generated stylesheet side-car. The earlier standalone-CLI workaround (to avoid the `@tailwindcss/node` loader colliding with Start's prerender on `h3-v2`/`rou3` aliases) is no longer needed under the current plugin + SPA-mode combo. See §9.4. |
 | **shadcn/ui (radix-mira) over rolling our own primitives** | Forms, menus, dialogs, tabs, and toasts get battle-tested keyboard nav + ARIA + focus management + dark-mode support for free via [radix-ui](https://www.radix-ui.com) and [sonner](https://sonner.emilkowal.ski/). The editorial "built like a printed book" layer (`.cover`, `.chip`, `.shelf-plank`, Source Serif 4 typography scale) lives alongside the shadcn tokens in `styles.css`, so the custom voice survives the adoption. Components land under `components/ui/` via `bunx shadcn add` and are owned/forkable source. |
 | **Bun over npm + node** | Bun's installer is ~10× faster than npm on a cold cache, it runs TS scripts (`sync-dist.ts`) directly without a compile step, and the Docker build stage is a single `oven/bun:1` image. The production binary has no JS runtime, so bun is a build-time-only dependency. |
-| **PostgreSQL over MariaDB/SQLite** | `jsonb`, `tsvector` full-text search, and a mature job-queue ecosystem (river) more than earn the operational overhead. |
+| **PostgreSQL for multi-user installs; SQLite as the default** | SQLite is the zero-dependency default for single-user self-hosted installs. Postgres is required for multi-writer deployments where `jsonb`, `tsvector` full-text search, and River (job queue) earn the operational overhead. |
 | **sqlc-staged over ORM** | Typed, compile-time-checked SQL keeps the query surface explicit and avoids N+1 surprises; hand-written pgx today, `sqlc.yaml` + `internal/repo/queries/*.sql` staged for when schema stabilizes. |
 | **golang-migrate over goose/dbmate** | Paired `.up.sql`/`.down.sql` files are unambiguous; the library is small, pgx-friendly, and can be embedded into the app binary so a single artifact can run its own migrations in any environment. |
 | **Gin over chi/echo** | Rich built-in middleware (logger, recovery, CORS via `gin-contrib`), well-known binding/validation story, ergonomic `gin.Context` for streaming responses. Survived the Templ→React and React→shadcn/bun UI migrations unchanged. |

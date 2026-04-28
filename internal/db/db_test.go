@@ -39,6 +39,39 @@ func TestDetectDialect(t *testing.T) {
 	}
 }
 
+func TestSQLiteDSN_resolvesAgainstDataPath(t *testing.T) {
+	got, err := sqliteDSN("sqlite://./data/foo.db", "/srv/embookshelf")
+	if err != nil {
+		t.Fatalf("sqliteDSN: %v", err)
+	}
+	want := "/srv/embookshelf/foo.db"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestSQLiteDSN_absolutePath_unchanged(t *testing.T) {
+	got, err := sqliteDSN("sqlite:///var/lib/foo.db", "/ignored")
+	if err != nil {
+		t.Fatalf("sqliteDSN: %v", err)
+	}
+	want := "/var/lib/foo.db"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestSQLiteDSN_emptyDataPath_noResolution(t *testing.T) {
+	got, err := sqliteDSN("sqlite://./data/foo.db", "")
+	if err != nil {
+		t.Fatalf("sqliteDSN: %v", err)
+	}
+	want := "./data/foo.db"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
 func TestOpenPostgres_live(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
