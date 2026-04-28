@@ -37,9 +37,9 @@ func New(
 	d *db.DB,
 	bdropSvc *service.BookDropService,
 	libSvc *service.LibraryService,
-) (*RiverClient, error) {
+) (Client, error) {
 	if d.Dialect != db.DialectPostgres {
-		return nil, errors.New("queue: only Postgres backend supported in Plan 1")
+		return nil, errors.New("queue: SQLite backend lands in Plan 3; use a Postgres DATABASE_URL or wait for the SQLite queue worker")
 	}
 	if d.PG == nil {
 		return nil, errors.New("queue: db.PG is nil for postgres dialect")
@@ -102,3 +102,21 @@ func (r *RiverClient) EnqueueLibraryScan(ctx context.Context, libraryID string) 
 func (r *RiverClient) Stop(ctx context.Context) error {
 	return r.c.Stop(ctx)
 }
+
+// Noop is a queue implementation that fails every enqueue. Used in
+// SQLite mode until Plan 3 lands the homegrown worker. Stop is a
+// no-op so deferred cleanup in main.go is safe.
+type Noop struct{}
+
+func (Noop) EnqueueBookDrop(_ context.Context, _ string) error {
+	return errors.New("queue: bookdrop disabled on sqlite (Plan 3)")
+}
+
+func (Noop) EnqueueLibraryScan(_ context.Context, _ string) error {
+	return errors.New("queue: library scan disabled on sqlite (Plan 3)")
+}
+
+func (Noop) Stop(_ context.Context) error { return nil }
+
+// Compile-time interface conformance check.
+var _ Client = Noop{}
