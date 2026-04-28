@@ -142,6 +142,15 @@ function BookDetail() {
         >
           <Icon name="edit" size={13} /> Edit metadata
         </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            void navigate({ to: "/book/$id/find", params: { id } })
+          }
+        >
+          <Icon name="search" size={13} /> Find metadata online
+        </Button>
         <Button variant="outline" size="sm" asChild>
           <a
             href={`/api/v1/books/${id}/file?download=1`}
