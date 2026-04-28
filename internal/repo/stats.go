@@ -187,10 +187,12 @@ func (r *StatsRepo) UserProgressCounts(ctx context.Context, userID string) (read
 		FROM user_book_progress
 		WHERE user_id = $1
 	`
+	// COALESCE wraps SUM because SQLite returns NULL for SUM over an empty
+	// row set, which doesn't scan into int. PG's COUNT(*) FILTER returns 0.
 	const qSQLite = `
 		SELECT
-			SUM(CASE WHEN progress BETWEEN 1 AND 99 THEN 1 ELSE 0 END),
-			SUM(CASE WHEN progress >= 100 THEN 1 ELSE 0 END)
+			COALESCE(SUM(CASE WHEN progress BETWEEN 1 AND 99 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN progress >= 100 THEN 1 ELSE 0 END), 0)
 		FROM user_book_progress
 		WHERE user_id = ?
 	`
@@ -220,7 +222,7 @@ func (r *StatsRepo) UserShelfCounts(ctx context.Context, userID string) (total, 
 		WHERE user_id = $1
 	`
 	const qSQLite = `
-		SELECT COUNT(*), SUM(CASE WHEN is_smart = 1 THEN 1 ELSE 0 END)
+		SELECT COUNT(*), COALESCE(SUM(CASE WHEN is_smart = 1 THEN 1 ELSE 0 END), 0)
 		FROM shelves
 		WHERE user_id = ?
 	`
