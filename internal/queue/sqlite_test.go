@@ -14,14 +14,14 @@ import (
 // with a stub handler registered for "test.echo" jobs.
 //
 // The polling interval is dropped to 10ms so tests don't wait a
-// full second per tick. Returns the queue plus a slice pointer and
-// signal that test code can use to record handler calls.
-func newTestQueue(t *testing.T) (*sqliteQueue, *[]string, *atomicErr) {
+// full second per tick. Returns the queue plus a thread-safe call
+// recorder and an error slot the test can prime.
+func newTestQueue(t *testing.T) (*sqliteQueue, *callLog, *atomicErr) {
 	t.Helper()
 	t.Setenv("REPOTEST_DIALECT", "sqlite")
 	d := repotest.New(t)
 
-	calls := &[]string{}
+	calls := &callLog{}
 	failNext := &atomicErr{}
 
 	q := &sqliteQueue{
@@ -32,7 +32,7 @@ func newTestQueue(t *testing.T) (*sqliteQueue, *[]string, *atomicErr) {
 		handlers: map[string]kindHandler{},
 	}
 	q.handlers["test.echo"] = func(ctx context.Context, raw string) error {
-		*calls = append(*calls, raw)
+		calls.add(raw)
 		if e := failNext.swap(nil); e != nil {
 			return e
 		}
@@ -41,6 +41,26 @@ func newTestQueue(t *testing.T) (*sqliteQueue, *[]string, *atomicErr) {
 	go q.loop(context.Background())
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 	return q, calls, failNext
+}
+
+// callLog is a tiny thread-safe slice recorder. The handler runs on
+// the worker goroutine while assertions run on the test goroutine, so
+// every read/write needs the mutex to keep -race quiet.
+type callLog struct {
+	mu sync.Mutex
+	xs []string
+}
+
+func (c *callLog) add(s string) {
+	c.mu.Lock()
+	c.xs = append(c.xs, s)
+	c.mu.Unlock()
+}
+
+func (c *callLog) len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.xs)
 }
 
 type atomicErr struct {
@@ -64,7 +84,7 @@ func TestSQLiteQueue_runsToCompletion(t *testing.T) {
 		`INSERT INTO jobs (kind, args) VALUES ('test.echo', '{"v":1}')`); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
-	waitFor(t, func() bool { return len(*calls) == 1 })
+	waitFor(t, func() bool { return calls.len() == 1 })
 
 	var state string
 	if err := q.db.SQL.QueryRowContext(context.Background(),
@@ -89,12 +109,12 @@ func TestSQLiteQueue_retriesOnError(t *testing.T) {
 	// tests we shorten by manually resetting scheduled_at after the first
 	// failure.
 	waitFor(t, func() bool {
-		if len(*calls) < 1 {
+		if calls.len() < 1 {
 			return false
 		}
 		_, _ = q.db.SQL.ExecContext(context.Background(),
 			`UPDATE jobs SET scheduled_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE state='pending'`)
-		return len(*calls) >= 2
+		return calls.len() >= 2
 	})
 
 	var (
