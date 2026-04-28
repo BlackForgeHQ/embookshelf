@@ -13,10 +13,10 @@ func TestNextBackoff_growthAndCap(t *testing.T) {
 		maxWanted time.Duration
 	}{
 		{1, 1500 * time.Millisecond, 2500 * time.Millisecond}, // 2s ± 25%
-		{2, 3 * time.Second, 5 * time.Second},                  // 4s ± 25%
-		{3, 6 * time.Second, 10 * time.Second},                 // 8s ± 25%
-		{8, 4 * time.Minute, 5 * time.Minute},                  // capped at 5m
-		{20, 4 * time.Minute, 5 * time.Minute},                 // still capped
+		{2, 3 * time.Second, 5 * time.Second},                 // 4s ± 25%
+		{3, 6 * time.Second, 10 * time.Second},                // 8s ± 25%
+		{8, 4 * time.Minute, 5 * time.Minute},                 // capped at 5m
+		{20, 4 * time.Minute, 5 * time.Minute},                // still capped
 	}
 	for _, tc := range cases {
 		got := nextBackoff(tc.attempt)
