@@ -71,9 +71,56 @@ func TestOpenPostgres_live(t *testing.T) {
 	}
 }
 
-func TestOpenSQLite_notYetSupported(t *testing.T) {
-	cfg := config.Config{DatabaseURL: "file:./does-not-matter.db"}
-	if _, err := Open(context.Background(), cfg); err == nil {
-		t.Fatal("expected error for sqlite dialect in Plan 1")
+func TestOpenSQLite_live(t *testing.T) {
+	dir := t.TempDir()
+	dsn := "sqlite:" + dir + "/test.db"
+	cfg := config.Config{DatabaseURL: dsn}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	d, err := Open(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if d.Dialect != DialectSQLite {
+		t.Fatalf("dialect=%q want sqlite", d.Dialect)
+	}
+	if d.PG != nil {
+		t.Fatal("PG should be nil for sqlite dialect")
+	}
+	if d.SQL == nil {
+		t.Fatal("SQL nil")
+	}
+	if err := d.SQL.PingContext(ctx); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+
+	// Verify pragmas took effect.
+	var jm string
+	if err := d.SQL.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&jm); err != nil {
+		t.Fatalf("read journal_mode: %v", err)
+	}
+	if jm != "wal" {
+		t.Fatalf("journal_mode=%q want wal", jm)
+	}
+
+	var fk int
+	if err := d.SQL.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fk); err != nil {
+		t.Fatalf("read foreign_keys: %v", err)
+	}
+	if fk != 1 {
+		t.Fatalf("foreign_keys=%d want 1", fk)
+	}
+
+	// OpenMigrationDB must produce a working *sql.DB pointed at the same file.
+	mig, err := d.OpenMigrationDB()
+	if err != nil {
+		t.Fatalf("OpenMigrationDB: %v", err)
+	}
+	defer func() { _ = mig.Close() }()
+	if err := mig.PingContext(ctx); err != nil {
+		t.Fatalf("migration ping: %v", err)
 	}
 }

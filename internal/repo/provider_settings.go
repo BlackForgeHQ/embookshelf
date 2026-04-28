@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/db"
@@ -37,6 +38,7 @@ func NewProviderSettingsRepo(d *db.DB) *ProviderSettingsRepo {
 // priority ASC (NULLs last) then id — matches the chain-walk behavior
 // callers actually want for ISBN lookup and future bookdrop auto-enrich.
 func (r *ProviderSettingsRepo) List(ctx context.Context) ([]ProviderSetting, error) {
+	// NULLS LAST is supported by SQLite as well.
 	rows, err := r.db.SQL.QueryContext(ctx, `
 		SELECT id, enabled, config, priority, updated_at,
 		       last_success_at, last_error_at, last_error
@@ -49,11 +51,8 @@ func (r *ProviderSettingsRepo) List(ctx context.Context) ([]ProviderSetting, err
 	defer func() { _ = rows.Close() }()
 	out := make([]ProviderSetting, 0)
 	for rows.Next() {
-		var s ProviderSetting
-		if err := rows.Scan(
-			&s.ID, &s.Enabled, &s.Config, &s.Priority, &s.UpdatedAt,
-			&s.LastSuccessAt, &s.LastErrorAt, &s.LastError,
-		); err != nil {
+		s, err := r.scanProviderSetting(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -72,11 +71,11 @@ func (r *ProviderSettingsRepo) AllConfigs(ctx context.Context) (map[string]json.
 	out := make(map[string]json.RawMessage)
 	for rows.Next() {
 		var id string
-		var cfg json.RawMessage
+		var cfg []byte
 		if err := rows.Scan(&id, &cfg); err != nil {
 			return nil, err
 		}
-		out[id] = cfg
+		out[id] = json.RawMessage(cfg)
 	}
 	return out, rows.Err()
 }
@@ -104,13 +103,23 @@ func (r *ProviderSettingsRepo) EnabledIDs(ctx context.Context) (map[string]bool,
 // SetEnabled upserts a single row. Used by the PATCH endpoint when an
 // admin toggles a provider.
 func (r *ProviderSettingsRepo) SetEnabled(ctx context.Context, id string, enabled bool) error {
-	_, err := r.db.SQL.ExecContext(ctx, `
+	const qPG = `
 		INSERT INTO provider_settings (id, enabled, updated_at)
 		VALUES ($1, $2, now())
 		ON CONFLICT (id) DO UPDATE
 		SET enabled = EXCLUDED.enabled,
 		    updated_at = now()
-	`, id, enabled)
+	`
+	const qSQLite = `
+		INSERT INTO provider_settings (id, enabled, updated_at)
+		VALUES (?, ?, (strftime('%Y-%m-%dT%H:%M:%fZ','now')))
+		ON CONFLICT (id) DO UPDATE
+		SET enabled = EXCLUDED.enabled,
+		    updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+	`
+	_, err := r.db.SQL.ExecContext(ctx,
+		db.SelectQ(r.db.Dialect, qPG, qSQLite),
+		id, enabled)
 	return err
 }
 
@@ -121,13 +130,23 @@ func (r *ProviderSettingsRepo) SetConfig(ctx context.Context, id string, config 
 	if len(config) == 0 {
 		config = []byte("{}")
 	}
-	_, err := r.db.SQL.ExecContext(ctx, `
+	const qPG = `
 		INSERT INTO provider_settings (id, enabled, config, updated_at)
 		VALUES ($1, false, $2, now())
 		ON CONFLICT (id) DO UPDATE
 		SET config = EXCLUDED.config,
 		    updated_at = now()
-	`, id, config)
+	`
+	const qSQLite = `
+		INSERT INTO provider_settings (id, enabled, config, updated_at)
+		VALUES (?, 0, ?, (strftime('%Y-%m-%dT%H:%M:%fZ','now')))
+		ON CONFLICT (id) DO UPDATE
+		SET config = EXCLUDED.config,
+		    updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+	`
+	_, err := r.db.SQL.ExecContext(ctx,
+		db.SelectQ(r.db.Dialect, qPG, qSQLite),
+		id, config)
 	return err
 }
 
@@ -136,13 +155,23 @@ func (r *ProviderSettingsRepo) SetConfig(ctx context.Context, id string, config 
 // after a provider returns — writes are best-effort; caller logs
 // errors but never aborts on them.
 func (r *ProviderSettingsRepo) RecordSuccess(ctx context.Context, id string) error {
-	_, err := r.db.SQL.ExecContext(ctx, `
+	const qPG = `
 		INSERT INTO provider_settings (id, enabled, last_success_at, last_error, updated_at)
 		VALUES ($1, false, now(), '', now())
 		ON CONFLICT (id) DO UPDATE
 		SET last_success_at = now(),
 		    last_error = ''
-	`, id)
+	`
+	const qSQLite = `
+		INSERT INTO provider_settings (id, enabled, last_success_at, last_error, updated_at)
+		VALUES (?, 0, (strftime('%Y-%m-%dT%H:%M:%fZ','now')), '', (strftime('%Y-%m-%dT%H:%M:%fZ','now')))
+		ON CONFLICT (id) DO UPDATE
+		SET last_success_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+		    last_error = ''
+	`
+	_, err := r.db.SQL.ExecContext(ctx,
+		db.SelectQ(r.db.Dialect, qPG, qSQLite),
+		id)
 	return err
 }
 
@@ -152,26 +181,46 @@ func (r *ProviderSettingsRepo) RecordError(ctx context.Context, id, msg string) 
 	if len(msg) > 500 {
 		msg = msg[:500]
 	}
-	_, err := r.db.SQL.ExecContext(ctx, `
+	const qPG = `
 		INSERT INTO provider_settings (id, enabled, last_error_at, last_error, updated_at)
 		VALUES ($1, false, now(), $2, now())
 		ON CONFLICT (id) DO UPDATE
 		SET last_error_at = now(),
 		    last_error = EXCLUDED.last_error
-	`, id, msg)
+	`
+	const qSQLite = `
+		INSERT INTO provider_settings (id, enabled, last_error_at, last_error, updated_at)
+		VALUES (?, 0, (strftime('%Y-%m-%dT%H:%M:%fZ','now')), ?, (strftime('%Y-%m-%dT%H:%M:%fZ','now')))
+		ON CONFLICT (id) DO UPDATE
+		SET last_error_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+		    last_error = EXCLUDED.last_error
+	`
+	_, err := r.db.SQL.ExecContext(ctx,
+		db.SelectQ(r.db.Dialect, qPG, qSQLite),
+		id, msg)
 	return err
 }
 
 // SetPriority stores the sort priority. nil clears the slot (reverts
 // the provider to catalog-order fallback).
 func (r *ProviderSettingsRepo) SetPriority(ctx context.Context, id string, priority *int) error {
-	_, err := r.db.SQL.ExecContext(ctx, `
+	const qPG = `
 		INSERT INTO provider_settings (id, enabled, priority, updated_at)
 		VALUES ($1, false, $2, now())
 		ON CONFLICT (id) DO UPDATE
 		SET priority = EXCLUDED.priority,
 		    updated_at = now()
-	`, id, priority)
+	`
+	const qSQLite = `
+		INSERT INTO provider_settings (id, enabled, priority, updated_at)
+		VALUES (?, 0, ?, (strftime('%Y-%m-%dT%H:%M:%fZ','now')))
+		ON CONFLICT (id) DO UPDATE
+		SET priority = EXCLUDED.priority,
+		    updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+	`
+	_, err := r.db.SQL.ExecContext(ctx,
+		db.SelectQ(r.db.Dialect, qPG, qSQLite),
+		id, priority)
 	return err
 }
 
@@ -180,14 +229,49 @@ func (r *ProviderSettingsRepo) SetPriority(ctx context.Context, id string, prior
 // — after first boot the DB is authoritative and restarts don't clobber
 // admin toggles.
 func (r *ProviderSettingsRepo) SeedIfAbsent(ctx context.Context, defaults map[string]bool) error {
+	const qPG = `
+		INSERT INTO provider_settings (id, enabled)
+		VALUES ($1, $2)
+		ON CONFLICT (id) DO NOTHING
+	`
+	const qSQLite = `
+		INSERT INTO provider_settings (id, enabled)
+		VALUES (?, ?)
+		ON CONFLICT (id) DO NOTHING
+	`
 	for id, enabled := range defaults {
-		if _, err := r.db.SQL.ExecContext(ctx, `
-			INSERT INTO provider_settings (id, enabled)
-			VALUES ($1, $2)
-			ON CONFLICT (id) DO NOTHING
-		`, id, enabled); err != nil {
+		if _, err := r.db.SQL.ExecContext(ctx,
+			db.SelectQ(r.db.Dialect, qPG, qSQLite),
+			id, enabled); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (r *ProviderSettingsRepo) scanProviderSetting(s scanner) (ProviderSetting, error) {
+	var (
+		ps             ProviderSetting
+		cfg            []byte
+		updatedAny     any
+		lastSuccessAny any
+		lastErrorAtAny any
+	)
+	if err := s.Scan(
+		&ps.ID, &ps.Enabled, &cfg, &ps.Priority, &updatedAny,
+		&lastSuccessAny, &lastErrorAtAny, &ps.LastError,
+	); err != nil {
+		return ps, err
+	}
+	ps.Config = json.RawMessage(cfg)
+	if err := db.ScanTime(r.db.Dialect, updatedAny, &ps.UpdatedAt); err != nil {
+		return ps, fmt.Errorf("scan updated_at: %w", err)
+	}
+	if err := db.ScanNullTime(r.db.Dialect, lastSuccessAny, &ps.LastSuccessAt); err != nil {
+		return ps, fmt.Errorf("scan last_success_at: %w", err)
+	}
+	if err := db.ScanNullTime(r.db.Dialect, lastErrorAtAny, &ps.LastErrorAt); err != nil {
+		return ps, fmt.Errorf("scan last_error_at: %w", err)
+	}
+	return ps, nil
 }

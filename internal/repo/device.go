@@ -27,12 +27,19 @@ var ErrDeviceNameTaken = errors.New("a device with that name already exists")
 const deviceCols = `id, user_id, kind, name, secret, config, last_sent_at, last_error, created_at, updated_at`
 
 func (r *DeviceRepo) ListForUser(ctx context.Context, userID string) ([]model.Device, error) {
-	rows, err := r.db.SQL.QueryContext(ctx, `
-		SELECT `+deviceCols+`
+	const qPG = `
+		SELECT ` + deviceCols + `
 		FROM user_devices
 		WHERE user_id = $1
 		ORDER BY created_at ASC
-	`, userID)
+	`
+	const qSQLite = `
+		SELECT ` + deviceCols + `
+		FROM user_devices
+		WHERE user_id = ?
+		ORDER BY created_at ASC
+	`
+	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +47,7 @@ func (r *DeviceRepo) ListForUser(ctx context.Context, userID string) ([]model.De
 
 	var out []model.Device
 	for rows.Next() {
-		d, err := scanDevice(rows)
+		d, err := r.scanDevice(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -50,11 +57,16 @@ func (r *DeviceRepo) ListForUser(ctx context.Context, userID string) ([]model.De
 }
 
 func (r *DeviceRepo) GetForUser(ctx context.Context, userID, id string) (model.Device, error) {
-	row := r.db.SQL.QueryRowContext(ctx, `
-		SELECT `+deviceCols+`
+	const qPG = `
+		SELECT ` + deviceCols + `
 		FROM user_devices WHERE user_id = $1 AND id = $2
-	`, userID, id)
-	return scanDevice(row)
+	`
+	const qSQLite = `
+		SELECT ` + deviceCols + `
+		FROM user_devices WHERE user_id = ? AND id = ?
+	`
+	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID, id)
+	return r.scanDevice(row)
 }
 
 func (r *DeviceRepo) Create(ctx context.Context, d model.Device) (model.Device, error) {
@@ -62,12 +74,19 @@ func (r *DeviceRepo) Create(ctx context.Context, d model.Device) (model.Device, 
 	if err != nil {
 		return model.Device{}, err
 	}
-	row := r.db.SQL.QueryRowContext(ctx, `
-		INSERT INTO user_devices (user_id, kind, name, secret, config)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING `+deviceCols,
-		d.UserID, string(d.Kind), strings.TrimSpace(d.Name), d.Secret, cfg)
-	created, err := scanDevice(row)
+	id := db.NewID()
+	const qPG = `
+		INSERT INTO user_devices (id, user_id, kind, name, secret, config)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING ` + deviceCols
+	const qSQLite = `
+		INSERT INTO user_devices (id, user_id, kind, name, secret, config)
+		VALUES (?, ?, ?, ?, ?, ?)
+		RETURNING ` + deviceCols
+	row := r.db.SQL.QueryRowContext(ctx,
+		db.SelectQ(r.db.Dialect, qPG, qSQLite),
+		id, d.UserID, string(d.Kind), strings.TrimSpace(d.Name), d.Secret, cfg)
+	created, err := r.scanDevice(row)
 	if err != nil {
 		if ok, name := dberr.IsUniqueViolation(err); ok && name == "idx_user_devices_user_name" {
 			return model.Device{}, ErrDeviceNameTaken
@@ -78,8 +97,9 @@ func (r *DeviceRepo) Create(ctx context.Context, d model.Device) (model.Device, 
 }
 
 func (r *DeviceRepo) Delete(ctx context.Context, userID, id string) error {
-	res, err := r.db.SQL.ExecContext(ctx,
-		`DELETE FROM user_devices WHERE user_id = $1 AND id = $2`, userID, id)
+	const qPG = `DELETE FROM user_devices WHERE user_id = $1 AND id = $2`
+	const qSQLite = `DELETE FROM user_devices WHERE user_id = ? AND id = ?`
+	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID, id)
 	if err != nil {
 		return err
 	}
@@ -96,34 +116,56 @@ func (r *DeviceRepo) Delete(ctx context.Context, userID, id string) error {
 // MarkSendResult records the outcome of a push attempt.
 func (r *DeviceRepo) MarkSendResult(ctx context.Context, userID, id string, sendErr error) error {
 	if sendErr == nil {
-		_, err := r.db.SQL.ExecContext(ctx, `
+		const qPG = `
 			UPDATE user_devices
 			SET last_sent_at = now(), last_error = '', updated_at = now()
 			WHERE user_id = $1 AND id = $2
-		`, userID, id)
+		`
+		const qSQLite = `
+			UPDATE user_devices
+			SET last_sent_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			    last_error = '',
+			    updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+			WHERE user_id = ? AND id = ?
+		`
+		_, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID, id)
 		return err
 	}
 	msg := sendErr.Error()
 	if len(msg) > 500 {
 		msg = msg[:500]
 	}
-	_, err := r.db.SQL.ExecContext(ctx, `
+	const qPG = `
 		UPDATE user_devices
 		SET last_error = $3, updated_at = now()
 		WHERE user_id = $1 AND id = $2
-	`, userID, id, msg)
+	`
+	const qSQLite = `
+		UPDATE user_devices
+		SET last_error = ?,
+		    updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		WHERE user_id = ? AND id = ?
+	`
+	if r.db.Dialect == db.DialectSQLite {
+		_, err := r.db.SQL.ExecContext(ctx, qSQLite, msg, userID, id)
+		return err
+	}
+	_, err := r.db.SQL.ExecContext(ctx, qPG, userID, id, msg)
 	return err
 }
 
-func scanDevice(s scanner) (model.Device, error) {
+func (r *DeviceRepo) scanDevice(s scanner) (model.Device, error) {
 	var (
-		d      model.Device
-		kind   string
-		rawCfg []byte
+		d           model.Device
+		kind        string
+		rawCfg      []byte
+		lastSentAny any
+		createdAny  any
+		updatedAny  any
 	)
 	err := s.Scan(
 		&d.ID, &d.UserID, &kind, &d.Name, &d.Secret, &rawCfg,
-		&d.LastSentAt, &d.LastError, &d.CreatedAt, &d.UpdatedAt,
+		&lastSentAny, &d.LastError, &createdAny, &updatedAny,
 	)
 	if err != nil {
 		if dberr.IsNotFound(err) {
@@ -139,6 +181,15 @@ func scanDevice(s scanner) (model.Device, error) {
 	}
 	if d.Config == nil {
 		d.Config = map[string]any{}
+	}
+	if err := db.ScanNullTime(r.db.Dialect, lastSentAny, &d.LastSentAt); err != nil {
+		return d, fmt.Errorf("scan last_sent_at: %w", err)
+	}
+	if err := db.ScanTime(r.db.Dialect, createdAny, &d.CreatedAt); err != nil {
+		return d, fmt.Errorf("scan created_at: %w", err)
+	}
+	if err := db.ScanTime(r.db.Dialect, updatedAny, &d.UpdatedAt); err != nil {
+		return d, fmt.Errorf("scan updated_at: %w", err)
 	}
 	return d, nil
 }

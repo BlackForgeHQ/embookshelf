@@ -29,10 +29,8 @@ func (r *ReadingSessionRepo) RecordTick(
 	percent int,
 	mergeWindow time.Duration,
 ) error {
-	// Look up the freshest session for the book and decide whether to
-	// extend it. Using a single UPSERT-ish CTE keeps this to one
-	// round trip.
-	_, err := r.db.SQL.ExecContext(ctx, `
+	// PG path: single CTE round trip with interval arithmetic.
+	const qPG = `
 		WITH latest AS (
 			SELECT id, ended_at
 			FROM reading_sessions
@@ -52,7 +50,43 @@ func (r *ReadingSessionRepo) RecordTick(
 		INSERT INTO reading_sessions (user_id, book_id, start_progress, end_progress)
 		SELECT $1, $2, $3, $3
 		WHERE NOT EXISTS (SELECT 1 FROM extended)
-	`, userID, bookID, percent, intervalLiteral(mergeWindow))
+	`
+	// SQLite path: app-side time arithmetic + explicit UUID generation.
+	// We use a simpler two-step approach: check/extend in the CTE, and
+	// supply a pre-generated ID + timestamps for the INSERT branch.
+	const qSQLite = `
+		WITH latest AS (
+			SELECT id, ended_at
+			FROM reading_sessions
+			WHERE user_id = ?1 AND book_id = ?2
+			ORDER BY ended_at DESC
+			LIMIT 1
+		),
+		extended AS (
+			UPDATE reading_sessions
+			SET ended_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')), end_progress = ?3
+			WHERE id = (
+				SELECT id FROM latest
+				WHERE ended_at >= datetime('now', ?4)
+			)
+			RETURNING 1
+		)
+		INSERT INTO reading_sessions (id, user_id, book_id, start_progress, end_progress)
+		SELECT ?5, ?1, ?2, ?3, ?3
+		WHERE NOT EXISTS (SELECT 1 FROM extended)
+	`
+	if r.db.Dialect == db.DialectSQLite {
+		newID := db.NewID()
+		// SQLite datetime modifier: '-N seconds'
+		secs := int(mergeWindow.Seconds())
+		if secs <= 0 {
+			secs = 1
+		}
+		modifier := fmt.Sprintf("-%d seconds", secs)
+		_, err := r.db.SQL.ExecContext(ctx, qSQLite, userID, bookID, percent, modifier, newID)
+		return err
+	}
+	_, err := r.db.SQL.ExecContext(ctx, qPG, userID, bookID, percent, intervalLiteral(mergeWindow))
 	return err
 }
 
@@ -64,6 +98,14 @@ func (r *ReadingSessionRepo) Heatmap(ctx context.Context, userID string, days in
 	if days <= 0 {
 		days = 84
 	}
+
+	if r.db.Dialect == db.DialectSQLite {
+		return r.heatmapSQLite(ctx, userID, days)
+	}
+	return r.heatmapPG(ctx, userID, days)
+}
+
+func (r *ReadingSessionRepo) heatmapPG(ctx context.Context, userID string, days int) ([]int, error) {
 	rows, err := r.db.SQL.QueryContext(ctx, `
 		WITH day_series AS (
 			SELECT generate_series(
@@ -103,6 +145,49 @@ func (r *ReadingSessionRepo) Heatmap(ctx context.Context, userID string, days in
 	return out, rows.Err()
 }
 
+func (r *ReadingSessionRepo) heatmapSQLite(ctx context.Context, userID string, days int) ([]int, error) {
+	// Query minutes grouped by date for the window.
+	rows, err := r.db.SQL.QueryContext(ctx, `
+		SELECT date(started_at) AS day,
+		       MAX(1,
+		           CAST(CEIL((julianday(ended_at) - julianday(started_at)) * 86400 / 60.0) AS INTEGER)
+		       ) AS minutes
+		FROM reading_sessions
+		WHERE user_id = ?
+		  AND started_at >= date('now', ? || ' days')
+		GROUP BY date(started_at)
+		ORDER BY day ASC
+	`, userID, fmt.Sprintf("-%d", days-1))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	// Build a day→minutes map.
+	byDay := make(map[string]int, days)
+	for rows.Next() {
+		var dayStr string
+		var m int
+		if err := rows.Scan(&dayStr, &m); err != nil {
+			return nil, err
+		}
+		byDay[dayStr] = m
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Fill the full window oldest→newest with 0 for missing days.
+	now := time.Now().UTC().Truncate(24 * time.Hour)
+	out := make([]int, days)
+	for i := 0; i < days; i++ {
+		d := now.AddDate(0, 0, -(days - 1 - i))
+		key := d.Format("2006-01-02")
+		out[i] = byDay[key]
+	}
+	return out, nil
+}
+
 // MinutesInWindow sums session durations for the last N days.
 // Mirrors the heatmap's "one minute minimum" rounding so short sessions
 // aren't invisible in the headline figure either.
@@ -110,8 +195,7 @@ func (r *ReadingSessionRepo) MinutesInWindow(ctx context.Context, userID string,
 	if days <= 0 {
 		days = 7
 	}
-	var m *int
-	err := r.db.SQL.QueryRowContext(ctx, `
+	const qPG = `
 		SELECT COALESCE(
 			CEIL(SUM(EXTRACT(EPOCH FROM (ended_at - started_at)) / 60.0))::int,
 			0
@@ -119,7 +203,24 @@ func (r *ReadingSessionRepo) MinutesInWindow(ctx context.Context, userID string,
 		FROM reading_sessions
 		WHERE user_id = $1
 		  AND started_at >= CURRENT_DATE - ($2::int - 1) * INTERVAL '1 day'
-	`, userID, days).Scan(&m)
+	`
+	const qSQLite = `
+		SELECT COALESCE(
+			CAST(CEIL(SUM((julianday(ended_at) - julianday(started_at)) * 86400 / 60.0)) AS INTEGER),
+			0
+		)
+		FROM reading_sessions
+		WHERE user_id = ?
+		  AND started_at >= date('now', ? || ' days')
+	`
+	var m *int
+	var err error
+	if r.db.Dialect == db.DialectSQLite {
+		err = r.db.SQL.QueryRowContext(ctx, qSQLite,
+			userID, fmt.Sprintf("-%d", days-1)).Scan(&m)
+	} else {
+		err = r.db.SQL.QueryRowContext(ctx, qPG, userID, days).Scan(&m)
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -136,13 +237,22 @@ func (r *ReadingSessionRepo) CurrentStreak(ctx context.Context, userID string) (
 	// Pull the distinct dates with activity (newest first) and walk
 	// them in Go — clearer than a gap-detection window function, and
 	// the list is at most ~366 rows for a year.
-	rows, err := r.db.SQL.QueryContext(ctx, `
+	const qPG = `
 		SELECT DISTINCT DATE(started_at) AS day
 		FROM reading_sessions
 		WHERE user_id = $1
 		  AND started_at >= CURRENT_DATE - INTERVAL '400 days'
 		ORDER BY day DESC
-	`, userID)
+	`
+	const qSQLite = `
+		SELECT DISTINCT date(started_at) AS day
+		FROM reading_sessions
+		WHERE user_id = ?
+		  AND started_at >= date('now', '-400 days')
+		ORDER BY day DESC
+	`
+	rows, err := r.db.SQL.QueryContext(ctx,
+		db.SelectQ(r.db.Dialect, qPG, qSQLite), userID)
 	if err != nil {
 		return 0, err
 	}
@@ -150,9 +260,23 @@ func (r *ReadingSessionRepo) CurrentStreak(ctx context.Context, userID string) (
 
 	var days []time.Time
 	for rows.Next() {
-		var d time.Time
-		if err := rows.Scan(&d); err != nil {
+		var dayAny any
+		if err := rows.Scan(&dayAny); err != nil {
 			return 0, err
+		}
+		// PG returns time.Time for DATE columns; SQLite returns a string "YYYY-MM-DD".
+		var d time.Time
+		switch v := dayAny.(type) {
+		case time.Time:
+			d = v.UTC()
+		case string:
+			t, err := time.Parse("2006-01-02", v)
+			if err != nil {
+				return 0, fmt.Errorf("parse day %q: %w", v, err)
+			}
+			d = t.UTC()
+		default:
+			return 0, fmt.Errorf("unexpected day type %T", dayAny)
 		}
 		days = append(days, d)
 	}
@@ -188,12 +312,19 @@ func (r *ReadingSessionRepo) CurrentStreak(ctx context.Context, userID string) (
 // subtitle ("you've been reading for N hours this quarter across K
 // sessions"). Quarter-scoping is applied by passing days=90.
 func (r *ReadingSessionRepo) TotalMinutes(ctx context.Context, userID string) (int, error) {
-	var m *int
-	err := r.db.SQL.QueryRowContext(ctx, `
+	const qPG = `
 		SELECT CEIL(SUM(EXTRACT(EPOCH FROM (ended_at - started_at)) / 60.0))::int
 		FROM reading_sessions
 		WHERE user_id = $1
-	`, userID).Scan(&m)
+	`
+	const qSQLite = `
+		SELECT CAST(CEIL(SUM((julianday(ended_at) - julianday(started_at)) * 86400 / 60.0)) AS INTEGER)
+		FROM reading_sessions
+		WHERE user_id = ?
+	`
+	var m *int
+	err := r.db.SQL.QueryRowContext(ctx,
+		db.SelectQ(r.db.Dialect, qPG, qSQLite), userID).Scan(&m)
 	if err != nil {
 		return 0, err
 	}
@@ -209,13 +340,26 @@ func (r *ReadingSessionRepo) CountSessions(ctx context.Context, userID string, d
 	if days <= 0 {
 		days = 90
 	}
-	var n int
-	err := r.db.SQL.QueryRowContext(ctx, `
+	const qPG = `
 		SELECT COUNT(*)
 		FROM reading_sessions
 		WHERE user_id = $1
 		  AND started_at >= CURRENT_DATE - ($2::int - 1) * INTERVAL '1 day'
-	`, userID, days).Scan(&n)
+	`
+	const qSQLite = `
+		SELECT COUNT(*)
+		FROM reading_sessions
+		WHERE user_id = ?
+		  AND started_at >= date('now', ? || ' days')
+	`
+	var n int
+	var err error
+	if r.db.Dialect == db.DialectSQLite {
+		err = r.db.SQL.QueryRowContext(ctx, qSQLite,
+			userID, fmt.Sprintf("-%d", days-1)).Scan(&n)
+	} else {
+		err = r.db.SQL.QueryRowContext(ctx, qPG, userID, days).Scan(&n)
+	}
 	return n, err
 }
 

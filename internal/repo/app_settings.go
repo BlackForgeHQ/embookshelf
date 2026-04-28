@@ -124,25 +124,36 @@ func DefaultOIDCAutoProvisionDetails() OIDCAutoProvisionDetails {
 // when the row is missing — callers decide whether a missing row is
 // fatal or a "use default" signal.
 func (r *AppSettingsRepo) GetRaw(ctx context.Context, name string) (json.RawMessage, error) {
-	var raw json.RawMessage
-	err := r.db.SQL.QueryRowContext(ctx, `SELECT value FROM app_settings WHERE name = $1`, name).Scan(&raw)
+	const qPG = `SELECT value FROM app_settings WHERE name = $1`
+	const qSQLite = `SELECT value FROM app_settings WHERE name = ?`
+	var raw []byte
+	err := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), name).Scan(&raw)
 	if err != nil {
 		if dberr.IsNotFound(err) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
-	return raw, nil
+	return json.RawMessage(raw), nil
 }
 
 // SetRaw upserts one setting. Validation is the caller's problem.
 func (r *AppSettingsRepo) SetRaw(ctx context.Context, name string, value json.RawMessage) error {
-	_, err := r.db.SQL.ExecContext(ctx, `
+	const qPG = `
 		INSERT INTO app_settings (name, value, updated_at)
 		VALUES ($1, $2::jsonb, now())
 		ON CONFLICT (name) DO UPDATE
 		SET value = EXCLUDED.value, updated_at = now()
-	`, name, string(value))
+	`
+	const qSQLite = `
+		INSERT INTO app_settings (name, value, updated_at)
+		VALUES (?, ?, (strftime('%Y-%m-%dT%H:%M:%fZ','now')))
+		ON CONFLICT (name) DO UPDATE
+		SET value = EXCLUDED.value, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+	`
+	_, err := r.db.SQL.ExecContext(ctx,
+		db.SelectQ(r.db.Dialect, qPG, qSQLite),
+		name, string(value))
 	return err
 }
 

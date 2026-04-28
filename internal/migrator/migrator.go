@@ -13,6 +13,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
+	"github.com/golang-migrate/migrate/v4/database/sqlite"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 
 	"github.com/blackforge/embookshelf/internal/db"
@@ -77,7 +78,11 @@ func driverFor(d db.Dialect, sqlDB *sql.DB) (database.Driver, string, error) {
 		}
 		return drv, "postgres", nil
 	case db.DialectSQLite:
-		return nil, "", errors.New("sqlite migrator driver not yet supported (Plan 2)")
+		drv, err := sqlite.WithInstance(sqlDB, &sqlite.Config{})
+		if err != nil {
+			return nil, "", fmt.Errorf("migrate sqlite driver: %w", err)
+		}
+		return drv, "sqlite", nil
 	default:
 		return nil, "", fmt.Errorf("migrator: unknown dialect %q", d)
 	}

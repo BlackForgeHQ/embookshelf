@@ -18,7 +18,7 @@ func NewProgressRepo(db *db.DB) *ProgressRepo {
 // empty string leaves any previously-stored resume point intact (so a manual
 // percent tweak doesn't wipe out a reader-recorded CFI).
 func (r *ProgressRepo) Set(ctx context.Context, userID, bookID string, progress int, cfi string) error {
-	_, err := r.db.SQL.ExecContext(ctx, `
+	const qPG = `
 		INSERT INTO user_book_progress (user_id, book_id, progress, resume_cfi, last_read_at)
 		VALUES ($1, $2, $3, $4, now())
 		ON CONFLICT (user_id, book_id) DO UPDATE
@@ -27,6 +27,19 @@ func (r *ProgressRepo) Set(ctx context.Context, userID, bookID string, progress 
 		                          THEN EXCLUDED.resume_cfi
 		                          ELSE user_book_progress.resume_cfi END,
 		      last_read_at = now()
-	`, userID, bookID, progress, cfi)
+	`
+	const qSQLite = `
+		INSERT INTO user_book_progress (user_id, book_id, progress, resume_cfi, last_read_at)
+		VALUES (?, ?, ?, ?, (strftime('%Y-%m-%dT%H:%M:%fZ','now')))
+		ON CONFLICT (user_id, book_id) DO UPDATE
+		  SET progress     = EXCLUDED.progress,
+		      resume_cfi   = CASE WHEN EXCLUDED.resume_cfi <> ''
+		                          THEN EXCLUDED.resume_cfi
+		                          ELSE user_book_progress.resume_cfi END,
+		      last_read_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+	`
+	_, err := r.db.SQL.ExecContext(ctx,
+		db.SelectQ(r.db.Dialect, qPG, qSQLite),
+		userID, bookID, progress, cfi)
 	return err
 }

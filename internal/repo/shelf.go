@@ -47,12 +47,19 @@ const shelfColsReturning = `id, user_id, name, slug, accent, created_at,
                            END AS book_count`
 
 func (r *ShelfRepo) ListForUser(ctx context.Context, userID string) ([]model.Shelf, error) {
-	rows, err := r.db.SQL.QueryContext(ctx, `
-		SELECT `+shelfCols+`
+	const qPG = `
+		SELECT ` + shelfCols + `
 		FROM shelves s
 		WHERE s.user_id = $1
 		ORDER BY s.is_smart ASC, s.created_at ASC
-	`, userID)
+	`
+	const qSQLite = `
+		SELECT ` + shelfCols + `
+		FROM shelves s
+		WHERE s.user_id = ?
+		ORDER BY s.is_smart ASC, s.created_at ASC
+	`
+	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +67,7 @@ func (r *ShelfRepo) ListForUser(ctx context.Context, userID string) ([]model.She
 
 	var out []model.Shelf
 	for rows.Next() {
-		s, err := scanShelf(rows)
+		s, err := r.scanShelf(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -70,12 +77,18 @@ func (r *ShelfRepo) ListForUser(ctx context.Context, userID string) ([]model.She
 }
 
 func (r *ShelfRepo) GetBySlugForUser(ctx context.Context, userID, slug string) (model.Shelf, error) {
-	row := r.db.SQL.QueryRowContext(ctx, `
-		SELECT `+shelfCols+`
+	const qPG = `
+		SELECT ` + shelfCols + `
 		FROM shelves s
 		WHERE s.user_id = $1 AND s.slug = $2
-	`, userID, slug)
-	return scanShelf(row)
+	`
+	const qSQLite = `
+		SELECT ` + shelfCols + `
+		FROM shelves s
+		WHERE s.user_id = ? AND s.slug = ?
+	`
+	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID, slug)
+	return r.scanShelf(row)
 }
 
 // BooksInShelfForUser returns the books on a user shelf. If the shelf is
@@ -91,19 +104,28 @@ func (r *ShelfRepo) BooksInShelfForUser(ctx context.Context, userID, shelfSlug s
 		return r.booksMatchingRule(ctx, userID, sh.Rule)
 	}
 
-	rows, err := r.db.SQL.QueryContext(ctx, `
-		SELECT `+bookCols+`
-		`+bookFrom+`
+	const qPG = `
+		SELECT ` + bookCols + `
+		` + bookFromPG + `
 		JOIN shelf_books sb ON sb.book_id = b.id
 		JOIN shelves     s  ON s.id = sb.shelf_id
 		WHERE s.user_id = $1 AND s.slug = $2 AND b.deleted_at IS NULL
 		ORDER BY sb.added_at DESC
-	`, userID, shelfSlug)
+	`
+	const qSQLite = `
+		SELECT ` + bookCols + `
+		` + bookFromSQLite + `
+		JOIN shelf_books sb ON sb.book_id = b.id
+		JOIN shelves     s  ON s.id = sb.shelf_id
+		WHERE s.user_id = ?1 AND s.slug = ?2 AND b.deleted_at IS NULL
+		ORDER BY sb.added_at DESC
+	`
+	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID, shelfSlug)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	return collectBooks(rows)
+	return collectBooks(r.db.Dialect, rows)
 }
 
 // CountForSmartShelf runs the rule as a COUNT(*) so the sidebar can show
@@ -116,7 +138,7 @@ func (r *ShelfRepo) CountForSmartShelf(ctx context.Context, userID string, rule 
 	args := append([]any{userID}, compiled.args...)
 	query := `
 		SELECT COUNT(*)
-		` + bookFrom + `
+		` + bookFromQ(r.db.Dialect) + `
 		WHERE b.deleted_at IS NULL
 	`
 	if compiled.where != "" {
@@ -137,7 +159,7 @@ func (r *ShelfRepo) booksMatchingRule(ctx context.Context, userID string, rule *
 	args := append([]any{userID}, compiled.args...)
 	query := `
 		SELECT ` + bookCols + `
-		` + bookFrom + `
+		` + bookFromQ(r.db.Dialect) + `
 		WHERE b.deleted_at IS NULL
 	`
 	if compiled.where != "" {
@@ -150,7 +172,7 @@ func (r *ShelfRepo) booksMatchingRule(ctx context.Context, userID string, rule *
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	return collectBooks(rows)
+	return collectBooks(r.db.Dialect, rows)
 }
 
 // Create inserts a new shelf. For regular shelves, rule must be nil; for
@@ -180,20 +202,31 @@ func (r *ShelfRepo) Create(ctx context.Context, userID, name, accent string, rul
 		ruleJSON = j
 	}
 
+	id := db.NewID()
+	const qPG = `
+		INSERT INTO shelves (id, user_id, name, slug, accent, is_smart, rule)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (user_id, slug) DO NOTHING
+		RETURNING ` + shelfColsReturning
+	const qSQLite = `
+		INSERT INTO shelves (id, user_id, name, slug, accent, is_smart, rule)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (user_id, slug) DO NOTHING
+		RETURNING ` + shelfColsReturning
+
 	for attempt := 0; attempt < 50; attempt++ {
 		slug := baseSlug
 		if attempt > 0 {
 			slug = fmt.Sprintf("%s-%d", baseSlug, attempt+1)
 		}
-		row := r.db.SQL.QueryRowContext(ctx, `
-			INSERT INTO shelves (user_id, name, slug, accent, is_smart, rule)
-			VALUES ($1, $2, $3, $4, $5, $6)
-			ON CONFLICT (user_id, slug) DO NOTHING
-			RETURNING `+shelfColsReturning,
-			userID, name, slug, accent, isSmart, nullOrJSON(ruleJSON))
-		s, err := scanShelf(row)
+		row := r.db.SQL.QueryRowContext(ctx,
+			db.SelectQ(r.db.Dialect, qPG, qSQLite),
+			id, userID, name, slug, accent, isSmart, nullOrJSON(ruleJSON))
+		s, err := r.scanShelf(row)
 		if dberr.IsNotFound(err) {
-			continue // collision, try next -N
+			// Collision on (user_id, slug) — generate a new ID for the next attempt
+			id = db.NewID()
+			continue
 		}
 		return s, err
 	}
@@ -214,54 +247,98 @@ func (r *ShelfRepo) Update(ctx context.Context, userID, slug string, name, accen
 
 	var (
 		sets []string
-		args = []any{userID, slug}
+		args []any
 	)
-	if name != nil {
-		trimmed := strings.TrimSpace(*name)
-		if trimmed == "" {
-			return model.Shelf{}, errors.New("name cannot be empty")
-		}
-		args = append(args, trimmed)
-		sets = append(sets, fmt.Sprintf("name = $%d", len(args)))
-	}
-	if accent != nil {
-		args = append(args, strings.TrimSpace(*accent))
-		sets = append(sets, fmt.Sprintf("accent = $%d", len(args)))
-	}
-	if ruleChanged {
-		if !cur.IsSmart {
-			return model.Shelf{}, errors.New("cannot assign a rule to a regular shelf")
-		}
-		if rule == nil {
-			return model.Shelf{}, errors.New("smart shelf requires a rule")
-		}
-		j, err := json.Marshal(rule)
-		if err != nil {
-			return model.Shelf{}, fmt.Errorf("marshal rule: %w", err)
-		}
-		args = append(args, string(j))
-		sets = append(sets, fmt.Sprintf("rule = $%d::jsonb", len(args)))
-	}
-	if len(sets) == 0 {
-		return cur, nil
-	}
 
-	query := `
-		UPDATE shelves
-		SET ` + strings.Join(sets, ", ") + `
-		WHERE user_id = $1 AND slug = $2
-	`
-	// Re-fetch via GetBySlugForUser so we consistently compute book_count
-	// through the same CASE expression. Cheaper than wrestling with a
-	// RETURNING list that can't reference the `s` alias shelfCols uses.
-	if _, err := r.db.SQL.ExecContext(ctx, query, args...); err != nil {
-		return model.Shelf{}, err
+	if r.db.Dialect == db.DialectSQLite {
+		// SQLite uses positional ? placeholders; $N-style positional binding
+		// is NOT supported in go-sqlite3. Build args first, then sets.
+		args = []any{userID, slug}
+		if name != nil {
+			trimmed := strings.TrimSpace(*name)
+			if trimmed == "" {
+				return model.Shelf{}, errors.New("name cannot be empty")
+			}
+			args = append(args, trimmed)
+			sets = append(sets, "name = ?")
+		}
+		if accent != nil {
+			args = append(args, strings.TrimSpace(*accent))
+			sets = append(sets, "accent = ?")
+		}
+		if ruleChanged {
+			if !cur.IsSmart {
+				return model.Shelf{}, errors.New("cannot assign a rule to a regular shelf")
+			}
+			if rule == nil {
+				return model.Shelf{}, errors.New("smart shelf requires a rule")
+			}
+			j, err := json.Marshal(rule)
+			if err != nil {
+				return model.Shelf{}, fmt.Errorf("marshal rule: %w", err)
+			}
+			args = append(args, string(j))
+			sets = append(sets, "rule = ?")
+		}
+		if len(sets) == 0 {
+			return cur, nil
+		}
+		// WHERE clauses come after SET args for SQLite (? is positional)
+		query := `UPDATE shelves SET ` + strings.Join(sets, ", ") + ` WHERE user_id = ? AND slug = ?`
+		if _, err := r.db.SQL.ExecContext(ctx, query, args...); err != nil {
+			return model.Shelf{}, err
+		}
+	} else {
+		// Postgres uses $N placeholders.
+		args = []any{userID, slug}
+		if name != nil {
+			trimmed := strings.TrimSpace(*name)
+			if trimmed == "" {
+				return model.Shelf{}, errors.New("name cannot be empty")
+			}
+			args = append(args, trimmed)
+			sets = append(sets, fmt.Sprintf("name = $%d", len(args)))
+		}
+		if accent != nil {
+			args = append(args, strings.TrimSpace(*accent))
+			sets = append(sets, fmt.Sprintf("accent = $%d", len(args)))
+		}
+		if ruleChanged {
+			if !cur.IsSmart {
+				return model.Shelf{}, errors.New("cannot assign a rule to a regular shelf")
+			}
+			if rule == nil {
+				return model.Shelf{}, errors.New("smart shelf requires a rule")
+			}
+			j, err := json.Marshal(rule)
+			if err != nil {
+				return model.Shelf{}, fmt.Errorf("marshal rule: %w", err)
+			}
+			args = append(args, string(j))
+			sets = append(sets, fmt.Sprintf("rule = $%d::jsonb", len(args)))
+		}
+		if len(sets) == 0 {
+			return cur, nil
+		}
+		query := `
+			UPDATE shelves
+			SET ` + strings.Join(sets, ", ") + `
+			WHERE user_id = $1 AND slug = $2
+		`
+		// Re-fetch via GetBySlugForUser so we consistently compute book_count
+		// through the same CASE expression. Cheaper than wrestling with a
+		// RETURNING list that can't reference the `s` alias shelfCols uses.
+		if _, err := r.db.SQL.ExecContext(ctx, query, args...); err != nil {
+			return model.Shelf{}, err
+		}
 	}
 	return r.GetBySlugForUser(ctx, userID, slug)
 }
 
 func (r *ShelfRepo) Delete(ctx context.Context, userID, slug string) error {
-	res, err := r.db.SQL.ExecContext(ctx, `DELETE FROM shelves WHERE user_id = $1 AND slug = $2`, userID, slug)
+	const qPG = `DELETE FROM shelves WHERE user_id = $1 AND slug = $2`
+	const qSQLite = `DELETE FROM shelves WHERE user_id = ? AND slug = ?`
+	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID, slug)
 	if err != nil {
 		return err
 	}
@@ -288,11 +365,17 @@ func (r *ShelfRepo) AddBook(ctx context.Context, userID, slug, bookID string) er
 	if sh.IsSmart {
 		return ErrSmartShelfImmutable
 	}
-	res, err := r.db.SQL.ExecContext(ctx, `
+	const qPG = `
 		INSERT INTO shelf_books (shelf_id, book_id)
 		VALUES ($1, $2)
 		ON CONFLICT DO NOTHING
-	`, sh.ID, bookID)
+	`
+	const qSQLite = `
+		INSERT INTO shelf_books (shelf_id, book_id)
+		VALUES (?, ?)
+		ON CONFLICT DO NOTHING
+	`
+	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), sh.ID, bookID)
 	if err != nil {
 		return err
 	}
@@ -315,10 +398,15 @@ func (r *ShelfRepo) RemoveBook(ctx context.Context, userID, slug, bookID string)
 	if sh.IsSmart {
 		return ErrSmartShelfImmutable
 	}
-	_, err = r.db.SQL.ExecContext(ctx, `
+	const qPG = `
 		DELETE FROM shelf_books
 		WHERE shelf_id = $1 AND book_id = $2
-	`, sh.ID, bookID)
+	`
+	const qSQLite = `
+		DELETE FROM shelf_books
+		WHERE shelf_id = ? AND book_id = ?
+	`
+	_, err = r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), sh.ID, bookID)
 	return err
 }
 
@@ -326,12 +414,19 @@ func (r *ShelfRepo) RemoveBook(ctx context.Context, userID, slug, bookID string)
 // contain a book. Smart shelves are deliberately excluded — a book's
 // "is it in this smart shelf" relationship is query-time, not stored.
 func (r *ShelfRepo) ShelfSlugsForBook(ctx context.Context, userID, bookID string) ([]string, error) {
-	rows, err := r.db.SQL.QueryContext(ctx, `
+	const qPG = `
 		SELECT s.slug
 		FROM shelf_books sb
 		JOIN shelves s ON s.id = sb.shelf_id
 		WHERE s.user_id = $1 AND sb.book_id = $2 AND s.is_smart = false
-	`, userID, bookID)
+	`
+	const qSQLite = `
+		SELECT s.slug
+		FROM shelf_books sb
+		JOIN shelves s ON s.id = sb.shelf_id
+		WHERE s.user_id = ? AND sb.book_id = ? AND s.is_smart = 0
+	`
+	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID, bookID)
 	if err != nil {
 		return nil, err
 	}
@@ -347,13 +442,14 @@ func (r *ShelfRepo) ShelfSlugsForBook(ctx context.Context, userID, bookID string
 	return out, rows.Err()
 }
 
-func scanShelf(s scanner) (model.Shelf, error) {
+func (r *ShelfRepo) scanShelf(s scanner) (model.Shelf, error) {
 	var (
-		sh     model.Shelf
-		ruleJS []byte
+		sh         model.Shelf
+		ruleJS     []byte
+		createdAny any
 	)
 	err := s.Scan(
-		&sh.ID, &sh.UserID, &sh.Name, &sh.Slug, &sh.Accent, &sh.CreatedAt,
+		&sh.ID, &sh.UserID, &sh.Name, &sh.Slug, &sh.Accent, &createdAny,
 		&sh.IsSmart, &ruleJS, &sh.BookCount,
 	)
 	if err != nil {
@@ -361,6 +457,9 @@ func scanShelf(s scanner) (model.Shelf, error) {
 			return sh, ErrNotFound
 		}
 		return sh, err
+	}
+	if err := db.ScanTime(r.db.Dialect, createdAny, &sh.CreatedAt); err != nil {
+		return sh, fmt.Errorf("scan created_at: %w", err)
 	}
 	if len(ruleJS) > 0 {
 		var r model.ShelfRule
@@ -542,14 +641,23 @@ type SuggestShelf struct {
 // the global command palette; per-user scoping is enforced via the
 // user_id WHERE clause.
 func (r *ShelfRepo) SearchSuggest(ctx context.Context, userID, q string, limit int) ([]SuggestShelf, error) {
-	rows, err := r.db.SQL.QueryContext(ctx, `
+	const qPG = `
 		SELECT s.slug, s.name, s.accent
 		FROM shelves s
 		WHERE s.user_id = $1
 		  AND s.name ILIKE '%' || $2 || '%'
 		ORDER BY s.name ASC
 		LIMIT $3
-	`, userID, q, limit)
+	`
+	const qSQLite = `
+		SELECT s.slug, s.name, s.accent
+		FROM shelves s
+		WHERE s.user_id = ?
+		  AND s.name LIKE '%' || ? || '%' COLLATE NOCASE
+		ORDER BY s.name ASC
+		LIMIT ?
+	`
+	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID, q, limit)
 	if err != nil {
 		return nil, err
 	}
