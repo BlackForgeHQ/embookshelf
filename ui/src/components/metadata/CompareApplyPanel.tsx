@@ -117,11 +117,15 @@ export function CompareApplyPanel({
   const [rows, setRows] = useState<Array<DiffRow>>(() => buildDiffRows(book, match))
 
   // Re-seed rows when a different match is selected. setState-in-effect
-  // is intentional (prop→state sync, not a cascading render).
+  // is intentional (prop→state sync, not a cascading render). We
+  // intentionally exclude `book` from the deps — a refetch (SSE
+  // invalidation, etc.) creates a new `book` reference but the user's
+  // in-progress checkbox state must survive across those refetches.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setRows(buildDiffRows(book, match))
-  }, [book, match])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [match])
 
   const applyMut = useMutation({
     mutationFn: () => applyEnrichmentMatch(book.id, buildApplyBody(match, rows)),
@@ -181,7 +185,10 @@ export function CompareApplyPanel({
                 checked={r.checked}
                 disabled={r.disabled}
                 onCheckedChange={(c) => toggle(r.field, c === true)}
-                aria-label={`Apply ${r.field}`}
+                aria-label={`Apply ${
+                  FIELD_SPECS.find((s) => s.field === r.field)?.label ??
+                  (r.field === "cover" ? "Cover" : r.field)
+                }`}
               />
             </label>
             {r.field === "cover" ? (
