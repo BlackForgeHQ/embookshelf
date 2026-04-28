@@ -33,6 +33,7 @@ type DB struct {
 	SQL     *sql.DB
 	Dialect Dialect
 	PG      *pgxpool.Pool // nil when Dialect == DialectSQLite
+	dsn     string        // SQLite only; the resolved file path passed to sql.Open("sqlite", …)
 }
 
 // DetectDialect parses a DSN-or-path string and returns the dialect it
@@ -46,7 +47,7 @@ func DetectDialect(url string) (Dialect, error) {
 	switch {
 	case strings.HasPrefix(low, "postgres://"), strings.HasPrefix(low, "postgresql://"):
 		return DialectPostgres, nil
-	case strings.HasPrefix(low, "sqlite://"), strings.HasPrefix(low, "file:"):
+	case strings.HasPrefix(low, "sqlite:"), strings.HasPrefix(low, "file:"):
 		return DialectSQLite, nil
 	case strings.Contains(low, "://"):
 		return "", fmt.Errorf("unsupported database URL scheme: %q", url)
@@ -80,7 +81,7 @@ func Open(ctx context.Context, cfg config.Config) (*DB, error) {
 	case DialectPostgres:
 		return openPostgres(ctx, cfg)
 	case DialectSQLite:
-		return nil, errors.New("sqlite backend not yet supported (Plan 2)")
+		return openSQLite(ctx, cfg)
 	default:
 		return nil, fmt.Errorf("unknown dialect: %q", d)
 	}
@@ -117,6 +118,88 @@ func openPostgres(ctx context.Context, cfg config.Config) (*DB, error) {
 	}, nil
 }
 
+func openSQLite(ctx context.Context, cfg config.Config) (*DB, error) {
+	dsn, err := sqliteDSN(cfg.DatabaseURL)
+	if err != nil {
+		return nil, err
+	}
+
+	sqlDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite open: %w", err)
+	}
+
+	// Single writer to avoid SQLITE_BUSY storms. Plan 2A's spec records
+	// the decision to revisit if read latency suffers; the simplest model
+	// for a small/single-user install is one connection serializing both
+	// reads and writes.
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := sqlDB.PingContext(pingCtx); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("sqlite ping: %w", err)
+	}
+
+	// Apply pragmas on the live connection. WAL gives concurrent reads
+	// while a writer is active; foreign_keys=ON enforces the FK
+	// constraints we declare in the squashed init.
+	pragmas := []string{
+		`PRAGMA journal_mode=WAL`,
+		`PRAGMA synchronous=NORMAL`,
+		`PRAGMA foreign_keys=ON`,
+		`PRAGMA busy_timeout=5000`,
+		`PRAGMA temp_store=MEMORY`,
+	}
+	for _, p := range pragmas {
+		if _, err := sqlDB.ExecContext(ctx, p); err != nil {
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("sqlite pragma %q: %w", p, err)
+		}
+	}
+
+	return &DB{
+		SQL:     sqlDB,
+		Dialect: DialectSQLite,
+		PG:      nil,
+		dsn:     dsn,
+	}, nil
+}
+
+// sqliteDSN converts the user-facing DATABASE_URL into a path the
+// modernc.org/sqlite driver accepts. Accepted inputs:
+//
+//	sqlite:///absolute/path/to/file.db
+//	sqlite://./relative/path.db
+//	sqlite://relative.db
+//	file:./relative.db
+//	./relative.db   (or any bare path)
+//
+// All forms are equivalent; the driver opens the file (creating it if
+// absent) using whatever the OS does with that path.
+func sqliteDSN(url string) (string, error) {
+	low := strings.ToLower(url)
+	switch {
+	case strings.HasPrefix(low, "sqlite:"):
+		// Strip the "sqlite:" scheme prefix, then strip an optional "//"
+		// authority marker (RFC 3986 §3.2). What remains is the path.
+		//
+		//   sqlite:///abs/path.db  → strip "sqlite:"  → "//abs/path.db"  → strip "//" → "/abs/path.db"  (absolute)
+		//   sqlite://./rel.db      → strip "sqlite:"  → "//./rel.db"     → strip "//" → "./rel.db"      (relative)
+		//   sqlite:/abs/path.db    → strip "sqlite:"  → "/abs/path.db"   (no "//" to strip)             (absolute)
+		//   sqlite:rel.db          → strip "sqlite:"  → "rel.db"                                        (relative)
+		path := url[len("sqlite:"):]
+		path = strings.TrimPrefix(path, "//")
+		return path, nil
+	case strings.HasPrefix(low, "file:"):
+		return url[len("file:"):], nil
+	default:
+		return url, nil
+	}
+}
+
 // OpenMigrationDB returns a fresh *sql.DB that shares the underlying pool
 // but is not the shared db.SQL handle. The caller (or the tool that receives
 // it, e.g. golang-migrate's Postgres driver via m.Close()) is responsible for
@@ -129,9 +212,38 @@ func (d *DB) OpenMigrationDB() (*sql.DB, error) {
 			return nil, errors.New("db: PG pool is nil")
 		}
 		return stdlib.OpenDBFromPool(d.PG), nil
+	case DialectSQLite:
+		// SQLite migrations run on the same single-writer connection.
+		// golang-migrate's sqlite3 driver calls Close() on the *sql.DB at
+		// m.Close() time; we hand it a fresh handle bound to the SAME file
+		// so it doesn't tear down our shared db.SQL.
+		return openSQLiteMigrationDB(d.dsn)
 	default:
 		return nil, fmt.Errorf("db: OpenMigrationDB not supported for dialect %q", d.Dialect)
 	}
+}
+
+func openSQLiteMigrationDB(dsn string) (*sql.DB, error) {
+	if dsn == "" {
+		return nil, errors.New("sqlite migration db: empty dsn (db.Open did not store one)")
+	}
+	mig, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite migration open: %w", err)
+	}
+	mig.SetMaxOpenConns(1)
+	pragmas := []string{
+		`PRAGMA journal_mode=WAL`,
+		`PRAGMA foreign_keys=ON`,
+		`PRAGMA busy_timeout=5000`,
+	}
+	for _, p := range pragmas {
+		if _, err := mig.Exec(p); err != nil {
+			_ = mig.Close()
+			return nil, fmt.Errorf("sqlite migration pragma %q: %w", p, err)
+		}
+	}
+	return mig, nil
 }
 
 // Close releases all underlying handles. Safe to call multiple times.
