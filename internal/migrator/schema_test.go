@@ -34,6 +34,7 @@ var allowedDivergence = map[string]bool{
 	"books_fts_config":  true,
 	"books_fts_content": true,
 	"books_fts_docsize": true,
+	"jobs":              true, // SQLite-only; PG uses River's river_job
 }
 
 // TestSchemaEquivalence migrates both trees end-to-end against
