@@ -24,6 +24,7 @@ import {
   fetchBook,
   fetchShelves,
   librariesQueryKey,
+  patchBook,
   removeBookFromShelf,
   shelvesQueryKey,
 } from "@/api/books"
@@ -91,6 +92,16 @@ function BookDetail() {
     },
   })
   const deleteError = deleteMut.error as unknown as ApiError | null
+
+  const ratingMut = useMutation({
+    mutationFn: (rating: number) => patchBook(id, { rating }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(bookQueryKey(id), updated)
+      queryClient.invalidateQueries({ queryKey: booksQueryKey() })
+    },
+    onError: (err) =>
+      toast.error((err as unknown as ApiError).message || "Rating failed."),
+  })
 
   if (book.isLoading) {
     return (
@@ -232,7 +243,12 @@ function BookDetail() {
               marginBottom: 28,
             }}
           >
-            <StarRating rating={b.rating} size={15} />
+            <StarRating
+              rating={b.rating}
+              size={18}
+              onChange={(next) => ratingMut.mutate(next)}
+              disabled={ratingMut.isPending}
+            />
             <span
               className="mono"
               style={{ fontSize: 12, color: "var(--color-ink-2)" }}

@@ -362,18 +362,78 @@ export function Spine({ book, index = 0, onClick }: SpineProps) {
 type StarRatingProps = {
   rating: number
   size?: number
+  // When provided, the row becomes interactive: hovering previews,
+  // clicking a star sets the rating, and clicking the active star
+  // again clears it (resets to 0). Display-only otherwise.
+  onChange?: (rating: number) => void
+  disabled?: boolean
 }
 
-export function StarRating({ rating, size = 13 }: StarRatingProps) {
-  const full = Math.floor(rating)
-  const fractional = rating - full
-  const half = fractional >= 0.3 && fractional <= 0.7
+const FILLED_COLOR = "var(--color-cov-ochre)"
+const EMPTY_COLOR = "var(--color-ink-4)"
+
+export function StarRating({
+  rating,
+  size = 13,
+  onChange,
+  disabled = false,
+}: StarRatingProps) {
+  const interactive = Boolean(onChange) && !disabled
+  const [hover, setHover] = useState<number | null>(null)
+
+  const display = hover ?? rating
+  const full = Math.floor(display)
+  const fractional = display - full
+  // Half-star rendering only applies to non-interactive previews; the
+  // click target writes whole-star values.
+  const half = !interactive && fractional >= 0.3 && fractional <= 0.7
+
   return (
-    <div style={{ display: "flex", gap: 1, color: "var(--color-accent)" }}>
-      {[0, 1, 2, 3, 4].map((i) => {
-        const name =
-          i < full ? "star-filled" : i === full && half ? "star-half" : "star"
-        return <Icon key={i} name={name} size={size} />
+    <div
+      style={{ display: "flex", gap: 2, alignItems: "center" }}
+      onMouseLeave={interactive ? () => setHover(null) : undefined}
+    >
+      {[1, 2, 3, 4, 5].map((i) => {
+        const isFilled = i <= full || (i === full + 1 && half)
+        const name = i <= full
+          ? "star-filled"
+          : i === full + 1 && half
+            ? "star-half"
+            : "star"
+        const star = (
+          <Icon
+            name={name}
+            size={size}
+            style={{ color: isFilled ? FILLED_COLOR : EMPTY_COLOR }}
+          />
+        )
+        if (!interactive) {
+          return <span key={i}>{star}</span>
+        }
+        return (
+          <button
+            key={i}
+            type="button"
+            aria-label={`Rate ${i} star${i === 1 ? "" : "s"}`}
+            onMouseEnter={() => setHover(i)}
+            onFocus={() => setHover(i)}
+            onClick={() => {
+              // Clicking the current rating clears it; otherwise sets.
+              onChange?.(rating === i ? 0 : i)
+            }}
+            style={{
+              appearance: "none",
+              background: "transparent",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              lineHeight: 0,
+              color: "inherit",
+            }}
+          >
+            {star}
+          </button>
+        )
       })}
     </div>
   )
