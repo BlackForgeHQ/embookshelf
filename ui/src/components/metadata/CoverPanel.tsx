@@ -60,14 +60,9 @@ export function CoverPanel({ book }: { book: BookDetail }) {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => {
-            // "/book/$id/find" route is added in a sibling file (Task 10); cast so this
-            // component typechecks before that file lands.
-            void navigate({
-              to: "/book/$id/find" as const,
-              params: { id: book.id },
-            } as unknown as Parameters<typeof navigate>[0])
-          }}
+          onClick={() =>
+            void navigate({ to: "/book/$id/find", params: { id: book.id } })
+          }
         >
           <Icon name="search" size={13} /> Find covers online
         </Button>

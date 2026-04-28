@@ -168,13 +168,7 @@ function MetadataEditor() {
         </h1>
         <div className="grow" />
         <Button variant="outline" size="sm" asChild>
-          {/* "/book/$id/find" route is added in a sibling file (Task 10); cast so this typechecks before that file lands. */}
-          <Link
-            {...({
-              to: "/book/$id/find",
-              params: { id },
-            } as unknown as Parameters<typeof Link>[0])}
-          >
+          <Link to="/book/$id/find" params={{ id }}>
             Find metadata online <Icon name="arrow-right" size={13} />
           </Link>
         </Button>
