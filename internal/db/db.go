@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -119,7 +120,7 @@ func openPostgres(ctx context.Context, cfg config.Config) (*DB, error) {
 }
 
 func openSQLite(ctx context.Context, cfg config.Config) (*DB, error) {
-	dsn, err := sqliteDSN(cfg.DatabaseURL)
+	dsn, err := sqliteDSN(cfg.DatabaseURL, cfg.DataPath)
 	if err != nil {
 		return nil, err
 	}
@@ -179,9 +180,17 @@ func openSQLite(ctx context.Context, cfg config.Config) (*DB, error) {
 //
 // All forms are equivalent; the driver opens the file (creating it if
 // absent) using whatever the OS does with that path.
-func sqliteDSN(url string) (string, error) {
+//
+// When dataPath is non-empty and the resolved path has a leading "./data/"
+// prefix, that prefix is replaced with dataPath so that
+// DATA_PATH=/var/lib/embookshelf causes the DB to land at
+// /var/lib/embookshelf/embookshelf.db.
+func sqliteDSN(url, dataPath string) (string, error) {
+	var path string
 	low := strings.ToLower(url)
 	switch {
+	case strings.HasPrefix(low, "sqlite://"):
+		path = url[len("sqlite://"):]
 	case strings.HasPrefix(low, "sqlite:"):
 		// Strip the "sqlite:" scheme prefix, then strip an optional "//"
 		// authority marker (RFC 3986 §3.2). What remains is the path.
@@ -190,14 +199,22 @@ func sqliteDSN(url string) (string, error) {
 		//   sqlite://./rel.db      → strip "sqlite:"  → "//./rel.db"     → strip "//" → "./rel.db"      (relative)
 		//   sqlite:/abs/path.db    → strip "sqlite:"  → "/abs/path.db"   (no "//" to strip)             (absolute)
 		//   sqlite:rel.db          → strip "sqlite:"  → "rel.db"                                        (relative)
-		path := url[len("sqlite:"):]
+		path = url[len("sqlite:"):]
 		path = strings.TrimPrefix(path, "//")
-		return path, nil
 	case strings.HasPrefix(low, "file:"):
-		return url[len("file:"):], nil
+		path = url[len("file:"):]
 	default:
-		return url, nil
+		path = url
 	}
+
+	// Resolve a leading "./data/" prefix against cfg.DataPath. This lets
+	// operators set DATA_PATH=/var/lib/foo and have the SQLite file
+	// land at /var/lib/foo/embookshelf.db without rewriting the URL.
+	const prefix = "./data/"
+	if dataPath != "" && strings.HasPrefix(path, prefix) {
+		path = filepath.Join(dataPath, strings.TrimPrefix(path, prefix))
+	}
+	return path, nil
 }
 
 // OpenMigrationDB returns a fresh *sql.DB that shares the underlying pool

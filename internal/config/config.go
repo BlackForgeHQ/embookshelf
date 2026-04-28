@@ -55,7 +55,7 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		Port:             envInt("EMBOOKSHELF_PORT", 6060),
-		DatabaseURL:      envStr("DATABASE_URL", "postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable"),
+		DatabaseURL:      envStr("DATABASE_URL", "sqlite://./data/embookshelf.db"),
 		DatabaseMaxConns: int32(envInt("DATABASE_MAX_CONNS", 20)),
 		DatabaseMinConns: int32(envInt("DATABASE_MIN_CONNS", 5)),
 		DiskType:         envStr("DISK_TYPE", "LOCAL"),
