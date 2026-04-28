@@ -3,22 +3,22 @@ package repo
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/blackforge/embookshelf/internal/db"
 )
 
 type ProgressRepo struct {
-	pool *pgxpool.Pool
+	db *db.DB
 }
 
-func NewProgressRepo(pool *pgxpool.Pool) *ProgressRepo {
-	return &ProgressRepo{pool: pool}
+func NewProgressRepo(db *db.DB) *ProgressRepo {
+	return &ProgressRepo{db: db}
 }
 
 // Set records a user's progress for a book. The CFI argument is optional; an
 // empty string leaves any previously-stored resume point intact (so a manual
 // percent tweak doesn't wipe out a reader-recorded CFI).
 func (r *ProgressRepo) Set(ctx context.Context, userID, bookID string, progress int, cfi string) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.db.SQL.ExecContext(ctx, `
 		INSERT INTO user_book_progress (user_id, book_id, progress, resume_cfi, last_read_at)
 		VALUES ($1, $2, $3, $4, now())
 		ON CONFLICT (user_id, book_id) DO UPDATE

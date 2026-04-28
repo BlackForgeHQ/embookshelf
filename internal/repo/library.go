@@ -2,14 +2,13 @@ package repo
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
-
+	"github.com/blackforge/embookshelf/internal/db"
+	"github.com/blackforge/embookshelf/internal/db/dberr"
 	"github.com/blackforge/embookshelf/internal/model"
 )
 
@@ -55,11 +54,11 @@ var ErrLibraryNameTaken = errors.New("library name already taken")
 var ErrLibraryPathTaken = errors.New("library path already in use")
 
 type LibraryRepo struct {
-	pool *pgxpool.Pool
+	db *db.DB
 }
 
-func NewLibraryRepo(pool *pgxpool.Pool) *LibraryRepo {
-	return &LibraryRepo{pool: pool}
+func NewLibraryRepo(d *db.DB) *LibraryRepo {
+	return &LibraryRepo{db: d}
 }
 
 // libCols is the shared SELECT list for library rows. Keep the scan
@@ -85,7 +84,7 @@ const libCols = `
 // `libraries l` alongside a modifying CTE wouldn't see the insert —
 // both share one snapshot per the PG manual).
 func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug, path string) (model.Library, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.SQL.QueryRowContext(ctx, `
 		INSERT INTO libraries (name, slug, path)
 		VALUES ($1, $2, $3)
 		RETURNING
@@ -96,9 +95,8 @@ func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug, path string
 	`, name, slug, path)
 	l, err := scanLibrary(row)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			switch pgErr.ConstraintName {
+		if ok, constraint := dberr.IsUniqueViolation(err); ok {
+			switch constraint {
 			case "libraries_slug_key":
 				return model.Library{}, ErrLibraryNameTaken
 			case "libraries_path_key":
@@ -111,7 +109,7 @@ func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug, path string
 }
 
 func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
 		SELECT `+libCols+`
 		FROM libraries l
 		ORDER BY l.created_at ASC
@@ -119,7 +117,7 @@ func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var libs []model.Library
 	for rows.Next() {
@@ -135,14 +133,14 @@ func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
 // GetByID returns a single library row. Used by pattern-preview + scan
 // flows that need the current path/pattern without a full listing.
 func (r *LibraryRepo) GetByID(ctx context.Context, id string) (model.Library, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.SQL.QueryRowContext(ctx, `
 		SELECT `+libCols+`
 		FROM libraries l
 		WHERE l.id = $1
 	`, id)
 	l, err := scanLibrary(row)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if dberr.IsNotFound(err) {
 			return model.Library{}, ErrNotFound
 		}
 		return model.Library{}, err
@@ -153,7 +151,7 @@ func (r *LibraryRepo) GetByID(ctx context.Context, id string) (model.Library, er
 // TouchScan stamps the last-scan aggregate on a library row after a
 // filesystem walk completes. Used by the library-scan worker.
 func (r *LibraryRepo) TouchScan(ctx context.Context, id string, fileCount, discovered int) error {
-	tag, err := r.pool.Exec(ctx, `
+	res, err := r.db.SQL.ExecContext(ctx, `
 		UPDATE libraries
 		SET last_scanned_at = now(),
 		    file_count       = $2,
@@ -163,7 +161,11 @@ func (r *LibraryRepo) TouchScan(ctx context.Context, id string, fileCount, disco
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -190,13 +192,13 @@ func scanLibrary(s scanner) (model.Library, error) {
 // same as "wipe the bytes". Admin-driven cleanup belongs outside this
 // path.
 func (r *LibraryRepo) DeleteLibrary(ctx context.Context, id string) ([]string, error) {
-	tx, err := r.pool.Begin(ctx)
+	tx, err := r.db.SQL.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback() }()
 
-	rows, err := tx.Query(ctx, `SELECT id FROM books WHERE library_id = $1`, id)
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM books WHERE library_id = $1`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -204,24 +206,28 @@ func (r *LibraryRepo) DeleteLibrary(ctx context.Context, id string) ([]string, e
 	for rows.Next() {
 		var bookID string
 		if err := rows.Scan(&bookID); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
 		bookIDs = append(bookIDs, bookID)
 	}
-	rows.Close()
+	_ = rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	tag, err := tx.Exec(ctx, `DELETE FROM libraries WHERE id = $1`, id)
+	res, err := tx.ExecContext(ctx, `DELETE FROM libraries WHERE id = $1`, id)
 	if err != nil {
 		return nil, err
 	}
-	if tag.RowsAffected() == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
 		return nil, ErrNotFound
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return bookIDs, nil
@@ -230,13 +236,17 @@ func (r *LibraryRepo) DeleteLibrary(ctx context.Context, id string) ([]string, e
 // SetFileNamingPattern writes (or clears) the per-library naming pattern.
 // Pass nil to revert to the fallback (keep original filename on approval).
 func (r *LibraryRepo) SetFileNamingPattern(ctx context.Context, id string, pattern *string) error {
-	tag, err := r.pool.Exec(ctx, `
+	res, err := r.db.SQL.ExecContext(ctx, `
 		UPDATE libraries SET file_naming_pattern = $2 WHERE id = $1
 	`, id, pattern)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -287,11 +297,11 @@ func (r *LibraryRepo) Search(ctx context.Context, userID, librarySlug string, p 
 		ORDER BY ` + orderBy + `
 		LIMIT 500
 	`
-	rows, err := r.pool.Query(ctx, query, args...)
+	rows, err := r.db.SQL.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return collectBooks(rows)
 }
 
@@ -321,7 +331,7 @@ func (r *LibraryRepo) Create(ctx context.Context, b model.Book) (model.Book, err
 	// We don't have a user context on book creation itself — return with
 	// Progress=0 and no resume CFI. The next user-scoped query will re-
 	// populate those via the LEFT JOIN.
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.SQL.QueryRowContext(ctx, `
 		WITH inserted AS (
 			INSERT INTO books (library_id, title, subtitle, author, format, year,
 			                   publish_date, language,
@@ -366,14 +376,14 @@ func (r *LibraryRepo) Create(ctx context.Context, b model.Book) (model.Book, err
 }
 
 func (r *LibraryRepo) GetBookByID(ctx context.Context, userID, id string) (model.Book, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.SQL.QueryRowContext(ctx, `
 		SELECT `+bookCols+`
 		`+bookFrom+`
 		WHERE b.id = $2 AND b.deleted_at IS NULL
 	`, userID, id)
 	b, err := scanBook(row)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if dberr.IsNotFound(err) {
 			return model.Book{}, ErrNotFound
 		}
 		return model.Book{}, err
@@ -386,7 +396,7 @@ func (r *LibraryRepo) GetBookByID(ctx context.Context, userID, id string) (model
 // imported.
 func (r *LibraryRepo) BookExistsByPath(ctx context.Context, path string) (bool, error) {
 	var n int
-	err := r.pool.QueryRow(ctx,
+	err := r.db.SQL.QueryRowContext(ctx,
 		`SELECT count(*) FROM books WHERE path = $1 AND deleted_at IS NULL`,
 		path,
 	).Scan(&n)
@@ -396,14 +406,18 @@ func (r *LibraryRepo) BookExistsByPath(ctx context.Context, path string) (bool, 
 // SetCover flips the cover flags on a book. The coverstore is expected to
 // have the bytes on disk already (SaveBook); this just records that fact.
 func (r *LibraryRepo) SetCover(ctx context.Context, bookID string, hasCover bool, mime string) error {
-	tag, err := r.pool.Exec(ctx, `
+	res, err := r.db.SQL.ExecContext(ctx, `
 		UPDATE books SET has_cover = $2, cover_mime = $3, updated_at = now()
 		WHERE id = $1 AND deleted_at IS NULL
 	`, bookID, hasCover, mime)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -415,11 +429,15 @@ func (r *LibraryRepo) SetCover(ctx context.Context, bookID string, hasCover bool
 // ON DELETE SET NULL so the import history survives the book going away.
 // Returns ErrNotFound when the id is unknown (or was already deleted).
 func (r *LibraryRepo) Delete(ctx context.Context, id string) error {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM books WHERE id = $1`, id)
+	res, err := r.db.SQL.ExecContext(ctx, `DELETE FROM books WHERE id = $1`, id)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -440,7 +458,7 @@ func (r *LibraryRepo) UpdateMetadata(ctx context.Context, b model.Book) error {
 	if b.Tags == nil {
 		b.Tags = []string{}
 	}
-	tag, err := r.pool.Exec(ctx, `
+	res, err := r.db.SQL.ExecContext(ctx, `
 		UPDATE books SET
 			title          = $1,
 			subtitle       = $2,
@@ -500,7 +518,11 @@ func (r *LibraryRepo) UpdateMetadata(ctx context.Context, b model.Book) error {
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -533,7 +555,9 @@ func scanBook(s scanner) (model.Book, error) {
 	return b, err
 }
 
-func collectBooks(rows pgx.Rows) ([]model.Book, error) {
+// collectBooks iterates rows into a slice of Book values. The caller is
+// responsible for closing rows (typically via defer) before or after this call.
+func collectBooks(rows *sql.Rows) ([]model.Book, error) {
 	var books []model.Book
 	for rows.Next() {
 		b, err := scanBook(rows)
@@ -566,7 +590,7 @@ type SuggestLibrary struct {
 // listing uses (idx_books_tsv GIN). `limit` is assumed already clamped
 // by the caller (service caps at 20).
 func (r *LibraryRepo) SearchSuggestBooks(ctx context.Context, q string, limit int) ([]SuggestBook, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
 		SELECT b.id, b.title, b.author, b.has_cover
 		FROM books b
 		WHERE b.deleted_at IS NULL
@@ -578,7 +602,7 @@ func (r *LibraryRepo) SearchSuggestBooks(ctx context.Context, q string, limit in
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []SuggestBook
 	for rows.Next() {
 		var b SuggestBook
@@ -595,7 +619,7 @@ func (r *LibraryRepo) SearchSuggestBooks(ctx context.Context, q string, limit in
 // so there is no per-user filter here — adopt one if/when library
 // visibility becomes user-scoped.
 func (r *LibraryRepo) SearchSuggestLibraries(ctx context.Context, q string, limit int) ([]SuggestLibrary, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
 		SELECT l.id, l.name, l.slug
 		FROM libraries l
 		WHERE l.name ILIKE '%' || $1 || '%'
@@ -605,7 +629,7 @@ func (r *LibraryRepo) SearchSuggestLibraries(ctx context.Context, q string, limi
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []SuggestLibrary
 	for rows.Next() {
 		var l SuggestLibrary

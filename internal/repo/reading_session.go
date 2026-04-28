@@ -5,18 +5,18 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/blackforge/embookshelf/internal/db"
 )
 
 // ReadingSessionRepo owns the reading_sessions table. RecordTick is
 // invoked from ProgressService.Set on every progress update; the read
 // queries power the Dashboard heatmap + the /stats reading panel.
 type ReadingSessionRepo struct {
-	pool *pgxpool.Pool
+	db *db.DB
 }
 
-func NewReadingSessionRepo(pool *pgxpool.Pool) *ReadingSessionRepo {
-	return &ReadingSessionRepo{pool: pool}
+func NewReadingSessionRepo(db *db.DB) *ReadingSessionRepo {
+	return &ReadingSessionRepo{db: db}
 }
 
 // RecordTick either extends the user's most recent session for a book
@@ -32,7 +32,7 @@ func (r *ReadingSessionRepo) RecordTick(
 	// Look up the freshest session for the book and decide whether to
 	// extend it. Using a single UPSERT-ish CTE keeps this to one
 	// round trip.
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.db.SQL.ExecContext(ctx, `
 		WITH latest AS (
 			SELECT id, ended_at
 			FROM reading_sessions
@@ -64,7 +64,7 @@ func (r *ReadingSessionRepo) Heatmap(ctx context.Context, userID string, days in
 	if days <= 0 {
 		days = 84
 	}
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
 		WITH day_series AS (
 			SELECT generate_series(
 				(CURRENT_DATE - ($2::int - 1) * INTERVAL '1 day')::date,
@@ -90,7 +90,7 @@ func (r *ReadingSessionRepo) Heatmap(ctx context.Context, userID string, days in
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := make([]int, 0, days)
 	for rows.Next() {
@@ -111,7 +111,7 @@ func (r *ReadingSessionRepo) MinutesInWindow(ctx context.Context, userID string,
 		days = 7
 	}
 	var m *int
-	err := r.pool.QueryRow(ctx, `
+	err := r.db.SQL.QueryRowContext(ctx, `
 		SELECT COALESCE(
 			CEIL(SUM(EXTRACT(EPOCH FROM (ended_at - started_at)) / 60.0))::int,
 			0
@@ -136,7 +136,7 @@ func (r *ReadingSessionRepo) CurrentStreak(ctx context.Context, userID string) (
 	// Pull the distinct dates with activity (newest first) and walk
 	// them in Go — clearer than a gap-detection window function, and
 	// the list is at most ~366 rows for a year.
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
 		SELECT DISTINCT DATE(started_at) AS day
 		FROM reading_sessions
 		WHERE user_id = $1
@@ -146,7 +146,7 @@ func (r *ReadingSessionRepo) CurrentStreak(ctx context.Context, userID string) (
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var days []time.Time
 	for rows.Next() {
@@ -189,7 +189,7 @@ func (r *ReadingSessionRepo) CurrentStreak(ctx context.Context, userID string) (
 // sessions"). Quarter-scoping is applied by passing days=90.
 func (r *ReadingSessionRepo) TotalMinutes(ctx context.Context, userID string) (int, error) {
 	var m *int
-	err := r.pool.QueryRow(ctx, `
+	err := r.db.SQL.QueryRowContext(ctx, `
 		SELECT CEIL(SUM(EXTRACT(EPOCH FROM (ended_at - started_at)) / 60.0))::int
 		FROM reading_sessions
 		WHERE user_id = $1
@@ -210,7 +210,7 @@ func (r *ReadingSessionRepo) CountSessions(ctx context.Context, userID string, d
 		days = 90
 	}
 	var n int
-	err := r.pool.QueryRow(ctx, `
+	err := r.db.SQL.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM reading_sessions
 		WHERE user_id = $1

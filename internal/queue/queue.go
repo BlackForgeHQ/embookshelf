@@ -5,14 +5,15 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 
+	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/task"
 )
@@ -33,11 +34,18 @@ type RiverClient struct {
 // for every job kind the app supports.
 func New(
 	ctx context.Context,
-	pool *pgxpool.Pool,
+	d *db.DB,
 	bdropSvc *service.BookDropService,
 	libSvc *service.LibraryService,
 ) (*RiverClient, error) {
-	driver := riverpgxv5.New(pool)
+	if d.Dialect != db.DialectPostgres {
+		return nil, errors.New("queue: only Postgres backend supported in Plan 1")
+	}
+	if d.PG == nil {
+		return nil, errors.New("queue: db.PG is nil for postgres dialect")
+	}
+
+	driver := riverpgxv5.New(d.PG)
 
 	migrator, err := rivermigrate.New(driver, nil)
 	if err != nil {

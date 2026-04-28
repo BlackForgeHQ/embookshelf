@@ -3,24 +3,24 @@ package repo
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/blackforge/embookshelf/internal/db"
 )
 
 // StatsRepo groups read-only aggregate queries that span multiple
 // existing tables. Each method runs an independent SQL statement; the
 // service layer fans them out in parallel.
 type StatsRepo struct {
-	pool *pgxpool.Pool
+	db *db.DB
 }
 
-func NewStatsRepo(pool *pgxpool.Pool) *StatsRepo {
-	return &StatsRepo{pool: pool}
+func NewStatsRepo(d *db.DB) *StatsRepo {
+	return &StatsRepo{db: d}
 }
 
 // CountBooks returns every book not soft-deleted.
 func (r *StatsRepo) CountBooks(ctx context.Context) (int, error) {
 	var n int
-	err := r.pool.QueryRow(ctx, `
+	err := r.db.SQL.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM books WHERE deleted_at IS NULL
 	`).Scan(&n)
 	return n, err
@@ -30,7 +30,7 @@ func (r *StatsRepo) CountBooks(ctx context.Context) (int, error) {
 // image.  Used as a quick "cover coverage" indicator.
 func (r *StatsRepo) CountBooksWithCover(ctx context.Context) (int, error) {
 	var n int
-	err := r.pool.QueryRow(ctx, `
+	err := r.db.SQL.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM books WHERE deleted_at IS NULL AND has_cover = true
 	`).Scan(&n)
 	return n, err
@@ -105,7 +105,7 @@ type StatsYearBucket struct {
 // with year = 0 (unknown) are excluded — an "unknown" bar doesn't add
 // much signal.
 func (r *StatsRepo) YearHistogram(ctx context.Context) ([]StatsYearBucket, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
 		SELECT (year / 10) * 10 AS decade, COUNT(*)
 		FROM books
 		WHERE deleted_at IS NULL AND year > 0
@@ -115,7 +115,7 @@ func (r *StatsRepo) YearHistogram(ctx context.Context) ([]StatsYearBucket, error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []StatsYearBucket
 	for rows.Next() {
 		var b StatsYearBucket
@@ -136,7 +136,7 @@ type StatsRatingBucket struct {
 // Zero-rated books (unrated) are excluded so the chart only shows
 // opinions the user has expressed.
 func (r *StatsRepo) RatingDistribution(ctx context.Context) ([]StatsRatingBucket, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.SQL.QueryContext(ctx, `
 		SELECT rating, COUNT(*)
 		FROM books
 		WHERE deleted_at IS NULL AND rating > 0
@@ -146,7 +146,7 @@ func (r *StatsRepo) RatingDistribution(ctx context.Context) ([]StatsRatingBucket
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []StatsRatingBucket
 	for rows.Next() {
 		var b StatsRatingBucket
@@ -161,7 +161,7 @@ func (r *StatsRepo) RatingDistribution(ctx context.Context) ([]StatsRatingBucket
 // UserProgressCounts returns a (reading, finished) pair for the user.
 // "Reading" = progress 1..99; "Finished" = progress >= 100.
 func (r *StatsRepo) UserProgressCounts(ctx context.Context, userID string) (reading, finished int, _ error) {
-	err := r.pool.QueryRow(ctx, `
+	err := r.db.SQL.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*) FILTER (WHERE progress BETWEEN 1 AND 99),
 			COUNT(*) FILTER (WHERE progress >= 100)
@@ -174,7 +174,7 @@ func (r *StatsRepo) UserProgressCounts(ctx context.Context, userID string) (read
 // UserAnnotationCount returns the user's total annotation count.
 func (r *StatsRepo) UserAnnotationCount(ctx context.Context, userID string) (int, error) {
 	var n int
-	err := r.pool.QueryRow(ctx, `
+	err := r.db.SQL.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM annotations WHERE user_id = $1
 	`, userID).Scan(&n)
 	return n, err
@@ -182,7 +182,7 @@ func (r *StatsRepo) UserAnnotationCount(ctx context.Context, userID string) (int
 
 // UserShelfCounts returns (total, smart) shelf counts for the user.
 func (r *StatsRepo) UserShelfCounts(ctx context.Context, userID string) (total, smart int, _ error) {
-	err := r.pool.QueryRow(ctx, `
+	err := r.db.SQL.QueryRowContext(ctx, `
 		SELECT COUNT(*), COUNT(*) FILTER (WHERE is_smart)
 		FROM shelves
 		WHERE user_id = $1
@@ -193,11 +193,11 @@ func (r *StatsRepo) UserShelfCounts(ctx context.Context, userID string) (total, 
 // query is the shared scan path for the label/count buckets. Kept
 // private; callers reach in via the typed public methods.
 func (r *StatsRepo) query(ctx context.Context, sql string, args ...any) ([]StatsBucket, error) {
-	rows, err := r.pool.Query(ctx, sql, args...)
+	rows, err := r.db.SQL.QueryContext(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []StatsBucket
 	for rows.Next() {
 		var b StatsBucket

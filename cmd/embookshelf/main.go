@@ -12,12 +12,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 
 	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/crypto"
+	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/handler"
 	"github.com/blackforge/embookshelf/internal/ingest"
 	"github.com/blackforge/embookshelf/internal/migrator"
@@ -71,34 +71,34 @@ func main() {
 		slog.Info("OpenTelemetry enabled", "endpoint", cfg.OTELEndpoint, "protocol", cfg.OTELProtocol, "service", cfg.OTELServiceName)
 	}
 
-	pool, err := newPool(ctx, cfg)
+	dbh, err := db.Open(ctx, cfg)
 	if err != nil {
 		slog.Error("db connect", "err", err)
 		os.Exit(1)
 	}
-	defer pool.Close()
+	defer func() { _ = dbh.Close() }()
 
 	// Apply app schema migrations before any repo runs queries. River's own
 	// migrations are applied separately inside queue.New().
 	if cfg.MigrateOnStart {
-		if err := runAppMigrations(ctx, pool); err != nil {
+		if err := runAppMigrations(ctx, dbh); err != nil {
 			slog.Error("migrate", "err", err)
 			os.Exit(1)
 		}
 	}
 
 	// Repositories.
-	libRepo := repo.NewLibraryRepo(pool)
-	shelfRepo := repo.NewShelfRepo(pool)
-	userRepo := repo.NewUserRepo(pool)
-	sessionRepo := repo.NewSessionRepo(pool)
-	bdropRepo := repo.NewBookDropRepo(pool)
-	progressRepo := repo.NewProgressRepo(pool)
-	annotationRepo := repo.NewAnnotationRepo(pool)
-	statsRepo := repo.NewStatsRepo(pool)
-	readingSessionRepo := repo.NewReadingSessionRepo(pool)
-	deviceRepo := repo.NewDeviceRepo(pool)
-	appSettingsRepo := repo.NewAppSettingsRepo(pool)
+	libRepo := repo.NewLibraryRepo(dbh)
+	shelfRepo := repo.NewShelfRepo(dbh)
+	userRepo := repo.NewUserRepo(dbh)
+	sessionRepo := repo.NewSessionRepo(dbh)
+	bdropRepo := repo.NewBookDropRepo(dbh)
+	progressRepo := repo.NewProgressRepo(dbh)
+	annotationRepo := repo.NewAnnotationRepo(dbh)
+	statsRepo := repo.NewStatsRepo(dbh)
+	readingSessionRepo := repo.NewReadingSessionRepo(dbh)
+	deviceRepo := repo.NewDeviceRepo(dbh)
+	appSettingsRepo := repo.NewAppSettingsRepo(dbh)
 
 	// SSE hub — shared between services that broadcast and the handler that serves /events.
 	hub := sse.NewHub()
@@ -128,7 +128,7 @@ func main() {
 		}
 		providers = append(providers, p)
 	}
-	providerSettingsRepo := repo.NewProviderSettingsRepo(pool)
+	providerSettingsRepo := repo.NewProviderSettingsRepo(dbh)
 	// Seed provider_settings on first boot using catalog defaults.
 	// ON CONFLICT DO NOTHING means subsequent restarts leave admin
 	// toggles alone — the DB is authoritative after the initial seed.
@@ -204,7 +204,7 @@ func main() {
 	}
 
 	// Background queue (river). Runs its own migrations, then starts workers.
-	q, err := queue.New(ctx, pool, bdropSvc, libSvc)
+	q, err := queue.New(ctx, dbh, bdropSvc, libSvc)
 	if err != nil {
 		slog.Error("queue", "err", err)
 		os.Exit(1)
@@ -287,9 +287,23 @@ func main() {
 
 // runAppMigrations applies every pending schema migration using the embedded
 // migration files. Idempotent — a no-op when the DB is already up-to-date.
-func runAppMigrations(ctx context.Context, pool *pgxpool.Pool) error {
-	m, err := migrator.New(migrator.FS, migrator.Subpath, pool)
+//
+// It opens a dedicated *sql.DB for migrations and closes it at the end via
+// m.Close() (the golang-migrate postgres driver closes the sql.DB it owns).
+// This keeps the shared dbh.SQL alive for the rest of the application.
+func runAppMigrations(ctx context.Context, d *db.DB) error {
+	// Open a short-lived, dedicated connection for the migrator so that
+	// m.Close() (which golang-migrate's Postgres driver calls sql.DB.Close on)
+	// does not close the shared application pool.
+	migDB, err := d.OpenMigrationDB()
 	if err != nil {
+		return fmt.Errorf("migration db: %w", err)
+	}
+
+	m, err := migrator.New(d.Dialect, migDB)
+	if err != nil {
+		// migDB not yet owned by migrator — close it ourselves.
+		_ = migDB.Close()
 		return err
 	}
 	defer func() {
@@ -311,25 +325,4 @@ func runAppMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	_ = ctx
 	return nil
-}
-
-func newPool(ctx context.Context, cfg config.Config) (*pgxpool.Pool, error) {
-	poolCfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
-	if err != nil {
-		return nil, err
-	}
-	poolCfg.MaxConns = cfg.DatabaseMaxConns
-	poolCfg.MinConns = cfg.DatabaseMinConns
-
-	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
-	if err != nil {
-		return nil, err
-	}
-	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err := pool.Ping(pingCtx); err != nil {
-		pool.Close()
-		return nil, err
-	}
-	return pool, nil
 }
