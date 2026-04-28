@@ -1,0 +1,22 @@
+# compose.sqlite.yml — single-binary, zero-dependency operator path.
+# Run with:
+#
+#   docker compose -f compose.sqlite.yml up
+#
+# The SQLite database persists under ./data on the host. No PG container.
+
+services:
+  embookshelf:
+    image: embookshelf:dev
+    restart: unless-stopped
+    ports:
+      - "6060:6060"
+    environment:
+      DATABASE_URL: sqlite://./data/embookshelf.db
+      DATA_PATH: /data
+      BOOKDROP_PATH: /bookdrop
+      DISK_TYPE: LOCAL
+      LOG_LEVEL: info
+    volumes:
+      - ./data:/data
+      - ./bookdrop:/bookdrop

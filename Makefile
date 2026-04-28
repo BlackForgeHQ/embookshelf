@@ -174,6 +174,16 @@ up-otlp: obs-up ## Same as `up` but exports OTLP from backend AND browser to gra
 test: ## Run Go tests
 	go test ./...
 
+.PHONY: test-sqlite
+test-sqlite: ## Run repo tests against SQLite
+	REPOTEST_DIALECT=sqlite go test ./internal/repo/...
+
+.PHONY: test-pg
+test-pg: ## Run repo tests against Postgres (requires dev PG container)
+	REPOTEST_DIALECT=postgres \
+	TEST_DATABASE_URL='postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable' \
+	go test ./internal/repo/...
+
 GOLANGCI_LINT_VERSION ?= v2.11.4
 
 .PHONY: go-lint
