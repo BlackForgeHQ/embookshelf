@@ -1,10 +1,12 @@
 -- Tear down everything created by 0000_init.up.sql.
 -- Order is reverse-creation so FK constraints don't trip.
 -- IF EXISTS on every statement for idempotency.
---
--- Note: books_fts virtual table and its triggers are added in Task 6
--- and will be prepended to that task's down migration — they are NOT
--- listed here so this file stays stable.
+
+-- FTS5 virtual table + triggers (reverse order vs creation).
+DROP TRIGGER IF EXISTS books_fts_after_update;
+DROP TRIGGER IF EXISTS books_fts_after_delete;
+DROP TRIGGER IF EXISTS books_fts_after_insert;
+DROP TABLE   IF EXISTS books_fts;
 
 -- Indexes are dropped implicitly when their table is dropped in SQLite,
 -- but we drop them explicitly first for clarity and safety.

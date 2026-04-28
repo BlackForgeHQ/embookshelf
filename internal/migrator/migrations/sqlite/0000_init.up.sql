@@ -350,3 +350,43 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value      TEXT NOT NULL CHECK (json_valid(value)),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
+-- ============================================================
+-- Full-text search: FTS5 virtual table mirrors title/author/series/description.
+--   - content='books' makes it an "external content" FTS table; the
+--     virtual table doesn't store its own copy of the text and
+--     trigger-driven sync keeps it aligned.
+--   - content_rowid='rowid' uses the books table's implicit rowid
+--     for cross-references (NOT the books.id TEXT — FTS5 needs an
+--     INTEGER content_rowid).
+-- The PG side keeps the existing tsvector + GIN index.
+-- ============================================================
+CREATE VIRTUAL TABLE IF NOT EXISTS books_fts USING fts5(
+    title,
+    author,
+    series,
+    description,
+    content='books',
+    content_rowid='rowid',
+    tokenize='unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS books_fts_after_insert
+AFTER INSERT ON books BEGIN
+    INSERT INTO books_fts(rowid, title, author, series, description)
+    VALUES (new.rowid, new.title, new.author, new.series, new.description);
+END;
+
+CREATE TRIGGER IF NOT EXISTS books_fts_after_delete
+AFTER DELETE ON books BEGIN
+    INSERT INTO books_fts(books_fts, rowid, title, author, series, description)
+    VALUES ('delete', old.rowid, old.title, old.author, old.series, old.description);
+END;
+
+CREATE TRIGGER IF NOT EXISTS books_fts_after_update
+AFTER UPDATE ON books BEGIN
+    INSERT INTO books_fts(books_fts, rowid, title, author, series, description)
+    VALUES ('delete', old.rowid, old.title, old.author, old.series, old.description);
+    INSERT INTO books_fts(rowid, title, author, series, description)
+    VALUES (new.rowid, new.title, new.author, new.series, new.description);
+END;
