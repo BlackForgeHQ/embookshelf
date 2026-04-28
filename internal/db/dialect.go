@@ -3,6 +3,7 @@ package db
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -48,6 +49,75 @@ func ValueStringSlice(d Dialect, s []string) (any, error) {
 		return nil, fmt.Errorf("encode string slice: %w", err)
 	}
 	return string(b), nil
+}
+
+// sqliteTimeFormats lists the TEXT formats SQLite produces for timestamps.
+// The schema stores times as strftime('%Y-%m-%dT%H:%M:%fZ','now'), which
+// yields RFC3339Nano with milliseconds. We also accept plain RFC3339 for
+// values written by older schema revisions or manual inserts.
+var sqliteTimeFormats = []string{
+	"2006-01-02T15:04:05.999999999Z07:00", // RFC3339Nano
+	"2006-01-02T15:04:05Z07:00",           // RFC3339
+	"2006-01-02T15:04:05.999999999",       // no TZ suffix (UTC assumed)
+	"2006-01-02T15:04:05",                 // no TZ, no sub-seconds
+	"2006-01-02 15:04:05",                 // SQLite datetime() format
+}
+
+// ScanTime reads a non-nullable timestamp column into *time.Time.
+//
+//   - Postgres: the pgx codec delivers a time.Time directly; we assert it.
+//   - SQLite: the column is TEXT; we parse it through sqliteTimeFormats.
+func ScanTime(d Dialect, src any, dst *time.Time) error {
+	if dst == nil {
+		return fmt.Errorf("scan time: nil dst")
+	}
+	if src == nil {
+		return fmt.Errorf("scan time: unexpected NULL for non-nullable column")
+	}
+	if d == DialectPostgres {
+		t, ok := src.(time.Time)
+		if !ok {
+			return fmt.Errorf("scan time (PG): unexpected type %T", src)
+		}
+		*dst = t
+		return nil
+	}
+	// SQLite — value arrives as string
+	var s string
+	switch v := src.(type) {
+	case string:
+		s = v
+	case []byte:
+		s = string(v)
+	default:
+		return fmt.Errorf("scan time (SQLite): unexpected type %T", src)
+	}
+	for _, layout := range sqliteTimeFormats {
+		if t, err := time.Parse(layout, s); err == nil {
+			*dst = t.UTC()
+			return nil
+		}
+	}
+	return fmt.Errorf("scan time (SQLite): cannot parse %q as time", s)
+}
+
+// ScanNullTime reads a nullable timestamp column into **time.Time (pointer
+// to pointer). The outer pointer must not be nil; the inner pointer is set
+// to nil on SQL NULL and to a parsed value otherwise.
+func ScanNullTime(d Dialect, src any, dst **time.Time) error {
+	if dst == nil {
+		return fmt.Errorf("scan null time: nil dst")
+	}
+	if src == nil {
+		*dst = nil
+		return nil
+	}
+	var t time.Time
+	if err := ScanTime(d, src, &t); err != nil {
+		return err
+	}
+	*dst = &t
+	return nil
 }
 
 // ScanStringSlice decodes a value retrieved from the database into *[]string.

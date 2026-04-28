@@ -93,7 +93,7 @@ func (r *ShelfRepo) BooksInShelfForUser(ctx context.Context, userID, shelfSlug s
 
 	rows, err := r.db.SQL.QueryContext(ctx, `
 		SELECT `+bookCols+`
-		`+bookFrom+`
+		`+bookFromQ(r.db.Dialect)+`
 		JOIN shelf_books sb ON sb.book_id = b.id
 		JOIN shelves     s  ON s.id = sb.shelf_id
 		WHERE s.user_id = $1 AND s.slug = $2 AND b.deleted_at IS NULL
@@ -103,7 +103,7 @@ func (r *ShelfRepo) BooksInShelfForUser(ctx context.Context, userID, shelfSlug s
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	return collectBooks(rows)
+	return collectBooks(r.db.Dialect, rows)
 }
 
 // CountForSmartShelf runs the rule as a COUNT(*) so the sidebar can show
@@ -116,7 +116,7 @@ func (r *ShelfRepo) CountForSmartShelf(ctx context.Context, userID string, rule 
 	args := append([]any{userID}, compiled.args...)
 	query := `
 		SELECT COUNT(*)
-		` + bookFrom + `
+		` + bookFromQ(r.db.Dialect) + `
 		WHERE b.deleted_at IS NULL
 	`
 	if compiled.where != "" {
@@ -137,7 +137,7 @@ func (r *ShelfRepo) booksMatchingRule(ctx context.Context, userID string, rule *
 	args := append([]any{userID}, compiled.args...)
 	query := `
 		SELECT ` + bookCols + `
-		` + bookFrom + `
+		` + bookFromQ(r.db.Dialect) + `
 		WHERE b.deleted_at IS NULL
 	`
 	if compiled.where != "" {
@@ -150,7 +150,7 @@ func (r *ShelfRepo) booksMatchingRule(ctx context.Context, userID string, rule *
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	return collectBooks(rows)
+	return collectBooks(r.db.Dialect, rows)
 }
 
 // Create inserts a new shelf. For regular shelves, rule must be nil; for
