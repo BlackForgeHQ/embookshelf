@@ -1,153 +1,48 @@
+// ui/src/routes/_app.book.$id_.edit.tsx
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { toast } from "sonner"
-import { createFileRoute, useNavigate } from "@tanstack/react-router"
+import { Link, createFileRoute, useBlocker, useNavigate } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 
 import type { ApiError } from "@/api/client"
-import type { EnrichMatch } from "@/api/enrich"
-import type { BookDetail, BookPatch, LockField } from "@/api/books"
-import {
-  applyCoverFromUrl,
-  applyEnrichmentMatch,
-  formatProviderList,
-  streamEnrichment,
-} from "@/api/enrich"
-import {
-  bookQueryKey,
-  fetchBook,
-  patchBook,
-  toggleBookFieldLocks,
-} from "@/api/books"
-import { Cover } from "@/components/Cover"
+import type { LockField } from "@/api/books"
+import type { FormState } from "@/lib/book-form"
+import { bookQueryKey, fetchBook, patchBook } from "@/api/books"
+import { blankForm, bookToForm, dirtyFieldCount, formToPatch } from "@/lib/book-form"
+import { validateField } from "@/lib/metadata-validators"
 import { Icon } from "@/components/Icon"
+import { ChipEditor } from "@/components/metadata/ChipEditor"
+import { CoverPanel } from "@/components/metadata/CoverPanel"
+import { FieldLockButton } from "@/components/metadata/FieldLockButton"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
 
 export const Route = createFileRoute("/_app/book/$id_/edit")({
   component: MetadataEditor,
 })
 
-// FormState mirrors the editor inputs as strings (native form shape);
-// numeric fields get parsed back to numbers on save. publicReviews is
-// tri-state — '' means "No Value" (null), 'yes' / 'no' map to true/false.
-type FormState = {
-  title: string
-  subtitle: string
-  author: string
-  description: string
-  year: string
-  publishDate: string
-  language: string
-  publisher: string
-  isbn13: string
-  isbn10: string
-  series: string
-  seriesNum: string
-  seriesTotal: string
-  genres: string
-  moods: string
-  tags: string
-  ageRating: string
-  contentRating: string
-  pages: string
-  publicReviews: "" | "yes" | "no"
-}
+const AGE_RATINGS = ["", "All ages", "8+", "12+", "16+", "18+"] as const
+const CONTENT_RATINGS = ["", "G", "PG", "PG-13", "R", "NC-17"] as const
 
-function blankForm(): FormState {
-  return {
-    title: "",
-    subtitle: "",
-    author: "",
-    description: "",
-    year: "",
-    publishDate: "",
-    language: "",
-    publisher: "",
-    isbn13: "",
-    isbn10: "",
-    series: "",
-    seriesNum: "",
-    seriesTotal: "",
-    genres: "",
-    moods: "",
-    tags: "",
-    ageRating: "",
-    contentRating: "",
-    pages: "",
-    publicReviews: "",
-  }
-}
-
-function bookToForm(b: BookDetail): FormState {
-  const pr = b.publicReviews
-  return {
-    title: b.title,
-    subtitle: b.subtitle ?? "",
-    author: b.author,
-    description: b.description ?? "",
-    year: b.year ? String(b.year) : "",
-    publishDate: b.publishDate ?? "",
-    language: b.language ?? "",
-    publisher: b.publisher ?? "",
-    isbn13: b.isbn ?? "",
-    isbn10: b.isbn10 ?? "",
-    series: b.series ?? "",
-    seriesNum: b.seriesNum ? String(b.seriesNum) : "",
-    seriesTotal: b.seriesTotal ? String(b.seriesTotal) : "",
-    genres: b.genres.join(", "),
-    moods: b.moods.join(", "),
-    tags: b.tags.join(", "),
-    ageRating: b.ageRating ?? "",
-    contentRating: b.contentRating ?? "",
-    pages: b.pages ? String(b.pages) : "",
-    publicReviews: pr === true ? "yes" : pr === false ? "no" : "",
-  }
-}
-
-function splitCsv(raw: string): Array<string> {
-  return raw
-    .split(",")
-    .map((t) => t.trim())
-    .filter(Boolean)
-}
-
-function formToPatch(form: FormState): BookPatch {
-  const patch: BookPatch = {
-    title: form.title.trim(),
-    subtitle: form.subtitle.trim(),
-    author: form.author.trim(),
-    description: form.description,
-    language: form.language.trim(),
-    publisher: form.publisher.trim(),
-    isbn: form.isbn13.trim(),
-    isbn10: form.isbn10.trim(),
-    series: form.series.trim(),
-    ageRating: form.ageRating.trim(),
-    contentRating: form.contentRating.trim(),
-    publishDate: form.publishDate.trim(),
-  }
-  const year = Number.parseInt(form.year, 10)
-  patch.year = Number.isFinite(year) ? year : 0
-  const seriesNum = Number.parseInt(form.seriesNum, 10)
-  patch.seriesNum = Number.isFinite(seriesNum) ? seriesNum : 0
-  const seriesTotal = Number.parseInt(form.seriesTotal, 10)
-  patch.seriesTotal = Number.isFinite(seriesTotal) ? seriesTotal : 0
-  const pages = Number.parseInt(form.pages, 10)
-  patch.pages = Number.isFinite(pages) ? pages : 0
-  patch.genres = splitCsv(form.genres)
-  patch.moods = splitCsv(form.moods)
-  patch.tags = splitCsv(form.tags)
-  if (form.publicReviews === "yes") {
-    patch.publicReviews = true
-  } else if (form.publicReviews === "no") {
-    patch.publicReviews = false
-  } else {
-    patch.publicReviewsClear = true
-  }
-  return patch
-}
+const TAG_SUGGESTIONS = [
+  "Fiction",
+  "Literary",
+  "Essays",
+  "Poetry",
+  "Nonfiction",
+  "History",
+  "Philosophy",
+  "Memoir",
+] as const
 
 function MetadataEditor() {
   const { id } = Route.useParams()
@@ -160,901 +55,506 @@ function MetadataEditor() {
   })
 
   const [form, setForm] = useState<FormState>(blankForm())
-  // Sync form state once when the book loads. Subsequent refetches don't
+  const baselineRef = useRef<FormState>(blankForm())
+  const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({})
+  const [hydrated, setHydrated] = useState(false)
+
+  // Sync form once when the book loads. Subsequent refetches don't
   // overwrite in-flight edits. This is a prop→state sync, not a
   // cascading render — the intended use of setState-in-effect.
   useEffect(() => {
-    if (book.data) {
+    if (book.data && !hydrated) {
+      const seeded = bookToForm(book.data)
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setForm((prev) =>
-        // Only initialize if we haven't customized yet — an empty title
-        // is the sentinel that the form is fresh.
-        prev.title === "" && prev.author === "" ? bookToForm(book.data) : prev
-      )
+      setForm(seeded)
+      baselineRef.current = seeded
+      setHydrated(true)
     }
-  }, [book.data])
+  }, [book.data, hydrated])
 
-  const set = <TKey extends keyof FormState>(k: TKey, v: string) =>
-    setForm((f) => ({ ...f, [k]: v }))
+  // eslint-disable-next-line react-hooks/refs
+  const dirtyCount = useMemo(() => dirtyFieldCount(form, baselineRef.current), [form])
+  const isDirty = dirtyCount > 0
+
+  // beforeUnload guard for tab close / hard refresh. Router-level
+  // guard below handles in-app navigation.
+  useEffect(() => {
+    if (!isDirty) return
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ""
+    }
+    window.addEventListener("beforeunload", handler)
+    return () => window.removeEventListener("beforeunload", handler)
+  }, [isDirty])
+
+  // TanStack Router blocker — surfaces a confirm() before the route
+  // changes when the form is dirty. saveMut is allowed to navigate
+  // freely because it resets isDirty before the redirect.
+  useBlocker({
+    shouldBlockFn: () => {
+      if (!isDirty) return false
+      return !window.confirm("You have unsaved changes. Leave without saving?")
+    },
+  })
 
   const saveMut = useMutation({
     mutationFn: () => patchBook(id, formToPatch(form)),
     onSuccess: (updated) => {
       queryClient.setQueryData(bookQueryKey(id), updated)
-      // Library lists might show the patched title/author, so nuke the
-      // cached lists — next visit refetches.
       queryClient.invalidateQueries({ queryKey: ["books"] })
+      // Reset baseline so blocker stops firing during the navigate.
+      baselineRef.current = bookToForm(updated)
+      setForm(bookToForm(updated))
       void navigate({ to: "/book/$id", params: { id } })
     },
   })
 
+  const set = <TKey extends keyof FormState>(k: TKey, v: FormState[TKey]) =>
+    setForm((f) => ({ ...f, [k]: v }))
+
+  const onBlurValidate = (k: keyof FormState) => () => {
+    const value = form[k]
+    if (typeof value !== "string") return
+    const err = validateField(k, value)
+    setErrors((e) => ({ ...e, [k]: err ?? undefined }))
+  }
+
+  const validateAll = (): boolean => {
+    const next: Partial<Record<keyof FormState, string>> = {}
+    for (const k of ["isbn13", "isbn10", "year", "pages"] as const) {
+      const err = validateField(k, form[k])
+      if (err) next[k] = err
+    }
+    setErrors(next)
+    return Object.keys(next).length === 0
+  }
+
+  const onSave = () => {
+    if (!validateAll()) return
+    saveMut.mutate()
+  }
+
   if (book.isLoading) {
-    return (
-      <div style={{ padding: 40 }}>
-        <p className="t-small">Loading…</p>
-      </div>
-    )
+    return <EditPageSkeleton />
   }
   if (book.isError || !book.data) {
     return (
-      <div style={{ padding: 40 }}>
+      <div className="p-10">
         <p className="t-small">Book not found.</p>
       </div>
     )
   }
+
   const b = book.data
   const error = saveMut.error as unknown as ApiError | null
 
   return (
     <div className="fade-in">
-      <div
-        style={{
-          padding: "16px 32px",
-          borderBottom: "1px solid var(--color-rule-soft)",
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-        }}
-      >
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => void navigate({ to: "/book/$id", params: { id } })}
-        >
-          <Icon name="arrow-left" size={14} /> Back to book
+      {/* Sticky top header */}
+      <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-(--color-rule-soft) bg-(--color-paper-1) px-8 py-3">
+        <Button variant="ghost" size="sm" asChild>
+          <Link to="/book/$id" params={{ id }}>
+            <Icon name="arrow-left" size={14} /> Back to book
+          </Link>
         </Button>
+        <h1 className="t-h1 truncate text-[20px]" style={{ fontWeight: 500 }}>
+          {b.title}
+        </h1>
         <div className="grow" />
-        <Button
-          variant="outline"
-          onClick={() => void navigate({ to: "/book/$id", params: { id } })}
-          disabled={saveMut.isPending}
-        >
-          Cancel
+        <Button variant="outline" size="sm" asChild>
+          {/* "/book/$id/find" route is added in a sibling file (Task 10); cast so this typechecks before that file lands. */}
+          <Link
+            {...({
+              to: "/book/$id/find",
+              params: { id },
+            } as unknown as Parameters<typeof Link>[0])}
+          >
+            Find metadata online <Icon name="arrow-right" size={13} />
+          </Link>
         </Button>
-        <Button onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
+        <Button onClick={onSave} disabled={!isDirty || saveMut.isPending} size="sm">
           {saveMut.isPending ? "Saving…" : "Save changes"}
         </Button>
-      </div>
+      </header>
 
-      {error && (
-        <div
-          style={{
-            margin: "16px 40px 0",
-            padding: "10px 14px",
-            border: "1px solid var(--color-accent-soft)",
-            background: "var(--color-accent-soft)",
-            color: "var(--color-accent-ink)",
-            borderRadius: 2,
-            fontSize: 13,
-          }}
-        >
-          {error.message}
-        </div>
-      )}
+      <div className="mx-auto max-w-[760px] px-6 py-10 pb-24">
+        <CoverPanel book={b} />
 
-      <div
-        className="page-split page-split--main-sidebar"
-        style={{ padding: "32px 40px" }}
-      >
-        <div style={{ maxWidth: 720 }}>
-          <div className="t-label" style={{ marginBottom: 6 }}>
-            Editing metadata
+        <FormSection title="Title & author">
+          <FieldRow
+            label="Title"
+            error={errors.title}
+            lock={{ bookId: b.id, field: "title", locked: !!b.locks?.title }}
+          >
+            <Input
+              value={form.title}
+              onChange={(e) => set("title", e.target.value)}
+              disabled={!!b.locks?.title}
+              className={b.locks?.title ? "opacity-60" : ""}
+            />
+          </FieldRow>
+          <FieldRow
+            label="Subtitle"
+            lock={{ bookId: b.id, field: "subtitle", locked: !!b.locks?.subtitle }}
+          >
+            <Input
+              value={form.subtitle}
+              onChange={(e) => set("subtitle", e.target.value)}
+              placeholder="—"
+              disabled={!!b.locks?.subtitle}
+              className={b.locks?.subtitle ? "opacity-60" : ""}
+            />
+          </FieldRow>
+          <FieldRow
+            label="Author"
+            lock={{ bookId: b.id, field: "author", locked: !!b.locks?.author }}
+          >
+            <Input
+              value={form.author}
+              onChange={(e) => set("author", e.target.value)}
+              disabled={!!b.locks?.author}
+              className={b.locks?.author ? "opacity-60" : ""}
+            />
+          </FieldRow>
+        </FormSection>
+
+        <FormSection title="Description">
+          <FieldRow
+            label="Description"
+            lock={{ bookId: b.id, field: "description", locked: !!b.locks?.description }}
+          >
+            <Textarea
+              rows={8}
+              value={form.description}
+              onChange={(e) => set("description", e.target.value)}
+              disabled={!!b.locks?.description}
+              className={
+                "min-h-[200px] resize-y font-serif text-[15px] leading-relaxed " +
+                (b.locks?.description ? "opacity-60" : "")
+              }
+            />
+          </FieldRow>
+        </FormSection>
+
+        <FormSection title="Publication">
+          <div className="grid gap-4 md:grid-cols-2">
+            <FieldRow
+              label="Publisher"
+              lock={{ bookId: b.id, field: "publisher", locked: !!b.locks?.publisher }}
+            >
+              <Input
+                value={form.publisher}
+                onChange={(e) => set("publisher", e.target.value)}
+                disabled={!!b.locks?.publisher}
+                className={b.locks?.publisher ? "opacity-60" : ""}
+              />
+            </FieldRow>
+            <FieldRow
+              label="Publish date"
+              lock={{ bookId: b.id, field: "publishDate", locked: !!b.locks?.publishDate }}
+            >
+              <Input
+                type="date"
+                value={form.publishDate}
+                onChange={(e) => set("publishDate", e.target.value)}
+                disabled={!!b.locks?.publishDate}
+                className={b.locks?.publishDate ? "opacity-60" : ""}
+              />
+            </FieldRow>
+            <FieldRow label="Year" error={errors.year}>
+              <Input
+                inputMode="numeric"
+                value={form.year}
+                onChange={(e) => set("year", e.target.value)}
+                onBlur={onBlurValidate("year")}
+                aria-invalid={!!errors.year}
+              />
+            </FieldRow>
+            <FieldRow
+              label="Language"
+              lock={{ bookId: b.id, field: "language", locked: !!b.locks?.language }}
+            >
+              <Input
+                value={form.language}
+                onChange={(e) => set("language", e.target.value)}
+                placeholder="en"
+                className={"mono " + (b.locks?.language ? "opacity-60" : "")}
+                disabled={!!b.locks?.language}
+              />
+            </FieldRow>
+            <FieldRow
+              label="Pages"
+              error={errors.pages}
+              lock={{ bookId: b.id, field: "pages", locked: !!b.locks?.pages }}
+            >
+              <Input
+                inputMode="numeric"
+                value={form.pages}
+                onChange={(e) => set("pages", e.target.value)}
+                onBlur={onBlurValidate("pages")}
+                placeholder="—"
+                aria-invalid={!!errors.pages}
+                disabled={!!b.locks?.pages}
+                className={b.locks?.pages ? "opacity-60" : ""}
+              />
+            </FieldRow>
+            <div />
+            <FieldRow
+              label="ISBN-13"
+              error={errors.isbn13}
+              lock={{ bookId: b.id, field: "isbn", locked: !!b.locks?.isbn }}
+            >
+              <Input
+                value={form.isbn13}
+                onChange={(e) => set("isbn13", e.target.value)}
+                onBlur={onBlurValidate("isbn13")}
+                aria-invalid={!!errors.isbn13}
+                disabled={!!b.locks?.isbn}
+                className={"mono " + (b.locks?.isbn ? "opacity-60" : "")}
+              />
+            </FieldRow>
+            <FieldRow
+              label="ISBN-10"
+              error={errors.isbn10}
+              lock={{ bookId: b.id, field: "isbn10", locked: !!b.locks?.isbn10 }}
+            >
+              <Input
+                value={form.isbn10}
+                onChange={(e) => set("isbn10", e.target.value)}
+                onBlur={onBlurValidate("isbn10")}
+                aria-invalid={!!errors.isbn10}
+                disabled={!!b.locks?.isbn10}
+                className={"mono " + (b.locks?.isbn10 ? "opacity-60" : "")}
+              />
+            </FieldRow>
           </div>
-          <h1 className="t-h1" style={{ marginBottom: 28 }}>
-            {b.title}
-          </h1>
+        </FormSection>
 
-          <Section title="Core">
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 14,
-              }}
-            >
-              <Row
-                label="Title"
-                lock={{
-                  bookId: b.id,
-                  field: "title",
-                  locked: !!b.locks?.title,
-                }}
-              >
-                <Input
-                  value={form.title}
-                  onChange={(e) => set("title", e.target.value)}
-                />
-              </Row>
-              <Row
-                label="Subtitle"
-                lock={{
-                  bookId: b.id,
-                  field: "subtitle",
-                  locked: !!b.locks?.subtitle,
-                }}
-              >
-                <Input
-                  value={form.subtitle}
-                  onChange={(e) => set("subtitle", e.target.value)}
-                  placeholder="—"
-                />
-              </Row>
-            </div>
-            <Row
-              label="Authors"
-              lock={{
-                bookId: b.id,
-                field: "author",
-                locked: !!b.locks?.author,
-              }}
+        <FormSection title="Series">
+          <div className="grid gap-4" style={{ gridTemplateColumns: "2fr 1fr 1fr" }}>
+            <FieldRow
+              label="Series name"
+              lock={{ bookId: b.id, field: "series", locked: !!b.locks?.series }}
             >
               <Input
-                value={form.author}
-                onChange={(e) => set("author", e.target.value)}
+                value={form.series}
+                onChange={(e) => set("series", e.target.value)}
+                placeholder="—"
+                disabled={!!b.locks?.series}
+                className={b.locks?.series ? "opacity-60" : ""}
               />
-            </Row>
-            <Row
-              label="Description"
-              lock={{
-                bookId: b.id,
-                field: "description",
-                locked: !!b.locks?.description,
-              }}
-            >
-              <Textarea
-                rows={5}
-                value={form.description}
-                onChange={(e) => set("description", e.target.value)}
-                className="min-h-[140px] resize-y"
-              />
-            </Row>
-          </Section>
-
-          <Section title="Publication">
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr 1fr",
-                gap: 14,
-              }}
-            >
-              <Row
-                label="Publisher"
-                lock={{
-                  bookId: b.id,
-                  field: "publisher",
-                  locked: !!b.locks?.publisher,
-                }}
-              >
-                <Input
-                  value={form.publisher}
-                  onChange={(e) => set("publisher", e.target.value)}
-                />
-              </Row>
-              <Row
-                label="Publish date"
-                lock={{
-                  bookId: b.id,
-                  field: "publishDate",
-                  locked: !!b.locks?.publishDate,
-                }}
-              >
-                <Input
-                  type="date"
-                  value={form.publishDate}
-                  onChange={(e) => set("publishDate", e.target.value)}
-                />
-              </Row>
-              <Row label="Year">
-                <Input
-                  value={form.year}
-                  onChange={(e) => set("year", e.target.value)}
-                />
-              </Row>
-            </div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr 1fr",
-                gap: 14,
-              }}
-            >
-              <Row
-                label="Language"
-                lock={{
-                  bookId: b.id,
-                  field: "language",
-                  locked: !!b.locks?.language,
-                }}
-              >
-                <Input
-                  value={form.language}
-                  onChange={(e) => set("language", e.target.value)}
-                  placeholder="en"
-                  className="mono"
-                />
-              </Row>
-              <Row
-                label="Pages"
-                lock={{
-                  bookId: b.id,
-                  field: "pages",
-                  locked: !!b.locks?.pages,
-                }}
-              >
-                <Input
-                  inputMode="numeric"
-                  value={form.pages}
-                  onChange={(e) => set("pages", e.target.value)}
-                  placeholder="—"
-                />
-              </Row>
-              <div />
-            </div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 14,
-              }}
-            >
-              <Row
-                label="ISBN 13"
-                lock={{ bookId: b.id, field: "isbn", locked: !!b.locks?.isbn }}
-              >
-                <Input
-                  className="mono"
-                  value={form.isbn13}
-                  onChange={(e) => set("isbn13", e.target.value)}
-                />
-              </Row>
-              <Row
-                label="ISBN 10"
-                lock={{
-                  bookId: b.id,
-                  field: "isbn10",
-                  locked: !!b.locks?.isbn10,
-                }}
-              >
-                <Input
-                  className="mono"
-                  value={form.isbn10}
-                  onChange={(e) => set("isbn10", e.target.value)}
-                />
-              </Row>
-            </div>
-          </Section>
-
-          <Section title="Series">
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "2fr 1fr 1fr",
-                gap: 14,
-              }}
-            >
-              <Row
-                label="Series name"
-                lock={{
-                  bookId: b.id,
-                  field: "series",
-                  locked: !!b.locks?.series,
-                }}
-              >
-                <Input
-                  value={form.series}
-                  onChange={(e) => set("series", e.target.value)}
-                  placeholder="—"
-                />
-              </Row>
-              <Row label="Book #">
-                <Input
-                  value={form.seriesNum}
-                  onChange={(e) => set("seriesNum", e.target.value)}
-                  placeholder="—"
-                />
-              </Row>
-              <Row label="Total">
-                <Input
-                  value={form.seriesTotal}
-                  onChange={(e) => set("seriesTotal", e.target.value)}
-                  placeholder="—"
-                />
-              </Row>
-            </div>
-          </Section>
-
-          <Section title="Categories & tags">
-            <Row
-              label="Genres"
-              lock={{
-                bookId: b.id,
-                field: "genres",
-                locked: !!b.locks?.genres,
-              }}
-            >
+            </FieldRow>
+            <FieldRow label="Book #">
               <Input
-                value={form.genres}
-                onChange={(e) => set("genres", e.target.value)}
-                placeholder="Fiction, Science"
+                inputMode="numeric"
+                value={form.seriesNum}
+                onChange={(e) => set("seriesNum", e.target.value)}
+                placeholder="—"
               />
-            </Row>
-            <Row
-              label="Moods"
-              lock={{ bookId: b.id, field: "moods", locked: !!b.locks?.moods }}
-            >
+            </FieldRow>
+            <FieldRow label="Total">
               <Input
-                value={form.moods}
-                onChange={(e) => set("moods", e.target.value)}
-                placeholder="Hopeful, Reflective"
+                inputMode="numeric"
+                value={form.seriesTotal}
+                onChange={(e) => set("seriesTotal", e.target.value)}
+                placeholder="—"
               />
-            </Row>
-            <Row
-              label="Tags"
-              lock={{ bookId: b.id, field: "tags", locked: !!b.locks?.tags }}
-            >
-              <Input
-                value={form.tags}
-                onChange={(e) => set("tags", e.target.value)}
-              />
-            </Row>
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: 6,
-                marginTop: 8,
-              }}
-            >
-              {[
-                "Fiction",
-                "Literary",
-                "Essays",
-                "Poetry",
-                "Nonfiction",
-                "History",
-                "Philosophy",
-                "Memoir",
-              ].map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  className="chip"
-                  style={{ cursor: "pointer" }}
-                  onClick={() =>
-                    set("tags", form.tags ? `${form.tags}, ${t}` : t)
-                  }
-                >
-                  + {t}
-                </button>
-              ))}
-            </div>
-          </Section>
+            </FieldRow>
+          </div>
+        </FormSection>
 
-          <Section title="Ratings & reviews">
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr 1fr",
-                gap: 14,
-              }}
-            >
-              <Row label="Age rating">
-                <select
-                  value={form.ageRating}
-                  onChange={(e) => set("ageRating", e.target.value)}
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
-                >
-                  <option value="">—</option>
-                  <option value="All ages">All ages</option>
-                  <option value="8+">8+</option>
-                  <option value="12+">12+</option>
-                  <option value="16+">16+</option>
-                  <option value="18+">18+</option>
-                </select>
-              </Row>
-              <Row label="Content rating">
-                <select
-                  value={form.contentRating}
-                  onChange={(e) => set("contentRating", e.target.value)}
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
-                >
-                  <option value="">—</option>
-                  <option value="G">G</option>
-                  <option value="PG">PG</option>
-                  <option value="PG-13">PG-13</option>
-                  <option value="R">R</option>
-                  <option value="NC-17">NC-17</option>
-                </select>
-              </Row>
-              <Row label="Public reviews">
-                <select
-                  value={form.publicReviews}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      publicReviews: e.target
-                        .value as FormState["publicReviews"],
-                    }))
-                  }
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
-                >
-                  <option value="">No value</option>
-                  <option value="yes">Allowed</option>
-                  <option value="no">Blocked</option>
-                </select>
-              </Row>
-            </div>
-          </Section>
-        </div>
+        <FormSection title="Categories & tags">
+          <FieldRow
+            label="Genres"
+            lock={{ bookId: b.id, field: "genres", locked: !!b.locks?.genres }}
+          >
+            <ChipEditor
+              value={form.genres}
+              onChange={(v) => set("genres", v)}
+              placeholder="Add a genre and press Enter"
+              disabled={!!b.locks?.genres}
+            />
+          </FieldRow>
+          <FieldRow
+            label="Moods"
+            lock={{ bookId: b.id, field: "moods", locked: !!b.locks?.moods }}
+          >
+            <ChipEditor
+              value={form.moods}
+              onChange={(v) => set("moods", v)}
+              placeholder="Hopeful, reflective…"
+              disabled={!!b.locks?.moods}
+            />
+          </FieldRow>
+          <FieldRow
+            label="Tags"
+            lock={{ bookId: b.id, field: "tags", locked: !!b.locks?.tags }}
+          >
+            <ChipEditor
+              value={form.tags}
+              onChange={(v) => set("tags", v)}
+              placeholder="Add a tag and press Enter"
+              disabled={!!b.locks?.tags}
+              suggestions={TAG_SUGGESTIONS}
+            />
+          </FieldRow>
+        </FormSection>
 
-        <EnrichmentPanel
-          book={b}
-          searchTitle={form.title}
-          searchAuthor={form.author}
-          onApplyFields={(m) => {
-            setForm((prev) => ({
-              ...prev,
-              title: m.title || prev.title,
-              author: m.authors.join(", ") || prev.author,
-              description: m.description || prev.description,
-              year: m.year ? String(m.year) : prev.year,
-              publisher: m.publisher || prev.publisher,
-              isbn13: m.isbn || prev.isbn13,
-              series: m.series || prev.series,
-              genres: [
-                ...new Set([...splitCsv(prev.genres), ...(m.categories ?? [])]),
-              ].join(", "),
-            }))
-          }}
-        />
-      </div>
-    </div>
-  )
-}
-
-function EnrichmentPanel({
-  book,
-  searchTitle,
-  searchAuthor,
-  onApplyFields,
-}: {
-  book: BookDetail
-  searchTitle: string
-  searchAuthor: string
-  onApplyFields: (m: EnrichMatch) => void
-}) {
-  const queryClient = useQueryClient()
-  const [opened, setOpened] = useState(false)
-
-  // Streaming state. matches lands incrementally as SSE frames arrive;
-  // we sort-insert by confidence so the highest-scoring hit floats to
-  // the top without a flash.
-  const [matches, setMatches] = useState<Array<EnrichMatch>>([])
-  const [streaming, setStreaming] = useState(false)
-  const [providers, setProviders] = useState<Array<string>>([])
-  const [streamError, setStreamError] = useState<string | null>(null)
-  const cancelRef = useRef<() => void>(undefined)
-
-  // Version bumps whenever the user hits "re-search" so streaming effect
-  // knows to tear down the old EventSource and open a fresh one.
-  const [runId, setRunId] = useState(0)
-
-  const q = useMemo(
-    () => ({ title: searchTitle, author: searchAuthor }),
-    [searchTitle, searchAuthor]
-  )
-
-  useEffect(() => {
-    if (!opened) return
-    // Reset the enrichment stream state on each (re)open — prop→state
-    // sync, not a cascading render.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setMatches([])
-    setProviders([])
-    setStreamError(null)
-    setStreaming(true)
-    const cancel = streamEnrichment(book.id, q, (ev) => {
-      if (ev.type === "match") {
-        setMatches((prev) => {
-          // De-dupe on (source, sourceId); provider retries or
-          // re-streams shouldn't produce double cards.
-          if (
-            prev.some(
-              (m) =>
-                m.source === ev.match.source && m.sourceId === ev.match.sourceId
-            )
-          ) {
-            return prev
-          }
-          const next = [...prev, ev.match]
-          next.sort((a, b) => b.confidence - a.confidence)
-          return next
-        })
-      } else if (ev.type === "provider-error") {
-        setStreamError(`${ev.provider}: ${ev.error}`)
-      } else {
-        // ev.type is narrowed to "done" here.
-        setProviders(ev.providers)
-        setStreaming(false)
-      }
-    })
-    cancelRef.current = cancel
-    return () => cancel()
-  }, [opened, book.id, q, runId])
-
-  const coverMut = useMutation({
-    mutationFn: (url: string) => applyCoverFromUrl(book.id, url),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: bookQueryKey(book.id) })
-      queryClient.invalidateQueries({ queryKey: ["books"] })
-      toast.success("Cover updated.")
-    },
-    onError: (err) =>
-      toast.error(
-        (err as unknown as ApiError).message || "Cover import failed."
-      ),
-  })
-
-  // applyMut writes the selected match server-side via PUT
-  // /books/:id/metadata. Skips locked fields, optionally pulls the cover
-  // in the same request. Different from onApplyFields() which only
-  // populates the form for the user to review before saving.
-  const applyMut = useMutation({
-    mutationFn: ({ m, cover }: { m: EnrichMatch; cover: boolean }) =>
-      applyEnrichmentMatch(book.id, {
-        source: m.source,
-        sourceId: m.sourceId,
-        title: m.title,
-        authors: m.authors,
-        description: m.description,
-        publisher: m.publisher,
-        year: m.year,
-        isbn: m.isbn,
-        series: m.series,
-        categories: m.categories,
-        language: m.language,
-        coverUrl: m.coverUrl,
-        applyCover: cover,
-      }),
-    onSuccess: (fresh) => {
-      queryClient.setQueryData(bookQueryKey(book.id), fresh)
-      queryClient.invalidateQueries({ queryKey: ["books"] })
-      toast.success("Metadata applied.")
-    },
-    onError: (err) =>
-      toast.error((err as unknown as ApiError).message || "Apply failed."),
-  })
-
-  return (
-    <div>
-      <div
-        className="t-label"
-        style={{
-          marginBottom: 10,
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-        }}
-      >
-        <span>Cover</span>
-        <LockToggle
-          bookId={book.id}
-          field="cover"
-          locked={!!book.locks?.cover}
-        />
-      </div>
-      <Cover book={book} size="hero" style={{ width: 240, height: 360 }} />
-      {coverMut.isPending && (
-        <div className="t-small" style={{ marginTop: 8, fontStyle: "italic" }}>
-          Fetching cover…
-        </div>
-      )}
-
-      <div className="t-label" style={{ marginTop: 28, marginBottom: 10 }}>
-        Metadata sources
+        <FormSection title="Ratings">
+          <div className="grid gap-4 md:grid-cols-3">
+            <FieldRow label="Age rating">
+              <Select
+                value={form.ageRating}
+                onValueChange={(v) => set("ageRating", v === "__none" ? "" : v)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="—" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none">—</SelectItem>
+                  {AGE_RATINGS.filter((r) => r !== "").map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {r}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FieldRow>
+            <FieldRow label="Content rating">
+              <Select
+                value={form.contentRating}
+                onValueChange={(v) => set("contentRating", v === "__none" ? "" : v)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="—" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none">—</SelectItem>
+                  {CONTENT_RATINGS.filter((r) => r !== "").map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {r}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FieldRow>
+            <FieldRow label="Public reviews">
+              <Select
+                value={form.publicReviews === "" ? "__none" : form.publicReviews}
+                onValueChange={(v) =>
+                  set(
+                    "publicReviews",
+                    (v === "__none" ? "" : v) as FormState["publicReviews"],
+                  )
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="No value" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none">No value</SelectItem>
+                  <SelectItem value="yes">Allowed</SelectItem>
+                  <SelectItem value="no">Blocked</SelectItem>
+                </SelectContent>
+              </Select>
+            </FieldRow>
+          </div>
+        </FormSection>
       </div>
 
-      {!opened ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="w-full"
-          onClick={() => setOpened(true)}
-        >
-          <Icon name="search" size={12} /> Find metadata online
-        </Button>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {/* Sticky bottom save bar */}
+      <footer className="sticky bottom-0 z-10 border-t border-(--color-rule-soft) bg-(--color-paper-1) px-8 py-3">
+        <div className="mx-auto flex max-w-[760px] items-center gap-3">
+          <span className="t-small">
+            {isDirty
+              ? `${dirtyCount} unsaved change${dirtyCount === 1 ? "" : "s"}`
+              : "No changes"}
+          </span>
+          {error && (
+            <span
+              className="t-small rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-2 py-1 text-(--color-accent-ink)"
+              role="alert"
+            >
+              {error.message}
+            </span>
+          )}
+          <div className="grow" />
           <Button
-            type="button"
             variant="ghost"
             size="sm"
-            disabled={streaming}
-            onClick={() => setRunId((n) => n + 1)}
+            disabled={!isDirty || saveMut.isPending}
+            onClick={() => {
+              setForm(baselineRef.current)
+              setErrors({})
+            }}
           >
-            <Icon name="refresh" size={12} />{" "}
-            {streaming ? "Searching…" : "Re-search with current fields"}
+            Discard
           </Button>
-
-          {streamError && (
-            <div
-              className="flash error"
-              style={{
-                padding: "8px 12px",
-                border: "1px solid var(--color-accent-soft)",
-                background: "var(--color-accent-soft)",
-                color: "var(--color-accent-ink)",
-                borderRadius: 2,
-                fontSize: 12,
-              }}
-            >
-              {streamError}
-            </div>
-          )}
-
-          {!streaming && matches.length === 0 && providers.length > 0 && (
-            <div className="t-small" style={{ fontStyle: "italic" }}>
-              No matches from {formatProviderList(providers)}.
-            </div>
-          )}
-          {!streaming && matches.length === 0 && providers.length === 0 && (
-            <div className="t-small" style={{ fontStyle: "italic" }}>
-              No metadata providers are enabled. An admin can turn them on in
-              Settings → Metadata providers.
-            </div>
-          )}
-
-          {matches.slice(0, 10).map((m) => (
-            <MatchCard
-              key={`${m.source}:${m.sourceId}`}
-              match={m}
-              applyFields={() => onApplyFields(m)}
-              applyCover={() => coverMut.mutate(m.coverUrl ?? "")}
-              applyAll={(withCover) => applyMut.mutate({ m, cover: withCover })}
-              coverBusy={coverMut.isPending}
-              applyBusy={applyMut.isPending}
-            />
-          ))}
+          <Button onClick={onSave} disabled={!isDirty || saveMut.isPending} size="sm">
+            {saveMut.isPending ? "Saving…" : error ? "Retry save" : "Save changes"}
+          </Button>
         </div>
-      )}
+      </footer>
     </div>
   )
 }
 
-function LockToggle({
-  bookId,
-  field,
-  locked,
-}: {
-  bookId: string
-  field: LockField
-  locked: boolean
-}) {
-  const queryClient = useQueryClient()
-  const mut = useMutation({
-    mutationFn: (next: boolean) =>
-      toggleBookFieldLocks(bookId, { [field]: next }),
-    onSuccess: (fresh) => {
-      queryClient.setQueryData(bookQueryKey(bookId), fresh)
-    },
-    onError: (err) =>
-      toast.error(
-        (err as unknown as ApiError).message || "Lock update failed."
-      ),
-  })
+function EditPageSkeleton() {
   return (
-    <button
-      type="button"
-      title={
-        locked
-          ? "Field is locked — click to unlock"
-          : "Lock this field against auto-refresh"
-      }
-      disabled={mut.isPending}
-      onClick={() => mut.mutate(!locked)}
-      style={{
-        padding: 0,
-        border: "none",
-        background: "transparent",
-        cursor: "pointer",
-        color: locked ? "var(--color-accent-ink)" : "var(--color-ink-3)",
-        lineHeight: 0,
-      }}
-    >
-      <Icon name={locked ? "lock" : "unlock"} size={11} />
-    </button>
-  )
-}
-
-function MatchCard({
-  match,
-  applyFields,
-  applyCover,
-  applyAll,
-  coverBusy,
-  applyBusy,
-}: {
-  match: EnrichMatch
-  applyFields: () => void
-  applyCover: () => void
-  applyAll: (withCover: boolean) => void
-  coverBusy: boolean
-  applyBusy: boolean
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        gap: 10,
-        padding: 10,
-        border: "1px solid var(--color-rule-soft)",
-        background: "var(--color-paper-0)",
-        borderRadius: 2,
-      }}
-    >
-      {match.coverUrl ? (
-        <img
-          src={match.coverUrl}
-          alt=""
-          width={52}
-          height={78}
-          style={{
-            width: 52,
-            height: 78,
-            objectFit: "cover",
-            flexShrink: 0,
-            background: "var(--color-paper-2)",
-          }}
-        />
-      ) : (
-        <div
-          style={{
-            width: 52,
-            height: 78,
-            background:
-              "repeating-linear-gradient(135deg, var(--color-paper-3) 0 6px, var(--color-paper-2) 6px 12px)",
-            flexShrink: 0,
-          }}
-        />
-      )}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 500, textWrap: "balance" }}>
-          {match.title}
+    <div className="mx-auto max-w-[760px] p-10 fade-in">
+      <Skeleton className="mb-6 h-8 w-1/2" />
+      <Skeleton className="mb-10 h-[240px] w-[160px]" />
+      {[1, 2, 3, 4].map((i) => (
+        <div key={i} className="mb-10">
+          <Skeleton className="mb-4 h-4 w-32" />
+          <Skeleton className="mb-3 h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
         </div>
-        <div
-          className="t-small"
-          style={{ fontSize: 11.5, fontStyle: "italic" }}
-        >
-          {match.authors.join(", ")}
-          {match.year ? ` · ${match.year}` : ""}
-        </div>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            marginTop: 4,
-          }}
-        >
-          <span className="t-micro" style={{ fontSize: 9.5 }}>
-            {match.source.replace("_", " ")}
-          </span>
-          <span
-            className="mono"
-            style={{ fontSize: 10, color: "var(--color-ink-3)" }}
-          >
-            conf {match.confidence}
-          </span>
-        </div>
-        <div
-          style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}
-        >
-          <Button
-            type="button"
-            size="sm"
-            onClick={() => applyAll(!!match.coverUrl)}
-            disabled={applyBusy}
-            title="Write these fields directly to the book (skips locked fields). Includes cover when available."
-          >
-            Apply
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={applyFields}
-          >
-            Use fields
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={applyCover}
-            disabled={!match.coverUrl || coverBusy}
-          >
-            Use cover
-          </Button>
-        </div>
-      </div>
+      ))}
     </div>
   )
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function FormSection({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div
-      style={{
-        marginBottom: 28,
-        paddingBottom: 24,
-        borderBottom: "1px solid var(--color-rule-soft)",
-      }}
-    >
-      <div className="t-label" style={{ marginBottom: 14 }}>
+    <section className="mb-10 border-b border-(--color-rule-soft) pb-8 last:border-b-0">
+      <h2
+        className="mb-5 font-serif text-[22px] text-(--color-ink-1)"
+        style={{ fontWeight: 500 }}
+      >
         {title}
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        {children}
-      </div>
-    </div>
+      </h2>
+      <div className="flex flex-col gap-4">{children}</div>
+    </section>
   )
 }
 
-function Row({
+function FieldRow({
   label,
   children,
   lock,
+  error,
 }: {
   label: string
   children: ReactNode
   lock?: { bookId: string; field: LockField; locked: boolean }
+  error?: string
 }) {
   return (
     <div>
-      <div
-        style={{
-          fontSize: 12,
-          color: "var(--color-ink-3)",
-          marginBottom: 4,
-          fontFamily: "var(--font-mono)",
-          letterSpacing: "0.04em",
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-        }}
-      >
+      <div className="t-label mb-1.5 flex items-center gap-2">
         <span>{label}</span>
         {lock && (
-          <LockToggle
-            bookId={lock.bookId}
-            field={lock.field}
-            locked={lock.locked}
-          />
+          <FieldLockButton bookId={lock.bookId} field={lock.field} locked={lock.locked} />
         )}
       </div>
       {children}
+      {error && (
+        <p className="t-small mt-1 text-(--color-accent-ink)" role="alert">
+          {error}
+        </p>
+      )}
     </div>
   )
 }
