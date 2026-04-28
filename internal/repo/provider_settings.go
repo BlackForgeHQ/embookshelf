@@ -71,11 +71,11 @@ func (r *ProviderSettingsRepo) AllConfigs(ctx context.Context) (map[string]json.
 	out := make(map[string]json.RawMessage)
 	for rows.Next() {
 		var id string
-		var cfg json.RawMessage
+		var cfg []byte
 		if err := rows.Scan(&id, &cfg); err != nil {
 			return nil, err
 		}
-		out[id] = cfg
+		out[id] = json.RawMessage(cfg)
 	}
 	return out, rows.Err()
 }
@@ -252,16 +252,18 @@ func (r *ProviderSettingsRepo) SeedIfAbsent(ctx context.Context, defaults map[st
 func (r *ProviderSettingsRepo) scanProviderSetting(s scanner) (ProviderSetting, error) {
 	var (
 		ps             ProviderSetting
+		cfg            []byte
 		updatedAny     any
 		lastSuccessAny any
 		lastErrorAtAny any
 	)
 	if err := s.Scan(
-		&ps.ID, &ps.Enabled, &ps.Config, &ps.Priority, &updatedAny,
+		&ps.ID, &ps.Enabled, &cfg, &ps.Priority, &updatedAny,
 		&lastSuccessAny, &lastErrorAtAny, &ps.LastError,
 	); err != nil {
 		return ps, err
 	}
+	ps.Config = json.RawMessage(cfg)
 	if err := db.ScanTime(r.db.Dialect, updatedAny, &ps.UpdatedAt); err != nil {
 		return ps, fmt.Errorf("scan updated_at: %w", err)
 	}

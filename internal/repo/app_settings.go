@@ -126,7 +126,7 @@ func DefaultOIDCAutoProvisionDetails() OIDCAutoProvisionDetails {
 func (r *AppSettingsRepo) GetRaw(ctx context.Context, name string) (json.RawMessage, error) {
 	const qPG = `SELECT value FROM app_settings WHERE name = $1`
 	const qSQLite = `SELECT value FROM app_settings WHERE name = ?`
-	var raw json.RawMessage
+	var raw []byte
 	err := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), name).Scan(&raw)
 	if err != nil {
 		if dberr.IsNotFound(err) {
@@ -134,7 +134,7 @@ func (r *AppSettingsRepo) GetRaw(ctx context.Context, name string) (json.RawMess
 		}
 		return nil, err
 	}
-	return raw, nil
+	return json.RawMessage(raw), nil
 }
 
 // SetRaw upserts one setting. Validation is the caller's problem.
