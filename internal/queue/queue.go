@@ -1,6 +1,7 @@
-// Package queue wraps the river client so callers don't need to know about
-// river's generics / driver types. Keeps the service layer free of river
-// imports and makes it trivial to swap implementations later.
+// Package queue wraps the River client (Postgres) and a homegrown
+// polling worker (SQLite) so callers see a single Client interface.
+// Keeps the service layer free of driver imports and makes the
+// per-dialect implementation choice invisible to the rest of the app.
 package queue
 
 import (
@@ -25,22 +26,37 @@ type Client interface {
 	Stop(ctx context.Context) error
 }
 
-// RiverClient implements Client against river's *river.Client.
-type RiverClient struct {
-	c *river.Client[pgx.Tx]
-}
-
-// New constructs, migrates, and starts a river.Client. Workers are registered
-// for every job kind the app supports.
+// New constructs a Client appropriate for the dialect of d:
+// Postgres → River-backed; SQLite → polling worker.
 func New(
 	ctx context.Context,
 	d *db.DB,
 	bdropSvc *service.BookDropService,
 	libSvc *service.LibraryService,
 ) (Client, error) {
-	if d.Dialect != db.DialectPostgres {
-		return nil, errors.New("queue: SQLite backend lands in Plan 3; use a Postgres DATABASE_URL or wait for the SQLite queue worker")
+	switch d.Dialect {
+	case db.DialectPostgres:
+		return newRiver(ctx, d, bdropSvc, libSvc)
+	case db.DialectSQLite:
+		return newSQLiteQueue(ctx, d, bdropSvc, libSvc)
+	default:
+		return nil, fmt.Errorf("queue: unknown dialect %q", d.Dialect)
 	}
+}
+
+// RiverClient implements Client against river's *river.Client.
+type RiverClient struct {
+	c *river.Client[pgx.Tx]
+}
+
+// newRiver builds and starts the River-backed implementation. The
+// caller is queue.New, which dispatches by dialect.
+func newRiver(
+	ctx context.Context,
+	d *db.DB,
+	bdropSvc *service.BookDropService,
+	libSvc *service.LibraryService,
+) (*RiverClient, error) {
 	if d.PG == nil {
 		return nil, errors.New("queue: db.PG is nil for postgres dialect")
 	}
@@ -56,14 +72,17 @@ func New(
 	}
 
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &task.BookDropWorker{Svc: bdropSvc})
+	river.AddWorker(workers, &task.BookDropWorker{Deps: task.BookDropDeps{Svc: bdropSvc}})
 
 	// The scan worker needs to enqueue bookdrop.ingest jobs; wire that up
 	// after the client is constructed (circular dep resolved via the
 	// BookDropEnqueuer interface).
 	scanWorker := &task.LibraryScanWorker{
-		BookDrop: bdropSvc,
-		Lib:      libSvc,
+		Deps: task.LibraryScanDeps{
+			BookDrop: bdropSvc,
+			Lib:      libSvc,
+			// Queue is set after the river.Client is constructed (cyclic dep).
+		},
 	}
 	river.AddWorker(workers, scanWorker)
 
@@ -78,7 +97,7 @@ func New(
 	}
 
 	rc := &RiverClient{c: c}
-	scanWorker.Queue = rc // now the scan worker can enqueue further jobs
+	scanWorker.Deps.Queue = rc // now the scan worker can enqueue further jobs
 
 	if err := c.Start(ctx); err != nil {
 		return nil, fmt.Errorf("river start: %w", err)
@@ -102,21 +121,3 @@ func (r *RiverClient) EnqueueLibraryScan(ctx context.Context, libraryID string) 
 func (r *RiverClient) Stop(ctx context.Context) error {
 	return r.c.Stop(ctx)
 }
-
-// Noop is a queue implementation that fails every enqueue. Used in
-// SQLite mode until Plan 3 lands the homegrown worker. Stop is a
-// no-op so deferred cleanup in main.go is safe.
-type Noop struct{}
-
-func (Noop) EnqueueBookDrop(_ context.Context, _ string) error {
-	return errors.New("queue: bookdrop disabled on sqlite (Plan 3)")
-}
-
-func (Noop) EnqueueLibraryScan(_ context.Context, _ string) error {
-	return errors.New("queue: library scan disabled on sqlite (Plan 3)")
-}
-
-func (Noop) Stop(_ context.Context) error { return nil }
-
-// Compile-time interface conformance check.
-var _ Client = Noop{}

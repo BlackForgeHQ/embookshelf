@@ -390,3 +390,26 @@ AFTER UPDATE ON books BEGIN
     INSERT INTO books_fts(rowid, title, author, series, description)
     VALUES (new.rowid, new.title, new.author, new.series, new.description);
 END;
+
+-- ============================================================
+-- Background queue (SQLite-only). Postgres keeps River's own
+-- river_job table; SQLite uses this jobs table driven by a single
+-- polling worker (see internal/queue/sqlite.go).
+-- ============================================================
+CREATE TABLE IF NOT EXISTS jobs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind          TEXT NOT NULL,
+    args          TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(args)),
+    state         TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (state IN ('pending','running','completed','failed')),
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    max_attempts  INTEGER NOT NULL DEFAULT 5,
+    last_error    TEXT,
+    scheduled_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    started_at    TEXT,
+    finished_at   TEXT,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_pending
+    ON jobs(state, scheduled_at) WHERE state = 'pending';

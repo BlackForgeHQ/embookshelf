@@ -2,6 +2,10 @@
 -- Order is reverse-creation so FK constraints don't trip.
 -- IF EXISTS on every statement for idempotency.
 
+-- Background queue (SQLite-only).
+DROP INDEX IF EXISTS idx_jobs_pending;
+DROP TABLE IF EXISTS jobs;
+
 -- FTS5 virtual table + triggers (reverse order vs creation).
 DROP TRIGGER IF EXISTS books_fts_after_update;
 DROP TRIGGER IF EXISTS books_fts_after_delete;
