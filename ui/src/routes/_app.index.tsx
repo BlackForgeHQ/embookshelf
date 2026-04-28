@@ -1,5 +1,6 @@
 import { useQueries } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
+import type { ReactNode } from "react"
 
 import type { Book, Library } from "@/api/books"
 import type { ReadingStats } from "@/api/reading"
@@ -19,7 +20,7 @@ export const Route = createFileRoute("/_app/")({
 })
 
 function heatColor(m: number): string {
-  if (m === 0) return "var(--color-paper-3)"
+  if (m === 0) return "var(--color-paper-2)"
   if (m < 20) return "oklch(0.78 0.06 35)"
   if (m < 35) return "oklch(0.65 0.09 35)"
   if (m < 50) return "oklch(0.52 0.11 35)"
@@ -84,31 +85,16 @@ function Dashboard() {
         }
       />
 
-      <div
-        style={{
-          padding: "28px 32px 80px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 40,
-        }}
-      >
+      <div className="mx-auto flex max-w-[1180px] flex-col gap-16 px-8 pt-10 pb-24">
         {/* Currently reading */}
-        <section>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "baseline",
-              justifyContent: "space-between",
-              marginBottom: 16,
-            }}
-          >
-            <h2 className="t-h2">Currently reading</h2>
-            <span className="t-micro">
-              {reading.isLoading
-                ? "loading…"
-                : `${readingList.length} open books`}
-            </span>
-          </div>
+        <Section
+          title="Currently reading"
+          overline={
+            reading.isLoading
+              ? "loading…"
+              : `${readingList.length} open book${readingList.length === 1 ? "" : "s"}`
+          }
+        >
           {readingList.length === 0 && !reading.isLoading ? (
             <EmptyState message="Nothing on the Reading Now shelf. Open a book and tap “Continue reading” to add it." />
           ) : (
@@ -124,192 +110,149 @@ function Dashboard() {
               ))}
             </div>
           )}
-        </section>
+        </Section>
 
-        {/* Reading activity — still mocked until per-user sessions land. */}
-        <section>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "baseline",
-              justifyContent: "space-between",
-              marginBottom: 16,
-            }}
-          >
-            <h2 className="t-h2">Reading activity</h2>
-            <span className="t-micro">Last 12 weeks</span>
-          </div>
-          <div
-            style={{
-              background: "var(--color-paper-0)",
-              border: "1px solid var(--color-rule-soft)",
-              padding: 24,
-              borderRadius: 2,
-              display: "flex",
-              gap: 32,
-            }}
-          >
-            <div>
-              <div
-                style={{ display: "flex", gap: 4, alignItems: "flex-start" }}
-              >
+        {/* Reading activity — heatmap + side metrics, chrome-free */}
+        <Section title="Reading activity" overline="last 12 weeks">
+          {readingStats.isLoading ? (
+            <EmptyRow>Loading session log…</EmptyRow>
+          ) : (
+            <div className="grid gap-10 md:grid-cols-[auto_1fr] md:items-start">
+              <div>
                 <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 4,
-                    marginRight: 6,
-                    paddingTop: 2,
-                  }}
+                  style={{ display: "flex", gap: 5, alignItems: "flex-start" }}
                 >
-                  {["Mon", "", "Wed", "", "Fri", "", ""].map((d, i) => (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 5,
+                      marginRight: 8,
+                      paddingTop: 2,
+                    }}
+                  >
+                    {["Mon", "", "Wed", "", "Fri", "", ""].map((d, i) => (
+                      <div
+                        key={i}
+                        className="mono"
+                        style={{
+                          fontSize: 9,
+                          color: "var(--color-ink-3)",
+                          height: 14,
+                          lineHeight: "14px",
+                        }}
+                      >
+                        {d}
+                      </div>
+                    ))}
+                  </div>
+                  {weeks.map((week, wi) => (
                     <div
-                      key={i}
-                      className="mono"
+                      key={wi}
                       style={{
-                        fontSize: 9,
-                        color: "var(--color-ink-3)",
-                        height: 12,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 5,
                       }}
                     >
-                      {d}
+                      {week.map((m, di) => (
+                        <div
+                          key={di}
+                          title={m === 0 ? "no activity" : `${m} min`}
+                          style={{
+                            width: 14,
+                            height: 14,
+                            borderRadius: 2,
+                            background: heatColor(m),
+                            boxShadow:
+                              m === 0
+                                ? "inset 0 0 0 1px var(--color-rule-soft)"
+                                : undefined,
+                          }}
+                        />
+                      ))}
                     </div>
                   ))}
                 </div>
-                {weeks.map((week, wi) => (
-                  <div
-                    key={wi}
-                    style={{ display: "flex", flexDirection: "column", gap: 4 }}
-                  >
-                    {week.map((m, di) => (
-                      <div
-                        key={di}
-                        title={`${m} min`}
-                        style={{
-                          width: 12,
-                          height: 12,
-                          borderRadius: 1,
-                          background: heatColor(m),
-                        }}
-                      />
-                    ))}
-                  </div>
-                ))}
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  marginTop: 14,
-                }}
-              >
-                <span className="t-micro">Less</span>
-                {[0, 15, 30, 45, 60].map((m) => (
-                  <div
-                    key={m}
-                    style={{
-                      width: 10,
-                      height: 10,
-                      background: heatColor(m),
-                      borderRadius: 1,
-                    }}
-                  />
-                ))}
-                <span className="t-micro">More</span>
-              </div>
-            </div>
-
-            <div
-              style={{
-                flex: 1,
-                display: "grid",
-                gridTemplateColumns: "repeat(2, 1fr)",
-                gap: 20,
-              }}
-            >
-              {[
-                {
-                  label: "This week",
-                  value: formatMinutes(readingData?.thisWeekMinutes ?? 0),
-                  sub:
-                    (readingData?.thisWeekMinutes ?? 0) === 0
-                      ? "no activity"
-                      : "across the last 7 days",
-                },
-                {
-                  label: "Current streak",
-                  value: `${readingData?.currentStreak ?? 0} day${(readingData?.currentStreak ?? 0) === 1 ? "" : "s"}`,
-                  sub:
-                    (readingData?.currentStreak ?? 0) > 0
-                      ? "keep it going"
-                      : "start one today",
-                },
-                {
-                  label: "This quarter",
-                  value: `${quarterHours}h`,
-                  sub: `${quarterSessions} ${quarterSessions === 1 ? "session" : "sessions"}`,
-                },
-                {
-                  label: "All time",
-                  value: `${Math.round((readingData?.allTimeMinutes ?? 0) / 60)}h`,
-                  sub: "total time in readers",
-                },
-              ].map((s) => (
                 <div
-                  key={s.label}
                   style={{
-                    borderLeft: "2px solid var(--color-accent)",
-                    paddingLeft: 14,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    marginTop: 16,
                   }}
                 >
-                  <div className="t-label" style={{ marginBottom: 6 }}>
-                    {s.label}
-                  </div>
-                  <div
-                    style={{
-                      fontFamily: "var(--font-serif)",
-                      fontSize: 28,
-                      fontWeight: 500,
-                      letterSpacing: "-0.01em",
-                    }}
-                  >
-                    {s.value}
-                  </div>
-                  <div className="t-item-sub">{s.sub}</div>
+                  <span className="t-micro">Less</span>
+                  {[0, 15, 30, 45, 60].map((m) => (
+                    <div
+                      key={m}
+                      style={{
+                        width: 11,
+                        height: 11,
+                        background: heatColor(m),
+                        borderRadius: 2,
+                        boxShadow:
+                          m === 0
+                            ? "inset 0 0 0 1px var(--color-rule-soft)"
+                            : undefined,
+                      }}
+                    />
+                  ))}
+                  <span className="t-micro">More</span>
                 </div>
-              ))}
-            </div>
-          </div>
-        </section>
+              </div>
 
-        {/* Recently added + library snapshot */}
-        <div
-          style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 28 }}
-        >
-          <section>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "baseline",
-                justifyContent: "space-between",
-                marginBottom: 16,
-              }}
-            >
-              <h2 className="t-h2">Recently added</h2>
-              <span className="t-micro">
-                {recent.isLoading
-                  ? "loading…"
-                  : `${recent.data?.total ?? 0} books indexed`}
-              </span>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-6 self-center md:max-w-[460px]">
+                <SideMetric
+                  label="This week"
+                  value={formatMinutes(readingData?.thisWeekMinutes ?? 0)}
+                  sub={
+                    (readingData?.thisWeekMinutes ?? 0) === 0
+                      ? "no activity"
+                      : "across the last 7 days"
+                  }
+                />
+                <SideMetric
+                  label="Current streak"
+                  value={`${readingData?.currentStreak ?? 0} day${(readingData?.currentStreak ?? 0) === 1 ? "" : "s"}`}
+                  sub={
+                    (readingData?.currentStreak ?? 0) > 0
+                      ? "keep it going"
+                      : "start one today"
+                  }
+                />
+                <SideMetric
+                  label="This quarter"
+                  value={`${quarterHours}h`}
+                  sub={`${quarterSessions} ${quarterSessions === 1 ? "session" : "sessions"}`}
+                />
+                <SideMetric
+                  label="All time"
+                  value={`${Math.round((readingData?.allTimeMinutes ?? 0) / 60)}h`}
+                  sub="total time in readers"
+                />
+              </div>
             </div>
+          )}
+        </Section>
+
+        {/* Recently added (wide) + Libraries (narrow) */}
+        <div className="grid gap-12 md:grid-cols-[2fr_1fr]">
+          <Section
+            title="Recently added"
+            overline={
+              recent.isLoading
+                ? "loading…"
+                : `${recent.data?.total ?? 0} books indexed`
+            }
+          >
             {recentList.length === 0 && !recent.isLoading ? (
               <EmptyState message="Drop a book into /bookdrop to start growing your library." />
             ) : (
               <div
                 style={{
                   display: "flex",
-                  gap: 18,
+                  gap: 22,
                   overflowX: "auto",
                   paddingBottom: 8,
                 }}
@@ -319,72 +262,114 @@ function Dashboard() {
                 ))}
               </div>
             )}
-          </section>
+          </Section>
 
-          <section>
-            <div style={{ marginBottom: 16 }}>
-              <h2 className="t-h2">Your libraries</h2>
-            </div>
-            <div
-              style={{
-                background: "var(--color-paper-0)",
-                border: "1px solid var(--color-rule-soft)",
-                borderRadius: 2,
-              }}
-            >
-              {libraryList.length === 0 ? (
-                <div style={{ padding: 16 }}>
-                  <div className="t-small" style={{ fontStyle: "italic" }}>
-                    {libraries.isLoading
-                      ? "Loading libraries…"
-                      : "No libraries yet."}
-                  </div>
-                </div>
-              ) : (
-                libraryList.map((lib, i) => (
+          <Section title="Your libraries">
+            {libraryList.length === 0 ? (
+              <EmptyRow>
+                {libraries.isLoading ? "Loading libraries…" : "No libraries yet."}
+              </EmptyRow>
+            ) : (
+              <div className="flex flex-col">
+                {libraryList.map((lib, i) => (
                   <div
                     key={lib.id}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 12,
-                      padding: "14px 16px",
-                      borderBottom:
-                        i < libraryList.length - 1
-                          ? "1px solid var(--color-rule-soft)"
-                          : "none",
-                    }}
+                    className={
+                      "flex items-center gap-3 py-3 " +
+                      (i === 0 ? "" : "border-t border-(--color-rule-soft)")
+                    }
                   >
-                    <div
+                    <span
+                      aria-hidden
                       style={{
                         width: 8,
                         height: 8,
                         borderRadius: "50%",
-                        background: "var(--color-accent)",
+                        background: "var(--color-editorial-accent)",
+                        flexShrink: 0,
                       }}
                     />
-                    <div className="grow">
-                      <div className="t-item-title">{lib.name}</div>
+                    <div className="grow min-w-0">
+                      <div className="t-item-title truncate">{lib.name}</div>
                       <div
-                        className="mono"
-                        style={{ fontSize: 10.5, color: "var(--color-ink-3)" }}
+                        className="mono truncate"
+                        style={{
+                          fontSize: 10.5,
+                          color: "var(--color-ink-3)",
+                        }}
                       >
                         /{lib.slug}
                       </div>
                     </div>
                     <span
-                      className="mono"
-                      style={{ fontSize: 11, color: "var(--color-ink-2)" }}
+                      className="mono tabular-nums"
+                      style={{ fontSize: 12, color: "var(--color-ink-2)" }}
                     >
                       {lib.bookCount}
                     </span>
                   </div>
-                ))
-              )}
-            </div>
-          </section>
+                ))}
+              </div>
+            )}
+          </Section>
         </div>
       </div>
+    </div>
+  )
+}
+
+// Section — overline + serif heading + thin rule. Mirrors the stats
+// redesign so dashboard + stats share one structural grammar.
+function Section({
+  title,
+  overline,
+  children,
+}: {
+  title: string
+  overline?: string
+  children: ReactNode
+}) {
+  return (
+    <section>
+      <div className="mb-5 flex items-baseline justify-between gap-3 border-b border-(--color-rule-soft) pb-3">
+        <h2 className="t-h2" style={{ fontWeight: 500 }}>
+          {title}
+        </h2>
+        {overline && <span className="t-micro">{overline}</span>}
+      </div>
+      <div>{children}</div>
+    </section>
+  )
+}
+
+function SideMetric({
+  label,
+  value,
+  sub,
+}: {
+  label: string
+  value: string
+  sub?: string
+}) {
+  return (
+    <div className="border-t border-(--color-rule-soft) pt-3">
+      <div className="t-label mb-1.5">{label}</div>
+      <div
+        className="font-serif tabular-nums text-(--color-ink-1)"
+        style={{
+          fontSize: 26,
+          fontWeight: 500,
+          lineHeight: 1.1,
+          letterSpacing: "-0.01em",
+        }}
+      >
+        {value}
+      </div>
+      {sub && (
+        <div className="t-small mt-1" style={{ fontSize: 11.5 }}>
+          {sub}
+        </div>
+      )}
     </div>
   )
 }
@@ -442,7 +427,7 @@ function ReadingCard({
             }}
           >
             <span
-              className="mono"
+              className="mono tabular-nums"
               style={{ fontSize: 10, color: "var(--color-ink-3)" }}
             >
               {Math.round(progress * 100)}%
@@ -470,15 +455,21 @@ function RecentTile({
       onClick={() => onOpen(book.id)}
       className="card-tile"
       aria-label={`Open ${book.title}`}
-      style={{ flexShrink: 0, width: 110 }}
+      style={{ flexShrink: 0, width: 130 }}
     >
-      <Cover book={book} size="sm" style={{ width: 110, height: 165 }} />
+      <Cover book={book} size="sm" style={{ width: 130, height: 195 }} />
       <div
-        style={{ fontSize: 12, fontWeight: 500, marginTop: 8, lineHeight: 1.3 }}
+        style={{
+          fontSize: 13,
+          fontWeight: 500,
+          marginTop: 10,
+          lineHeight: 1.3,
+          textWrap: "balance",
+        }}
       >
         {book.title}
       </div>
-      <div className="t-small" style={{ fontSize: 11, fontStyle: "italic" }}>
+      <div className="t-small" style={{ fontSize: 11.5, fontStyle: "italic" }}>
         {book.author}
       </div>
     </button>
@@ -488,17 +479,24 @@ function RecentTile({
 function EmptyState({ message }: { message: string }) {
   return (
     <div
+      className="t-small italic"
       style={{
-        padding: 24,
-        background: "var(--color-paper-0)",
-        border: "1px dashed var(--color-rule)",
-        borderRadius: 2,
+        padding: "16px 0",
         color: "var(--color-ink-3)",
-        fontStyle: "italic",
-        fontSize: 13.5,
       }}
     >
       {message}
+    </div>
+  )
+}
+
+function EmptyRow({ children }: { children: ReactNode }) {
+  return (
+    <div
+      className="t-small italic"
+      style={{ color: "var(--color-ink-3)", padding: "8px 0" }}
+    >
+      {children}
     </div>
   )
 }

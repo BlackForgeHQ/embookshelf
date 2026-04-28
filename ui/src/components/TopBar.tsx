@@ -5,6 +5,7 @@ import { LibrarySearchCombobox } from "./LibrarySearchCombobox"
 
 import type { ReactNode } from "react"
 import { Input } from "@/components/ui/input"
+import { useSidebar } from "@/components/ui/sidebar"
 
 type SearchVariant = "input" | "command"
 
@@ -31,6 +32,9 @@ export function TopBar({
   right,
   crumbs,
 }: TopBarProps) {
+  const { toggleSidebar, state } = useSidebar()
+  const collapsed = state === "collapsed"
+
   return (
     <div
       style={{
@@ -72,6 +76,16 @@ export function TopBar({
         </div>
       )}
       <div style={{ display: "flex", alignItems: "flex-end", gap: 24 }}>
+        <button
+          type="button"
+          onClick={toggleSidebar}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-pressed={!collapsed}
+          title={`${collapsed ? "Expand" : "Collapse"} sidebar  (⌘B)`}
+          className="inline-flex h-8 w-8 items-center justify-center self-center rounded-md text-(--color-ink-3) hover:bg-(--color-paper-3) hover:text-(--color-ink-1) focus-visible:ring-2 focus-visible:ring-(--color-ink-3) focus-visible:outline-none"
+        >
+          <Icon name="menu" size={14} />
+        </button>
         <div className="grow">
           <h1 className="t-h1" style={{ fontWeight: 500 }}>
             {title}

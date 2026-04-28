@@ -31,7 +31,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -44,16 +43,15 @@ export const Route = createFileRoute("/_app/bookdrop")({
   component: BookDrop,
 })
 
-// Dot color mapped to the state lifecycle. Terminal states keep using the
-// non-terminal palette so the user sees "this was ready / failed" context
-// before they clear the row.
+// State → status dot color. Calibrated to be visible against the warm
+// paper background (no more paper-3 ghost dots for "failed").
 const STATUS_COLOR: Record<BookDropState, string> = {
-  ready: "oklch(0.58 0.12 140)",
-  processing: "oklch(0.65 0.09 80)",
-  discovered: "var(--color-ink-4)",
-  failed: "var(--color-accent)",
-  imported: "var(--color-ink-3)",
-  rejected: "var(--color-ink-4)",
+  ready: "oklch(0.58 0.12 140)", // green
+  processing: "oklch(0.65 0.10 70)", // amber
+  discovered: "var(--color-ink-3)",
+  failed: "var(--color-accent-ink)", // burgundy
+  imported: "var(--color-ink-4)", // muted (terminal, success)
+  rejected: "var(--color-ink-4)", // muted (terminal, dismissed)
 }
 
 function BookDrop() {
@@ -130,7 +128,7 @@ function BookDrop() {
     clearMut.error) as unknown as ApiError | null
 
   return (
-    <div className="fade-in">
+    <div className="fade-in flex h-full min-h-0 flex-col">
       <TopBar
         title="BookDrop"
         subtitle="Drop files into /bookdrop and they'll appear here for review before joining your library."
@@ -164,257 +162,217 @@ function BookDrop() {
         }
       />
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "440px 1fr",
-          flex: 1,
-          minHeight: 0,
-        }}
-      >
-        {/* Left — file list */}
-        <div
-          style={{
-            borderRight: "1px solid var(--color-rule-soft)",
-            overflow: "auto",
-          }}
-        >
-          <DropZone
-            onUploaded={() => {
-              queryClient.invalidateQueries({ queryKey: bookdropQueryKey })
-            }}
-          />
-
-          <div className="t-label" style={{ padding: "4px 20px 10px" }}>
-            In queue · {active.length}
-          </div>
-          {queue.isLoading && (
-            <div
-              className="t-small"
-              style={{ padding: "12px 20px", fontStyle: "italic" }}
-            >
-              Loading queue…
-            </div>
-          )}
-          {queue.isError && (
-            <div
-              className="flash error"
-              style={{
-                margin: 20,
-                padding: "10px 14px",
-                borderRadius: 2,
-                fontSize: 13,
+      <div className="grid min-h-0 flex-1 grid-cols-[440px_minmax(0,1fr)]">
+        {/* Left — drop zone + queue */}
+        <aside className="flex min-h-0 flex-col overflow-y-auto border-r border-(--color-rule-soft)">
+          <div className="px-6 pt-6 pb-2">
+            <DropZone
+              onUploaded={() => {
+                queryClient.invalidateQueries({ queryKey: bookdropQueryKey })
               }}
-            >
+            />
+          </div>
+
+          <RailHeader
+            label="In queue"
+            count={active.length}
+          />
+          {queue.isLoading && <RailEmpty>Loading queue…</RailEmpty>}
+          {queue.isError && (
+            <div className="mx-6 my-3 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink)" style={{ fontSize: 13 }}>
               Failed to load the ingest queue.
             </div>
           )}
           {active.length === 0 && !queue.isLoading && !queue.isError && (
-            <div
-              className="t-small"
-              style={{ padding: "12px 20px", fontStyle: "italic" }}
-            >
+            <RailEmpty>
               Queue is empty. Drop a file into{" "}
               <span className="mono">/bookdrop</span>.
-            </div>
+            </RailEmpty>
           )}
-          {active.map((f) => (
-            <QueueRow
-              key={f.id}
-              item={f}
-              selected={selectedId === f.id}
-              onSelect={() => setSelectedId(f.id)}
-            />
-          ))}
+          <div className="divide-y divide-(--color-rule-soft) border-y border-(--color-rule-soft)">
+            {active.map((f) => (
+              <QueueRow
+                key={f.id}
+                item={f}
+                selected={selectedId === f.id}
+                onSelect={() => setSelectedId(f.id)}
+              />
+            ))}
+          </div>
 
           {finished.length > 0 && (
             <>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "16px 20px 10px",
-                }}
-              >
-                <span className="t-label">
-                  Recently processed · {finished.length}
-                </span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={clearMut.isPending}
-                  title="Remove every imported / rejected row from the queue history"
-                  onClick={() => setClearConfirmOpen(true)}
-                >
-                  <Icon name="close" size={11} />{" "}
-                  {clearMut.isPending ? "Clearing…" : "Clear"}
-                </Button>
+              <RailHeader
+                label="Recently processed"
+                count={finished.length}
+                action={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={clearMut.isPending}
+                    title="Remove every imported / rejected row from the queue history"
+                    onClick={() => setClearConfirmOpen(true)}
+                  >
+                    <Icon name="close" size={11} />{" "}
+                    {clearMut.isPending ? "Clearing…" : "Clear"}
+                  </Button>
+                }
+              />
+              <div className="divide-y divide-(--color-rule-soft) border-y border-(--color-rule-soft)">
+                {finished.map((f) => (
+                  <QueueRow
+                    key={f.id}
+                    item={f}
+                    selected={selectedId === f.id}
+                    onSelect={() => setSelectedId(f.id)}
+                  />
+                ))}
               </div>
-              {finished.map((f) => (
-                <QueueRow
-                  key={f.id}
-                  item={f}
-                  selected={selectedId === f.id}
-                  onSelect={() => setSelectedId(f.id)}
-                />
-              ))}
             </>
           )}
-        </div>
+        </aside>
 
         {/* Right — detail */}
-        {current && (
-          <div style={{ overflow: "auto", padding: "32px 40px" }}>
-            {error && (
-              <div
-                className="flash error"
-                style={{
-                  padding: "10px 14px",
-                  border: "1px solid var(--color-accent-soft)",
-                  background: "var(--color-accent-soft)",
-                  color: "var(--color-accent-ink)",
-                  borderRadius: 2,
-                  fontSize: 13,
-                  marginBottom: 20,
-                }}
-              >
-                {error.message}
-              </div>
-            )}
-
-            <div className="t-label" style={{ marginBottom: 6 }}>
-              Review import
-            </div>
-            <div
-              className="mono"
-              style={{
-                fontSize: 12,
-                color: "var(--color-ink-3)",
-                marginBottom: 20,
-              }}
-            >
-              {current.path}
-            </div>
-
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "160px 1fr",
-                gap: 32,
-              }}
-            >
-              <CoverPanel item={current} />
-              <div>
+        <main className="min-h-0 overflow-y-auto">
+          {current ? (
+            <div className="mx-auto max-w-[820px] px-10 py-10">
+              {error && (
                 <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr 1fr",
-                    gap: 14,
-                    marginBottom: 20,
-                  }}
+                  className="mb-6 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink)"
+                  style={{ fontSize: 13 }}
+                  role="alert"
                 >
-                  <Field
-                    label="Title"
-                    value={current.title ?? ""}
-                    placeholder="Could not detect"
-                  />
-                  <Field
-                    label="Author"
-                    value={current.author ?? ""}
-                    placeholder="Could not detect"
-                  />
-                  <Field label="Format" value={current.format} readOnly />
-                  <Field
-                    label="Size"
-                    value={formatBytes(current.fileSize)}
-                    readOnly
-                  />
-                  <Field
-                    label="Language"
-                    value={current.language ?? ""}
-                    placeholder="—"
-                  />
-                  <Field label="State" value={current.state} readOnly />
+                  {error.message}
                 </div>
+              )}
 
-                {current.description && (
-                  <div style={{ marginBottom: 20 }}>
-                    <div className="t-label" style={{ marginBottom: 6 }}>
-                      Description
+              <div className="mb-8 flex items-baseline justify-between gap-3 border-b border-(--color-rule-soft) pb-3">
+                <div>
+                  <p className="t-micro mb-2">Review import</p>
+                  <h2
+                    className="t-h2 wrap-break-word"
+                    style={{ fontWeight: 500 }}
+                  >
+                    {current.title || "Untitled file"}
+                  </h2>
+                </div>
+                <StatusBadge state={current.state} />
+              </div>
+
+              <p
+                className="mono mb-8 break-all"
+                style={{ fontSize: 12, color: "var(--color-ink-3)" }}
+              >
+                {current.path}
+              </p>
+
+              <div className="grid grid-cols-[180px_minmax(0,1fr)] gap-10">
+                <CoverPanel item={current} />
+
+                <div className="min-w-0">
+                  <dl className="grid grid-cols-2 gap-x-6 gap-y-5">
+                    <InfoField
+                      label="Title"
+                      value={current.title}
+                      missing="Could not detect"
+                    />
+                    <InfoField
+                      label="Author"
+                      value={current.author}
+                      missing="Could not detect"
+                    />
+                    <InfoField label="Format" value={current.format} mono />
+                    <InfoField
+                      label="Size"
+                      value={formatBytes(current.fileSize)}
+                      mono
+                    />
+                    <InfoField
+                      label="Language"
+                      value={current.language}
+                      mono
+                      missing="—"
+                    />
+                    <InfoField
+                      label="State"
+                      value={current.state}
+                      mono
+                    />
+                  </dl>
+
+                  {current.description && (
+                    <div className="mt-8">
+                      <p className="t-label mb-2">Description</p>
+                      <p
+                        className="font-serif"
+                        style={{
+                          fontSize: 14.5,
+                          lineHeight: 1.6,
+                          color: "var(--color-ink-1)",
+                          maxWidth: 560,
+                          textWrap: "pretty",
+                        }}
+                      >
+                        {current.description}
+                      </p>
                     </div>
-                    <p
-                      style={{
-                        fontSize: 13.5,
-                        lineHeight: 1.55,
-                        color: "var(--color-ink-1)",
-                        maxWidth: 560,
-                      }}
-                    >
-                      {current.description}
-                    </p>
-                  </div>
-                )}
+                  )}
 
-                {current.state === "failed" && current.errorMsg && (
-                  <div
-                    style={{
-                      padding: 12,
-                      marginBottom: 20,
-                      border: "1px solid var(--color-accent-soft)",
-                      background: "var(--color-accent-soft)",
-                      color: "var(--color-accent-ink)",
-                      fontSize: 13,
-                      borderRadius: 2,
-                    }}
-                  >
-                    Processing error: {current.errorMsg}
-                  </div>
-                )}
-
-                {current.state === "imported" && current.bookId ? (
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 8,
-                      borderTop: "1px solid var(--color-rule-soft)",
-                      paddingTop: 20,
-                    }}
-                  >
-                    <Button
-                      onClick={() =>
-                        void navigate({
-                          to: "/book/$id",
-                          params: { id: current.bookId! },
-                        })
-                      }
+                  {current.state === "failed" && current.errorMsg && (
+                    <div
+                      className="mt-6 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink)"
+                      style={{ fontSize: 13 }}
                     >
-                      <Icon name="book-open" size={13} /> Open imported book
-                    </Button>
+                      Processing error: {current.errorMsg}
+                    </div>
+                  )}
+
+                  <div className="mt-8 border-t border-(--color-rule-soft) pt-6">
+                    {current.state === "imported" && current.bookId ? (
+                      <Button
+                        onClick={() =>
+                          void navigate({
+                            to: "/book/$id",
+                            params: { id: current.bookId! },
+                          })
+                        }
+                      >
+                        <Icon name="book-open" size={13} /> Open imported book
+                      </Button>
+                    ) : current.state === "rejected" ? (
+                      <p
+                        className="t-small italic"
+                        style={{ color: "var(--color-ink-3)" }}
+                      >
+                        This item was dismissed.
+                      </p>
+                    ) : (
+                      <ApprovalBar
+                        item={current}
+                        libraries={libraries.data ?? []}
+                        disabled={approveMut.isPending || rejectMut.isPending}
+                        onApprove={(libraryId) =>
+                          approveMut.mutate({ id: current.id, libraryId })
+                        }
+                        onReject={() => rejectMut.mutate(current.id)}
+                      />
+                    )}
                   </div>
-                ) : current.state === "rejected" ? (
-                  <div
-                    className="t-small"
-                    style={{ fontStyle: "italic", color: "var(--color-ink-3)" }}
-                  >
-                    This item was dismissed.
-                  </div>
-                ) : (
-                  <ApprovalBar
-                    item={current}
-                    libraries={libraries.data ?? []}
-                    disabled={approveMut.isPending || rejectMut.isPending}
-                    onApprove={(libraryId) =>
-                      approveMut.mutate({ id: current.id, libraryId })
-                    }
-                    onReject={() => rejectMut.mutate(current.id)}
-                  />
-                )}
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          ) : (
+            <div className="flex h-full items-center justify-center px-8">
+              <p
+                className="t-small italic"
+                style={{ color: "var(--color-ink-3)", maxWidth: 320, textAlign: "center" }}
+              >
+                Drop a file into the queue to start reviewing.
+              </p>
+            </div>
+          )}
+        </main>
       </div>
 
       <Dialog open={clearConfirmOpen} onOpenChange={setClearConfirmOpen}>
@@ -452,6 +410,67 @@ function BookDrop() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+function RailHeader({
+  label,
+  count,
+  action,
+}: {
+  label: string
+  count: number
+  action?: ReactNode
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 px-6 pt-6 pb-2">
+      <div className="flex items-baseline gap-2">
+        <span className="t-label">{label}</span>
+        <span
+          className="mono tabular-nums"
+          style={{ fontSize: 11, color: "var(--color-ink-3)" }}
+        >
+          {count}
+        </span>
+      </div>
+      {action}
+    </div>
+  )
+}
+
+function RailEmpty({ children }: { children: ReactNode }) {
+  return (
+    <div
+      className="t-small italic px-6 py-3"
+      style={{ color: "var(--color-ink-3)" }}
+    >
+      {children}
+    </div>
+  )
+}
+
+function StatusBadge({ state }: { state: BookDropState }) {
+  return (
+    <span
+      className="mono inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap"
+      style={{
+        fontSize: 10.5,
+        letterSpacing: "0.06em",
+        textTransform: "uppercase",
+        color: "var(--color-ink-2)",
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 7,
+          height: 7,
+          borderRadius: "50%",
+          background: STATUS_COLOR[state],
+        }}
+      />
+      {state}
+    </span>
   )
 }
 
@@ -501,7 +520,7 @@ function DropZone({ onUploaded }: { onUploaded: () => void }) {
   const okCount = results?.filter((r) => r.item).length ?? 0
 
   return (
-    <div style={{ margin: 20 }}>
+    <div>
       <div
         onDragOver={(e) => {
           e.preventDefault()
@@ -510,32 +529,73 @@ function DropZone({ onUploaded }: { onUploaded: () => void }) {
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
         onClick={() => inputRef.current?.click()}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault()
+            inputRef.current?.click()
+          }
+        }}
         style={{
-          padding: "28px 16px",
-          border: `2px dashed ${dragOver ? "var(--color-accent)" : "var(--color-rule)"}`,
+          padding: "32px 20px",
+          border: `1px dashed ${
+            dragOver ? "var(--color-editorial-accent)" : "var(--color-rule)"
+          }`,
           borderRadius: 3,
           background: dragOver
-            ? "var(--color-paper-3)"
-            : "var(--color-paper-2)",
+            ? "var(--color-paper-2)"
+            : "transparent",
           textAlign: "center",
           cursor: uploading ? "wait" : "pointer",
-          transition: "background 120ms, border-color 120ms",
+          transition:
+            "background 160ms cubic-bezier(0.16,1,0.3,1), border-color 160ms",
         }}
       >
-        <Icon name="upload" size={20} className="mono" />
-        <div style={{ fontSize: 14, fontWeight: 500, marginTop: 8 }}>
-          {uploading ? "Uploading…" : "Drop files here or click to browse"}
+        <div
+          aria-hidden
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 36,
+            height: 36,
+            borderRadius: "50%",
+            background: dragOver
+              ? "var(--color-editorial-accent)"
+              : "var(--color-paper-3)",
+            color: dragOver
+              ? "var(--color-paper-0)"
+              : "var(--color-ink-2)",
+            transition: "background 160ms, color 160ms",
+            marginBottom: 10,
+          }}
+        >
+          <Icon name="upload" size={16} />
         </div>
-        <div className="t-small" style={{ fontSize: 12 }}>
-          Multi-file supported · EPUB, PDF, CBZ, MOBI, AZW3, FB2, audio
+        <div
+          className="font-serif"
+          style={{ fontSize: 16, fontWeight: 500, marginBottom: 4 }}
+        >
+          {uploading
+            ? "Uploading…"
+            : dragOver
+              ? "Drop to queue"
+              : "Drop files or click to browse"}
+        </div>
+        <div
+          className="t-small italic"
+          style={{ fontSize: 12, color: "var(--color-ink-3)" }}
+        >
+          EPUB, PDF, CBZ, MOBI, AZW3, FB2, audio
         </div>
 
         {uploading && (
           <div
             style={{
               marginTop: 14,
-              height: 4,
-              background: "var(--color-paper-0)",
+              height: 3,
+              background: "var(--color-paper-3)",
               borderRadius: 2,
               overflow: "hidden",
             }}
@@ -544,7 +604,7 @@ function DropZone({ onUploaded }: { onUploaded: () => void }) {
               style={{
                 height: "100%",
                 width: `${Math.round(progress * 100)}%`,
-                background: "var(--color-accent)",
+                background: "var(--color-editorial-accent)",
                 transition: "width 80ms linear",
               }}
             />
@@ -568,16 +628,9 @@ function DropZone({ onUploaded }: { onUploaded: () => void }) {
 
       {err && (
         <div
-          className="flash error"
-          style={{
-            marginTop: 10,
-            padding: "8px 12px",
-            border: "1px solid var(--color-accent-soft)",
-            background: "var(--color-accent-soft)",
-            color: "var(--color-accent-ink)",
-            borderRadius: 2,
-            fontSize: 12.5,
-          }}
+          className="mt-2.5 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink)"
+          style={{ fontSize: 12.5 }}
+          role="alert"
         >
           {err}
         </div>
@@ -585,14 +638,8 @@ function DropZone({ onUploaded }: { onUploaded: () => void }) {
 
       {results && (
         <div
-          style={{
-            marginTop: 10,
-            padding: "8px 12px",
-            background: "var(--color-paper-0)",
-            border: "1px solid var(--color-rule-soft)",
-            borderRadius: 2,
-            fontSize: 12.5,
-          }}
+          className="mt-2.5 rounded-[3px] border border-(--color-rule-soft) px-3 py-2"
+          style={{ fontSize: 12.5 }}
         >
           <div style={{ marginBottom: failedCount ? 4 : 0 }}>
             {okCount} queued{failedCount ? ` · ${failedCount} failed` : ""}
@@ -624,54 +671,50 @@ function QueueRow({
   onSelect: () => void
 }) {
   return (
-    <div
+    <button
+      type="button"
       onClick={onSelect}
+      aria-pressed={selected}
+      className="card-row relative flex w-full items-center gap-3 px-6 py-3 text-left"
       style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 12,
-        padding: "12px 20px",
-        cursor: "pointer",
-        borderBottom: "1px solid var(--color-rule-soft)",
-        background: selected ? "var(--color-paper-3)" : "transparent",
-        borderLeft: selected
-          ? "2px solid var(--color-accent)"
-          : "2px solid transparent",
+        background: selected ? "var(--color-paper-2)" : "transparent",
       }}
     >
+      {selected && (
+        <span
+          aria-hidden
+          className="absolute inset-y-0 left-0 w-[2px]"
+          style={{ background: "var(--color-editorial-accent)" }}
+        />
+      )}
       <div
+        className="mono shrink-0"
         style={{
           width: 36,
           height: 48,
           background: "var(--color-paper-2)",
           border: "1px solid var(--color-rule)",
+          borderRadius: 2,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          fontFamily: "var(--font-mono)",
           fontSize: 9,
           color: "var(--color-ink-3)",
-          flexShrink: 0,
         }}
       >
         {item.format}
       </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div className="min-w-0 grow">
         <div
-          className="mono"
-          style={{
-            fontSize: 11,
-            color: "var(--color-ink-2)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
+          className="mono truncate"
+          style={{ fontSize: 11, color: "var(--color-ink-3)" }}
         >
           {item.filename}
         </div>
         <div
+          className="truncate font-serif"
           style={{
-            fontSize: 13,
+            fontSize: 13.5,
             fontWeight: 500,
             marginTop: 2,
             fontStyle: item.title ? "normal" : "italic",
@@ -680,15 +723,9 @@ function QueueRow({
         >
           {item.title || "Could not detect metadata"}
         </div>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            marginTop: 4,
-          }}
-        >
+        <div className="mt-1.5 flex items-center gap-2">
           <span
+            aria-hidden
             style={{
               width: 6,
               height: 6,
@@ -707,53 +744,56 @@ function QueueRow({
           </span>
         </div>
       </div>
-    </div>
+    </button>
   )
 }
 
 function CoverPanel({ item }: { item: BookDropItem }) {
+  const sharedBox: React.CSSProperties = {
+    width: 180,
+    height: 270,
+    borderRadius: 2,
+  }
   if (item.hasCover) {
     return (
-      <div>
-        <img
-          src={bookdropCoverUrl(item.id)}
-          alt=""
-          width={160}
-          height={240}
-          style={{
-            width: 160,
-            height: 240,
-            objectFit: "cover",
-            boxShadow: "2px 4px 12px oklch(0.2 0.02 60 / 0.15)",
-            background: "var(--color-paper-2)",
-          }}
-        />
-      </div>
+      <img
+        src={bookdropCoverUrl(item.id)}
+        alt=""
+        width={180}
+        height={270}
+        style={{
+          ...sharedBox,
+          objectFit: "cover",
+          boxShadow:
+            "inset 0 0 0 1px oklch(0 0 0 / 0.08), 2px 4px 14px oklch(0.2 0.02 60 / 0.16)",
+          background: "var(--color-paper-2)",
+        }}
+      />
     )
   }
   return (
-    <div>
-      <div
+    <div
+      className="flex flex-col items-center justify-center"
+      style={{
+        ...sharedBox,
+        background:
+          "repeating-linear-gradient(135deg, var(--color-paper-3) 0 8px, var(--color-paper-2) 8px 16px)",
+        border: "1px solid var(--color-rule)",
+        textAlign: "center",
+        padding: 20,
+      }}
+    >
+      <p
+        className="font-serif italic"
         style={{
-          width: 160,
-          height: 240,
-          background:
-            "repeating-linear-gradient(135deg, var(--color-paper-3) 0 8px, var(--color-paper-2) 8px 16px)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          border: "1px solid var(--color-rule)",
+          fontSize: 14,
+          color: "var(--color-ink-2)",
+          lineHeight: 1.4,
+          textWrap: "balance",
         }}
       >
-        <div
-          className="t-micro"
-          style={{ textAlign: "center", lineHeight: 1.4 }}
-        >
-          no cover
-          <br />
-          detected
-        </div>
-      </div>
+        no cover detected
+      </p>
     </div>
   )
 }
@@ -777,16 +817,7 @@ function ApprovalBar({
   const approvable = item.state === "ready" || item.state === "failed"
 
   return (
-    <div
-      style={{
-        display: "flex",
-        gap: 8,
-        alignItems: "center",
-        borderTop: "1px solid var(--color-rule-soft)",
-        paddingTop: 20,
-        flexWrap: "wrap",
-      }}
-    >
+    <div className="flex flex-wrap items-center gap-2">
       {libraries.length > 0 && (
         <Select
           value={libraryId}
@@ -813,7 +844,7 @@ function ApprovalBar({
       <Button
         variant="ghost"
         disabled={disabled}
-        className="text-(--color-accent-ink)"
+        className="text-(--color-accent-ink) hover:text-(--color-accent-ink) hover:bg-(--color-accent-soft)"
         onClick={onReject}
       >
         Discard file
@@ -822,25 +853,35 @@ function ApprovalBar({
   )
 }
 
-type FieldProps = {
+function InfoField({
+  label,
+  value,
+  missing,
+  mono,
+}: {
   label: string
-  value: string
-  placeholder?: string
-  readOnly?: boolean
-}
-
-function Field({ label, value, placeholder, readOnly }: FieldProps): ReactNode {
+  value?: string | null
+  missing?: string
+  mono?: boolean
+}) {
+  const v = (value ?? "").trim()
+  const isMissing = v === ""
   return (
-    <div>
-      <div className="t-label" style={{ marginBottom: 6 }}>
-        {label}
-      </div>
-      <Input
-        defaultValue={value}
-        placeholder={placeholder}
-        readOnly={readOnly}
-        className={readOnly ? "bg-muted text-muted-foreground" : undefined}
-      />
+    <div className="min-w-0">
+      <dt className="t-label mb-1.5">{label}</dt>
+      <dd
+        className={
+          (mono ? "mono " : "font-serif ") + "block min-w-0 wrap-break-word"
+        }
+        style={{
+          fontSize: mono ? 13 : 14.5,
+          fontWeight: mono ? 400 : 500,
+          color: isMissing ? "var(--color-ink-3)" : "var(--color-ink-1)",
+          fontStyle: isMissing ? "italic" : "normal",
+        }}
+      >
+        {isMissing ? (missing ?? "—") : v}
+      </dd>
     </div>
   )
 }

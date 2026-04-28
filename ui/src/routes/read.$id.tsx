@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
+import { toast } from "sonner"
 
+import type { ApiError } from "@/api/client"
 import type { Annotation } from "@/api/annotations"
 import type { BookDetail } from "@/api/books"
 import type {
@@ -145,6 +147,39 @@ function ReaderShell({ book }: { book: BookDetail }) {
     onSuccess: invalidateAnnotations,
   })
 
+  // Bookmark = a zero-text annotation at the current location, marked
+  // with color="bookmark" so the notebook can group it separately. The
+  // annotations CHECK constraint requires selected_text or note to be
+  // non-empty, so we put the literal label in selected_text.
+  const bookmarkMut = useMutation({
+    mutationFn: (locator: string) =>
+      createAnnotation(book.id, {
+        locator,
+        selectedText: "Bookmark",
+        color: "bookmark",
+      }),
+    onSuccess: () => {
+      invalidateAnnotations()
+      toast.success("Bookmark saved")
+    },
+    onError: (err) =>
+      toast.error((err as unknown as ApiError).message || "Bookmark failed"),
+  })
+
+  const onBookmark = () => {
+    const locator =
+      book.format === "PDF" && pageState
+        ? `page:${pageState.current}`
+        : book.format === "EPUB" && cfiState
+          ? cfiState
+          : ""
+    if (!locator) {
+      toast.info("Open the book first, then bookmark.")
+      return
+    }
+    bookmarkMut.mutate(locator)
+  }
+
   // EPUB highlights for the rendition overlay. Stable reference when the
   // annotation list hasn't changed, so the effect in EpubReader doesn't
   // churn add/remove on every render.
@@ -285,7 +320,13 @@ function ReaderShell({ book }: { book: BookDetail }) {
           >
             <Icon name="aA" size={14} />
           </Button>
-          <Button variant="ghost" size="icon-sm" aria-label="Bookmark">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Bookmark"
+            disabled={bookmarkMut.isPending}
+            onClick={onBookmark}
+          >
             <Icon name="bookmark" size={14} />
           </Button>
           <Button
@@ -733,9 +774,6 @@ function ReaderShell({ book }: { book: BookDetail }) {
         </Button>
       )}
 
-      {/* Intentional reference — keeps cfiState alive for the bookmark
-          feature once annotations land. */}
-      <span hidden>{cfiState}</span>
     </div>
   )
 }
