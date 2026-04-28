@@ -62,8 +62,11 @@ func New(
 	// after the client is constructed (circular dep resolved via the
 	// BookDropEnqueuer interface).
 	scanWorker := &task.LibraryScanWorker{
-		BookDrop: bdropSvc,
-		Lib:      libSvc,
+		Deps: task.LibraryScanDeps{
+			BookDrop: bdropSvc,
+			Lib:      libSvc,
+			// Queue is set after the river.Client is constructed (cyclic dep).
+		},
 	}
 	river.AddWorker(workers, scanWorker)
 
@@ -78,7 +81,7 @@ func New(
 	}
 
 	rc := &RiverClient{c: c}
-	scanWorker.Queue = rc // now the scan worker can enqueue further jobs
+	scanWorker.Deps.Queue = rc // now the scan worker can enqueue further jobs
 
 	if err := c.Start(ctx); err != nil {
 		return nil, fmt.Errorf("river start: %w", err)
