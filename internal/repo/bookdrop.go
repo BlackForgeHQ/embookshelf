@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/db/dberr"
@@ -27,12 +28,19 @@ const bdCols = `id, path, file_size, format, state, progress, error_msg,
 var ErrAlreadyExists = errors.New("already exists")
 
 func (r *BookDropRepo) Insert(ctx context.Context, path, format string, size int64) (model.BookDropItem, error) {
-	row := r.db.SQL.QueryRowContext(ctx, `
-		INSERT INTO bookdrop_items (path, file_size, format)
-		VALUES ($1, $2, $3)
+	id := db.NewID()
+	const qPG = `
+		INSERT INTO bookdrop_items (id, path, file_size, format)
+		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (path) DO NOTHING
-		RETURNING `+bdCols, path, size, format)
-	item, err := scanBookDrop(row)
+		RETURNING ` + bdCols
+	const qSQLite = `
+		INSERT INTO bookdrop_items (id, path, file_size, format)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (path) DO NOTHING
+		RETURNING ` + bdCols
+	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), id, path, size, format)
+	item, err := r.scanBookDrop(row)
 	if errors.Is(err, ErrNotFound) {
 		// ON CONFLICT DO NOTHING returned no rows — row already existed, fetch it.
 		existing, gerr := r.GetByPath(ctx, path)
@@ -45,13 +53,17 @@ func (r *BookDropRepo) Insert(ctx context.Context, path, format string, size int
 }
 
 func (r *BookDropRepo) GetByID(ctx context.Context, id string) (model.BookDropItem, error) {
-	row := r.db.SQL.QueryRowContext(ctx, `SELECT `+bdCols+` FROM bookdrop_items WHERE id = $1`, id)
-	return scanBookDrop(row)
+	const qPG = `SELECT ` + bdCols + ` FROM bookdrop_items WHERE id = $1`
+	const qSQLite = `SELECT ` + bdCols + ` FROM bookdrop_items WHERE id = ?`
+	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), id)
+	return r.scanBookDrop(row)
 }
 
 func (r *BookDropRepo) GetByPath(ctx context.Context, path string) (model.BookDropItem, error) {
-	row := r.db.SQL.QueryRowContext(ctx, `SELECT `+bdCols+` FROM bookdrop_items WHERE path = $1`, path)
-	return scanBookDrop(row)
+	const qPG = `SELECT ` + bdCols + ` FROM bookdrop_items WHERE path = $1`
+	const qSQLite = `SELECT ` + bdCols + ` FROM bookdrop_items WHERE path = ?`
+	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), path)
+	return r.scanBookDrop(row)
 }
 
 func (r *BookDropRepo) List(ctx context.Context) ([]model.BookDropItem, error) {
@@ -65,29 +77,52 @@ func (r *BookDropRepo) List(ctx context.Context) ([]model.BookDropItem, error) {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	return collectBookDrop(rows)
+	return r.collectBookDrop(rows)
 }
 
 func (r *BookDropRepo) SetState(ctx context.Context, id string, state model.BookDropState, progress int, errorMsg string) error {
-	_, err := r.db.SQL.ExecContext(ctx, `
+	const qPG = `
 		UPDATE bookdrop_items
 		SET state = $2, progress = $3, error_msg = $4, updated_at = now()
 		WHERE id = $1
-	`, id, string(state), progress, errorMsg)
+	`
+	const qSQLite = `
+		UPDATE bookdrop_items
+		SET state = ?, progress = ?, error_msg = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		WHERE id = ?
+	`
+	if r.db.Dialect == db.DialectSQLite {
+		_, err := r.db.SQL.ExecContext(ctx, qSQLite, string(state), progress, errorMsg, id)
+		return err
+	}
+	_, err := r.db.SQL.ExecContext(ctx, qPG, id, string(state), progress, errorMsg)
 	return err
 }
 
 // SetMetadata records metadata extracted by the fileproc worker and flips the
 // item into 'ready' state. cover_mime is empty when no cover was extracted.
 func (r *BookDropRepo) SetMetadata(ctx context.Context, id, title, author, description, language string, hasCover bool, coverMime string) error {
-	_, err := r.db.SQL.ExecContext(ctx, `
+	const qPG = `
 		UPDATE bookdrop_items
 		SET title = $2, author = $3, description = $4, language = $5,
 		    has_cover = $6, cover_mime = $7,
 		    state = 'ready', progress = 100, error_msg = '',
 		    updated_at = now()
 		WHERE id = $1
-	`, id, title, author, description, language, hasCover, coverMime)
+	`
+	const qSQLite = `
+		UPDATE bookdrop_items
+		SET title = ?, author = ?, description = ?, language = ?,
+		    has_cover = ?, cover_mime = ?,
+		    state = 'ready', progress = 100, error_msg = '',
+		    updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		WHERE id = ?
+	`
+	if r.db.Dialect == db.DialectSQLite {
+		_, err := r.db.SQL.ExecContext(ctx, qSQLite, title, author, description, language, hasCover, coverMime, id)
+		return err
+	}
+	_, err := r.db.SQL.ExecContext(ctx, qPG, id, title, author, description, language, hasCover, coverMime)
 	return err
 }
 
@@ -119,23 +154,35 @@ func (r *BookDropRepo) DeleteProcessed(ctx context.Context) ([]string, error) {
 
 // MarkImported links the bookdrop item to the newly-created book row.
 func (r *BookDropRepo) MarkImported(ctx context.Context, id, bookID string) error {
-	_, err := r.db.SQL.ExecContext(ctx, `
+	const qPG = `
 		UPDATE bookdrop_items
 		SET state = 'imported', progress = 100, book_id = $2, updated_at = now()
 		WHERE id = $1
-	`, id, bookID)
+	`
+	const qSQLite = `
+		UPDATE bookdrop_items
+		SET state = 'imported', progress = 100, book_id = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		WHERE id = ?
+	`
+	if r.db.Dialect == db.DialectSQLite {
+		_, err := r.db.SQL.ExecContext(ctx, qSQLite, bookID, id)
+		return err
+	}
+	_, err := r.db.SQL.ExecContext(ctx, qPG, id, bookID)
 	return err
 }
 
-func scanBookDrop(s scanner) (model.BookDropItem, error) {
+func (r *BookDropRepo) scanBookDrop(s scanner) (model.BookDropItem, error) {
 	var (
-		item  model.BookDropItem
-		state string
+		item          model.BookDropItem
+		state         string
+		discoveredAny any
+		updatedAny    any
 	)
 	err := s.Scan(
 		&item.ID, &item.Path, &item.FileSize, &item.Format, &state, &item.Progress, &item.ErrorMsg,
 		&item.Title, &item.Author, &item.Description, &item.Language, &item.HasCover, &item.CoverMime, &item.BookID,
-		&item.DiscoveredAt, &item.UpdatedAt,
+		&discoveredAny, &updatedAny,
 	)
 	if err != nil {
 		if dberr.IsNotFound(err) {
@@ -144,13 +191,19 @@ func scanBookDrop(s scanner) (model.BookDropItem, error) {
 		return item, err
 	}
 	item.State = model.BookDropState(state)
+	if err := db.ScanTime(r.db.Dialect, discoveredAny, &item.DiscoveredAt); err != nil {
+		return item, fmt.Errorf("scan discovered_at: %w", err)
+	}
+	if err := db.ScanTime(r.db.Dialect, updatedAny, &item.UpdatedAt); err != nil {
+		return item, fmt.Errorf("scan updated_at: %w", err)
+	}
 	return item, nil
 }
 
-func collectBookDrop(rows *sql.Rows) ([]model.BookDropItem, error) {
+func (r *BookDropRepo) collectBookDrop(rows *sql.Rows) ([]model.BookDropItem, error) {
 	var out []model.BookDropItem
 	for rows.Next() {
-		item, err := scanBookDrop(rows)
+		item, err := r.scanBookDrop(rows)
 		if err != nil {
 			return nil, err
 		}
