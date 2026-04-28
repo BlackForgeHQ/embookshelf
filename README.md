@@ -10,6 +10,33 @@ Ships as a single binary with the UI embedded.
 See [docs/architecture.md](docs/architecture.md) for the technical shape
 and [docs/prd.md](docs/prd.md) for the product intent + roadmap.
 
+> **2026-04 update:** SQLite is now the default backend. If you were relying on the bare-default `postgres://localhost:5432/embookshelf` connection (i.e. running without `DATABASE_URL` set), update your config to set `DATABASE_URL` explicitly to your Postgres DSN.
+
+## Quickstart
+
+### Single-user / self-hosted (SQLite, default)
+
+```bash
+docker run --rm -p 6060:6060 -v $(pwd)/data:/data ghcr.io/blackforgehq/embookshelf:latest
+```
+
+Open http://localhost:6060 and create your admin user. The library lives at `./data/embookshelf.db`. No external database required.
+
+### Multi-user / production (Postgres)
+
+For shared installs, run with an explicit `DATABASE_URL`:
+
+```bash
+docker run --rm -p 6060:6060 \
+  -e DATABASE_URL='postgres://user:pass@dbhost:5432/embookshelf?sslmode=disable' \
+  -v $(pwd)/data:/data \
+  ghcr.io/blackforgehq/embookshelf:latest
+```
+
+The Postgres path supports concurrent writes and the full bookdrop ingest pipeline.
+
+---
+
 ## Layout
 
 ```
@@ -257,7 +284,7 @@ live in [internal/config/config.go](internal/config/config.go).
 
 | Var | Default | Notes |
 | --- | --- | --- |
-| `DATABASE_URL` | `postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable` | PG connection string |
+| `DATABASE_URL` | `sqlite://./data/embookshelf.db` | Database connection. SQLite by default; set to a `postgres://…` DSN to use Postgres instead |
 | `EMBOOKSHELF_PORT` | `6060` | HTTP listen port |
 | `ALLOWED_ORIGINS` | `*` | CSRF allow-list for `Origin`/`Referer` |
 | `SESSION_SECRET` | _(empty — dev only)_ | Sign session cookies; set in prod |
