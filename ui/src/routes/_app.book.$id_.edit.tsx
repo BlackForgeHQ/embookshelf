@@ -30,8 +30,8 @@ export const Route = createFileRoute("/_app/book/$id_/edit")({
   component: MetadataEditor,
 })
 
-const AGE_RATINGS = ["", "All ages", "8+", "12+", "16+", "18+"] as const
-const CONTENT_RATINGS = ["", "G", "PG", "PG-13", "R", "NC-17"] as const
+const AGE_RATINGS = ["All ages", "8+", "12+", "16+", "18+"] as const
+const CONTENT_RATINGS = ["G", "PG", "PG-13", "R", "NC-17"] as const
 
 const TAG_SUGGESTIONS = [
   "Fiction",
@@ -110,8 +110,13 @@ function MetadataEditor() {
     },
   })
 
-  const set = <TKey extends keyof FormState>(k: TKey, v: FormState[TKey]) =>
+  const set = <TKey extends keyof FormState>(k: TKey, v: FormState[TKey]) => {
     setForm((f) => ({ ...f, [k]: v }))
+    // Clear any stale validation error so the red message disappears as
+    // soon as the user starts correcting the value (re-validation
+    // still runs on blur).
+    if (errors[k]) setErrors((e) => ({ ...e, [k]: undefined }))
+  }
 
   const onBlurValidate = (k: keyof FormState) => () => {
     const value = form[k]
@@ -413,7 +418,7 @@ function MetadataEditor() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none">—</SelectItem>
-                  {AGE_RATINGS.filter((r) => r !== "").map((r) => (
+                  {AGE_RATINGS.map((r) => (
                     <SelectItem key={r} value={r}>
                       {r}
                     </SelectItem>
@@ -431,7 +436,7 @@ function MetadataEditor() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none">—</SelectItem>
-                  {CONTENT_RATINGS.filter((r) => r !== "").map((r) => (
+                  {CONTENT_RATINGS.map((r) => (
                     <SelectItem key={r} value={r}>
                       {r}
                     </SelectItem>

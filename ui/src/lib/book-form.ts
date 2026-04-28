@@ -78,13 +78,6 @@ export function bookToForm(b: BookDetail): FormState {
   }
 }
 
-export function splitCsv(raw: string): Array<string> {
-  return raw
-    .split(",")
-    .map((t) => t.trim())
-    .filter(Boolean)
-}
-
 export function formToPatch(form: FormState): BookPatch {
   const patch: BookPatch = {
     title: form.title.trim(),
