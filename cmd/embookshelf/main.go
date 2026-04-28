@@ -263,7 +263,7 @@ func main() {
 	// taken from a silent stop.
 	var serveErr error
 	go func() {
-		slog.Info("server starting", "addr", srv.Addr, "diskMode", cfg.DiskType, "bookdrop", cfg.BookDropPath)
+		slog.Info("server starting", "addr", srv.Addr, "bookdrop", cfg.BookDropPath)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("server failed", "err", err)
 			serveErr = err

@@ -2238,10 +2238,6 @@ function AboutPanel({ isAdmin }: { isAdmin: boolean }) {
               }
             />
             <DefRow
-              label="Disk mode"
-              value={<span className="mono">{info.data?.diskMode ?? "—"}</span>}
-            />
-            <DefRow
               label="BookDrop path"
               value={
                 <span className="mono">{info.data?.bookDropPath ?? "—"}</span>

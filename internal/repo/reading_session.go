@@ -2,6 +2,8 @@ package repo
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -51,43 +53,93 @@ func (r *ReadingSessionRepo) RecordTick(
 		SELECT $1, $2, $3, $3
 		WHERE NOT EXISTS (SELECT 1 FROM extended)
 	`
-	// SQLite path: app-side time arithmetic + explicit UUID generation.
-	// We use a simpler two-step approach: check/extend in the CTE, and
-	// supply a pre-generated ID + timestamps for the INSERT branch.
-	const qSQLite = `
-		WITH latest AS (
-			SELECT id, ended_at
-			FROM reading_sessions
-			WHERE user_id = ?1 AND book_id = ?2
-			ORDER BY ended_at DESC
-			LIMIT 1
-		),
-		extended AS (
-			UPDATE reading_sessions
-			SET ended_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')), end_progress = ?3
-			WHERE id = (
-				SELECT id FROM latest
-				WHERE ended_at >= datetime('now', ?4)
-			)
-			RETURNING 1
-		)
-		INSERT INTO reading_sessions (id, user_id, book_id, start_progress, end_progress)
-		SELECT ?5, ?1, ?2, ?3, ?3
-		WHERE NOT EXISTS (SELECT 1 FROM extended)
-	`
 	if r.db.Dialect == db.DialectSQLite {
-		newID := db.NewID()
-		// SQLite datetime modifier: '-N seconds'
-		secs := int(mergeWindow.Seconds())
-		if secs <= 0 {
-			secs = 1
-		}
-		modifier := fmt.Sprintf("-%d seconds", secs)
-		_, err := r.db.SQL.ExecContext(ctx, qSQLite, userID, bookID, percent, modifier, newID)
-		return err
+		return r.recordTickSQLite(ctx, userID, bookID, percent, mergeWindow)
 	}
 	_, err := r.db.SQL.ExecContext(ctx, qPG, userID, bookID, percent, intervalLiteral(mergeWindow))
 	return err
+}
+
+// recordTickSQLite is the SQLite equivalent of the PG single-statement CTE
+// chain. SQLite rejects DML inside a CTE (Postgres-only extension), so the
+// extend-or-insert decision happens app-side inside a transaction:
+//
+//  1. SELECT the latest session for (user, book).
+//  2. If its ended_at is within mergeWindow → UPDATE that row.
+//  3. Otherwise → INSERT a new row with a pre-generated UUID.
+//
+// Wrapped in a tx so a concurrent tick from another goroutine can't drop
+// us into a torn state. RecordTick is already documented as best-effort,
+// so any error rolls back and surfaces to the caller.
+func (r *ReadingSessionRepo) recordTickSQLite(
+	ctx context.Context,
+	userID, bookID string,
+	percent int,
+	mergeWindow time.Duration,
+) error {
+	secs := int(mergeWindow.Seconds())
+	if secs <= 0 {
+		secs = 1
+	}
+	modifier := fmt.Sprintf("-%d seconds", secs)
+
+	tx, err := r.db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		latestID string
+		// String scan because SQLite stores timestamps as TEXT.
+		latestEndedAt string
+	)
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, ended_at
+		FROM reading_sessions
+		WHERE user_id = ? AND book_id = ?
+		ORDER BY ended_at DESC
+		LIMIT 1
+	`, userID, bookID).Scan(&latestID, &latestEndedAt)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("select latest: %w", err)
+	}
+
+	if latestID != "" {
+		// Did the latest tick land inside mergeWindow? Push the cutoff
+		// computation to SQLite so its clock is the authority — no
+		// app/DB drift.
+		var withinWindow int
+		err = tx.QueryRowContext(ctx, `
+			SELECT CASE
+				WHEN ? >= datetime('now', ?) THEN 1 ELSE 0
+			END
+		`, latestEndedAt, modifier).Scan(&withinWindow)
+		if err != nil {
+			return fmt.Errorf("window check: %w", err)
+		}
+		if withinWindow == 1 {
+			_, err = tx.ExecContext(ctx, `
+				UPDATE reading_sessions
+				SET ended_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+				    end_progress = ?
+				WHERE id = ?
+			`, percent, latestID)
+			if err != nil {
+				return fmt.Errorf("extend session: %w", err)
+			}
+			return tx.Commit()
+		}
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO reading_sessions (id, user_id, book_id, start_progress, end_progress)
+		VALUES (?, ?, ?, ?, ?)
+	`, db.NewID(), userID, bookID, percent, percent)
+	if err != nil {
+		return fmt.Errorf("insert session: %w", err)
+	}
+	return tx.Commit()
 }
 
 // Heatmap returns minute-per-day totals for the last `days` days,

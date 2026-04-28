@@ -19,7 +19,6 @@ const Version = "1.0.0"
 type instanceInfoDTO struct {
 	Version             string            `json:"version"`
 	GoVersion           string            `json:"goVersion"`
-	DiskMode            string            `json:"diskMode"`
 	AllowedOrigins      []string          `json:"allowedOrigins"`
 	BookDropPath        string            `json:"bookDropPath"`
 	DataPath            string            `json:"dataPath"`
@@ -118,18 +117,16 @@ func toProviderInfoDTO(p service.ProviderInfo) providerInfoDTO {
 // every signed-in user — rendered in the persistent status bar.
 type instanceSummaryDTO struct {
 	Version   string `json:"version"`
-	DiskMode  string `json:"diskMode"`
 	Libraries int    `json:"libraries"`
 	Books     int    `json:"books"`
 }
 
-// InstanceSummary returns the non-sensitive instance fields (version,
-// disk mode, and catalog-size counts). Session-authed but not admin-gated —
-// the status bar at the bottom of every page reads this.
+// InstanceSummary returns the non-sensitive instance fields (version
+// and catalog-size counts). Session-authed but not admin-gated — the
+// status bar at the bottom of every page reads this.
 func (h *Handler) InstanceSummary(c *gin.Context) {
 	out := instanceSummaryDTO{
-		Version:  Version,
-		DiskMode: h.cfg.DiskType,
+		Version: Version,
 	}
 	// Counts are best-effort: a DB hiccup here shouldn't take down the
 	// status bar, so we log and render zeros rather than erroring.
@@ -173,7 +170,6 @@ func (h *Handler) InstanceInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, instanceInfoDTO{
 		Version:             Version,
 		GoVersion:           runtime.Version(),
-		DiskMode:            h.cfg.DiskType,
 		AllowedOrigins:      h.cfg.AllowedOrigins,
 		BookDropPath:        h.cfg.BookDropPath,
 		DataPath:            h.cfg.DataPath,

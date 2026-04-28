@@ -49,13 +49,29 @@ test.describe('settings · metadata (auto-enrich + provider rows)', () => {
     const original = await fetchMetadata(adminApi);
 
     try {
+      // Watch for the panel's own GET so we know the switch has had a
+      // chance to reflect the persisted value — the underlying Switch
+      // mounts with a default before TanStack Query fills it in.
+      const settingsLoaded = page.waitForResponse(
+        (r) =>
+          r.request().method() === 'GET' &&
+          r.url().endsWith('/api/v1/settings/metadata') &&
+          r.ok(),
+      );
       await openProvidersPanel(page);
+      await settingsLoaded;
+
       const switchEl = page.getByRole('switch', {
         name: /Toggle auto-enrich/,
       });
       await expect(switchEl).toBeVisible();
+      // Wait for the switch to settle on the persisted value before
+      // reading it, otherwise we race the post-fetch re-render.
+      await expect(switchEl).toHaveAttribute(
+        'aria-checked',
+        String(original.autoEnrich),
+      );
 
-      // Read current aria-checked so we invert it.
       const wasChecked = (await switchEl.getAttribute('aria-checked')) === 'true';
       expect(wasChecked).toBe(original.autoEnrich);
 

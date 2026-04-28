@@ -223,7 +223,11 @@ func (r *ShelfRepo) Create(ctx context.Context, userID, name, accent string, rul
 			db.SelectQ(r.db.Dialect, qPG, qSQLite),
 			id, userID, name, slug, accent, isSmart, nullOrJSON(ruleJSON))
 		s, err := r.scanShelf(row)
-		if dberr.IsNotFound(err) {
+		// scanShelf maps sql.ErrNoRows → repo.ErrNotFound. Empty
+		// RETURNING after `ON CONFLICT DO NOTHING` lands here, so
+		// match the wrapped sentinel — `dberr.IsNotFound` only sees
+		// raw sql.ErrNoRows and would loop-end early.
+		if errors.Is(err, ErrNotFound) {
 			// Collision on (user_id, slug) — generate a new ID for the next attempt
 			id = db.NewID()
 			continue

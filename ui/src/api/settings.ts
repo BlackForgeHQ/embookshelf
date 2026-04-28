@@ -187,7 +187,6 @@ export type ProviderPatch = {
 export type InstanceInfo = {
   version: string
   goVersion: string
-  diskMode: string
   allowedOrigins: Array<string>
   bookDropPath: string
   dataPath: string
@@ -255,7 +254,6 @@ export const metadataSettingsQueryKey = ["settings", "metadata"] as const
 // it — mirrors /api/v1/instance on the server.
 export type InstanceSummary = {
   version: string
-  diskMode: string
   libraries: number
   books: number
 }

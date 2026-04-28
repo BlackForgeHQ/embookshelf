@@ -343,7 +343,6 @@ test.describe('settings · about', () => {
     await expect(main.getByText('embookshelf', { exact: true })).toBeVisible();
     await expect(main.getByText('Version')).toBeVisible();
     await expect(main.getByText('Runtime')).toBeVisible();
-    await expect(main.getByText('Disk mode')).toBeVisible();
     await expect(main.getByText('Instance totals')).toBeVisible();
   });
 });

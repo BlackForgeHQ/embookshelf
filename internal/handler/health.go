@@ -8,7 +8,6 @@ import (
 
 func (h *Handler) Healthcheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"status":   "ok",
-		"diskMode": h.cfg.DiskType,
+		"status": "ok",
 	})
 }

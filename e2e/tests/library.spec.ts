@@ -136,8 +136,9 @@ test.describe('library', () => {
 
     // The Sort control is a shadcn Select (combobox) — open it, then
     // click the option. The chain fires a fresh /api/v1/books?sort=<key>
-    // request per selection.
-    const trigger = page.getByRole('combobox');
+    // request per selection. Scope to the sort trigger so cmdk's search
+    // input (also role="combobox") doesn't shadow it under strict mode.
+    const trigger = page.locator('[data-slot="select-trigger"]');
 
     const sorted = page.waitForResponse(
       (r) => /\/api\/v1\/books\?.*sort=title/.test(r.url()) && r.ok(),

@@ -55,7 +55,7 @@ Non-goals (out of scope for this spec):
 
 ### 3.1 Environment variables (new)
 
-The existing `DATA_PATH` / `BOOKDROP_PATH` / `DISK_TYPE` stay. New vars introduce backend selection for **covers** and **bookdrop**:
+The existing `DATA_PATH` / `BOOKDROP_PATH` stay. New vars introduce backend selection for **covers** and **bookdrop**:
 
 | Var | Default | Meaning |
 |---|---|---|
@@ -81,7 +81,7 @@ Library backends (per-library S3 settings) live in the DB (§6), not env. Only t
 - Presence of `S3_ACCESS_KEY_ID` xor `S3_SECRET_ACCESS_KEY` is an error (partial static creds).
 - `S3_PRESIGN_TTL_SECONDS` outside `[30, 3600]` is an error.
 
-All validation lives in `internal/config/config.go` next to the existing `DISK_TYPE` check ([internal/config/config.go:91](internal/config/config.go#L91)).
+All validation lives in `internal/config/config.go` next to the existing OIDC checks.
 
 ### 3.3 Per-library backend (new fields)
 

@@ -34,12 +34,30 @@ function loadFixture(path: string) {
   psql(readFileSync(path, 'utf8'))
 }
 
+// These tests poke the dev Postgres directly to seed pending OIDC users
+// — they're meaningless on the SQLite e2e lane where no postgres
+// container is running. Skip the whole describe block if the container
+// isn't reachable instead of erroring out per-test in beforeEach.
+const postgresReachable = (() => {
+  try {
+    execSync(
+      'docker compose -f compose.dev.yml exec -T postgres pg_isready -U embookshelf -d embookshelf',
+      { cwd: PROJECT_ROOT, stdio: 'ignore' }
+    )
+    return true
+  } catch {
+    return false
+  }
+})()
+
 test.beforeEach(() => {
+  test.skip(!postgresReachable, 'dev Postgres container not running')
   psql(SQL_DELETE_PENDING)
   loadFixture(FIXTURE)
 })
 
 test.afterEach(() => {
+  if (!postgresReachable) return
   psql(SQL_DELETE_PENDING)
 })
 

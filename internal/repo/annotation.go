@@ -26,6 +26,17 @@ const annotationCols = `
     a.created_at, a.updated_at
 `
 
+// annotationReturning is annotationCols stripped of the `a.` alias —
+// used by INSERT ... RETURNING and UPDATE ... RETURNING where there's
+// no FROM clause to alias the table. SQLite refuses DML inside a CTE
+// (a Postgres-only extension), so we can't keep the `a.` prefix by
+// wrapping the write in `WITH inserted AS (...) SELECT ... FROM inserted a`.
+const annotationReturning = `
+    id, user_id, book_id, locator,
+    selected_text, note, color,
+    created_at, updated_at
+`
+
 // ListForBook returns every annotation the user has on a single book,
 // ordered by creation time ascending so the client list reads like a
 // chronological reading log.
@@ -104,26 +115,17 @@ func (r *AnnotationRepo) Create(ctx context.Context, a model.Annotation) (model.
 		a.Color = "accent"
 	}
 	id := db.NewID()
-	// Use WITH/RETURNING wrapper so annotationCols SELECT list is reusable
-	// (the bare INSERT RETURNING form doesn't let us alias as `a`).
+	// Bare INSERT … RETURNING works on both engines (Postgres and
+	// SQLite 3.35+). A CTE wrapper with INSERT inside is a Postgres
+	// extension that SQLite rejects with a syntax error.
 	const qPG = `
-        WITH inserted AS (
-            INSERT INTO annotations (id, user_id, book_id, locator, selected_text, note, color)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING *
-        )
-        SELECT ` + annotationCols + `
-        FROM inserted a
-    `
+        INSERT INTO annotations (id, user_id, book_id, locator, selected_text, note, color)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING ` + annotationReturning
 	const qSQLite = `
-        WITH inserted AS (
-            INSERT INTO annotations (id, user_id, book_id, locator, selected_text, note, color)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            RETURNING *
-        )
-        SELECT ` + annotationCols + `
-        FROM inserted a
-    `
+        INSERT INTO annotations (id, user_id, book_id, locator, selected_text, note, color)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        RETURNING ` + annotationReturning
 	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite),
 		id, a.UserID, a.BookID, a.Locator, a.SelectedText, a.Note, a.Color)
 	return r.scanAnnotation(row)
@@ -167,18 +169,8 @@ func (r *AnnotationRepo) updatePG(ctx context.Context, userID, id string, note, 
         UPDATE annotations
         SET ` + strings.Join(sets, ", ") + `, updated_at = now()
         WHERE user_id = $1 AND id = $2
-        RETURNING ` + annotationCols + `
-    `
-	// Use a CTE so annotationCols can use the `a` alias.
-	cteQuery := `
-        WITH updated AS (` + query + `)
-        SELECT ` + annotationCols + ` FROM updated a
-    `
-	// Actually, the simpler approach: RETURNING doesn't allow alias, so
-	// re-fetch. But that's extra round trip. Let's inline the scan directly
-	// from the UPDATE RETURNING without alias. The annotationCols has `a.`
-	// prefix which won't work in a plain RETURNING. Use the same CTE approach.
-	row := r.db.SQL.QueryRowContext(ctx, cteQuery, args...)
+        RETURNING ` + annotationReturning
+	row := r.db.SQL.QueryRowContext(ctx, query, args...)
 	a, err := r.scanAnnotation(row)
 	if dberr.IsNotFound(err) {
 		return model.Annotation{}, ErrNotFound
@@ -203,19 +195,13 @@ func (r *AnnotationRepo) updateSQLite(ctx context.Context, userID, id string, no
 		args = append(args, *color)
 		sets = append(sets, "color = ?")
 	}
-	// WHERE args at end for SQLite positional ?
 	args = append(args, userID, id)
 
 	query := `
-        WITH updated AS (
-            UPDATE annotations
-            SET ` + strings.Join(sets, ", ") + `, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-            WHERE user_id = ? AND id = ?
-            RETURNING *
-        )
-        SELECT ` + annotationCols + `
-        FROM updated a
-    `
+        UPDATE annotations
+        SET ` + strings.Join(sets, ", ") + `, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        WHERE user_id = ? AND id = ?
+        RETURNING ` + annotationReturning
 	row := r.db.SQL.QueryRowContext(ctx, query, args...)
 	a, err := r.scanAnnotation(row)
 	if dberr.IsNotFound(err) {

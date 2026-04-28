@@ -15,7 +15,6 @@ services:
       DATABASE_URL: sqlite://./data/embookshelf.db
       DATA_PATH: /data
       BOOKDROP_PATH: /bookdrop
-      DISK_TYPE: LOCAL
       LOG_LEVEL: info
     volumes:
       - ./data:/data

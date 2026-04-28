@@ -11,19 +11,67 @@ async function deleteShelfBySlug(api: APIRequestContext, slug: string): Promise<
   expect([204, 404]).toContain(res.status());
 }
 
+// Idempotently ensure a shelf with the given name exists. The Postgres
+// seed lane preloads these via scripts/seed.sql; the SQLite e2e lane
+// runs against a fresh DB with only the bootstrap admin, so the test
+// creates them on demand.
+//
+// We list first and skip when a shelf with the same name already exists.
+// Posting blindly is not idempotent — the shelf-create repo loop
+// auto-suffixes the slug on conflict (`to-read` → `to-read-2`) and
+// returns 201, so a re-run would accumulate duplicate sidebar entries.
+//
+// Note: "Reading Now" is intentionally NOT created here — the sidebar
+// hardcodes a pinned row for it (Sidebar.tsx) and a dynamic shelf with
+// the same name would auto-slug to "reading-now" and produce a duplicate
+// link. The pin renders regardless of whether the shelf exists.
+async function ensureShelf(api: APIRequestContext, name: string): Promise<void> {
+  const list = await api.get('/api/v1/shelves');
+  expect(list.ok()).toBeTruthy();
+  const { shelves } = (await list.json()) as {
+    shelves: { name: string; slug: string }[];
+  };
+  const matches = shelves.filter((s) => s.name === name);
+  // Earlier broken runs (before the repo Create-loop fix) left duplicate
+  // shelves with auto-suffixed slugs (`to-read-2`, `to-read-3`, …).
+  // Drop them so strict-mode locators don't trip on the duplicates.
+  for (const dup of matches.slice(1)) {
+    await api.delete(`/api/v1/shelves/${encodeURIComponent(dup.slug)}`);
+  }
+  if (matches.length > 0) return;
+  const res = await api.post('/api/v1/shelves', { data: { name } });
+  expect([200, 201]).toContain(res.status());
+}
+
 test.describe('shelves', () => {
   test('sidebar lists seeded shelves and they link to the filtered library', async ({
     page,
+    adminApi,
   }) => {
+    await ensureShelf(adminApi, 'To read');
+    await ensureShelf(adminApi, 'Favorites');
+
     await page.goto('/');
 
     const sidebar = page.locator('[data-sidebar="sidebar"]');
-    // Seeded shelves from scripts/seed.sql.
-    await expect(sidebar.getByRole('link', { name: /Reading Now/ })).toBeVisible();
-    await expect(sidebar.getByRole('link', { name: /To read/ })).toBeVisible();
-    await expect(sidebar.getByRole('link', { name: /Favorites/ })).toBeVisible();
+    // Reading Now is the hardcoded pinned row in the sidebar — it
+    // always renders, regardless of seed state.
+    await expect(
+      sidebar.getByRole('link', { name: /Reading Now/ }).first(),
+    ).toBeVisible();
+    // Tolerate duplicates that pre-date the repo Create-loop fix.
+    // The test's intent is "the seeded shelves render", not "exactly
+    // one row each".
+    await expect(
+      sidebar.getByRole('link', { name: /To read/ }).first(),
+    ).toBeVisible();
+    await expect(
+      sidebar.getByRole('link', { name: /Favorites/ }).first(),
+    ).toBeVisible();
 
-    await sidebar.getByRole('link', { name: /Favorites/ }).click();
+    // Click the canonical Favorites row by exact href so we don't pick
+    // up an auto-suffixed duplicate (`shelf=favorites-2`) if one exists.
+    await sidebar.locator('a[href="/library?shelf=favorites"]').click();
     await expect(page).toHaveURL(/\/library\?.*shelf=favorites/);
     await expect(page.getByRole('heading', { name: 'Favorites' })).toBeVisible();
   });

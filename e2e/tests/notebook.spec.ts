@@ -50,7 +50,14 @@ test.describe('notebook', () => {
         },
       },
     );
-    expect(createRes.ok()).toBeTruthy();
+    if (!createRes.ok()) {
+      // Surface the server error so future failures are actionable
+      // instead of a bare `Received: false`.
+      const body = await createRes.text();
+      throw new Error(
+        `POST /books/${book.id}/annotations failed (${createRes.status()}): ${body}`,
+      );
+    }
     const { annotation } = (await createRes.json()) as { annotation: { id: string } };
 
     try {

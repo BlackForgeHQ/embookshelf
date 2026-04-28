@@ -846,7 +846,7 @@ stack: **Public** = no gate, **Session** = `auth.RequireAuth`, **Admin**
 
 | Method | Route | Auth | Purpose |
 |--------|-------|------|---------|
-| GET | `/api/v1/healthcheck` | Public | `{"status":"ok","diskMode":"LOCAL"}`. Mounted before the CSRF guard for orchestrator probes. |
+| GET | `/api/v1/healthcheck` | Public | `{"status":"ok"}`. Mounted before the CSRF guard for orchestrator probes. |
 | GET | `/api/v1/auth/signup` | Public | `{ "enabled": bool }` — the SPA uses this to decide whether the signup form is visible. |
 | POST | `/api/v1/auth/signup` | Public | First-run admin creation. 403 once `users` is non-empty. |
 | POST | `/api/v1/auth/login` | Public | Create session, set cookie, return user DTO. |
@@ -1009,7 +1009,6 @@ All configuration flows through environment variables (optionally sourced from a
 | `DATABASE_MAX_CONNS` | `20` | pgxpool max connections |
 | `DATABASE_MIN_CONNS` | `5` | pgxpool min idle connections |
 | `MIGRATE_ON_START` | `true` | Apply pending app migrations on boot. Set `false` to manage externally via `go run ./cmd/migrate up`. |
-| `DISK_TYPE` | `LOCAL` | Storage mode (`LOCAL` — read/write; `NETWORK` — read-only for NAS/NFS/SMB mounts). |
 | `BOOKDROP_PATH` | `./bookdrop` | Watched folder for manual imports. |
 | `BOOKDROP_POLL_SECONDS` | `5` | Watcher poll interval. |
 | `DATA_PATH` | `./data` | Storage root for derived data — covers under `${DATA_PATH}/covers/books/` and `bookdrop/`. |

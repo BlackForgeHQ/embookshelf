@@ -96,7 +96,6 @@ function StatusBar() {
   })
 
   const version = instance.data?.version ?? "…"
-  const mode = instance.data?.diskMode ?? "…"
   const libCount = instance.data?.libraries
   const bookCount = instance.data?.books
 
@@ -108,9 +107,7 @@ function StatusBar() {
   return (
     <div className="status-bar">
       <span className="status-dot green" />
-      <span>
-        embookshelf {version} · {mode} mode
-      </span>
+      <span>embookshelf {version}</span>
       {catalog && (
         <>
           <span>·</span>

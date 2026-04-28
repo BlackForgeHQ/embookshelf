@@ -38,15 +38,7 @@ function StatsPage() {
         subtitle="A view of your collection — size, shape, and texture."
       />
 
-      <div
-        style={{
-          padding: "28px 32px 80px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 40,
-          maxWidth: 1040,
-        }}
-      >
+      <div className="mx-auto flex max-w-[1100px] flex-col gap-16 px-8 pt-10 pb-24">
         {stats.isLoading && <PanelMessage>Crunching…</PanelMessage>}
         {stats.isError && (
           <PanelMessage error>Failed to load statistics.</PanelMessage>
@@ -54,35 +46,30 @@ function StatsPage() {
 
         {stats.data && (
           <>
-            {/* Headline tiles */}
+            {/* Editorial hero metrics — display numbers, no boxes */}
             <section>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(5, 1fr)",
-                  gap: 16,
-                }}
-              >
-                <Tile
+              <p className="t-micro mb-6">At a glance</p>
+              <div className="grid grid-cols-2 gap-x-8 gap-y-10 md:grid-cols-5 md:divide-x md:divide-(--color-rule-soft)">
+                <Headline
                   label="Books"
                   value={stats.data.totals.books.toLocaleString()}
                 />
-                <Tile
+                <Headline
                   label="Covers"
                   value={`${coverPct}%`}
                   sub={`${stats.data.totals.booksWithCover.toLocaleString()} of ${stats.data.totals.books.toLocaleString()}`}
                 />
-                <Tile
+                <Headline
                   label="Reading"
                   value={stats.data.user.reading.toString()}
                   sub="in progress"
                 />
-                <Tile
+                <Headline
                   label="Finished"
                   value={stats.data.user.finished.toString()}
                   sub="by you"
                 />
-                <Tile
+                <Headline
                   label="Annotations"
                   value={stats.data.user.annotations.toString()}
                   sub={`${stats.data.user.shelves} shelves · ${stats.data.user.smartShelves} smart`}
@@ -90,68 +77,56 @@ function StatsPage() {
               </div>
             </section>
 
-            {/* Reading activity */}
-            <Card title="Reading activity" subtitle="last 12 weeks">
+            {/* Reading activity — heatmap + side metrics */}
+            <Section title="Reading activity" overline="last 12 weeks">
               {reading.isLoading && <EmptyRow>Loading session log…</EmptyRow>}
               {reading.isError && (
                 <EmptyRow>Failed to load reading sessions.</EmptyRow>
               )}
               {reading.data && <ReadingActivity data={reading.data} />}
-            </Card>
+            </Section>
 
-            {/* Two-column: libraries + formats */}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "2fr 1fr",
-                gap: 28,
-              }}
-            >
-              <Card title="Books per library">
+            {/* Libraries (wide) + Formats (narrow) */}
+            <div className="grid gap-12 md:grid-cols-[2fr_1fr]">
+              <Section title="Books per library">
                 {stats.data.libraries.length === 0 ? (
                   <EmptyRow>No libraries configured.</EmptyRow>
                 ) : (
                   <BarList buckets={stats.data.libraries} />
                 )}
-              </Card>
-              <Card title="Formats">
+              </Section>
+              <Section title="Formats">
                 {stats.data.formats.length === 0 ? (
                   <EmptyRow>No books yet.</EmptyRow>
                 ) : (
                   <BarList buckets={stats.data.formats} />
                 )}
-              </Card>
+              </Section>
             </div>
 
-            {/* Year histogram (full width) */}
-            <Card title="Publication years" subtitle="grouped by decade">
+            {/* Year histogram */}
+            <Section title="Publication years" overline="grouped by decade">
               {stats.data.yearHistogram.length === 0 ? (
                 <EmptyRow>Years aren't populated on any books yet.</EmptyRow>
               ) : (
                 <YearBars buckets={stats.data.yearHistogram} />
               )}
-            </Card>
+            </Section>
 
-            {/* Rating distribution */}
-            <Card title="Rating distribution" subtitle="books you have rated">
+            {/* Ratings */}
+            <Section title="Rating distribution" overline="books you have rated">
               {stats.data.ratings.length === 0 ? (
                 <EmptyRow>No ratings yet.</EmptyRow>
               ) : (
                 <RatingBars buckets={stats.data.ratings} />
               )}
-            </Card>
+            </Section>
 
-            {/* Two-column: top authors + top tags */}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 28,
-              }}
-            >
-              <Card
+            {/* Top authors / Top tags — symmetric split */}
+            <div className="grid gap-12 md:grid-cols-2">
+              <Section
                 title="Top authors"
-                subtitle="most-represented in your library"
+                overline="most-represented in your library"
               >
                 {stats.data.topAuthors.length === 0 ? (
                   <EmptyRow>
@@ -160,14 +135,14 @@ function StatsPage() {
                 ) : (
                   <BarList buckets={stats.data.topAuthors} />
                 )}
-              </Card>
-              <Card title="Top tags" subtitle="most-used tag values">
+              </Section>
+              <Section title="Top tags" overline="most-used tag values">
                 {stats.data.topTags.length === 0 ? (
                   <EmptyRow>No tags yet.</EmptyRow>
                 ) : (
                   <BarList buckets={stats.data.topTags} />
                 )}
-              </Card>
+              </Section>
             </div>
           </>
         )}
@@ -176,10 +151,9 @@ function StatsPage() {
   )
 }
 
-// Tile is the headline stat card — big number up top, label underneath,
-// optional sub-line for secondary context. Mirrors the dashboard's
-// stats block.
-function Tile({
+// Headline — display-size serif number, label overline, optional sub.
+// No box; visually grouped via grid divider.
+function Headline({
   label,
   value,
   sub,
@@ -189,31 +163,21 @@ function Tile({
   sub?: string
 }) {
   return (
-    <div
-      style={{
-        padding: 16,
-        background: "var(--color-paper-0)",
-        border: "1px solid var(--color-rule-soft)",
-        borderLeft: "2px solid var(--color-accent)",
-        borderRadius: 2,
-      }}
-    >
-      <div className="t-label" style={{ marginBottom: 8 }}>
-        {label}
-      </div>
+    <div className="md:px-6 md:first:pl-0 md:last:pr-0">
+      <div className="t-label mb-3">{label}</div>
       <div
+        className="font-serif text-(--color-ink-1) tabular-nums"
         style={{
-          fontFamily: "var(--font-serif)",
-          fontSize: 28,
+          fontSize: 40,
           fontWeight: 500,
-          letterSpacing: "-0.01em",
-          lineHeight: 1.1,
+          lineHeight: 1,
+          letterSpacing: "-0.015em",
         }}
       >
         {value}
       </div>
       {sub && (
-        <div className="t-small" style={{ fontSize: 11.5, marginTop: 4 }}>
+        <div className="t-small mt-2" style={{ fontSize: 11.5 }}>
           {sub}
         </div>
       )}
@@ -221,38 +185,25 @@ function Tile({
   )
 }
 
-function Card({
+// Section — overline + serif heading + thin rule. No card chrome.
+function Section({
   title,
-  subtitle,
+  overline,
   children,
 }: {
   title: string
-  subtitle?: string
+  overline?: string
   children: ReactNode
 }) {
   return (
     <section>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "baseline",
-          gap: 12,
-          marginBottom: 14,
-        }}
-      >
-        <h2 className="t-h2">{title}</h2>
-        {subtitle && <span className="t-micro">{subtitle}</span>}
+      <div className="mb-5 flex items-baseline gap-3 border-b border-(--color-rule-soft) pb-3">
+        <h2 className="t-h2" style={{ fontWeight: 500 }}>
+          {title}
+        </h2>
+        {overline && <span className="t-micro">{overline}</span>}
       </div>
-      <div
-        style={{
-          padding: 18,
-          background: "var(--color-paper-0)",
-          border: "1px solid var(--color-rule-soft)",
-          borderRadius: 2,
-        }}
-      >
-        {children}
-      </div>
+      <div>{children}</div>
     </section>
   )
 }
@@ -262,9 +213,15 @@ function Card({
 function BarList({ buckets }: { buckets: Array<StatsBucket> }) {
   const max = Math.max(1, ...buckets.map((b) => b.count))
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {buckets.map((b) => (
-        <Bar key={b.label} label={b.label} count={b.count} max={max} />
+    <div className="flex flex-col">
+      {buckets.map((b, i) => (
+        <Bar
+          key={b.label}
+          label={b.label}
+          count={b.count}
+          max={max}
+          first={i === 0}
+        />
       ))}
     </div>
   )
@@ -273,14 +230,15 @@ function BarList({ buckets }: { buckets: Array<StatsBucket> }) {
 function YearBars({ buckets }: { buckets: Array<StatsYearBucket> }) {
   const max = Math.max(1, ...buckets.map((b) => b.count))
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {buckets.map((b) => (
+    <div className="flex flex-col">
+      {buckets.map((b, i) => (
         <Bar
           key={b.decade}
           label={`${b.decade}s`}
           count={b.count}
           max={max}
           mono
+          first={i === 0}
         />
       ))}
     </div>
@@ -297,13 +255,14 @@ function RatingBars({ buckets }: { buckets: Array<StatsRatingBucket> }) {
   }))
   const max = Math.max(1, ...full.map((b) => b.count))
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {full.map((b) => (
+    <div className="flex flex-col">
+      {full.map((b, i) => (
         <Bar
           key={b.rating}
           label={"★".repeat(b.rating) + "☆".repeat(5 - b.rating)}
           count={b.count}
           max={max}
+          first={i === 0}
         />
       ))}
     </div>
@@ -315,21 +274,22 @@ function Bar({
   count,
   max,
   mono,
+  first,
 }: {
   label: string
   count: number
   max: number
   mono?: boolean
+  first?: boolean
 }) {
   const pct = max === 0 ? 0 : Math.max(2, Math.round((count / max) * 100))
   return (
     <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "160px 1fr 48px",
-        gap: 12,
-        alignItems: "center",
-      }}
+      className={
+        "grid items-center gap-4 py-2.5 " +
+        (first ? "" : "border-t border-(--color-rule-soft)")
+      }
+      style={{ gridTemplateColumns: "180px 1fr 56px" }}
     >
       <span
         className={mono ? "mono" : undefined}
@@ -345,27 +305,22 @@ function Bar({
         {label}
       </span>
       <div
-        style={{
-          height: 10,
-          background: "var(--color-paper-2)",
-          borderRadius: 2,
-          overflow: "hidden",
-        }}
+        className="relative h-[6px] overflow-hidden bg-(--color-paper-3)"
+        style={{ borderRadius: 1 }}
       >
         <div
+          className="h-full bg-(--color-editorial-accent)"
           style={{
-            height: "100%",
             width: `${pct}%`,
-            background: "var(--color-accent)",
-            transition: "width 180ms ease",
+            transition: "width 220ms cubic-bezier(0.16, 1, 0.3, 1)",
           }}
         />
       </div>
       <span
-        className="mono"
+        className="mono tabular-nums"
         style={{
-          fontSize: 11,
-          color: "var(--color-ink-3)",
+          fontSize: 12,
+          color: "var(--color-ink-2)",
           textAlign: "right",
         }}
       >
@@ -378,8 +333,8 @@ function Bar({
 function EmptyRow({ children }: { children: ReactNode }) {
   return (
     <div
-      className="t-small"
-      style={{ fontStyle: "italic", color: "var(--color-ink-3)" }}
+      className="t-small italic"
+      style={{ color: "var(--color-ink-3)", padding: "8px 0" }}
     >
       {children}
     </div>
@@ -396,15 +351,16 @@ function ReadingActivity({ data }: { data: ReadingStats }) {
   const readDays = days.filter((m) => m > 0).length
 
   return (
-    <div style={{ display: "flex", gap: 28, flexWrap: "wrap" }}>
+    <div className="grid gap-10 md:grid-cols-[auto_1fr] md:items-start">
+      {/* Heatmap */}
       <div>
-        <div style={{ display: "flex", gap: 4, alignItems: "flex-start" }}>
+        <div style={{ display: "flex", gap: 5, alignItems: "flex-start" }}>
           <div
             style={{
               display: "flex",
               flexDirection: "column",
-              gap: 4,
-              marginRight: 6,
+              gap: 5,
+              marginRight: 8,
               paddingTop: 2,
             }}
           >
@@ -412,7 +368,12 @@ function ReadingActivity({ data }: { data: ReadingStats }) {
               <div
                 key={i}
                 className="mono"
-                style={{ fontSize: 9, color: "var(--color-ink-3)", height: 12 }}
+                style={{
+                  fontSize: 9,
+                  color: "var(--color-ink-3)",
+                  height: 14,
+                  lineHeight: "14px",
+                }}
               >
                 {d}
               </div>
@@ -421,17 +382,21 @@ function ReadingActivity({ data }: { data: ReadingStats }) {
           {weeks.map((week, wi) => (
             <div
               key={wi}
-              style={{ display: "flex", flexDirection: "column", gap: 4 }}
+              style={{ display: "flex", flexDirection: "column", gap: 5 }}
             >
               {week.map((m, di) => (
                 <div
                   key={di}
                   title={m === 0 ? "no activity" : `${m} min`}
                   style={{
-                    width: 12,
-                    height: 12,
-                    borderRadius: 1,
+                    width: 14,
+                    height: 14,
+                    borderRadius: 2,
                     background: heatColor(m),
+                    boxShadow:
+                      m === 0
+                        ? "inset 0 0 0 1px var(--color-rule-soft)"
+                        : undefined,
                   }}
                 />
               ))}
@@ -443,7 +408,7 @@ function ReadingActivity({ data }: { data: ReadingStats }) {
             display: "flex",
             alignItems: "center",
             gap: 8,
-            marginTop: 14,
+            marginTop: 16,
           }}
         >
           <span className="t-micro">Less</span>
@@ -451,10 +416,14 @@ function ReadingActivity({ data }: { data: ReadingStats }) {
             <div
               key={m}
               style={{
-                width: 10,
-                height: 10,
+                width: 11,
+                height: 11,
                 background: heatColor(m),
-                borderRadius: 1,
+                borderRadius: 2,
+                boxShadow:
+                  m === 0
+                    ? "inset 0 0 0 1px var(--color-rule-soft)"
+                    : undefined,
               }}
             />
           ))}
@@ -462,27 +431,22 @@ function ReadingActivity({ data }: { data: ReadingStats }) {
         </div>
       </div>
 
-      <div
-        style={{
-          flex: 1,
-          minWidth: 240,
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 16,
-          alignSelf: "center",
-        }}
-      >
-        <Tile label="This week" value={formatMinutes(data.thisWeekMinutes)} />
-        <Tile
+      {/* Side metrics — chrome-free, hairline-divided */}
+      <div className="grid grid-cols-2 gap-x-6 gap-y-6 self-center md:max-w-[420px]">
+        <SideMetric
+          label="This week"
+          value={formatMinutes(data.thisWeekMinutes)}
+        />
+        <SideMetric
           label="Current streak"
           value={`${data.currentStreak} day${data.currentStreak === 1 ? "" : "s"}`}
         />
-        <Tile
+        <SideMetric
           label="12-week total"
           value={formatMinutes(totalMin)}
           sub={`${readDays} active days`}
         />
-        <Tile
+        <SideMetric
           label="All time"
           value={formatMinutes(data.allTimeMinutes)}
           sub={`${data.quarterSessions} sessions this quarter`}
@@ -492,10 +456,42 @@ function ReadingActivity({ data }: { data: ReadingStats }) {
   )
 }
 
+function SideMetric({
+  label,
+  value,
+  sub,
+}: {
+  label: string
+  value: string
+  sub?: string
+}) {
+  return (
+    <div className="border-t border-(--color-rule-soft) pt-3">
+      <div className="t-label mb-1.5">{label}</div>
+      <div
+        className="font-serif tabular-nums text-(--color-ink-1)"
+        style={{
+          fontSize: 22,
+          fontWeight: 500,
+          lineHeight: 1.1,
+          letterSpacing: "-0.01em",
+        }}
+      >
+        {value}
+      </div>
+      {sub && (
+        <div className="t-small mt-1" style={{ fontSize: 11.5 }}>
+          {sub}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Heatmap color ramp — same thresholds the Dashboard uses so the two
 // views stay visually consistent.
 function heatColor(m: number): string {
-  if (m === 0) return "var(--color-paper-3)"
+  if (m === 0) return "var(--color-paper-2)"
   if (m < 20) return "oklch(0.78 0.06 35)"
   if (m < 35) return "oklch(0.65 0.09 35)"
   if (m < 50) return "oklch(0.52 0.11 35)"

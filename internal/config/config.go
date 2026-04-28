@@ -13,7 +13,6 @@ type Config struct {
 	DatabaseURL      string
 	DatabaseMaxConns int32
 	DatabaseMinConns int32
-	DiskType         string
 	AllowedOrigins   []string
 	SessionSecret    string
 	LogLevel         string
@@ -58,7 +57,6 @@ func Load() (Config, error) {
 		DatabaseURL:      envStr("DATABASE_URL", "sqlite://./data/embookshelf.db"),
 		DatabaseMaxConns: int32(envInt("DATABASE_MAX_CONNS", 20)),
 		DatabaseMinConns: int32(envInt("DATABASE_MIN_CONNS", 5)),
-		DiskType:         envStr("DISK_TYPE", "LOCAL"),
 		AllowedOrigins:   strings.Split(envStr("ALLOWED_ORIGINS", "*"), ","),
 		SessionSecret:    envStr("SESSION_SECRET", ""),
 		LogLevel:         envStr("LOG_LEVEL", "info"),
@@ -80,10 +78,6 @@ func Load() (Config, error) {
 		OTELProtocol:    strings.ToLower(envStr("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")),
 		OTELInsecure:    envBool("OTEL_EXPORTER_OTLP_INSECURE", true),
 		OTELSampleRatio: envFloat("OTEL_TRACES_SAMPLER_ARG", 1.0),
-	}
-
-	if cfg.DiskType != "LOCAL" && cfg.DiskType != "NETWORK" {
-		return cfg, errors.New("DISK_TYPE must be LOCAL or NETWORK")
 	}
 
 	// Validate OIDC: if issuer is set, client ID is required.

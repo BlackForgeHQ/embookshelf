@@ -140,31 +140,87 @@ test.describe('book detail', () => {
     page,
     adminApi,
   }) => {
+    // Default 30s isn't enough headroom for cold-start SQLite lanes; the
+    // restoreTitle finally also needs budget to log in fresh.
+    test.setTimeout(60_000);
+
     const book = await firstBookBy(adminApi, 'Blindsight');
     const originalTitle = book.title;
     const mutatedTitle = `${originalTitle}-e2e-${Date.now()}`;
 
     let mutated = false;
     try {
-      await page.goto(`/book/${book.id}`);
-      await page.getByRole('button', { name: 'Edit metadata' }).click();
-      await page.waitForURL(new RegExp(`/book/${book.id}/edit$`));
+      await test.step('open book detail', async () => {
+        const detailResp = page.waitForResponse(
+          (r) => r.url().endsWith(`/api/v1/books/${book.id}`),
+          { timeout: 15_000 },
+        );
+        await page.goto(`/book/${book.id}`);
+        const resp = await detailResp;
+        if (!resp.ok()) {
+          throw new Error(
+            `GET /api/v1/books/${book.id} failed (${resp.status()}): ${await resp.text()}`,
+          );
+        }
 
-      // Editor rows use a plain <div> for the label, so getByLabel doesn't
-      // resolve. The Title input is the first textbox on the form — assert
-      // its current value before mutating so we fail fast if the structure
-      // changes.
-      const titleInput = page.getByRole('textbox').first();
-      await expect(titleInput).toHaveValue(originalTitle);
+        // Anchor on "Back to library" — sits in the same header as
+        // "Edit metadata" and proves the page is past Loading/Error.
+        try {
+          await expect(
+            page.getByRole('button', { name: /back to library/i }),
+          ).toBeVisible({ timeout: 10_000 });
+        } catch (err) {
+          const html = await page.content();
+          throw new Error(
+            `Book detail header didn't render. URL=${page.url()}\n` +
+              `--- body ---\n${html.slice(0, 4000)}\n--- end ---\n` +
+              (err instanceof Error ? err.message : String(err)),
+          );
+        }
+      });
 
-      await titleInput.fill(mutatedTitle);
-      mutated = true;
+      await test.step('navigate into edit page', async () => {
+        await page.getByRole('button', { name: 'Edit metadata' }).click();
+        await page.waitForURL(new RegExp(`/book/${book.id}/edit$`), {
+          timeout: 10_000,
+        });
+      });
 
-      await page.getByRole('button', { name: 'Save changes' }).click();
-      await page.waitForURL(new RegExp(`/book/${book.id}$`));
-      await expect(
-        page.getByRole('heading', { name: mutatedTitle }),
-      ).toBeVisible({ timeout: 10_000 });
+      await test.step('mutate title', async () => {
+        const titleInput = page.getByRole('textbox').first();
+        await expect(titleInput).toHaveValue(originalTitle, { timeout: 10_000 });
+        await titleInput.fill(mutatedTitle);
+        mutated = true;
+      });
+
+      await test.step('save and assert redirect', async () => {
+        const saveResp = page.waitForResponse(
+          (r) =>
+            r.url().endsWith(`/api/v1/books/${book.id}`) &&
+            r.request().method() === 'PATCH',
+          { timeout: 15_000 },
+        );
+        // The editor renders Save changes in both the sticky header and
+        // the sticky footer save bar. Both share onSave, so picking the
+        // first one is fine — and avoids ARIA-role footer scoping which
+        // breaks once the footer is nested inside a <main>.
+        await page
+          .getByRole('button', { name: 'Save changes' })
+          .first()
+          .click();
+        const patch = await saveResp;
+        if (!patch.ok()) {
+          throw new Error(
+            `PATCH /api/v1/books/${book.id} failed (${patch.status()}): ${await patch.text()}`,
+          );
+        }
+        await page.waitForURL(new RegExp(`/book/${book.id}$`), {
+          timeout: 10_000,
+        });
+        await expect(
+          page.getByRole('heading', { name: mutatedTitle }),
+        ).toBeVisible({ timeout: 10_000 });
+      });
     } finally {
       if (mutated) await restoreTitle(book.id, originalTitle);
     }
