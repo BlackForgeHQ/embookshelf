@@ -203,16 +203,11 @@ func main() {
 		slog.Info("purged expired sessions", "count", n)
 	}
 
-	// Background queue (river). Runs its own migrations, then starts workers.
+	// Background queue. PG → River; SQLite → polling worker (queue.New dispatches by dialect).
 	q, err := queue.New(ctx, dbh, bdropSvc, libSvc)
 	if err != nil {
-		if dbh.Dialect == db.DialectSQLite {
-			slog.Warn("queue disabled on sqlite (Plan 3 introduces the SQLite worker)", "err", err)
-			q = queue.Noop{}
-		} else {
-			slog.Error("queue", "err", err)
-			os.Exit(1)
-		}
+		slog.Error("queue", "err", err)
+		os.Exit(1)
 	}
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
