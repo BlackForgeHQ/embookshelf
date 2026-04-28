@@ -154,13 +154,10 @@ CREATE INDEX IF NOT EXISTS users_status_idx ON users (status) WHERE status <> 'a
 -- ---------------------------------------------------------------------------
 -- sessions
 -- Translated from: postgres/000004
--- Note: sessions.token is the lookup key (TEXT UNIQUE); the PG schema uses the
--- UUID primary key as the session token directly, but the SQLite dberr map
--- explicitly references sessions.token so we expose it as a named column.
+-- Note: the UUID primary key IS the session token (matches PG schema exactly).
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS sessions (
     id           TEXT PRIMARY KEY NOT NULL,
-    token        TEXT NOT NULL,
     user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     expires_at   TEXT NOT NULL,
     user_agent   TEXT NOT NULL DEFAULT '',
@@ -168,8 +165,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     last_used_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS sessions_token_key ON sessions(token);
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_user    ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 
 -- ---------------------------------------------------------------------------

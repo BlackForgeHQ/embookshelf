@@ -16,7 +16,6 @@ DROP INDEX IF EXISTS users_email_key;
 
 DROP INDEX IF EXISTS idx_sessions_expires;
 DROP INDEX IF EXISTS idx_sessions_user;
-DROP INDEX IF EXISTS sessions_token_key;
 
 DROP INDEX IF EXISTS shelves_user_id_slug_key;
 

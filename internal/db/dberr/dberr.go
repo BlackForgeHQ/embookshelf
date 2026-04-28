@@ -75,7 +75,6 @@ var sqliteUniqueIndex = map[string]string{
 	"libraries.path":                          "libraries_path_key",
 	"users.email":                             "users_email_key",
 	"shelves.user_id, shelves.slug":           "shelves_user_id_slug_key",
-	"sessions.token":                          "sessions_token_key",
 	"bookdrop_items.path":                     "bookdrop_items_path_key",
 	"user_devices.user_id, user_devices.name": "idx_user_devices_user_name",
 	"app_settings.name":                       "app_settings_pkey",
