@@ -41,6 +41,23 @@ jobs:
     name: go-test
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: embookshelf
+          POSTGRES_PASSWORD: embookshelf
+          POSTGRES_DB: embookshelf
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U embookshelf"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      REPOTEST_DIALECT: postgres
+      TEST_DATABASE_URL: postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable
     steps:
       - uses: actions/checkout@v6
 
@@ -56,6 +73,30 @@ jobs:
         with:
           name: go-coverage
           path: coverage.out
+          if-no-files-found: warn
+          retention-days: 14
+
+  go-test-sqlite:
+    name: go-test-sqlite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      REPOTEST_DIALECT: sqlite
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - run: go test -race -coverprofile=coverage-sqlite.out ./...
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: go-coverage-sqlite
+          path: coverage-sqlite.out
           if-no-files-found: warn
           retention-days: 14
 
@@ -242,6 +283,43 @@ jobs:
         # Drive the down path to completion so reversibility is exercised
         # in CI. `migrate down` without -all reverts the most recent
         # migration; loop until version reports 0 / "no migration".
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 100); do
+            if ! go run ./cmd/migrate down 2>&1 | tee /tmp/migrate-down.log; then
+              if grep -qi "no migration" /tmp/migrate-down.log; then
+                echo "down complete"
+                break
+              fi
+              echo "migrate down failed"
+              exit 1
+            fi
+          done
+
+      - name: migrate up (again — ensures a clean re-apply)
+        run: go run ./cmd/migrate up
+
+  migrations-sanity-sqlite:
+    name: migrations-sanity-sqlite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: sqlite://./data/embookshelf.db
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Create data directory
+        run: mkdir -p ./data
+
+      - name: migrate up
+        run: go run ./cmd/migrate up
+
+      - name: migrate down (to version 0)
         run: |
           set -euo pipefail
           for _ in $(seq 1 100); do
