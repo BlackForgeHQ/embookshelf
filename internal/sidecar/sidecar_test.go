@@ -182,3 +182,161 @@ func TestMerge_EmptySlicesInBDontClobberA(t *testing.T) {
 		t.Errorf("Title: got %q want Override", out.Title)
 	}
 }
+
+// ---- OPF parser tests ----
+
+const calibreOPF = `<?xml version='1.0' encoding='utf-8'?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>Dune</dc:title>
+    <dc:creator opf:role="aut">Frank Herbert</dc:creator>
+    <dc:description>A science fiction epic about desert planet.</dc:description>
+    <dc:language>en</dc:language>
+    <dc:publisher>Chilton Books</dc:publisher>
+    <dc:date>1965-08-01</dc:date>
+    <dc:identifier opf:scheme="ISBN">978-0-441-17271-9</dc:identifier>
+    <dc:subject>Science Fiction</dc:subject>
+    <dc:subject>Classic</dc:subject>
+    <meta name="calibre:series" content="Dune Chronicles"/>
+    <meta name="calibre:series_index" content="1"/>
+    <meta name="calibre:title_sort" content="Dune"/>
+  </metadata>
+</package>`
+
+func TestParseOPF_CalibreOPF(t *testing.T) {
+	s, err := ParseOPF([]byte(calibreOPF))
+	if err != nil {
+		t.Fatalf("ParseOPF: %v", err)
+	}
+	if s.Title != "Dune" {
+		t.Errorf("Title: got %q want %q", s.Title, "Dune")
+	}
+	if s.Author != "Frank Herbert" {
+		t.Errorf("Author: got %q want %q", s.Author, "Frank Herbert")
+	}
+	if s.Description != "A science fiction epic about desert planet." {
+		t.Errorf("Description: got %q", s.Description)
+	}
+	if s.Language != "en" {
+		t.Errorf("Language: got %q want en", s.Language)
+	}
+	if s.Publisher != "Chilton Books" {
+		t.Errorf("Publisher: got %q want Chilton Books", s.Publisher)
+	}
+	if s.PublishedDate != "1965-08-01" {
+		t.Errorf("PublishedDate: got %q want 1965-08-01", s.PublishedDate)
+	}
+	if s.ISBN != "978-0-441-17271-9" {
+		t.Errorf("ISBN: got %q want 978-0-441-17271-9", s.ISBN)
+	}
+	if len(s.Tags) != 2 || s.Tags[0] != "Science Fiction" || s.Tags[1] != "Classic" {
+		t.Errorf("Tags: got %v want [Science Fiction Classic]", s.Tags)
+	}
+	if s.Series != "Dune Chronicles" {
+		t.Errorf("Series: got %q want Dune Chronicles", s.Series)
+	}
+	if s.SeriesIndex != 1 {
+		t.Errorf("SeriesIndex: got %d want 1", s.SeriesIndex)
+	}
+	if s.TitleSort != "Dune" {
+		t.Errorf("TitleSort: got %q want Dune", s.TitleSort)
+	}
+}
+
+func TestParseOPF_MultipleCreators_RoleAutWins(t *testing.T) {
+	opf := `<?xml version='1.0' encoding='utf-8'?>
+<package xmlns="http://www.idpf.org/2007/opf">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>Test Book</dc:title>
+    <dc:creator opf:role="edt">Editor Person</dc:creator>
+    <dc:creator opf:role="aut">Real Author</dc:creator>
+    <dc:creator>Just A Name</dc:creator>
+  </metadata>
+</package>`
+	s, err := ParseOPF([]byte(opf))
+	if err != nil {
+		t.Fatalf("ParseOPF: %v", err)
+	}
+	if s.Author != "Real Author" {
+		t.Errorf("Author: got %q want Real Author (role=aut should win)", s.Author)
+	}
+}
+
+func TestParseOPF_MultipleCreators_NoRoleUsesFirst(t *testing.T) {
+	opf := `<?xml version='1.0' encoding='utf-8'?>
+<package xmlns="http://www.idpf.org/2007/opf">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>Test Book</dc:title>
+    <dc:creator opf:role="edt">Editor Person</dc:creator>
+    <dc:creator opf:role="ill">Illustrator</dc:creator>
+  </metadata>
+</package>`
+	s, err := ParseOPF([]byte(opf))
+	if err != nil {
+		t.Fatalf("ParseOPF: %v", err)
+	}
+	// No aut role — first entry wins
+	if s.Author != "Editor Person" {
+		t.Errorf("Author: got %q want Editor Person (first entry)", s.Author)
+	}
+}
+
+func TestParseOPF_ISBNSchemeCasing(t *testing.T) {
+	tests := []struct {
+		scheme string
+	}{
+		{"ISBN"},
+		{"isbn"},
+		{"ISBN-13"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.scheme, func(t *testing.T) {
+			opf := `<?xml version='1.0' encoding='utf-8'?>
+<package xmlns="http://www.idpf.org/2007/opf">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>Book</dc:title>
+    <dc:identifier opf:scheme="` + tc.scheme + `">978-0-000-00000-0</dc:identifier>
+  </metadata>
+</package>`
+			s, err := ParseOPF([]byte(opf))
+			if err != nil {
+				t.Fatalf("ParseOPF: %v", err)
+			}
+			if s.ISBN != "978-0-000-00000-0" {
+				t.Errorf("ISBN scheme=%q: got %q want 978-0-000-00000-0", tc.scheme, s.ISBN)
+			}
+		})
+	}
+}
+
+func TestParseOPF_CalibreMeta(t *testing.T) {
+	opf := `<?xml version='1.0' encoding='utf-8'?>
+<package xmlns="http://www.idpf.org/2007/opf">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>Foundation</dc:title>
+    <meta name="calibre:series" content="Foundation Series"/>
+    <meta name="calibre:series_index" content="2"/>
+    <meta name="calibre:title_sort" content="Foundation"/>
+  </metadata>
+</package>`
+	s, err := ParseOPF([]byte(opf))
+	if err != nil {
+		t.Fatalf("ParseOPF: %v", err)
+	}
+	if s.Series != "Foundation Series" {
+		t.Errorf("Series: got %q want Foundation Series", s.Series)
+	}
+	if s.SeriesIndex != 2 {
+		t.Errorf("SeriesIndex: got %d want 2", s.SeriesIndex)
+	}
+	if s.TitleSort != "Foundation" {
+		t.Errorf("TitleSort: got %q want Foundation", s.TitleSort)
+	}
+}
+
+func TestParseOPF_MalformedXMLReturnsError(t *testing.T) {
+	_, err := ParseOPF([]byte("<package><metadata><unclosed>"))
+	if err == nil {
+		t.Fatal("expected error for malformed XML, got nil")
+	}
+}
