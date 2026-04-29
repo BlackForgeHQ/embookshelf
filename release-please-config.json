@@ -20,8 +20,6 @@
     { "type": "style",    "section": "Style",           "hidden": true }
   ],
   "packages": {
-    ".": {
-      "package-name": "embookshelf"
-    }
+    ".": {}
   }
 }
