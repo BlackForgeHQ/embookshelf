@@ -45,9 +45,95 @@ func (fs *LocalFS) resolve(key string) (string, error) {
 	return abs, nil
 }
 
-// Stub implementations follow in subsequent tasks.
 func (fs *LocalFS) List(ctx context.Context, prefix string) (storage.Iterator, error) {
-	return nil, fmt.Errorf("not implemented")
+	prefixAbs, err := fs.resolve(prefix)
+	if err != nil {
+		return nil, err
+	}
+	st, statErr := os.Stat(prefixAbs)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return &localIter{done: true}, nil
+		}
+		return nil, statErr
+	}
+	if !st.IsDir() {
+		// Listing a single file yields just that one entry.
+		return &localIter{
+			fs:      fs,
+			pending: []string{prefixAbs},
+		}, nil
+	}
+	return &localIter{
+		fs:      fs,
+		pending: []string{prefixAbs},
+		isDir:   map[string]bool{prefixAbs: true},
+	}, nil
+}
+
+// localIter is a depth-first iterator over a directory tree. It reads
+// each directory eagerly via os.ReadDir and pushes children onto a
+// stack; for very large trees this is O(depth) memory rather than
+// O(total entries), at the cost of one ReadDir call per directory.
+type localIter struct {
+	fs      *LocalFS
+	pending []string
+	isDir   map[string]bool
+	done    bool
+	closed  bool
+}
+
+func (it *localIter) Next(ctx context.Context) (storage.ObjectInfo, error) {
+	if it.closed {
+		return storage.ObjectInfo{}, fmt.Errorf("iterator closed")
+	}
+	for !it.done {
+		if err := ctx.Err(); err != nil {
+			return storage.ObjectInfo{}, err
+		}
+		if len(it.pending) == 0 {
+			it.done = true
+			return storage.ObjectInfo{}, io.EOF
+		}
+		// Pop.
+		n := len(it.pending) - 1
+		next := it.pending[n]
+		it.pending = it.pending[:n]
+
+		st, err := os.Stat(next)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return storage.ObjectInfo{}, err
+		}
+		if st.IsDir() {
+			entries, err := os.ReadDir(next)
+			if err != nil {
+				return storage.ObjectInfo{}, err
+			}
+			for _, e := range entries {
+				it.pending = append(it.pending, filepath.Join(next, e.Name()))
+			}
+			continue
+		}
+		rel, err := filepath.Rel(it.fs.root, next)
+		if err != nil {
+			return storage.ObjectInfo{}, err
+		}
+		return storage.ObjectInfo{
+			Key:     filepath.ToSlash(rel),
+			Size:    st.Size(),
+			ModTime: st.ModTime(),
+		}, nil
+	}
+	return storage.ObjectInfo{}, io.EOF
+}
+
+func (it *localIter) Close() error {
+	it.closed = true
+	it.pending = nil
+	return nil
 }
 func (fs *LocalFS) Head(ctx context.Context, key string) (storage.ObjectInfo, error) {
 	abs, err := fs.resolve(key)

@@ -172,3 +172,76 @@ func TestCopy_DuplicatesContent(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, "payload")
 	}
 }
+
+func TestList_WalksRecursivelyAndYieldsRelativeKeys(t *testing.T) {
+	root := t.TempDir()
+	fsys, _ := New(root)
+	ctx := context.Background()
+	for _, k := range []string{"a.txt", "sub/b.txt", "sub/deep/c.txt"} {
+		if _, err := fsys.Put(ctx, k, strings.NewReader(k)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	it, err := fsys.List(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer it.Close()
+	got := map[string]bool{}
+	for {
+		o, err := it.Next(ctx)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		got[o.Key] = true
+	}
+	for _, want := range []string{"a.txt", "sub/b.txt", "sub/deep/c.txt"} {
+		if !got[want] {
+			t.Errorf("missing key %q", want)
+		}
+	}
+}
+
+func TestList_PrefixFilter(t *testing.T) {
+	root := t.TempDir()
+	fsys, _ := New(root)
+	ctx := context.Background()
+	for _, k := range []string{"a/x", "a/y", "b/z"} {
+		_, _ = fsys.Put(ctx, k, strings.NewReader(""))
+	}
+	it, err := fsys.List(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer it.Close()
+	count := 0
+	for {
+		_, err := it.Next(ctx)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		count++
+	}
+	if count != 2 {
+		t.Errorf("got %d entries, want 2", count)
+	}
+}
+
+func TestList_MissingPrefixReturnsEmpty(t *testing.T) {
+	fsys, _ := New(t.TempDir())
+	it, err := fsys.List(context.Background(), "missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer it.Close()
+	_, err = it.Next(context.Background())
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("got %v, want io.EOF", err)
+	}
+}
