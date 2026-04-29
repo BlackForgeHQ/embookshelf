@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.4](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.3...v0.2.4) (2026-04-29)
+
+
+### Features
+
+* **db:** storage_v2 schema + content-hash identity (Plan B of 8) ([#54](https://github.com/BlackForgeHQ/embookshelf/issues/54)) ([384270d](https://github.com/BlackForgeHQ/embookshelf/commit/384270debf3ed3f6b1797e68e131b8767e4e87ea))
+
+
+### Documentation
+
+* **plan:** storage v2 schema + content-hash identity (Plan B of 8) ([#51](https://github.com/BlackForgeHQ/embookshelf/issues/51)) ([5a82d4c](https://github.com/BlackForgeHQ/embookshelf/commit/5a82d4cab35ccb3b0281805e8746f0b4eba1068f))
+
 ## [0.2.3](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.2...v0.2.3) (2026-04-29)
 
 
