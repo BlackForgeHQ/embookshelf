@@ -7,6 +7,7 @@ package local
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -49,10 +50,41 @@ func (fs *LocalFS) List(ctx context.Context, prefix string) (storage.Iterator, e
 	return nil, fmt.Errorf("not implemented")
 }
 func (fs *LocalFS) Head(ctx context.Context, key string) (storage.ObjectInfo, error) {
-	return storage.ObjectInfo{}, fmt.Errorf("not implemented")
+	abs, err := fs.resolve(key)
+	if err != nil {
+		return storage.ObjectInfo{}, err
+	}
+	st, err := os.Stat(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return storage.ObjectInfo{}, errors.Join(storage.ErrNotFound, err)
+		}
+		return storage.ObjectInfo{}, err
+	}
+	return storage.ObjectInfo{
+		Key:     key,
+		Size:    st.Size(),
+		ModTime: st.ModTime(),
+	}, nil
 }
+
 func (fs *LocalFS) Get(ctx context.Context, key string, opts ...storage.GetOption) (io.ReadCloser, error) {
-	return nil, fmt.Errorf("not implemented")
+	o := storage.ApplyGet(opts)
+	if o.RangeSet {
+		return nil, storage.ErrUnsupportedOption
+	}
+	abs, err := fs.resolve(key)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, errors.Join(storage.ErrNotFound, err)
+		}
+		return nil, err
+	}
+	return f, nil
 }
 // Put writes r to key atomically using write-temp-then-rename.
 // LocalFS does not support conditional writes (CapConditional is off);
@@ -93,8 +125,55 @@ func (fs *LocalFS) Put(ctx context.Context, key string, r io.Reader, opts ...sto
 	return storage.PutResult{}, nil
 }
 func (fs *LocalFS) Delete(ctx context.Context, key string, opts ...storage.DeleteOption) error {
-	return fmt.Errorf("not implemented")
+	abs, err := fs.resolve(key)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
+
 func (fs *LocalFS) Copy(ctx context.Context, srcKey, dstKey string) (storage.CopyResult, error) {
-	return storage.CopyResult{}, fmt.Errorf("not implemented")
+	srcAbs, err := fs.resolve(srcKey)
+	if err != nil {
+		return storage.CopyResult{}, err
+	}
+	dstAbs, err := fs.resolve(dstKey)
+	if err != nil {
+		return storage.CopyResult{}, err
+	}
+	src, err := os.Open(srcAbs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return storage.CopyResult{}, errors.Join(storage.ErrNotFound, err)
+		}
+		return storage.CopyResult{}, err
+	}
+	defer src.Close()
+	if err := os.MkdirAll(filepath.Dir(dstAbs), 0o755); err != nil {
+		return storage.CopyResult{}, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dstAbs), filepath.Base(dstAbs)+".*.tmp")
+	if err != nil {
+		return storage.CopyResult{}, err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if _, err := io.Copy(tmp, src); err != nil {
+		_ = tmp.Close()
+		return storage.CopyResult{}, err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return storage.CopyResult{}, err
+	}
+	if err := tmp.Close(); err != nil {
+		return storage.CopyResult{}, err
+	}
+	if err := os.Rename(tmpName, dstAbs); err != nil {
+		return storage.CopyResult{}, err
+	}
+	return storage.CopyResult{}, nil
 }
