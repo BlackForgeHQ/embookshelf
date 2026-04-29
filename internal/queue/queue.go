@@ -78,7 +78,7 @@ func newRiver(
 	}
 
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &task.BookDropWorker{Deps: task.BookDropDeps{Svc: bdropSvc}})
+	river.AddWorker(workers, &task.BookDropWorker{Deps: task.BookDropDeps{Svc: bdropSvc, Storage: store}})
 
 	// The scan worker needs to enqueue bookdrop.ingest jobs; wire that up
 	// after the client is constructed (circular dep resolved via the
