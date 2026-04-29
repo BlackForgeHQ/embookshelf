@@ -18,6 +18,7 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/storage"
 	"github.com/blackforge/embookshelf/internal/task"
 )
 
@@ -42,6 +43,7 @@ func newSQLiteQueue(
 	d *db.DB,
 	bdropSvc *service.BookDropService,
 	libSvc *service.LibraryService,
+	store storage.Storage,
 ) (*sqliteQueue, error) {
 	q := &sqliteQueue{
 		db:       d,
@@ -55,6 +57,7 @@ func newSQLiteQueue(
 		BookDrop: bdropSvc,
 		Lib:      libSvc,
 		Queue:    q, // back-reference so LibraryScan can enqueue children
+		Storage:  store,
 	}
 
 	q.handlers = map[string]kindHandler{

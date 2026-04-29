@@ -2,7 +2,8 @@ package task
 
 import (
 	"context"
-	"io/fs"
+	"errors"
+	"io"
 	"log/slog"
 	"path/filepath"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // LibraryScanArgs is the payload for walking a library's filesystem
@@ -36,6 +38,10 @@ type LibraryScanDeps struct {
 	BookDrop *service.BookDropService
 	Lib      *service.LibraryService
 	Queue    BookDropEnqueuer
+	// Storage reads the library's filesystem (or object store) during
+	// the walk. Plan A only uses List; future plans use Get/Head for
+	// content-hash computation and metadata extraction.
+	Storage storage.Storage
 }
 
 // LibraryScan walks a library's filesystem root and stages every
@@ -56,40 +62,56 @@ func LibraryScan(ctx context.Context, args LibraryScanArgs, deps LibraryScanDeps
 	}
 
 	var fileCount, discovered int
-	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil
+	if deps.Storage == nil {
+		slog.Warn("library scan: storage is nil, skipping", "library_id", lib.ID)
+		_ = deps.Lib.TouchScan(ctx, lib.ID, 0, 0)
+		return nil
+	}
+	it, err := deps.Storage.List(ctx, root)
+	if err != nil {
+		slog.Warn("library scan: list failed", "path", root, "err", err)
+		_ = deps.Lib.TouchScan(ctx, lib.ID, 0, 0)
+		return nil
+	}
+	defer it.Close()
+
+	for {
+		obj, err := it.Next(ctx)
+		if errors.Is(err, io.EOF) {
+			break
 		}
-		if d.IsDir() {
-			return nil
+		if err != nil {
+			slog.Warn("library scan: iteration error", "path", root, "err", err)
+			break
 		}
+		// LocalFS keys are slash-paths under the backend root; the
+		// backend is rooted at "/" today (Plan A) so obj.Key starts
+		// with the absolute library path. Plan B reroots backends
+		// per-library and obj.Key becomes library-relative.
+		p := "/" + obj.Key
 		if !fileproc.IsSupported(p) {
-			return nil
+			continue
 		}
 		fileCount++
 
 		already, err := deps.Lib.BookExistsByPath(ctx, p)
 		if err != nil {
 			slog.Warn("library scan: book exists check", "path", p, "err", err)
-			return nil
+			continue
 		}
 		if already {
-			return nil
+			continue
 		}
 
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
 		format := fileproc.FormatForExt(filepath.Ext(p))
 
-		item, created, err := deps.BookDrop.Enqueue(ctx, p, format, info.Size())
+		item, created, err := deps.BookDrop.Enqueue(ctx, p, format, obj.Size)
 		if err != nil {
 			slog.Warn("library scan: enqueue", "path", p, "err", err)
-			return nil
+			continue
 		}
 		if !created {
-			return nil
+			continue
 		}
 		if deps.Queue != nil {
 			if err := deps.Queue.EnqueueBookDrop(ctx, item.ID); err != nil {
@@ -97,10 +119,6 @@ func LibraryScan(ctx context.Context, args LibraryScanArgs, deps LibraryScanDeps
 			}
 		}
 		discovered++
-		return nil
-	})
-	if walkErr != nil {
-		slog.Warn("library scan: walk failed", "path", root, "err", walkErr)
 	}
 
 	if err := deps.Lib.TouchScan(ctx, lib.ID, fileCount, discovered); err != nil {
