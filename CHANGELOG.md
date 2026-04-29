@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.0...v0.2.1) (2026-04-29)
+
+
+### Features
+
+* **db:** enhance ScanStringSlice for PostgreSQL text-array literals ([5c9515f](https://github.com/BlackForgeHQ/embookshelf/commit/5c9515f0884dc8076380db82c0b0297b5a028432))
+
 ## [0.2.0](https://github.com/BlackForgeHQ/embookshelf/compare/v0.1.4...v0.2.0) (2026-04-29)
 
 
