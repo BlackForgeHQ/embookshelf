@@ -32,6 +32,9 @@ type BookDropItem struct {
 	BookID       *string
 	DiscoveredAt time.Time
 	UpdatedAt    time.Time
+	// ContentHash is the SHA-256 digest of the file content, computed
+	// during ingest. nil (or empty) until Task 9 fills it.
+	ContentHash []byte
 }
 
 // IsTerminal reports whether no further transitions are expected.

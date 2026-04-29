@@ -9,6 +9,70 @@ import (
 	"github.com/blackforge/embookshelf/internal/repo/repotest"
 )
 
+// TestLibraryRepo_backendFields verifies that the new storage_v2 columns
+// (backend_id, root, org_mode) round-trip through the repo layer and that
+// LibraryBackend joins through correctly.
+func TestLibraryRepo_backendFields(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "postgres"} {
+		dialect := dialect
+		t.Run(dialect, func(t *testing.T) {
+			d := repotest.NewWithDialect(t, dialect)
+			lr := repo.NewLibraryRepo(d)
+			sbr := repo.NewStorageBackendRepo(d)
+			ctx := context.Background()
+
+			// 1. Fresh library has nil BackendID and nil Root; OrgMode defaults to 'book_per_folder'.
+			lib, err := lr.CreateLibrary(ctx, "Backend Test", "backend-test", "/tmp/bt")
+			if err != nil {
+				t.Fatalf("CreateLibrary: %v", err)
+			}
+			if lib.BackendID != nil {
+				t.Fatalf("BackendID should be nil on fresh library, got %v", lib.BackendID)
+			}
+			if lib.Root != nil {
+				t.Fatalf("Root should be nil on fresh library, got %v", lib.Root)
+			}
+			if lib.OrgMode != "book_per_folder" {
+				t.Fatalf("OrgMode=%q want book_per_folder", lib.OrgMode)
+			}
+
+			// 2. LibraryBackend returns ErrNotFound when no backend is set.
+			_, err = lr.LibraryBackend(ctx, lib.ID)
+			if !errors.Is(err, repo.ErrNotFound) {
+				t.Fatalf("LibraryBackend (no backend): got %v, want ErrNotFound", err)
+			}
+
+			// 3. Wire a backend and read the library back.
+			backend, err := sbr.Create(ctx, "local", map[string]any{"root": "/data"})
+			if err != nil {
+				t.Fatalf("Create backend: %v", err)
+			}
+			if err := lr.SetBackendID(ctx, lib.ID, backend.ID); err != nil {
+				t.Fatalf("SetBackendID: %v", err)
+			}
+			got, err := lr.GetByID(ctx, lib.ID)
+			if err != nil {
+				t.Fatalf("GetByID after SetBackendID: %v", err)
+			}
+			if got.BackendID == nil || *got.BackendID != backend.ID {
+				t.Fatalf("BackendID=%v want %q", got.BackendID, backend.ID)
+			}
+
+			// 4. LibraryBackend now returns the joined backend row.
+			sb, err := lr.LibraryBackend(ctx, lib.ID)
+			if err != nil {
+				t.Fatalf("LibraryBackend: %v", err)
+			}
+			if sb.ID != backend.ID {
+				t.Fatalf("LibraryBackend ID=%q want %q", sb.ID, backend.ID)
+			}
+			if sb.Kind != "local" {
+				t.Fatalf("LibraryBackend Kind=%q want local", sb.Kind)
+			}
+		})
+	}
+}
+
 // TestLibraryRepo_matrix runs a single end-to-end CRUD scenario against
 // both SQLite and Postgres. The Postgres subtest is skipped when
 // TEST_DATABASE_URL is unset (per repotest.NewWithDialect contract).
