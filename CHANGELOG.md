@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.6](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.5...v0.2.6) (2026-04-29)
+
+
+### Features
+
+* **sidecar:** metadata.opf + .embookshelf.toml read pipeline (Plan D of 8) ([#57](https://github.com/BlackForgeHQ/embookshelf/issues/57)) ([d6828b3](https://github.com/BlackForgeHQ/embookshelf/commit/d6828b31d0026f65f1d040195b787331e91c5fac))
+
 ## [0.2.5](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.4...v0.2.5) (2026-04-29)
 
 
