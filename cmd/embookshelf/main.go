@@ -86,6 +86,10 @@ func main() {
 			slog.Error("migrate", "err", err)
 			os.Exit(1)
 		}
+		if err := migrator.BackfillStorageV2(ctx, dbh); err != nil {
+			slog.Error("storage_v2 backfill", "err", err)
+			os.Exit(1)
+		}
 	}
 
 	fileStorage, err := local.New("/")
