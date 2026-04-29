@@ -250,6 +250,20 @@ func main() {
 		}
 	}()
 
+	// Boot-time covers backfill: migrate legacy book-id-keyed covers to the
+	// hash-keyed path (covers/<hash[0:2]>/<hash>.<ext>). Idempotent and
+	// best-effort — errors per-book are logged and retried on next boot.
+	go func() {
+		backfillCoversCtx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
+		defer cancel()
+		if err := task.RunCoversBackfill(backfillCoversCtx, task.CoversBackfillDeps{
+			Library: libRepo,
+			Covers:  covers,
+		}); err != nil {
+			slog.Warn("covers backfill", "err", err)
+		}
+	}()
+
 	// Missing-files purge sweeper: deletes files rows whose missing_since
 	// is older than 24h. Runs hourly until the application shuts down.
 	go task.LoopMissingPurge(ctx, fileRepo, time.Hour)
