@@ -53,6 +53,8 @@ export type IconName =
   | "library"
   | "lock"
   | "unlock"
+  | "play"
+  | "pause"
 
 type Props = {
   name: IconName
@@ -362,6 +364,17 @@ function renderPath(name: IconName) {
         <>
           <rect x="5" y="11" width="14" height="9" rx="1" />
           <path d="M8 11V8a4 4 0 017.46-2" />
+        </>
+      )
+    case "play":
+      // Filled triangle reads better at the audiobook reader's prominent
+      // play button than a hollow stroke.
+      return <path d="M7 5l12 7-12 7V5z" fill="currentColor" stroke="none" />
+    case "pause":
+      return (
+        <>
+          <rect x="6" y="5" width="4" height="14" fill="currentColor" stroke="none" />
+          <rect x="14" y="5" width="4" height="14" fill="currentColor" stroke="none" />
         </>
       )
     default:

@@ -29,6 +29,13 @@ type Metadata struct {
 	// Format is the canonical format tag (EPUB, PDF, CBZ, ...). The caller
 	// uses this to populate books.format when approving.
 	Format string
+	// DurationSeconds is populated only for audio formats (MP3, M4B). nil
+	// when the processor couldn't determine a duration — the UI surfaces
+	// "—" rather than implying a misleading "0".
+	DurationSeconds *int
+	// Narrator is populated only for audio formats. Empty for everything
+	// else.
+	Narrator string
 }
 
 // Processor is the strategy interface implemented per file format.
@@ -47,7 +54,13 @@ func Dispatch(path string) (Processor, string, error) {
 		return &EPUBProcessor{}, "EPUB", nil
 	case ".pdf":
 		return &PDFProcessor{}, "PDF", nil
-	// TODO: cbz, cbr, mp3, m4b, azw3, mobi, fb2
+	case ".cbz":
+		return &CBZProcessor{}, "CBZ", nil
+	case ".mp3":
+		return &AudioProcessor{}, "MP3", nil
+	case ".m4a", ".m4b":
+		return &AudioProcessor{}, "M4B", nil
+	// TODO: cbr, azw3, mobi, fb2
 	default:
 		return nil, strings.ToUpper(strings.TrimPrefix(ext, ".")), ErrUnsupportedFormat
 	}
@@ -64,8 +77,10 @@ func FormatForExt(ext string) string {
 		return "PDF"
 	case "cbz", "cbr", "cb7":
 		return "CBZ"
-	case "mp3", "m4a", "m4b":
+	case "mp3":
 		return "MP3"
+	case "m4a", "m4b":
+		return "M4B"
 	case "mobi":
 		return "MOBI"
 	case "azw3":

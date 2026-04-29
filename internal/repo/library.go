@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -33,7 +34,8 @@ const bookCols = `
 	b.description_locked, b.publisher_locked, b.series_locked,
 	b.isbn_locked, b.isbn10_locked, b.language_locked,
 	b.publish_date_locked, b.genres_locked, b.moods_locked,
-	b.tags_locked, b.pages_locked, b.cover_locked
+	b.tags_locked, b.pages_locked, b.cover_locked,
+	b.duration_seconds, b.narrator, b.chapters
 `
 
 // bookFromPG is the FROM + LEFT JOIN clause for Postgres queries, where
@@ -476,7 +478,8 @@ func (r *LibraryRepo) Create(ctx context.Context, b model.Book) (model.Book, err
 		       b.description_locked, b.publisher_locked, b.series_locked,
 		       b.isbn_locked, b.isbn10_locked, b.language_locked,
 		       b.publish_date_locked, b.genres_locked, b.moods_locked,
-		       b.tags_locked, b.pages_locked, b.cover_locked
+		       b.tags_locked, b.pages_locked, b.cover_locked,
+		       b.duration_seconds, b.narrator, b.chapters
 		FROM inserted b
 	`
 
@@ -510,7 +513,8 @@ func (r *LibraryRepo) Create(ctx context.Context, b model.Book) (model.Book, err
 		    description_locked, publisher_locked, series_locked,
 		    isbn_locked, isbn10_locked, language_locked,
 		    publish_date_locked, genres_locked, moods_locked,
-		    tags_locked, pages_locked, cover_locked
+		    tags_locked, pages_locked, cover_locked,
+		    duration_seconds, narrator, chapters
 	`
 
 	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), args...)
@@ -766,6 +770,64 @@ func (r *LibraryRepo) UpdateMetadata(ctx context.Context, b model.Book) error {
 	return nil
 }
 
+// UpdateAudio writes the audiobook-specific metadata fields onto an
+// existing books row. Used right after Create() in the bookdrop Approve
+// flow for MP3/M4B imports — those fields aren't part of the bookdrop
+// review surface, so it's cheaper to re-extract on approval than to
+// schema-bloat bookdrop_items.
+//
+// chapters is JSON-encoded into TEXT (SQLite) / JSONB (PG). Passing
+// a nil slice writes SQL NULL so the UI can distinguish "no chapter
+// metadata" from "empty chapter list".
+func (r *LibraryRepo) UpdateAudio(
+	ctx context.Context,
+	id string,
+	durationSeconds *int,
+	narrator string,
+	chapters []model.Chapter,
+) error {
+	var chaptersVal any
+	if chapters != nil {
+		b, err := json.Marshal(chapters)
+		if err != nil {
+			return fmt.Errorf("encode chapters: %w", err)
+		}
+		chaptersVal = string(b)
+	}
+
+	const qPG = `
+		UPDATE books SET
+			duration_seconds = $1,
+			narrator         = $2,
+			chapters         = $3,
+			updated_at       = now()
+		WHERE id = $4 AND deleted_at IS NULL
+	`
+	const qSQLite = `
+		UPDATE books SET
+			duration_seconds = ?,
+			narrator         = ?,
+			chapters         = ?,
+			updated_at       = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		WHERE id = ? AND deleted_at IS NULL
+	`
+	res, err := r.db.SQL.ExecContext(ctx,
+		db.SelectQ(r.db.Dialect, qPG, qSQLite),
+		durationSeconds, narrator, chaptersVal, id,
+	)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // scanner lets us reuse scanBook for both Row and Rows.
 type scanner interface {
 	Scan(dest ...any) error
@@ -774,6 +836,7 @@ type scanner interface {
 func scanBook(d db.Dialect, s scanner) (model.Book, error) {
 	var b model.Book
 	var genresAny, moodsAny, tagsAny, publishDateAny, createdAny any
+	var durationAny, chaptersAny any
 	err := s.Scan(
 		&b.ID, &b.LibraryID, &b.Title, &b.Subtitle, &b.Author, &b.Format, &b.Year,
 		&publishDateAny, &b.Language,
@@ -790,6 +853,7 @@ func scanBook(d db.Dialect, s scanner) (model.Book, error) {
 		&b.Locks.ISBN, &b.Locks.ISBN10, &b.Locks.Language,
 		&b.Locks.PublishDate, &b.Locks.Genres, &b.Locks.Moods,
 		&b.Locks.Tags, &b.Locks.Pages, &b.Locks.Cover,
+		&durationAny, &b.Narrator, &chaptersAny,
 	)
 	if err != nil {
 		return b, err
@@ -808,6 +872,27 @@ func scanBook(d db.Dialect, s scanner) (model.Book, error) {
 	}
 	if err := db.ScanStringSlice(d, tagsAny, &b.Tags); err != nil {
 		return b, fmt.Errorf("scan tags: %w", err)
+	}
+	if v, ok := durationAny.(int64); ok {
+		n := int(v)
+		b.DurationSeconds = &n
+	}
+	// chapters: TEXT JSON on SQLite, JSONB on PG (delivered as []byte or
+	// string by pgx stdlib). NULL → nil slice; non-NULL → JSON-decode.
+	if chaptersAny != nil {
+		var raw []byte
+		switch v := chaptersAny.(type) {
+		case []byte:
+			raw = v
+		case string:
+			raw = []byte(v)
+		}
+		if len(raw) > 0 {
+			var ch []model.Chapter
+			if err := json.Unmarshal(raw, &ch); err == nil && len(ch) > 0 {
+				b.Chapters = ch
+			}
+		}
 	}
 	return b, nil
 }
