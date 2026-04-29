@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.2.0](https://github.com/BlackForgeHQ/embookshelf/compare/v0.1.4...v0.2.0) (2026-04-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* bare-default Postgres connections are no longer attempted. Existing deployments that already set DATABASE_URL explicitly are unaffected. Operators relying on the implicit postgres://localhost:5432/embookshelf default must now set DATABASE_URL explicitly. See README quickstart and architecture.md for the new defaults.
+
+### Features
+
+* SQLite backend — driver, schema, repos, FTS5 (Plan 2A of 4) ([#40](https://github.com/BlackForgeHQ/embookshelf/issues/40)) ([7256c16](https://github.com/BlackForgeHQ/embookshelf/commit/7256c167649b2c74908e9e89d59727b5d1410bc4))
+* SQLite CI lanes + e2e + final docs (Plan 4 of 4) ([#43](https://github.com/BlackForgeHQ/embookshelf/issues/43)) ([0d0bbc8](https://github.com/BlackForgeHQ/embookshelf/commit/0d0bbc830f9a7f7bd3bbd4c90f8a9b2026ae49c2))
+* SQLite is the default + test matrix harness (Plan 2B of 4) ([#41](https://github.com/BlackForgeHQ/embookshelf/issues/41)) ([4009de1](https://github.com/BlackForgeHQ/embookshelf/commit/4009de109d7364dba0747dd2d9a71ab8c3f2b2af))
+* SQLite queue worker (Plan 3 of 4) ([#42](https://github.com/BlackForgeHQ/embookshelf/issues/42)) ([3f7d74d](https://github.com/BlackForgeHQ/embookshelf/commit/3f7d74d1a79cf9d8e782aabcedfd37059041e36e))
+* **ui:** add sidebar toggle button to TopBar and enhance BookDrop layout ([4c3b1e9](https://github.com/BlackForgeHQ/embookshelf/commit/4c3b1e9bb3d78ba8a0c616967634efeab55c26ff))
+* **ui:** enhance StarRating component with interactivity and rating mutation ([2235c3d](https://github.com/BlackForgeHQ/embookshelf/commit/2235c3d2d225615f15c2f2278d2263d9372d2b8f))
+* **ui:** rethink edit metadata as two dedicated pages ([#44](https://github.com/BlackForgeHQ/embookshelf/issues/44)) ([f305c42](https://github.com/BlackForgeHQ/embookshelf/commit/f305c42a12bd86b9372a79a366a65de34b6ad3da))
+
+
+### Bug Fixes
+
+* **ci:** scan correct image tag for SBOM generation ([#38](https://github.com/BlackForgeHQ/embookshelf/issues/38)) ([205939f](https://github.com/BlackForgeHQ/embookshelf/commit/205939f4be5e627e9c8fd965fd4f148bc78b859c))
+
 ## [0.1.4](https://github.com/BlackForgeHQ/embookshelf/compare/v0.1.3...v0.1.4) (2026-04-27)
 
 
