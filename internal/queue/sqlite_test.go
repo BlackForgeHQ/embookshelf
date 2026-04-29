@@ -176,7 +176,7 @@ func TestSQLiteQueue_restartRecovery(t *testing.T) {
 	// Construct via the real path — newSQLiteQueue runs the recovery query.
 	// Pass nil services because this test only exercises the recovery query,
 	// not the handlers.
-	q, err := newSQLiteQueue(context.Background(), d, nil, nil)
+	q, err := newSQLiteQueue(context.Background(), d, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("newSQLiteQueue: %v", err)
 	}

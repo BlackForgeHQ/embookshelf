@@ -16,6 +16,7 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/storage"
 	"github.com/blackforge/embookshelf/internal/task"
 )
 
@@ -33,12 +34,13 @@ func New(
 	d *db.DB,
 	bdropSvc *service.BookDropService,
 	libSvc *service.LibraryService,
+	store storage.Storage,
 ) (Client, error) {
 	switch d.Dialect {
 	case db.DialectPostgres:
-		return newRiver(ctx, d, bdropSvc, libSvc)
+		return newRiver(ctx, d, bdropSvc, libSvc, store)
 	case db.DialectSQLite:
-		return newSQLiteQueue(ctx, d, bdropSvc, libSvc)
+		return newSQLiteQueue(ctx, d, bdropSvc, libSvc, store)
 	default:
 		return nil, fmt.Errorf("queue: unknown dialect %q", d.Dialect)
 	}
@@ -56,6 +58,7 @@ func newRiver(
 	d *db.DB,
 	bdropSvc *service.BookDropService,
 	libSvc *service.LibraryService,
+	store storage.Storage,
 ) (*RiverClient, error) {
 	if d.PG == nil {
 		return nil, errors.New("queue: db.PG is nil for postgres dialect")
@@ -81,6 +84,7 @@ func newRiver(
 		Deps: task.LibraryScanDeps{
 			BookDrop: bdropSvc,
 			Lib:      libSvc,
+			Storage:  store,
 			// Queue is set after the river.Client is constructed (cyclic dep).
 		},
 	}

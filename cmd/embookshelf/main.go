@@ -27,6 +27,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sse"
 	"github.com/blackforge/embookshelf/internal/staticfs"
+	"github.com/blackforge/embookshelf/internal/storage/local"
 	"github.com/blackforge/embookshelf/internal/telemetry"
 )
 
@@ -85,6 +86,12 @@ func main() {
 			slog.Error("migrate", "err", err)
 			os.Exit(1)
 		}
+	}
+
+	fileStorage, err := local.New("/")
+	if err != nil {
+		slog.Error("storage init", "err", err)
+		os.Exit(1)
 	}
 
 	// Repositories.
@@ -204,7 +211,7 @@ func main() {
 	}
 
 	// Background queue. PG → River; SQLite → polling worker (queue.New dispatches by dialect).
-	q, err := queue.New(ctx, dbh, bdropSvc, libSvc)
+	q, err := queue.New(ctx, dbh, bdropSvc, libSvc, fileStorage)
 	if err != nil {
 		slog.Error("queue", "err", err)
 		os.Exit(1)
