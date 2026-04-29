@@ -16,4 +16,8 @@ type File struct {
 	ContentHash []byte // nil until hashed
 	Format      string // canonical: "EPUB" | "PDF" | "CBZ" | "MP3" | "M4B"
 	LastScanned time.Time
+	// MissingSince is set when a scan can't find the file in storage.
+	// Files stay flagged for the missing TTL (24h) before purge; nil
+	// means "present (or never observed missing)".
+	MissingSince *time.Time
 }

@@ -208,6 +208,182 @@ func TestFileRepo_matrix(t *testing.T) {
 			if !errors.Is(err, repo.ErrFileLocationTaken) {
 				t.Fatalf("dup insert: got %v, want ErrFileLocationTaken", err)
 			}
+
+			// --- 9. MarkMissing round-trip ---
+			markFile, err := fr.Insert(ctx, model.File{
+				LibraryID:   lib.ID,
+				Location:    "missing/book.epub",
+				Size:        512,
+				Mtime:       now,
+				Format:      "EPUB",
+				LastScanned: now,
+			})
+			if err != nil {
+				t.Fatalf("Insert markFile: %v", err)
+			}
+			if markFile.MissingSince != nil {
+				t.Fatal("MissingSince should be nil on fresh insert")
+			}
+			markTime := time.Now().UTC().Truncate(time.Second)
+			if err := fr.MarkMissing(ctx, markFile.ID, markTime); err != nil {
+				t.Fatalf("MarkMissing: %v", err)
+			}
+			byLib, err := fr.ListByLibrary(ctx, lib.ID)
+			if err != nil {
+				t.Fatalf("ListByLibrary after MarkMissing: %v", err)
+			}
+			var found *model.File
+			for i := range byLib {
+				if byLib[i].ID == markFile.ID {
+					found = &byLib[i]
+					break
+				}
+			}
+			if found == nil {
+				t.Fatal("ListByLibrary: markFile not found")
+			}
+			if found.MissingSince == nil {
+				t.Fatal("MissingSince should be non-nil after MarkMissing")
+			}
+			if !found.MissingSince.Truncate(time.Second).Equal(markTime) {
+				t.Fatalf("MissingSince=%v want ~%v", found.MissingSince, markTime)
+			}
+
+			// --- 10. ClearMissing ---
+			if err := fr.ClearMissing(ctx, markFile.ID); err != nil {
+				t.Fatalf("ClearMissing: %v", err)
+			}
+			afterClear, err := fr.GetByLocation(ctx, lib.ID, "missing/book.epub")
+			if err != nil {
+				t.Fatalf("GetByLocation after ClearMissing: %v", err)
+			}
+			if afterClear.MissingSince != nil {
+				t.Fatalf("MissingSince should be nil after ClearMissing, got %v", afterClear.MissingSince)
+			}
+
+			// --- 11. DeleteMissingOlderThan ---
+			// Insert a file that went missing 25h ago (should be deleted).
+			old := time.Now().Add(-25 * time.Hour)
+			oldFile, err := fr.Insert(ctx, model.File{
+				LibraryID:   lib.ID,
+				Location:    "old/missing.epub",
+				Size:        100,
+				Mtime:       now,
+				Format:      "EPUB",
+				LastScanned: now,
+			})
+			if err != nil {
+				t.Fatalf("Insert oldFile: %v", err)
+			}
+			if err := fr.MarkMissing(ctx, oldFile.ID, old); err != nil {
+				t.Fatalf("MarkMissing oldFile: %v", err)
+			}
+			// Insert a file that went missing 1h ago (should survive 24h TTL).
+			recent := time.Now().Add(-1 * time.Hour)
+			recentFile, err := fr.Insert(ctx, model.File{
+				LibraryID:   lib.ID,
+				Location:    "recent/missing.epub",
+				Size:        100,
+				Mtime:       now,
+				Format:      "EPUB",
+				LastScanned: now,
+			})
+			if err != nil {
+				t.Fatalf("Insert recentFile: %v", err)
+			}
+			if err := fr.MarkMissing(ctx, recentFile.ID, recent); err != nil {
+				t.Fatalf("MarkMissing recentFile: %v", err)
+			}
+			deleted, err := fr.DeleteMissingOlderThan(ctx, 24*time.Hour)
+			if err != nil {
+				t.Fatalf("DeleteMissingOlderThan: %v", err)
+			}
+			if deleted != 1 {
+				t.Fatalf("DeleteMissingOlderThan count=%d want 1", deleted)
+			}
+			// recentFile should still exist.
+			_, err = fr.GetByLocation(ctx, lib.ID, "recent/missing.epub")
+			if err != nil {
+				t.Fatalf("recentFile should survive TTL: %v", err)
+			}
+			// oldFile should be gone.
+			_, err = fr.GetByLocation(ctx, lib.ID, "old/missing.epub")
+			if !errors.Is(err, repo.ErrNotFound) {
+				t.Fatalf("oldFile should be purged, got %v", err)
+			}
+
+			// --- 12. ListByLibrary isolation ---
+			lib2, err := lr.CreateLibrary(ctx, "Other Library", "other-library", "/tmp/other")
+			if err != nil {
+				t.Fatalf("CreateLibrary lib2: %v", err)
+			}
+			_, err = fr.Insert(ctx, model.File{
+				LibraryID:   lib2.ID,
+				Location:    "other/book.epub",
+				Size:        10,
+				Mtime:       now,
+				Format:      "EPUB",
+				LastScanned: now,
+			})
+			if err != nil {
+				t.Fatalf("Insert lib2 file: %v", err)
+			}
+			lib1Files, err := fr.ListByLibrary(ctx, lib.ID)
+			if err != nil {
+				t.Fatalf("ListByLibrary lib: %v", err)
+			}
+			for _, f := range lib1Files {
+				if f.LibraryID != lib.ID {
+					t.Fatalf("ListByLibrary returned file from wrong library: %q", f.LibraryID)
+				}
+			}
+			lib2Files, err := fr.ListByLibrary(ctx, lib2.ID)
+			if err != nil {
+				t.Fatalf("ListByLibrary lib2: %v", err)
+			}
+			if len(lib2Files) != 1 {
+				t.Fatalf("ListByLibrary lib2 count=%d want 1", len(lib2Files))
+			}
+
+			// --- 13. UpdateLocation happy path + conflict ---
+			moveFile, err := fr.Insert(ctx, model.File{
+				LibraryID:   lib.ID,
+				Location:    "move/source.epub",
+				Size:        200,
+				Mtime:       now,
+				Format:      "EPUB",
+				LastScanned: now,
+			})
+			if err != nil {
+				t.Fatalf("Insert moveFile: %v", err)
+			}
+			if err := fr.UpdateLocation(ctx, moveFile.ID, "move/dest.epub"); err != nil {
+				t.Fatalf("UpdateLocation: %v", err)
+			}
+			_, err = fr.GetByLocation(ctx, lib.ID, "move/dest.epub")
+			if err != nil {
+				t.Fatalf("GetByLocation after UpdateLocation: %v", err)
+			}
+			_, err = fr.GetByLocation(ctx, lib.ID, "move/source.epub")
+			if !errors.Is(err, repo.ErrNotFound) {
+				t.Fatalf("old location should be gone after UpdateLocation, got %v", err)
+			}
+			// Conflict: try to move to an existing location.
+			conflictTarget, err := fr.Insert(ctx, model.File{
+				LibraryID:   lib.ID,
+				Location:    "move/conflict.epub",
+				Size:        10,
+				Mtime:       now,
+				Format:      "EPUB",
+				LastScanned: now,
+			})
+			if err != nil {
+				t.Fatalf("Insert conflictTarget: %v", err)
+			}
+			err = fr.UpdateLocation(ctx, conflictTarget.ID, "move/dest.epub")
+			if !errors.Is(err, repo.ErrFileLocationTaken) {
+				t.Fatalf("UpdateLocation conflict: got %v, want ErrFileLocationTaken", err)
+			}
 		})
 	}
 }
