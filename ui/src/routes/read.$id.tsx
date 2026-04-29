@@ -7,6 +7,15 @@ import type { ApiError } from "@/api/client"
 import type { Annotation } from "@/api/annotations"
 import type { BookDetail } from "@/api/books"
 import type {
+  AudioProgress,
+  AudioReaderHandle,
+} from "@/components/AudioReader"
+import type {
+  ComicFitMode,
+  ComicProgress,
+  ComicReaderHandle,
+} from "@/components/ComicReader"
+import type {
   EpubHighlight,
   EpubProgress,
   EpubReaderHandle,
@@ -22,6 +31,8 @@ import {
   recentAnnotationsQueryKey,
 } from "@/api/annotations"
 import { bookQueryKey, fetchBook, updateProgress } from "@/api/books"
+import { AudioReader } from "@/components/AudioReader"
+import { ComicReader } from "@/components/ComicReader"
 import { EpubReader } from "@/components/EpubReader"
 import { Icon } from "@/components/Icon"
 import { PdfReader } from "@/components/PdfReader"
@@ -36,11 +47,19 @@ type TocItem = { label: string; href: string }
 // parseResumeToken separates the two resume-token shapes we store in the
 // database: raw CFI strings (EPUB) and page:N tokens (PDF). Unknown tokens
 // fall back to "start from the beginning".
-function parseResumeToken(raw?: string): { cfi?: string; page?: number } {
+function parseResumeToken(raw?: string): {
+  cfi?: string
+  page?: number
+  seconds?: number
+} {
   if (!raw) return {}
   if (raw.startsWith("page:")) {
     const page = Number.parseInt(raw.slice(5), 10)
     return Number.isFinite(page) ? { page } : {}
+  }
+  if (raw.startsWith("time:")) {
+    const seconds = Number.parseFloat(raw.slice(5))
+    return Number.isFinite(seconds) ? { seconds } : {}
   }
   return { cfi: raw }
 }
@@ -61,6 +80,12 @@ function Reader() {
     return <FullScreenMessage>Book not found.</FullScreenMessage>
   }
   const b = book.data
+  if (b.format === "CBZ") {
+    return <ComicReaderShell book={b} />
+  }
+  if (b.format === "MP3" || b.format === "M4B") {
+    return <AudioReaderShell book={b} />
+  }
   if (b.format !== "EPUB" && b.format !== "PDF") {
     return (
       <FullScreenMessage>
@@ -776,6 +801,691 @@ function ReaderShell({ book }: { book: BookDetail }) {
 
     </div>
   )
+}
+
+// ComicReaderShell is the chrome around a CBZ ComicReader. It's deliberately
+// a parallel implementation to ReaderShell rather than an extension: comics
+// have no TOC, no text selection / annotations flow, and use a 0-indexed
+// page model — folding all that into the existing shell would have made it
+// significantly harder to read. The two shells share the progress
+// debounce/persist pattern (queueProgress) but otherwise stand alone.
+function ComicReaderShell({ book }: { book: BookDetail }) {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+
+  // Initial page (0-indexed) parsed out of the same `page:N` token
+  // PDF readers persist; comics happen to also use 0-indexed pages
+  // internally so we re-use the parser without translation.
+  const initialPage = useMemo(() => {
+    const t = parseResumeToken(book.resumeCfi)
+    return typeof t.page === "number" ? Math.max(0, t.page) : 0
+  }, [book.resumeCfi])
+
+  const [chromeVisible, setChromeVisible] = useState(true)
+  const [fitMode, setFitMode] = useState<ComicFitMode>("page")
+  const [page, setPage] = useState<number>(initialPage)
+  const [total, setTotal] = useState<number>(0)
+  const comicRef = useRef<ComicReaderHandle>(null)
+
+  const progressMut = useMutation({
+    mutationFn: (args: { progress: number; resumeCfi: string }) =>
+      updateProgress(book.id, args.progress, args.resumeCfi),
+  })
+
+  const bookmarkMut = useMutation({
+    mutationFn: (locator: string) =>
+      createAnnotation(book.id, {
+        locator,
+        selectedText: `Bookmark · page ${page + 1}`,
+        color: "bookmark",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: bookAnnotationsQueryKey(book.id),
+      })
+      queryClient.invalidateQueries({ queryKey: recentAnnotationsQueryKey })
+      toast.success("Bookmark saved")
+    },
+    onError: (err) =>
+      toast.error((err as unknown as ApiError).message || "Bookmark failed"),
+  })
+
+  // Progress persistence: same debounce shape as ReaderShell so a quick
+  // session still records the last page on unmount.
+  const pendingRef = useRef<{ progress: number; resumeCfi: string } | null>(
+    null
+  )
+  const timerRef = useRef<number | null>(null)
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) window.clearTimeout(timerRef.current)
+      if (pendingRef.current) {
+        void updateProgress(
+          book.id,
+          pendingRef.current.progress,
+          pendingRef.current.resumeCfi
+        )
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const queueProgress = (progress: number, locator: string) => {
+    pendingRef.current = { progress, resumeCfi: locator }
+    if (timerRef.current) window.clearTimeout(timerRef.current)
+    timerRef.current = window.setTimeout(() => {
+      const snapshot = pendingRef.current
+      pendingRef.current = null
+      timerRef.current = null
+      if (snapshot) progressMut.mutate(snapshot)
+    }, 600)
+  }
+
+  const onComicProgress = (p: ComicProgress) => {
+    setPage(p.page)
+    setTotal(p.totalPages)
+    queueProgress(p.percent, `page:${p.page}`)
+  }
+
+  const exit = () => void navigate({ to: "/book/$id", params: { id: book.id } })
+  const percent = total <= 1 ? 1 : page / Math.max(1, total - 1)
+
+  return (
+    <div
+      className="fade-in"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "var(--color-paper-2)",
+        zIndex: 200,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      {chromeVisible && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            padding: "10px 22px",
+            borderBottom: "1px solid var(--color-rule-soft)",
+            background: "var(--color-paper-1)",
+          }}
+        >
+          <Button variant="ghost" size="sm" onClick={exit}>
+            <Icon name="arrow-left" size={14} /> Library
+          </Button>
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 500, fontStyle: "italic" }}>
+              {book.title}
+            </div>
+            <div className="t-micro" style={{ fontSize: 10 }}>
+              {book.author} · p.{page + 1}
+              {total > 0 ? ` / p.${total}` : ""}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 4 }}>
+            <Button
+              variant={fitMode === "page" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setFitMode("page")}
+              title="Fit page"
+            >
+              Fit
+            </Button>
+            <Button
+              variant={fitMode === "width" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setFitMode("width")}
+              title="Fit width"
+            >
+              W
+            </Button>
+            <Button
+              variant={fitMode === "height" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setFitMode("height")}
+              title="Fit height"
+            >
+              H
+            </Button>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Bookmark"
+            disabled={bookmarkMut.isPending}
+            onClick={() => bookmarkMut.mutate(`page:${page}`)}
+          >
+            <Icon name="bookmark" size={14} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setChromeVisible(false)}
+            title="Hide chrome"
+          >
+            <Icon name="close" size={14} />
+          </Button>
+        </div>
+      )}
+
+      <div
+        onDoubleClick={() => setChromeVisible((v) => !v)}
+        style={{ flex: 1, position: "relative", overflow: "hidden" }}
+      >
+        <ComicReader
+          ref={comicRef}
+          bookId={book.id}
+          initialPage={initialPage}
+          fitMode={fitMode}
+          onReady={({ totalPages }) => setTotal(totalPages)}
+          onProgress={onComicProgress}
+        />
+      </div>
+
+      <div
+        style={{
+          borderTop: "1px solid var(--color-rule-soft)",
+          padding: "10px 22px",
+          display: "flex",
+          alignItems: "center",
+          gap: 14,
+          background: "var(--color-paper-1)",
+        }}
+      >
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => comicRef.current?.prev()}
+        >
+          <Icon name="chevron-left" size={14} /> Prev
+        </Button>
+        <div
+          style={{ flex: 1, display: "flex", alignItems: "center", gap: 12 }}
+        >
+          <span
+            className="mono"
+            style={{ fontSize: 10.5, color: "var(--color-ink-3)" }}
+          >
+            p.{page + 1}
+          </span>
+          <div
+            style={{
+              flex: 1,
+              position: "relative",
+              height: 4,
+              background: "var(--color-paper-3)",
+              borderRadius: 2,
+              cursor: total > 0 ? "pointer" : "default",
+            }}
+            onClick={(e) => {
+              if (total <= 0) return
+              const rect = e.currentTarget.getBoundingClientRect()
+              const ratio = (e.clientX - rect.left) / rect.width
+              const target = Math.max(
+                0,
+                Math.min(total - 1, Math.round(ratio * (total - 1)))
+              )
+              comicRef.current?.goTo(target)
+            }}
+          >
+            <div
+              style={{
+                height: 4,
+                width: `${Math.round(percent * 100)}%`,
+                background: "var(--color-accent)",
+                borderRadius: 2,
+                transition: "width 120ms ease",
+              }}
+            />
+          </div>
+          <span
+            className="mono"
+            style={{ fontSize: 10.5, color: "var(--color-ink-3)" }}
+          >
+            {total > 0 ? `p.${total}` : "—"}
+          </span>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => comicRef.current?.next()}
+        >
+          Next <Icon name="chevron-right" size={14} />
+        </Button>
+      </div>
+
+      {!chromeVisible && (
+        <Button
+          variant="outline"
+          size="icon-sm"
+          onClick={() => setChromeVisible(true)}
+          className="absolute top-2 right-2 z-10"
+        >
+          <Icon name="menu" size={14} />
+        </Button>
+      )}
+    </div>
+  )
+}
+
+// AudioReaderShell wraps AudioReader with the chrome an audiobook listener
+// expects: cover + title at the top, big play/pause + skip controls
+// in the middle, scrubber + chapter list at the bottom. Like
+// ComicReaderShell, this is deliberately a parallel implementation
+// instead of folded into ReaderShell — audio has a fundamentally
+// different progress model (continuous time vs. discrete pages/CFIs).
+function AudioReaderShell({ book }: { book: BookDetail }) {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+
+  const initialSeconds = useMemo(() => {
+    const t = parseResumeToken(book.resumeCfi)
+    return typeof t.seconds === "number" ? Math.max(0, t.seconds) : 0
+  }, [book.resumeCfi])
+
+  const [seconds, setSeconds] = useState(initialSeconds)
+  const [duration, setDuration] = useState(book.durationSeconds ?? 0)
+  const [playing, setPlaying] = useState(false)
+  const [rate, setRate] = useState(1)
+  const [chapterIndex, setChapterIndex] = useState(-1)
+  const [chaptersOpen, setChaptersOpen] = useState(false)
+  const audioRef = useRef<AudioReaderHandle>(null)
+
+  const progressMut = useMutation({
+    mutationFn: (args: { progress: number; resumeCfi: string }) =>
+      updateProgress(book.id, args.progress, args.resumeCfi),
+  })
+
+  const bookmarkMut = useMutation({
+    mutationFn: (locator: string) =>
+      createAnnotation(book.id, {
+        locator,
+        selectedText: `Bookmark · ${formatHMS(seconds)}`,
+        color: "bookmark",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: bookAnnotationsQueryKey(book.id),
+      })
+      queryClient.invalidateQueries({ queryKey: recentAnnotationsQueryKey })
+      toast.success("Bookmark saved")
+    },
+    onError: (err) =>
+      toast.error((err as unknown as ApiError).message || "Bookmark failed"),
+  })
+
+  // Same debounced-persist shape the other shells use, plus an
+  // additional save-on-pause path so a quick listening session that
+  // ends with the user just hitting pause still records position.
+  const pendingRef = useRef<{ progress: number; resumeCfi: string } | null>(
+    null
+  )
+  const timerRef = useRef<number | null>(null)
+  const flush = () => {
+    if (timerRef.current) window.clearTimeout(timerRef.current)
+    timerRef.current = null
+    const snap = pendingRef.current
+    pendingRef.current = null
+    if (snap) progressMut.mutate(snap)
+  }
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) window.clearTimeout(timerRef.current)
+      if (pendingRef.current) {
+        void updateProgress(
+          book.id,
+          pendingRef.current.progress,
+          pendingRef.current.resumeCfi
+        )
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const queueProgress = (progress: number, locator: string) => {
+    pendingRef.current = { progress, resumeCfi: locator }
+    if (timerRef.current) window.clearTimeout(timerRef.current)
+    timerRef.current = window.setTimeout(() => {
+      flush()
+    }, 5000) // longer debounce: time updates fire several times a second
+  }
+
+  const onAudioProgress = (p: AudioProgress) => {
+    setSeconds(p.seconds)
+    setDuration(p.duration)
+    queueProgress(p.percent, `time:${p.seconds.toFixed(2)}`)
+  }
+
+  const exit = () => {
+    flush()
+    void navigate({ to: "/book/$id", params: { id: book.id } })
+  }
+
+  const togglePlay = () => {
+    audioRef.current?.toggle()
+    setPlaying((v) => !v)
+  }
+
+  const percent = duration > 0 ? seconds / duration : 0
+
+  return (
+    <div
+      className="fade-in"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "var(--color-paper-1)",
+        zIndex: 200,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "10px 22px",
+          borderBottom: "1px solid var(--color-rule-soft)",
+          background: "var(--color-paper-1)",
+        }}
+      >
+        <Button variant="ghost" size="sm" onClick={exit}>
+          <Icon name="arrow-left" size={14} /> Library
+        </Button>
+        <div style={{ flex: 1 }} />
+        <Button
+          variant={chaptersOpen ? "default" : "ghost"}
+          size="icon-sm"
+          disabled={!book.chapters || book.chapters.length === 0}
+          onClick={() => setChaptersOpen((v) => !v)}
+          title="Chapters"
+        >
+          <Icon name="contents" size={14} />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Bookmark"
+          disabled={bookmarkMut.isPending}
+          onClick={() => bookmarkMut.mutate(`time:${seconds.toFixed(2)}`)}
+        >
+          <Icon name="bookmark" size={14} />
+        </Button>
+      </div>
+
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 32,
+          gap: 32,
+          overflow: "auto",
+        }}
+      >
+        {/* Cover */}
+        <div
+          style={{
+            width: 280,
+            height: 280,
+            background: book.hasCover
+              ? `var(--color-paper-3) url(/api/v1/books/${book.id}/cover) center / cover no-repeat`
+              : "var(--color-paper-3)",
+            borderRadius: 6,
+            boxShadow: "0 12px 36px -8px oklch(0.2 0.02 60 / 0.32)",
+            flexShrink: 0,
+          }}
+        />
+
+        {/* Title block + transport + chapter list */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 14,
+            maxWidth: 480,
+            width: "100%",
+          }}
+        >
+          <div>
+            <div
+              style={{
+                fontSize: 24,
+                fontStyle: "italic",
+                fontWeight: 500,
+                lineHeight: 1.2,
+              }}
+            >
+              {book.title}
+            </div>
+            <div className="t-small" style={{ marginTop: 4 }}>
+              {book.author}
+              {book.narrator && book.narrator !== book.author
+                ? ` · narr. ${book.narrator}`
+                : ""}
+            </div>
+            {chapterIndex >= 0 && book.chapters?.[chapterIndex] && (
+              <div
+                className="t-micro"
+                style={{ marginTop: 6, fontStyle: "italic" }}
+              >
+                {book.chapters[chapterIndex].title}
+              </div>
+            )}
+          </div>
+
+          {/* Big transport row: skip back, play/pause, skip forward, rate. */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 14,
+              padding: "8px 0",
+            }}
+          >
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => audioRef.current?.skip(-15)}
+              title="Back 15s"
+            >
+              <Icon name="chevron-left" size={16} />
+            </Button>
+            <Button
+              variant="default"
+              size="lg"
+              onClick={togglePlay}
+              style={{ minWidth: 72 }}
+            >
+              <Icon name={playing ? "pause" : "play"} size={18} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => audioRef.current?.skip(30)}
+              title="Forward 30s"
+            >
+              <Icon name="chevron-right" size={16} />
+            </Button>
+            <div style={{ flex: 1 }} />
+            <select
+              value={rate}
+              onChange={(e) => {
+                const r = Number.parseFloat(e.target.value)
+                setRate(r)
+                audioRef.current?.setRate(r)
+              }}
+              className="mono"
+              style={{
+                fontSize: 12,
+                padding: "4px 8px",
+                background: "var(--color-paper-0)",
+                border: "1px solid var(--color-ink-3)",
+                borderRadius: 2,
+              }}
+            >
+              {[0.75, 1, 1.25, 1.5, 1.75, 2].map((r) => (
+                <option key={r} value={r}>
+                  {r}×
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Scrubber */}
+          <div
+            style={{ display: "flex", alignItems: "center", gap: 10 }}
+          >
+            <span
+              className="mono"
+              style={{ fontSize: 11, color: "var(--color-ink-3)", minWidth: 50 }}
+            >
+              {formatHMS(seconds)}
+            </span>
+            <div
+              style={{
+                flex: 1,
+                position: "relative",
+                height: 4,
+                background: "var(--color-paper-3)",
+                borderRadius: 2,
+                cursor: duration > 0 ? "pointer" : "default",
+              }}
+              onClick={(e) => {
+                if (duration <= 0) return
+                const rect = e.currentTarget.getBoundingClientRect()
+                const ratio = (e.clientX - rect.left) / rect.width
+                audioRef.current?.seekTo(
+                  Math.max(0, Math.min(duration, ratio * duration))
+                )
+              }}
+            >
+              <div
+                style={{
+                  height: 4,
+                  width: `${Math.round(percent * 100)}%`,
+                  background: "var(--color-accent)",
+                  borderRadius: 2,
+                  transition: "width 120ms linear",
+                }}
+              />
+              {/* Chapter tick marks */}
+              {book.chapters?.map((c, i) => {
+                if (duration <= 0) return null
+                const left = (c.startS / duration) * 100
+                if (left < 0 || left > 100) return null
+                return (
+                  <div
+                    key={i}
+                    style={{
+                      position: "absolute",
+                      top: -2,
+                      left: `${left}%`,
+                      width: 1,
+                      height: 8,
+                      background: "var(--color-ink-3)",
+                      opacity: 0.4,
+                    }}
+                  />
+                )
+              })}
+            </div>
+            <span
+              className="mono"
+              style={{ fontSize: 11, color: "var(--color-ink-3)", minWidth: 50 }}
+            >
+              {formatHMS(duration)}
+            </span>
+          </div>
+
+          {chaptersOpen && book.chapters && book.chapters.length > 0 && (
+            <div
+              style={{
+                marginTop: 8,
+                background: "var(--color-paper-0)",
+                border: "1px solid var(--color-rule-soft)",
+                borderRadius: 3,
+                maxHeight: 240,
+                overflow: "auto",
+              }}
+            >
+              {book.chapters.map((c, i) => (
+                <button
+                  key={i}
+                  onClick={() => audioRef.current?.seekTo(c.startS)}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "6px 12px",
+                    border: "none",
+                    background:
+                      i === chapterIndex
+                        ? "var(--color-paper-2)"
+                        : "transparent",
+                    fontFamily: "var(--font-serif)",
+                    fontSize: 13,
+                    color: "var(--color-ink-2)",
+                    cursor: "pointer",
+                  }}
+                >
+                  <span
+                    className="mono"
+                    style={{
+                      marginRight: 10,
+                      fontSize: 10.5,
+                      color: "var(--color-ink-3)",
+                    }}
+                  >
+                    {formatHMS(c.startS)}
+                  </span>
+                  {c.title}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <AudioReader
+        ref={audioRef}
+        url={`/api/v1/books/${book.id}/file`}
+        initialSeconds={initialSeconds}
+        initialRate={rate}
+        chapters={book.chapters}
+        title={book.title}
+        author={book.author}
+        artworkURL={book.hasCover ? `/api/v1/books/${book.id}/cover` : undefined}
+        onReady={({ duration: d }) => setDuration(d)}
+        onProgress={onAudioProgress}
+        onChapterChange={(i) => setChapterIndex(i)}
+      />
+    </div>
+  )
+}
+
+// formatHMS renders a seconds count as H:MM:SS (or M:SS for short
+// clips). NaN / negative values render as "—:—".
+function formatHMS(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "—:—"
+  const total = Math.floor(seconds)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const pad = (n: number) => n.toString().padStart(2, "0")
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
 }
 
 function FullScreenMessage({ children }: { children: React.ReactNode }) {

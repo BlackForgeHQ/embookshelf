@@ -70,10 +70,28 @@ type Book struct {
 	// ResumeCFI is the current user's last-known reading position (EPUB CFI).
 	// Empty when the user hasn't opened the reader yet.
 	ResumeCFI string
+	// Audiobook fields — populated for MP3 / M4B and left zero for other
+	// formats. DurationSeconds is nil when unknown (no MP3 frame header,
+	// no MP4 mvhd atom, or simply non-audio); the UI treats nil as "—".
+	DurationSeconds *int
+	Narrator        string
+	// Chapters is the audiobook chapter list (or EPUB TOC, future use).
+	// Stored as a JSON document on disk; nil means "no chapter data".
+	Chapters []Chapter
 	// Locks pins individual metadata fields against automatic overwrite.
 	// The apply-metadata flow consults each flag before copying a
 	// candidate value over the stored one; manual PATCHes always write.
 	Locks BookLocks
+}
+
+// Chapter is one entry in the audiobook chapter list. Times are in
+// seconds (float so we can preserve sub-second M4B metadata without
+// quantization). Title is non-empty; an "Untitled chapter N" fallback
+// is the processor's job, not the model's.
+type Chapter struct {
+	Title  string  `json:"title"`
+	StartS float64 `json:"start_s"`
+	EndS   float64 `json:"end_s"`
 }
 
 // BookLocks is the per-field lock set for a book. Each flag corresponds

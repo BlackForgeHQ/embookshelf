@@ -80,9 +80,22 @@ type bookDTO struct {
 	HasCover      bool     `json:"hasCover"`
 	CoverMime     string   `json:"coverMime,omitempty"`
 	AddedAt       string   `json:"addedAt"`
+	// DurationSeconds is populated only for audio formats (MP3, M4B);
+	// nil otherwise (omitted from the JSON via *int + omitempty).
+	DurationSeconds *int         `json:"durationSeconds,omitempty"`
+	Narrator        string       `json:"narrator,omitempty"`
+	Chapters        []chapterDTO `json:"chapters,omitempty"`
 	// Locks is a sparse map — only fields currently locked appear, so
 	// unlocked books keep the payload small. Keys match model.LockFields.
 	Locks map[string]bool `json:"locks,omitempty"`
+}
+
+// chapterDTO mirrors model.Chapter on the wire — keeps the JSON shape
+// camel-case for the TypeScript client.
+type chapterDTO struct {
+	Title  string  `json:"title"`
+	StartS float64 `json:"startS"`
+	EndS   float64 `json:"endS"`
 }
 
 func toBookDTO(b model.Book) bookDTO {
@@ -103,38 +116,52 @@ func toBookDTO(b model.Book) bookDTO {
 		publishDate = b.PublishDate.UTC().Format("2006-01-02")
 	}
 	return bookDTO{
-		ID:            b.ID,
-		LibraryID:     b.LibraryID,
-		Title:         b.Title,
-		Subtitle:      b.Subtitle,
-		Author:        b.Author,
-		Format:        b.Format,
-		Year:          b.Year,
-		PublishDate:   publishDate,
-		Language:      b.Language,
-		Progress:      float64(b.Progress) / 100.0,
-		ResumeCFI:     b.ResumeCFI,
-		Rating:        b.Rating,
-		Palette:       firstNonEmpty(b.CoverPalette, "navy"),
-		Description:   b.Description,
-		ISBN:          b.ISBN,
-		ISBN10:        b.ISBN10,
-		Publisher:     b.Publisher,
-		Series:        b.Series,
-		SeriesNum:     b.SeriesIndex,
-		SeriesTotal:   b.SeriesTotal,
-		Genres:        genres,
-		Moods:         moods,
-		Tags:          tags,
-		AgeRating:     b.AgeRating,
-		ContentRating: b.ContentRating,
-		Pages:         b.Pages,
-		PublicReviews: b.PublicReviews,
-		HasCover:      b.HasCover,
-		CoverMime:     b.CoverMime,
-		AddedAt:       b.CreatedAt.UTC().Format(time.RFC3339),
-		Locks:         serializeLocks(b.Locks),
+		ID:              b.ID,
+		LibraryID:       b.LibraryID,
+		Title:           b.Title,
+		Subtitle:        b.Subtitle,
+		Author:          b.Author,
+		Format:          b.Format,
+		Year:            b.Year,
+		PublishDate:     publishDate,
+		Language:        b.Language,
+		Progress:        float64(b.Progress) / 100.0,
+		ResumeCFI:       b.ResumeCFI,
+		Rating:          b.Rating,
+		Palette:         firstNonEmpty(b.CoverPalette, "navy"),
+		Description:     b.Description,
+		ISBN:            b.ISBN,
+		ISBN10:          b.ISBN10,
+		Publisher:       b.Publisher,
+		Series:          b.Series,
+		SeriesNum:       b.SeriesIndex,
+		SeriesTotal:     b.SeriesTotal,
+		Genres:          genres,
+		Moods:           moods,
+		Tags:            tags,
+		AgeRating:       b.AgeRating,
+		ContentRating:   b.ContentRating,
+		Pages:           b.Pages,
+		PublicReviews:   b.PublicReviews,
+		HasCover:        b.HasCover,
+		CoverMime:       b.CoverMime,
+		AddedAt:         b.CreatedAt.UTC().Format(time.RFC3339),
+		DurationSeconds: b.DurationSeconds,
+		Narrator:        b.Narrator,
+		Chapters:        chaptersToDTO(b.Chapters),
+		Locks:           serializeLocks(b.Locks),
 	}
+}
+
+func chaptersToDTO(in []model.Chapter) []chapterDTO {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]chapterDTO, len(in))
+	for i, c := range in {
+		out[i] = chapterDTO{Title: c.Title, StartS: c.StartS, EndS: c.EndS}
+	}
+	return out
 }
 
 // serializeLocks emits a sparse map of just the set flags. nil when

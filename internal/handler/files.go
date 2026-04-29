@@ -17,6 +17,13 @@ func mimeForFormat(format string) string {
 		return "application/epub+zip"
 	case "PDF":
 		return "application/pdf"
+	case "CBZ":
+		return "application/vnd.comicbook+zip"
+	case "MP3":
+		return "audio/mpeg"
+	case "M4B":
+		// Apple uses audio/mp4; the m4b container is identical to m4a.
+		return "audio/mp4"
 	}
 	return ""
 }

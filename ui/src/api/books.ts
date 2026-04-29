@@ -90,8 +90,21 @@ export type Book = {
   hasCover: boolean
   coverMime?: string
   addedAt: string
+  // Audiobook fields. durationSeconds is undefined for non-audio formats
+  // and may also be undefined for audio when the processor couldn't
+  // determine a duration (no XING header, no MP4 mvhd atom).
+  durationSeconds?: number
+  narrator?: string
+  chapters?: Array<Chapter>
   // Sparse map — only locked fields appear. Keys match LockField.
   locks?: Partial<Record<LockField, boolean>>
+}
+
+// Mirrors internal/handler/library.go chapterDTO. Times are seconds.
+export type Chapter = {
+  title: string
+  startS: number
+  endS: number
 }
 
 // Field keys accepted by PUT /books/:id/metadata/locks. Keep in sync
@@ -231,6 +244,18 @@ export async function updateProgress(
     method: "POST",
     body: JSON.stringify({ progress, resumeCfi }),
   })
+}
+
+// fetchComicPageCount returns the total page count for a CBZ book. The
+// reader needs this before it can size navigation; pages themselves are
+// fetched lazily as <img src="/api/v1/books/:id/pages/:n">.
+export async function fetchComicPageCount(id: string): Promise<number> {
+  const r = await api<{ count: number }>(`/api/v1/books/${id}/pages`)
+  return r.count
+}
+
+export function comicPageURL(id: string, page: number): string {
+  return `/api/v1/books/${id}/pages/${page}`
 }
 
 export async function addBookToShelf(

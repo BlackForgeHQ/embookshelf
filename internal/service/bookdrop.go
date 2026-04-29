@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/blackforge/embookshelf/internal/coverstore"
+	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/pattern"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -172,11 +173,45 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 		}
 	}
 
+	// Audiobook metadata: re-extract duration / narrator / chapters off
+	// the file we just imported. The bookdrop schema doesn't carry audio
+	// fields (the review surface only shows title/author/cover), so the
+	// pragmatic option is one extra processor pass on approve. The cost
+	// is bounded — for a typical M4B it's a single mvhd atom read; for
+	// MP3 the XING header at the start of the file. Failure is logged
+	// but never fatal: the book still imports without duration.
+	if isAudioFormat(created.Format) && created.Path != "" {
+		if meta, err := (fileproc.AudioProcessor{}).Extract(ctx, created.Path); err == nil {
+			if err := s.libs.UpdateAudio(ctx, created.ID,
+				meta.DurationSeconds, meta.Narrator, nil,
+			); err != nil {
+				slog.Warn("update audio metadata", "book_id", created.ID, "err", err)
+			} else {
+				if meta.DurationSeconds != nil {
+					created.DurationSeconds = meta.DurationSeconds
+				}
+				created.Narrator = meta.Narrator
+			}
+		} else {
+			slog.Warn("re-extract audio metadata", "book_id", created.ID, "err", err)
+		}
+	}
+
 	if err := s.bdrop.MarkImported(ctx, item.ID, created.ID); err != nil {
 		return created, err
 	}
 	s.broadcast(item.ID)
 	return created, nil
+}
+
+// isAudioFormat reports whether a books.format value names an audio file
+// the AudioProcessor can extract metadata from.
+func isAudioFormat(f string) bool {
+	switch f {
+	case "MP3", "M4B":
+		return true
+	}
+	return false
 }
 
 // ClearProcessed drops every bookdrop row in a terminal state from the
