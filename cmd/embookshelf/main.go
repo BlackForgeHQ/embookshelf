@@ -28,6 +28,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/sse"
 	"github.com/blackforge/embookshelf/internal/staticfs"
 	"github.com/blackforge/embookshelf/internal/storage/local"
+	"github.com/blackforge/embookshelf/internal/task"
 	"github.com/blackforge/embookshelf/internal/telemetry"
 )
 
@@ -230,6 +231,23 @@ func main() {
 
 	// Requeue anything still mid-flight from a previous process.
 	ingest.DiscoverOnStartup(ctx, bdropRepo, q)
+
+	// Boot-time files backfill: hash any files rows that are still missing a
+	// content_hash. Runs in the background so it doesn't block startup.
+	// 1-hour timeout is generous; real deployments have hundreds of files at most.
+	go func() {
+		slog.Info("files backfill starting")
+		backfillCtx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
+		defer cancel()
+		if err := task.RunFilesBackfill(backfillCtx, task.FilesBackfillDeps{
+			Files:     repo.NewFileRepo(dbh),
+			Libraries: libRepo,
+			Backends:  repo.NewStorageBackendRepo(dbh),
+			Storage:   fileStorage,
+		}); err != nil {
+			slog.Warn("files backfill", "err", err)
+		}
+	}()
 
 	// File watcher goroutine.
 	watcher := &ingest.Watcher{
