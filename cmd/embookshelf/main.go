@@ -111,6 +111,7 @@ func main() {
 	readingSessionRepo := repo.NewReadingSessionRepo(dbh)
 	deviceRepo := repo.NewDeviceRepo(dbh)
 	appSettingsRepo := repo.NewAppSettingsRepo(dbh)
+	fileRepo := repo.NewFileRepo(dbh)
 
 	// SSE hub — shared between services that broadcast and the handler that serves /events.
 	hub := sse.NewHub()
@@ -123,7 +124,7 @@ func main() {
 	shelfSvc := service.NewShelfService(shelfRepo)
 	searchSvc := service.NewSearchService(libRepo, shelfRepo)
 	authSvc := service.NewAuthService(userRepo, sessionRepo, hub)
-	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, appSettingsRepo, covers, hub)
+	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, appSettingsRepo, covers, hub, fileRepo)
 	progressSvc := service.NewProgressService(progressRepo, readingSessionRepo)
 	annotationSvc := service.NewAnnotationService(annotationRepo)
 	statsSvc := service.NewStatsService(statsRepo)
@@ -216,7 +217,7 @@ func main() {
 	}
 
 	// Background queue. PG → River; SQLite → polling worker (queue.New dispatches by dialect).
-	q, err := queue.New(ctx, dbh, bdropSvc, libSvc, fileStorage)
+	q, err := queue.New(ctx, dbh, bdropSvc, libSvc, fileStorage, fileRepo)
 	if err != nil {
 		slog.Error("queue", "err", err)
 		os.Exit(1)
@@ -240,7 +241,7 @@ func main() {
 		backfillCtx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
 		defer cancel()
 		if err := task.RunFilesBackfill(backfillCtx, task.FilesBackfillDeps{
-			Files:     repo.NewFileRepo(dbh),
+			Files:     fileRepo,
 			Libraries: libRepo,
 			Backends:  repo.NewStorageBackendRepo(dbh),
 			Storage:   fileStorage,
