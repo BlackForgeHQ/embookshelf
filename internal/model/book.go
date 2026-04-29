@@ -85,6 +85,11 @@ type Book struct {
 	// CoverMime is the image's content type (e.g. "image/jpeg"). Set only
 	// when HasCover is true.
 	CoverMime string
+	// CoverHash is the sha256 of the cover image bytes, set after the cover
+	// is promoted from bookdrop or after the boot-time backfill runs.
+	// nil means "not yet hashed" — the serve handler falls back to the
+	// legacy book-id-keyed path until the backfill fills it in.
+	CoverHash []byte
 	// ResumeCFI is the current user's last-known reading position (EPUB CFI).
 	// Empty when the user hasn't opened the reader yet.
 	ResumeCFI string

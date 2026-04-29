@@ -1,10 +1,13 @@
 package repo_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"testing"
 
+	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/repo/repotest"
 )
@@ -68,6 +71,80 @@ func TestLibraryRepo_backendFields(t *testing.T) {
 			}
 			if sb.Kind != "local" {
 				t.Fatalf("LibraryBackend Kind=%q want local", sb.Kind)
+			}
+		})
+	}
+}
+
+// TestLibraryRepo_setCoverHash verifies that SetCoverHash persists the sha256
+// bytes and that GetBookByID returns them, and that ListBooksMissingCoverHash
+// reflects the transition correctly.
+func TestLibraryRepo_setCoverHash(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "postgres"} {
+		dialect := dialect
+		t.Run(dialect, func(t *testing.T) {
+			d := repotest.NewWithDialect(t, dialect)
+			r := repo.NewLibraryRepo(d)
+			ctx := context.Background()
+
+			lib, err := r.CreateLibrary(ctx, "Cover Test", "cover-test", "/tmp/ct")
+			if err != nil {
+				t.Fatalf("CreateLibrary: %v", err)
+			}
+
+			// Create a book with has_cover=true so it appears in ListBooksMissingCoverHash.
+			book, err := r.Create(ctx, model.Book{
+				LibraryID: lib.ID,
+				Title:     "Hashed Cover Book",
+				HasCover:  true,
+				CoverMime: "image/jpeg",
+			})
+			if err != nil {
+				t.Fatalf("Create book: %v", err)
+			}
+			if book.CoverHash != nil {
+				t.Fatalf("fresh book should have nil CoverHash, got %x", book.CoverHash)
+			}
+
+			// ListBooksMissingCoverHash should return our book.
+			missing, err := r.ListBooksMissingCoverHash(ctx)
+			if err != nil {
+				t.Fatalf("ListBooksMissingCoverHash: %v", err)
+			}
+			found := false
+			for _, b := range missing {
+				if b.ID == book.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("book not in ListBooksMissingCoverHash result (got %d books)", len(missing))
+			}
+
+			// SetCoverHash and read back.
+			hash := sha256.Sum256([]byte("fake cover bytes"))
+			if err := r.SetCoverHash(ctx, book.ID, hash[:]); err != nil {
+				t.Fatalf("SetCoverHash: %v", err)
+			}
+
+			got, err := r.GetBookByID(ctx, "", book.ID)
+			if err != nil {
+				t.Fatalf("GetBookByID after SetCoverHash: %v", err)
+			}
+			if !bytes.Equal(got.CoverHash, hash[:]) {
+				t.Fatalf("CoverHash mismatch: got %x, want %x", got.CoverHash, hash[:])
+			}
+
+			// ListBooksMissingCoverHash should no longer return our book.
+			missing2, err := r.ListBooksMissingCoverHash(ctx)
+			if err != nil {
+				t.Fatalf("ListBooksMissingCoverHash (after set): %v", err)
+			}
+			for _, b := range missing2 {
+				if b.ID == book.ID {
+					t.Fatal("book still in ListBooksMissingCoverHash after SetCoverHash")
+				}
 			}
 		})
 	}
