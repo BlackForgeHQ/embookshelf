@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.2...v0.2.3) (2026-04-29)
+
+
+### Features
+
+* **storage:** backend-agnostic Storage interface (Plan A of 8) ([#50](https://github.com/BlackForgeHQ/embookshelf/issues/50)) ([32354ae](https://github.com/BlackForgeHQ/embookshelf/commit/32354ae11ee8451b5bc086b6acea5b81bf6d438f))
+
 ## [0.2.2](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.1...v0.2.2) (2026-04-29)
 
 
