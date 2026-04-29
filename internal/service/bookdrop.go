@@ -103,6 +103,12 @@ func (s *BookDropService) RecordMetadata(
 	return nil
 }
 
+// SetContentHash persists the sha256 computed by the ingest worker.
+// Plan B Task 9 / 11.
+func (s *BookDropService) SetContentHash(ctx context.Context, id string, hash []byte) error {
+	return s.bdrop.SetContentHash(ctx, id, hash)
+}
+
 func (s *BookDropService) Fail(ctx context.Context, id string, err error) error {
 	msg := err.Error()
 	if len(msg) > 500 {
