@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.1...v0.2.2) (2026-04-29)
+
+
+### Features
+
+* add feature specifications for CI/CD, file naming patterns, library creation, metadata providers, OIDC settings, and S3 storage ([f27f336](https://github.com/BlackForgeHQ/embookshelf/commit/f27f336607157d67264edecd9fbbe98465c45c3f))
+* comic (CBZ) and audiobook (MP3/M4B) readers ([#47](https://github.com/BlackForgeHQ/embookshelf/issues/47)) ([6ca0087](https://github.com/BlackForgeHQ/embookshelf/commit/6ca0087c619b1062487a685b80f7a474544ef5e1))
+
 ## [0.2.1](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.0...v0.2.1) (2026-04-29)
 
 
