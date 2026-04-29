@@ -245,3 +245,24 @@ func TestList_MissingPrefixReturnsEmpty(t *testing.T) {
 		t.Fatalf("got %v, want io.EOF", err)
 	}
 }
+
+func TestPut_ConditionalOptionsReturnErrUnsupported(t *testing.T) {
+	fs, _ := New(t.TempDir())
+	ctx := context.Background()
+	_, err := fs.Put(ctx, "f", strings.NewReader("x"), storage.WithIfMatch("abc"))
+	if !errors.Is(err, storage.ErrUnsupportedOption) {
+		t.Fatalf("WithIfMatch: got %v, want ErrUnsupportedOption", err)
+	}
+	_, err = fs.Put(ctx, "f", strings.NewReader("x"), storage.WithIfNoneMatch("*"))
+	if !errors.Is(err, storage.ErrUnsupportedOption) {
+		t.Fatalf("WithIfNoneMatch: got %v, want ErrUnsupportedOption", err)
+	}
+}
+
+func TestDelete_WithVersionIDReturnsErrUnsupported(t *testing.T) {
+	fs, _ := New(t.TempDir())
+	err := fs.Delete(context.Background(), "any", storage.WithVersionID("v1"))
+	if !errors.Is(err, storage.ErrUnsupportedOption) {
+		t.Fatalf("got %v, want ErrUnsupportedOption", err)
+	}
+}

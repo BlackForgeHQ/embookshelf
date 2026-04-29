@@ -67,7 +67,6 @@ func (fs *LocalFS) List(ctx context.Context, prefix string) (storage.Iterator, e
 	return &localIter{
 		fs:      fs,
 		pending: []string{prefixAbs},
-		isDir:   map[string]bool{prefixAbs: true},
 	}, nil
 }
 
@@ -78,7 +77,6 @@ func (fs *LocalFS) List(ctx context.Context, prefix string) (storage.Iterator, e
 type localIter struct {
 	fs      *LocalFS
 	pending []string
-	isDir   map[string]bool
 	done    bool
 	closed  bool
 }
@@ -135,6 +133,7 @@ func (it *localIter) Close() error {
 	it.pending = nil
 	return nil
 }
+
 func (fs *LocalFS) Head(ctx context.Context, key string) (storage.ObjectInfo, error) {
 	abs, err := fs.resolve(key)
 	if err != nil {
@@ -212,6 +211,10 @@ func (fs *LocalFS) Put(ctx context.Context, key string, r io.Reader, opts ...sto
 	return storage.PutResult{}, nil
 }
 func (fs *LocalFS) Delete(ctx context.Context, key string, opts ...storage.DeleteOption) error {
+	o := storage.ApplyDelete(opts)
+	if o.VersionID != "" {
+		return errors.Join(storage.ErrUnsupportedOption, fmt.Errorf("local: versioned delete not supported"))
+	}
 	abs, err := fs.resolve(key)
 	if err != nil {
 		return err
@@ -238,7 +241,7 @@ func (fs *LocalFS) Copy(ctx context.Context, srcKey, dstKey string) (storage.Cop
 		}
 		return storage.CopyResult{}, err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 	if err := os.MkdirAll(filepath.Dir(dstAbs), 0o755); err != nil {
 		return storage.CopyResult{}, err
 	}
