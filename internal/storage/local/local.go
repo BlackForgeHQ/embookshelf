@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 
 	"github.com/blackforge/embookshelf/internal/storage"
@@ -53,8 +54,43 @@ func (fs *LocalFS) Head(ctx context.Context, key string) (storage.ObjectInfo, er
 func (fs *LocalFS) Get(ctx context.Context, key string, opts ...storage.GetOption) (io.ReadCloser, error) {
 	return nil, fmt.Errorf("not implemented")
 }
+// Put writes r to key atomically using write-temp-then-rename.
+// LocalFS does not support conditional writes (CapConditional is off);
+// passing WithIfMatch or WithIfNoneMatch returns ErrUnsupportedOption.
 func (fs *LocalFS) Put(ctx context.Context, key string, r io.Reader, opts ...storage.PutOption) (storage.PutResult, error) {
-	return storage.PutResult{}, fmt.Errorf("not implemented")
+	o := storage.ApplyPut(opts)
+	if o.IfMatchSet || o.IfNoneMatchSet {
+		return storage.PutResult{}, storage.ErrUnsupportedOption
+	}
+	abs, err := fs.resolve(key)
+	if err != nil {
+		return storage.PutResult{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return storage.PutResult{}, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(abs), filepath.Base(abs)+".*.tmp")
+	if err != nil {
+		return storage.PutResult{}, err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+
+	if _, err := io.Copy(tmp, r); err != nil {
+		_ = tmp.Close()
+		return storage.PutResult{}, err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return storage.PutResult{}, err
+	}
+	if err := tmp.Close(); err != nil {
+		return storage.PutResult{}, err
+	}
+	if err := os.Rename(tmpName, abs); err != nil {
+		return storage.PutResult{}, err
+	}
+	return storage.PutResult{}, nil
 }
 func (fs *LocalFS) Delete(ctx context.Context, key string, opts ...storage.DeleteOption) error {
 	return fmt.Errorf("not implemented")
