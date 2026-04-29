@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.4...v0.2.5) (2026-04-29)
+
+
+### Features
+
+* **scan:** two-phase scan + reconciliation (Plan C of 8) ([#55](https://github.com/BlackForgeHQ/embookshelf/issues/55)) ([364e8d1](https://github.com/BlackForgeHQ/embookshelf/commit/364e8d1156a16e7fa80094587ba5e2aa482f4c1a))
+
 ## [0.2.4](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.3...v0.2.4) (2026-04-29)
 
 
