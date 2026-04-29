@@ -79,6 +79,34 @@ func TestScanStringSlice(t *testing.T) {
 		t.Fatalf("PG: got %v, want [a b]", pgDst)
 	}
 
+	// PG: pgx stdlib delivers TEXT[] as a literal string when the scan
+	// destination is `any`. Confirm we parse the literal form.
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"{}", []string{}},
+		{"{sci-fi,drama}", []string{"sci-fi", "drama"}},
+		{`{"a,b",c}`, []string{"a,b", "c"}},
+		{`{"with \"quote\"","back\\slash"}`, []string{`with "quote"`, `back\slash`}},
+		{"{NULL,a}", []string{"", "a"}},
+		{`{"NULL"}`, []string{"NULL"}},
+	}
+	for _, tc := range cases {
+		var got []string
+		if err := ScanStringSlice(DialectPostgres, tc.in, &got); err != nil {
+			t.Fatalf("PG literal %q: %v", tc.in, err)
+		}
+		if len(got) != len(tc.want) {
+			t.Fatalf("PG literal %q: got %v, want %v", tc.in, got, tc.want)
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Fatalf("PG literal %q: got %v, want %v", tc.in, got, tc.want)
+			}
+		}
+	}
+
 	// SQLite: src is a string holding JSON.
 	var sqliteDst []string
 	if err := ScanStringSlice(DialectSQLite, `["x","y","z"]`, &sqliteDst); err != nil {

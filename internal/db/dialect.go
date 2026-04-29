@@ -3,6 +3,7 @@ package db
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -138,12 +139,27 @@ func ScanStringSlice(d Dialect, src any, dst *[]string) error {
 		return nil
 	}
 	if d == DialectPostgres {
-		s, ok := src.([]string)
-		if !ok {
+		switch v := src.(type) {
+		case []string:
+			*dst = append((*dst)[:0], v...)
+			return nil
+		case string:
+			parsed, err := parsePGTextArray(v)
+			if err != nil {
+				return fmt.Errorf("scan string slice (PG): %w", err)
+			}
+			*dst = parsed
+			return nil
+		case []byte:
+			parsed, err := parsePGTextArray(string(v))
+			if err != nil {
+				return fmt.Errorf("scan string slice (PG): %w", err)
+			}
+			*dst = parsed
+			return nil
+		default:
 			return fmt.Errorf("scan string slice (PG): unexpected type %T", src)
 		}
-		*dst = append((*dst)[:0], s...)
-		return nil
 	}
 	// SQLite
 	var b []byte
@@ -156,4 +172,65 @@ func ScanStringSlice(d Dialect, src any, dst *[]string) error {
 		return fmt.Errorf("scan string slice (SQLite): unexpected type %T", src)
 	}
 	return json.Unmarshal(b, dst)
+}
+
+// parsePGTextArray decodes a PostgreSQL text-array literal (e.g. `{a,b,"c,d"}`)
+// into a []string. pgx's stdlib driver hands TEXT[] values to database/sql
+// scanners as this literal string when the destination is `any`, so repos
+// that scan into `any` see the raw form. NULL elements are mapped to "".
+func parsePGTextArray(s string) ([]string, error) {
+	if s == "" {
+		return []string{}, nil
+	}
+	if len(s) < 2 || s[0] != '{' || s[len(s)-1] != '}' {
+		return nil, fmt.Errorf("malformed PG array literal: %q", s)
+	}
+	body := s[1 : len(s)-1]
+	if body == "" {
+		return []string{}, nil
+	}
+	out := make([]string, 0, 4)
+	var buf strings.Builder
+	inQuotes := false
+	quoted := false // current element was quoted (so 'NULL' must stay literal)
+	flush := func() {
+		if !quoted && buf.String() == "NULL" {
+			out = append(out, "")
+		} else {
+			out = append(out, buf.String())
+		}
+		buf.Reset()
+		quoted = false
+	}
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if inQuotes {
+			if c == '\\' && i+1 < len(body) {
+				buf.WriteByte(body[i+1])
+				i++
+				continue
+			}
+			if c == '"' {
+				inQuotes = false
+				continue
+			}
+			buf.WriteByte(c)
+			continue
+		}
+		if c == '"' {
+			inQuotes = true
+			quoted = true
+			continue
+		}
+		if c == ',' {
+			flush()
+			continue
+		}
+		buf.WriteByte(c)
+	}
+	if inQuotes {
+		return nil, fmt.Errorf("unterminated quoted element in PG array: %q", s)
+	}
+	flush()
+	return out, nil
 }
