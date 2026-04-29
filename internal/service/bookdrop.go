@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/fileproc"
@@ -29,6 +30,10 @@ type BookDropService struct {
 	settings *repo.AppSettingsRepo
 	covers   *coverstore.Store
 	hub      *sse.Hub
+	// files is the storage_v2 file repo. When non-nil, Approve writes a
+	// files row alongside the new book. nil disables the write so callers
+	// (e.g. tests) that don't need the row don't have to supply a repo.
+	files *repo.FileRepo
 }
 
 func NewBookDropService(
@@ -37,6 +42,7 @@ func NewBookDropService(
 	settings *repo.AppSettingsRepo,
 	covers *coverstore.Store,
 	hub *sse.Hub,
+	files *repo.FileRepo,
 ) *BookDropService {
 	return &BookDropService{
 		bdrop:    bdrop,
@@ -44,6 +50,7 @@ func NewBookDropService(
 		settings: settings,
 		covers:   covers,
 		hub:      hub,
+		files:    files,
 	}
 }
 
@@ -101,6 +108,12 @@ func (s *BookDropService) RecordMetadata(
 	}
 	s.broadcast(id)
 	return nil
+}
+
+// SetContentHash persists the sha256 computed by the ingest worker.
+// Plan B Task 9 / 11.
+func (s *BookDropService) SetContentHash(ctx context.Context, id string, hash []byte) error {
+	return s.bdrop.SetContentHash(ctx, id, hash)
 }
 
 func (s *BookDropService) Fail(ctx context.Context, id string, err error) error {
@@ -161,6 +174,38 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 	created, err := s.libs.Create(ctx, book)
 	if err != nil {
 		return created, err
+	}
+
+	// Persist the storage_v2 files row alongside the book. content_hash
+	// was computed at ingest (Task 9); fall back to nil if it's missing,
+	// the boot worker will fill it on next start.
+	if s.files != nil {
+		location := relativizeBookLocation(ctx, s.libs, libraryID, book.Path)
+		size := int64(0)
+		var mtime time.Time
+		if st, statErr := os.Stat(book.Path); statErr == nil {
+			size = st.Size()
+			mtime = st.ModTime()
+		} else {
+			mtime = time.Now()
+		}
+		f := model.File{
+			LibraryID:   libraryID,
+			BookID:      created.ID,
+			Location:    location,
+			Size:        size,
+			Mtime:       mtime,
+			ContentHash: item.ContentHash,
+			Format:      created.Format,
+			LastScanned: time.Now(),
+		}
+		if _, err := s.files.Insert(ctx, f); err != nil {
+			// Duplicate location is benign — a re-import of an existing
+			// path. Other errors are logged but don't fail the approve.
+			if !errors.Is(err, repo.ErrFileLocationTaken) {
+				slog.Warn("approve: insert files row", "book_id", created.ID, "err", err)
+			}
+		}
 	}
 
 	// Best-effort: move the pre-approval cover into the book namespace.
@@ -432,4 +477,32 @@ func fallback(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// relativizeBookLocation strips the library root from abs, returning the
+// path the files table stores. Falls back to abs on any lookup failure or
+// when the path doesn't sit under the library root.
+func relativizeBookLocation(ctx context.Context, libs *repo.LibraryRepo, libraryID, abs string) string {
+	lib, err := libs.GetByID(ctx, libraryID)
+	if err != nil {
+		return abs
+	}
+	root := ""
+	if lib.Root != nil {
+		root = *lib.Root
+	}
+	if root == "" {
+		root = lib.Path
+	}
+	if root == "" {
+		return abs
+	}
+	prefix := root
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	if strings.HasPrefix(abs, prefix) {
+		return abs[len(prefix):]
+	}
+	return abs
 }

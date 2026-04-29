@@ -74,6 +74,9 @@ func main() {
 		if err := migrator.Up(m); err != nil {
 			fatal("up: %v", err)
 		}
+		if err := migrator.BackfillStorageV2(ctx, d); err != nil {
+			fatal("storage_v2 backfill: %v", err)
+		}
 		fmt.Println("ok")
 	case "down":
 		if err := m.Down(); err != nil && !errors.Is(err, migrate.ErrNoChange) {

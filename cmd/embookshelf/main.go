@@ -28,6 +28,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/sse"
 	"github.com/blackforge/embookshelf/internal/staticfs"
 	"github.com/blackforge/embookshelf/internal/storage/local"
+	"github.com/blackforge/embookshelf/internal/task"
 	"github.com/blackforge/embookshelf/internal/telemetry"
 )
 
@@ -86,6 +87,10 @@ func main() {
 			slog.Error("migrate", "err", err)
 			os.Exit(1)
 		}
+		if err := migrator.BackfillStorageV2(ctx, dbh); err != nil {
+			slog.Error("storage_v2 backfill", "err", err)
+			os.Exit(1)
+		}
 	}
 
 	fileStorage, err := local.New("/")
@@ -106,6 +111,7 @@ func main() {
 	readingSessionRepo := repo.NewReadingSessionRepo(dbh)
 	deviceRepo := repo.NewDeviceRepo(dbh)
 	appSettingsRepo := repo.NewAppSettingsRepo(dbh)
+	fileRepo := repo.NewFileRepo(dbh)
 
 	// SSE hub — shared between services that broadcast and the handler that serves /events.
 	hub := sse.NewHub()
@@ -118,7 +124,7 @@ func main() {
 	shelfSvc := service.NewShelfService(shelfRepo)
 	searchSvc := service.NewSearchService(libRepo, shelfRepo)
 	authSvc := service.NewAuthService(userRepo, sessionRepo, hub)
-	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, appSettingsRepo, covers, hub)
+	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, appSettingsRepo, covers, hub, fileRepo)
 	progressSvc := service.NewProgressService(progressRepo, readingSessionRepo)
 	annotationSvc := service.NewAnnotationService(annotationRepo)
 	statsSvc := service.NewStatsService(statsRepo)
@@ -211,7 +217,7 @@ func main() {
 	}
 
 	// Background queue. PG → River; SQLite → polling worker (queue.New dispatches by dialect).
-	q, err := queue.New(ctx, dbh, bdropSvc, libSvc, fileStorage)
+	q, err := queue.New(ctx, dbh, bdropSvc, libSvc, fileStorage, fileRepo)
 	if err != nil {
 		slog.Error("queue", "err", err)
 		os.Exit(1)
@@ -226,6 +232,23 @@ func main() {
 
 	// Requeue anything still mid-flight from a previous process.
 	ingest.DiscoverOnStartup(ctx, bdropRepo, q)
+
+	// Boot-time files backfill: hash any files rows that are still missing a
+	// content_hash. Runs in the background so it doesn't block startup.
+	// 1-hour timeout is generous; real deployments have hundreds of files at most.
+	go func() {
+		slog.Info("files backfill starting")
+		backfillCtx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
+		defer cancel()
+		if err := task.RunFilesBackfill(backfillCtx, task.FilesBackfillDeps{
+			Files:     fileRepo,
+			Libraries: libRepo,
+			Backends:  repo.NewStorageBackendRepo(dbh),
+			Storage:   fileStorage,
+		}); err != nil {
+			slog.Warn("files backfill", "err", err)
+		}
+	}()
 
 	// File watcher goroutine.
 	watcher := &ingest.Watcher{

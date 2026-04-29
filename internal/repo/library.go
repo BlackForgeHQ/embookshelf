@@ -35,7 +35,8 @@ const bookCols = `
 	b.isbn_locked, b.isbn10_locked, b.language_locked,
 	b.publish_date_locked, b.genres_locked, b.moods_locked,
 	b.tags_locked, b.pages_locked, b.cover_locked,
-	b.duration_seconds, b.narrator, b.chapters
+	b.duration_seconds, b.narrator, b.chapters,
+	b.uuid, b.folder_path
 `
 
 // bookFromPG is the FROM + LEFT JOIN clause for Postgres queries, where
@@ -90,7 +91,8 @@ const libCols = `
 		(SELECT COUNT(*) FROM books b
 		 WHERE b.library_id = l.id AND b.deleted_at IS NULL),
 		0
-	) AS book_count
+	) AS book_count,
+	l.backend_id, l.root, l.org_mode
 `
 
 // libColsReturning is the same projection for RETURNING clauses where
@@ -103,7 +105,8 @@ const libColsReturning = `
 		(SELECT COUNT(*) FROM books b
 		 WHERE b.library_id = libraries.id AND b.deleted_at IS NULL),
 		0
-	) AS book_count
+	) AS book_count,
+	backend_id, root, org_mode
 `
 
 // CreateLibrary inserts a new library row and returns the persisted
@@ -228,10 +231,12 @@ func (r *LibraryRepo) TouchScan(ctx context.Context, id string, fileCount, disco
 func (r *LibraryRepo) scanLibrary(s scanner) (model.Library, error) {
 	var l model.Library
 	var lastScannedAny, createdAny any
+	var backendID, root sql.NullString
 	err := s.Scan(
 		&l.ID, &l.Name, &l.Slug, &l.Path,
 		&lastScannedAny, &l.FileCount, &l.DiscoveredCount,
 		&l.FileNamingPattern, &createdAny, &l.BookCount,
+		&backendID, &root, &l.OrgMode,
 	)
 	if err != nil {
 		return l, err
@@ -241,6 +246,14 @@ func (r *LibraryRepo) scanLibrary(s scanner) (model.Library, error) {
 	}
 	if err := db.ScanTime(r.db.Dialect, createdAny, &l.CreatedAt); err != nil {
 		return l, fmt.Errorf("scan created_at: %w", err)
+	}
+	if backendID.Valid {
+		s := backendID.String
+		l.BackendID = &s
+	}
+	if root.Valid {
+		s := root.String
+		l.Root = &s
 	}
 	return l, nil
 }
@@ -479,7 +492,8 @@ func (r *LibraryRepo) Create(ctx context.Context, b model.Book) (model.Book, err
 		       b.isbn_locked, b.isbn10_locked, b.language_locked,
 		       b.publish_date_locked, b.genres_locked, b.moods_locked,
 		       b.tags_locked, b.pages_locked, b.cover_locked,
-		       b.duration_seconds, b.narrator, b.chapters
+		       b.duration_seconds, b.narrator, b.chapters,
+		       b.uuid, b.folder_path
 		FROM inserted b
 	`
 
@@ -514,7 +528,8 @@ func (r *LibraryRepo) Create(ctx context.Context, b model.Book) (model.Book, err
 		    isbn_locked, isbn10_locked, language_locked,
 		    publish_date_locked, genres_locked, moods_locked,
 		    tags_locked, pages_locked, cover_locked,
-		    duration_seconds, narrator, chapters
+		    duration_seconds, narrator, chapters,
+		    uuid, folder_path
 	`
 
 	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), args...)
@@ -837,6 +852,7 @@ func scanBook(d db.Dialect, s scanner) (model.Book, error) {
 	var b model.Book
 	var genresAny, moodsAny, tagsAny, publishDateAny, createdAny any
 	var durationAny, chaptersAny any
+	var bookUUID, folderPath sql.NullString
 	err := s.Scan(
 		&b.ID, &b.LibraryID, &b.Title, &b.Subtitle, &b.Author, &b.Format, &b.Year,
 		&publishDateAny, &b.Language,
@@ -854,6 +870,7 @@ func scanBook(d db.Dialect, s scanner) (model.Book, error) {
 		&b.Locks.PublishDate, &b.Locks.Genres, &b.Locks.Moods,
 		&b.Locks.Tags, &b.Locks.Pages, &b.Locks.Cover,
 		&durationAny, &b.Narrator, &chaptersAny,
+		&bookUUID, &folderPath,
 	)
 	if err != nil {
 		return b, err
@@ -893,6 +910,14 @@ func scanBook(d db.Dialect, s scanner) (model.Book, error) {
 				b.Chapters = ch
 			}
 		}
+	}
+	if bookUUID.Valid {
+		s := bookUUID.String
+		b.UUID = &s
+	}
+	if folderPath.Valid {
+		s := folderPath.String
+		b.FolderPath = &s
 	}
 	return b, nil
 }
@@ -1015,4 +1040,80 @@ func (r *LibraryRepo) SearchSuggestLibraries(ctx context.Context, q string, limi
 		out = append(out, l)
 	}
 	return out, rows.Err()
+}
+
+// LibraryBackend returns the storage_backends row associated with the given
+// library by joining through the backend_id FK. Returns ErrNotFound when the
+// library either does not exist or has no backend_id set yet.
+func (r *LibraryRepo) LibraryBackend(ctx context.Context, libraryID string) (model.StorageBackend, error) {
+	const qPG = `
+		SELECT sb.id, sb.kind, sb.config, sb.created_at
+		FROM libraries l
+		JOIN storage_backends sb ON sb.id = l.backend_id
+		WHERE l.id = $1
+	`
+	const qSQLite = `
+		SELECT sb.id, sb.kind, sb.config, sb.created_at
+		FROM libraries l
+		JOIN storage_backends sb ON sb.id = l.backend_id
+		WHERE l.id = ?
+	`
+	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), libraryID)
+
+	// Re-use the same scan logic as StorageBackendRepo to avoid duplication.
+	var b model.StorageBackend
+	var configRaw, createdAny any
+	if err := row.Scan(&b.ID, &b.Kind, &configRaw, &createdAny); err != nil {
+		if dberr.IsNotFound(err) {
+			return model.StorageBackend{}, ErrNotFound
+		}
+		return model.StorageBackend{}, err
+	}
+
+	var raw []byte
+	switch v := configRaw.(type) {
+	case []byte:
+		raw = v
+	case string:
+		raw = []byte(v)
+	default:
+		return model.StorageBackend{}, fmt.Errorf("unexpected type for config column: %T", configRaw)
+	}
+	if err := json.Unmarshal(raw, &b.Config); err != nil {
+		return model.StorageBackend{}, fmt.Errorf("decode config: %w", err)
+	}
+	if err := db.ScanTime(r.db.Dialect, createdAny, &b.CreatedAt); err != nil {
+		return model.StorageBackend{}, fmt.Errorf("scan created_at: %w", err)
+	}
+	return b, nil
+}
+
+// SetBackendID wires a library to a storage backend by writing the
+// backend_id FK column. Pass an empty string to clear the association.
+// Used by StorageBackendRepo tests and the library-update handler.
+func (r *LibraryRepo) SetBackendID(ctx context.Context, libraryID, backendID string) error {
+	const qPG = `UPDATE libraries SET backend_id = $2 WHERE id = $1`
+	const qSQLite = `UPDATE libraries SET backend_id = ? WHERE id = ?`
+	var nilableBackend any
+	if backendID != "" {
+		nilableBackend = backendID
+	}
+	var res sql.Result
+	var err error
+	if r.db.Dialect == db.DialectSQLite {
+		res, err = r.db.SQL.ExecContext(ctx, qSQLite, nilableBackend, libraryID)
+	} else {
+		res, err = r.db.SQL.ExecContext(ctx, qPG, libraryID, nilableBackend)
+	}
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

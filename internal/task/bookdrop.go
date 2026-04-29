@@ -6,8 +6,11 @@ package task
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"io"
 	"log/slog"
+	"os"
 
 	"github.com/riverqueue/river"
 
@@ -43,6 +46,24 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 	if err := deps.Svc.BeginProcessing(ctx, itemID); err != nil {
 		return err
 	}
+
+	// Compute the content hash from a dedicated read pass. EPUB/PDF/CBZ
+	// need random access for metadata extraction, so we don't share the
+	// stream with the processor — one extra full read is cheap relative
+	// to the metadata work itself.
+	if hash, err := hashFile(ctx, item.Path); err != nil {
+		slog.Warn("bookdrop hash failed", "item_id", itemID, "path", item.Path, "err", err)
+		// Non-fatal: missing or unreadable file → mark as failed and stop.
+		_ = deps.Svc.Fail(ctx, itemID, err)
+		return nil
+	} else {
+		if err := deps.Svc.SetContentHash(ctx, itemID, hash); err != nil {
+			slog.Warn("bookdrop set hash failed", "item_id", itemID, "err", err)
+			// Persistence failures retry-eligible — return the error.
+			return err
+		}
+	}
+
 	proc, format, err := fileproc.Dispatch(item.Path)
 	if err != nil {
 		if errors.Is(err, fileproc.ErrUnsupportedFormat) {
@@ -65,6 +86,24 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 		meta.Title, meta.Author, meta.Description, meta.Language,
 		meta.CoverBytes, meta.CoverMime,
 	)
+}
+
+// hashFile streams item.Path through sha256 and returns the digest.
+// Used during bookdrop ingest so the hash is recorded alongside the
+// approval-time metadata, well before the file is moved into the
+// library tree.
+func hashFile(_ context.Context, path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return nil, err
+	}
+	return h.Sum(nil), nil
 }
 
 // BookDropWorker is the River adapter for BookDropIngest. River

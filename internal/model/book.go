@@ -20,6 +20,18 @@ type Library struct {
 	// nil means "use the hard-coded fallback" (keep the original
 	// filename).
 	FileNamingPattern *string
+	// BackendID is the FK to storage_backends. nil when the library has
+	// not yet been wired to a backend (legacy libraries created before
+	// the storage_v2 migration).
+	BackendID *string
+	// Root is the root path within the backend (e.g. "/books" for a
+	// local backend). nil when BackendID is nil.
+	Root *string
+	// OrgMode controls how the scanner groups files into books.
+	// "book_per_file" treats each file as its own book;
+	// "book_per_folder" groups all files in a folder into one book.
+	// The column is NOT NULL with DEFAULT 'book_per_folder'.
+	OrgMode string
 }
 
 type Book struct {
@@ -62,6 +74,12 @@ type Book struct {
 	CreatedAt     time.Time
 	// Path is the absolute file path on disk (or empty for seed data).
 	Path string
+	// UUID is the stable identifier assigned during the storage_v2
+	// backfill. nil until the backfill worker populates it.
+	UUID *string
+	// FolderPath is the relative folder within the library that contains
+	// this book's files. nil until backfill or scan assigns it.
+	FolderPath *string
 	// HasCover is true when a cover image lives under coverstore/books/{ID}.
 	HasCover bool
 	// CoverMime is the image's content type (e.g. "image/jpeg"). Set only

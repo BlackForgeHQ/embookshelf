@@ -22,6 +22,20 @@ func IsNotFound(err error) bool {
 	return errors.Is(err, sql.ErrNoRows)
 }
 
+// IsForeignKeyViolation reports whether err denotes a foreign-key
+// constraint violation. On Postgres that is SQLSTATE 23503; on SQLite
+// the driver emits a message containing "FOREIGN KEY constraint failed".
+func IsForeignKeyViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23503"
+	}
+	return strings.Contains(err.Error(), "FOREIGN KEY constraint failed")
+}
+
 // IsUniqueViolation reports whether err denotes a unique-constraint
 // violation, and if so returns a stable identifier for the violated
 // constraint.
