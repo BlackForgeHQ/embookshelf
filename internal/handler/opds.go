@@ -231,6 +231,8 @@ func (h *Handler) OPDSDownload(c *gin.Context) {
 
 // OPDSCover streams the approved book's cover over the OPDS-authed surface.
 // Mirrors BookCover but uses the Basic Auth context rather than the session.
+// Prefers the hash-keyed path; falls back to the legacy id-keyed path for
+// covers that haven't been backfilled yet.
 func (h *Handler) OPDSCover(c *gin.Context) {
 	userID := opdsUserID(c)
 	if userID == "" {
@@ -242,6 +244,32 @@ func (h *Handler) OPDSCover(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
+	mime := book.CoverMime
+	if mime == "" {
+		mime = "application/octet-stream"
+	}
+
+	// Try hash-keyed path first.
+	if len(book.CoverHash) > 0 {
+		rc, err := h.covers.OpenBookHashed(book.CoverHash, book.CoverMime)
+		if err == nil {
+			defer func() { _ = rc.Close() }()
+			c.Header("Content-Type", mime)
+			c.Header("Cache-Control", "private, max-age=86400")
+			if _, err := io.Copy(c.Writer, rc); err != nil {
+				slog.Warn("opds cover stream", "id", id, "err", err)
+			}
+			return
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("opds cover open hashed", "book_id", id, "err", err)
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		// ErrNotExist: fall through to legacy path.
+	}
+
+	// Legacy fallback: id-keyed path (books/<id>).
 	f, err := h.covers.OpenBook(id)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -252,10 +280,6 @@ func (h *Handler) OPDSCover(c *gin.Context) {
 		return
 	}
 	defer func() { _ = f.Close() }()
-	mime := book.CoverMime
-	if mime == "" {
-		mime = "application/octet-stream"
-	}
 	c.Header("Content-Type", mime)
 	c.Header("Cache-Control", "private, max-age=86400")
 	if _, err := io.Copy(c.Writer, f); err != nil {

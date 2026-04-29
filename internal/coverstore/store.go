@@ -52,6 +52,11 @@ func (s *Store) SaveBook(id string, data []byte) error {
 // PromoteBookDropToBook moves a bookdrop cover into the book namespace once
 // the import is approved. Missing source is not an error — callers may pass
 // through even when the processor didn't find a cover.
+//
+// Deprecated: new flows in service.BookDropService.Approve compute a sha256
+// and write to the hash-keyed namespace via SaveBookHashed. This method is
+// kept for the legacy id-keyed fallback path used by the cover handler when
+// cover_hash is NULL (i.e. before the boot-time backfill runs).
 func (s *Store) PromoteBookDropToBook(bookdropID, bookID string) error {
 	src := s.BookDropPath(bookdropID)
 	dst := s.BookPath(bookID)

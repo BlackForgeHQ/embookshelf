@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -208,14 +209,36 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 		}
 	}
 
-	// Best-effort: move the pre-approval cover into the book namespace.
-	// Failure here is logged but doesn't abort the import — the DB row will
-	// show has_cover=true while the file is missing; the cover handler
-	// gracefully degrades to the palette fallback.
+	// Best-effort: hash the pre-approval cover and save it to the new
+	// hash-keyed path. Failure is logged but doesn't abort the import —
+	// the boot-time backfill will retry on the next start.
 	if item.HasCover && s.covers != nil {
-		if err := s.covers.PromoteBookDropToBook(item.ID, created.ID); err != nil {
-			slog.Warn("promote cover", "bookdrop_id", item.ID, "book_id", created.ID, "err", err)
-		}
+		func() {
+			rc, err := s.covers.OpenBookDrop(item.ID)
+			if err != nil {
+				slog.Warn("approve cover: open bookdrop", "bookdrop_id", item.ID, "err", err)
+				return
+			}
+			data, err := io.ReadAll(rc)
+			_ = rc.Close()
+			if err != nil {
+				slog.Warn("approve cover: read", "bookdrop_id", item.ID, "err", err)
+				return
+			}
+			sum := sha256.Sum256(data)
+			if err := s.covers.SaveBookHashed(sum[:], item.CoverMime, data); err != nil {
+				slog.Warn("approve cover: save hashed", "book_id", created.ID, "err", err)
+				return
+			}
+			if err := s.libs.SetCoverHash(ctx, created.ID, sum[:]); err != nil {
+				slog.Warn("approve cover: set hash", "book_id", created.ID, "err", err)
+				return
+			}
+			// Best-effort cleanup of the bookdrop cover; non-fatal.
+			if err := s.covers.DeleteBookDrop(item.ID); err != nil {
+				slog.Warn("approve cover: delete bookdrop", "bookdrop_id", item.ID, "err", err)
+			}
+		}()
 	}
 
 	// Audiobook metadata: re-extract duration / narrator / chapters off
