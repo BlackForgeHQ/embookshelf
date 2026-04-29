@@ -6,10 +6,13 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 
 	"github.com/riverqueue/river"
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
+	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
@@ -42,6 +45,11 @@ type LibraryScanDeps struct {
 	// the walk. Plan A only uses List; future plans use Get/Head for
 	// content-hash computation and metadata extraction.
 	Storage storage.Storage
+	// Files is the storage_v2 file repo. When non-nil the scan loop
+	// checks files.ExistsByLocation before falling through to the
+	// legacy BookExistsByPath check. nil disables the new check so
+	// libraries that haven't been backfilled yet still de-dupe by path.
+	Files *repo.FileRepo
 }
 
 // LibraryScan walks a library's filesystem root and stages every
@@ -94,6 +102,18 @@ func LibraryScan(ctx context.Context, args LibraryScanArgs, deps LibraryScanDeps
 		}
 		fileCount++
 
+		relLoc := relativizeLocation(lib, p)
+
+		if deps.Files != nil {
+			exists, err := deps.Files.ExistsByLocation(ctx, lib.ID, relLoc)
+			if err != nil {
+				slog.Warn("library scan: files exists check", "lib", lib.ID, "loc", relLoc, "err", err)
+				// fall through to legacy check
+			} else if exists {
+				continue
+			}
+		}
+
 		already, err := deps.Lib.BookExistsByPath(ctx, p)
 		if err != nil {
 			slog.Warn("library scan: book exists check", "path", p, "err", err)
@@ -136,4 +156,28 @@ type LibraryScanWorker struct {
 
 func (w *LibraryScanWorker) Work(ctx context.Context, job *river.Job[LibraryScanArgs]) error {
 	return LibraryScan(ctx, job.Args, w.Deps)
+}
+
+// relativizeLocation strips the library root from abs, returning the
+// path the files table stores. If abs doesn't fall under the library
+// root (a corner case Plan B's backfill stores verbatim), return abs.
+func relativizeLocation(lib model.Library, abs string) string {
+	root := ""
+	if lib.Root != nil {
+		root = *lib.Root
+	}
+	if root == "" {
+		root = lib.Path
+	}
+	if root == "" {
+		return abs
+	}
+	prefix := root
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	if strings.HasPrefix(abs, prefix) {
+		return abs[len(prefix):]
+	}
+	return abs
 }
