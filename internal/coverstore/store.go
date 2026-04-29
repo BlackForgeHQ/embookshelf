@@ -18,6 +18,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Store struct {
@@ -51,6 +52,11 @@ func (s *Store) SaveBook(id string, data []byte) error {
 // PromoteBookDropToBook moves a bookdrop cover into the book namespace once
 // the import is approved. Missing source is not an error — callers may pass
 // through even when the processor didn't find a cover.
+//
+// Deprecated: new flows in service.BookDropService.Approve compute a sha256
+// and write to the hash-keyed namespace via SaveBookHashed. This method is
+// kept for the legacy id-keyed fallback path used by the cover handler when
+// cover_hash is NULL (i.e. before the boot-time backfill runs).
 func (s *Store) PromoteBookDropToBook(bookdropID, bookID string) error {
 	src := s.BookDropPath(bookdropID)
 	dst := s.BookPath(bookID)
@@ -90,6 +96,72 @@ func (s *Store) DeleteBook(id string) error {
 // rejected).
 func (s *Store) DeleteBookDrop(id string) error {
 	return removeIfExists(s.BookDropPath(id))
+}
+
+// extForMIME maps a cover's MIME type to a filename suffix. Unknown
+// MIMEs default to ".bin" — the cover still serves correctly because
+// the response Content-Type comes from the DB row, not the path.
+func extForMIME(mime string) string {
+	switch strings.ToLower(strings.TrimSpace(mime)) {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	case "image/avif":
+		return ".avif"
+	default:
+		return ".bin"
+	}
+}
+
+// hashedDir returns ${root}/covers (the new hash-keyed namespace).
+func (s *Store) hashedDir() string { return filepath.Join(s.root, "covers") }
+
+// HashedPath returns the disk path for a cover keyed by content hash.
+// Layout: covers/<hash[0:2]>/<hash><ext>. Hash is hex-encoded.
+func (s *Store) HashedPath(hash []byte, mime string) string {
+	if len(hash) == 0 {
+		return ""
+	}
+	hex := fmt.Sprintf("%x", hash)
+	bucket := hex[:2]
+	return filepath.Join(s.hashedDir(), bucket, hex+extForMIME(mime))
+}
+
+// SaveBookHashed writes data atomically to the hash-keyed path.
+// Idempotent: re-saving identical bytes is a no-op (Stat skip).
+func (s *Store) SaveBookHashed(hash []byte, mime string, data []byte) error {
+	p := s.HashedPath(hash, mime)
+	if p == "" {
+		return errors.New("coverstore: empty hash")
+	}
+	if _, err := os.Stat(p); err == nil {
+		return nil // already there
+	}
+	return writeAtomic(p, data)
+}
+
+// OpenBookHashed returns a reader for the cover at the hashed path.
+func (s *Store) OpenBookHashed(hash []byte, mime string) (io.ReadCloser, error) {
+	p := s.HashedPath(hash, mime)
+	if p == "" {
+		return nil, os.ErrNotExist
+	}
+	return os.Open(p)
+}
+
+// DeleteBookHashed removes the cover at the hashed path. Missing is
+// not an error.
+func (s *Store) DeleteBookHashed(hash []byte, mime string) error {
+	p := s.HashedPath(hash, mime)
+	if p == "" {
+		return nil
+	}
+	return removeIfExists(p)
 }
 
 func writeAtomic(path string, data []byte) error {

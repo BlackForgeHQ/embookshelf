@@ -28,7 +28,7 @@ const bookCols = `
 	b.genres, b.moods, b.tags,
 	b.age_rating, b.content_rating, b.pages, b.public_reviews,
 	b.created_at, b.path,
-	b.has_cover, b.cover_mime,
+	b.has_cover, b.cover_mime, b.cover_hash,
 	COALESCE(ubp.resume_cfi, '') AS resume_cfi,
 	b.title_locked, b.subtitle_locked, b.author_locked,
 	b.description_locked, b.publisher_locked, b.series_locked,
@@ -485,7 +485,7 @@ func (r *LibraryRepo) Create(ctx context.Context, b model.Book) (model.Book, err
 		       b.genres, b.moods, b.tags,
 		       b.age_rating, b.content_rating, b.pages, b.public_reviews,
 		       b.created_at, b.path,
-		       b.has_cover, b.cover_mime,
+		       b.has_cover, b.cover_mime, b.cover_hash,
 		       '' AS resume_cfi,
 		       b.title_locked, b.subtitle_locked, b.author_locked,
 		       b.description_locked, b.publisher_locked, b.series_locked,
@@ -521,7 +521,7 @@ func (r *LibraryRepo) Create(ctx context.Context, b model.Book) (model.Book, err
 		    genres, moods, tags,
 		    age_rating, content_rating, pages, public_reviews,
 		    created_at, path,
-		    has_cover, cover_mime,
+		    has_cover, cover_mime, cover_hash,
 		    '' AS resume_cfi,
 		    title_locked, subtitle_locked, author_locked,
 		    description_locked, publisher_locked, series_locked,
@@ -598,6 +598,36 @@ func (r *LibraryRepo) SetCover(ctx context.Context, bookID string, hasCover bool
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SetCoverHash records the sha256 of the cover image. NULL means
+// "not yet hashed" (covers backfill will set it).
+func (r *LibraryRepo) SetCoverHash(ctx context.Context, bookID string, hash []byte) error {
+	const qPG = `UPDATE books SET cover_hash = $1 WHERE id = $2`
+	const qSQLite = `UPDATE books SET cover_hash = ?1 WHERE id = ?2`
+	_, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), hash, bookID)
+	return err
+}
+
+// ListBooksMissingCoverHash returns books that have a cover on disk
+// (has_cover = TRUE) but have not yet been assigned a cover_hash.
+// Used by the boot-time covers backfill worker. Capped at 500 rows;
+// the worker re-runs on subsequent boots until all rows are filled.
+func (r *LibraryRepo) ListBooksMissingCoverHash(ctx context.Context) ([]model.Book, error) {
+	const qPG = `SELECT ` + bookCols + ` ` + bookFromPG + `
+		WHERE b.has_cover = TRUE AND b.cover_hash IS NULL AND b.deleted_at IS NULL
+		LIMIT 500`
+	const qSQLite = `SELECT ` + bookCols + ` ` + bookFromSQLite + `
+		WHERE b.has_cover = TRUE AND b.cover_hash IS NULL AND b.deleted_at IS NULL
+		LIMIT 500`
+	// user_id = '' matches no rows in user_book_progress; that's intentional —
+	// the backfill only needs cover data, not per-user progress.
+	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), "")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	return collectBooks(r.db.Dialect, rows)
 }
 
 // Delete hard-deletes a book row by id. FKs on shelf_books, annotations,
@@ -852,6 +882,7 @@ func scanBook(d db.Dialect, s scanner) (model.Book, error) {
 	var b model.Book
 	var genresAny, moodsAny, tagsAny, publishDateAny, createdAny any
 	var durationAny, chaptersAny any
+	var coverHashAny any
 	var bookUUID, folderPath sql.NullString
 	err := s.Scan(
 		&b.ID, &b.LibraryID, &b.Title, &b.Subtitle, &b.Author, &b.Format, &b.Year,
@@ -862,7 +893,7 @@ func scanBook(d db.Dialect, s scanner) (model.Book, error) {
 		&genresAny, &moodsAny, &tagsAny,
 		&b.AgeRating, &b.ContentRating, &b.Pages, &b.PublicReviews,
 		&createdAny, &b.Path,
-		&b.HasCover, &b.CoverMime,
+		&b.HasCover, &b.CoverMime, &coverHashAny,
 		&b.ResumeCFI,
 		&b.Locks.Title, &b.Locks.Subtitle, &b.Locks.Author,
 		&b.Locks.Description, &b.Locks.Publisher, &b.Locks.Series,
@@ -908,6 +939,16 @@ func scanBook(d db.Dialect, s scanner) (model.Book, error) {
 			var ch []model.Chapter
 			if err := json.Unmarshal(raw, &ch); err == nil && len(ch) > 0 {
 				b.Chapters = ch
+			}
+		}
+	}
+	// cover_hash: BYTEA on PG (delivered as []byte), BLOB on SQLite
+	// (also []byte). NULL → nil slice.
+	if coverHashAny != nil {
+		switch v := coverHashAny.(type) {
+		case []byte:
+			if len(v) > 0 {
+				b.CoverHash = v
 			}
 		}
 	}
