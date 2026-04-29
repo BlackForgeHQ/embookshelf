@@ -73,7 +73,7 @@ func LibraryScan(ctx context.Context, args LibraryScanArgs, deps LibraryScanDeps
 		_ = deps.Lib.TouchScan(ctx, lib.ID, 0, 0)
 		return nil
 	}
-	defer it.Close()
+	defer func() { _ = it.Close() }()
 
 	for {
 		obj, err := it.Next(ctx)

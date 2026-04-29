@@ -51,7 +51,7 @@ func testPutThenGet(t *testing.T, mk MakeBackend) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	got, _ := io.ReadAll(rc)
 	if string(got) != "v" {
 		t.Fatalf("got %q, want %q", got, "v")
@@ -114,7 +114,7 @@ func testCopyDuplicates(t *testing.T, mk MakeBackend) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	got, _ := io.ReadAll(rc)
 	if string(got) != "data" {
 		t.Fatalf("got %q, want %q", got, "data")
@@ -132,7 +132,7 @@ func testListYieldsAllKeys(t *testing.T, mk MakeBackend) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer it.Close()
+	defer func() { _ = it.Close() }()
 	seen := map[string]bool{}
 	for {
 		o, err := it.Next(ctx)
@@ -159,7 +159,7 @@ func testListPrefixFilters(t *testing.T, mk MakeBackend) {
 	_, _ = s.Put(ctx, "a/2", strings.NewReader(""))
 	_, _ = s.Put(ctx, "b/3", strings.NewReader(""))
 	it, _ := s.List(ctx, "a")
-	defer it.Close()
+	defer func() { _ = it.Close() }()
 	count := 0
 	for {
 		_, err := it.Next(ctx)
@@ -183,7 +183,7 @@ func testListEmptyOnMissingPrefix(t *testing.T, mk MakeBackend) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer it.Close()
+	defer func() { _ = it.Close() }()
 	if _, err := it.Next(context.Background()); !errors.Is(err, io.EOF) {
 		t.Fatalf("got %v, want io.EOF", err)
 	}
