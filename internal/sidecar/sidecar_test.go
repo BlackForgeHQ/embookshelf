@@ -1,7 +1,13 @@
 package sidecar
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"sync"
 	"testing"
+
+	"github.com/blackforge/embookshelf/internal/storage/local"
 )
 
 // ---- TOML round-trip tests ----
@@ -338,5 +344,125 @@ func TestParseOPF_MalformedXMLReturnsError(t *testing.T) {
 	_, err := ParseOPF([]byte("<package><metadata><unclosed>"))
 	if err == nil {
 		t.Fatal("expected error for malformed XML, got nil")
+	}
+}
+
+// ---- Writer tests ----
+
+func newTestStore(t *testing.T) *local.LocalFS {
+	t.Helper()
+	fs, err := local.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	return fs
+}
+
+func TestWriter_SingleWriteHappyPath(t *testing.T) {
+	store := newTestStore(t)
+	w := NewWriter()
+	ctx := context.Background()
+
+	sc := Sidecar{Title: "Hello", Author: "World"}
+	if err := w.Write(ctx, store, "book.embookshelf.toml", sc); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	rc, err := store.Get(ctx, "book.embookshelf.toml")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	parsed, err := ParseTOML(data)
+	if err != nil {
+		t.Fatalf("ParseTOML: %v", err)
+	}
+	if parsed.Title != "Hello" || parsed.Author != "World" {
+		t.Errorf("parsed mismatch: got %+v", parsed)
+	}
+}
+
+func TestWriter_ConcurrentWritesSameKey(t *testing.T) {
+	store := newTestStore(t)
+	w := NewWriter()
+	ctx := context.Background()
+	key := "concurrent.embookshelf.toml"
+
+	const n = 100
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			sc := Sidecar{Title: fmt.Sprintf("Title-%d", i)}
+			if err := w.Write(ctx, store, key, sc); err != nil {
+				t.Errorf("Write[%d]: %v", i, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	// After all writes, the key must be parsable (no torn writes).
+	rc, err := store.Get(ctx, key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	data, _ := io.ReadAll(rc)
+	if _, err := ParseTOML(data); err != nil {
+		t.Fatalf("final read not parseable: %v", err)
+	}
+}
+
+func TestWriter_ConcurrentWritesDistinctKeys(t *testing.T) {
+	store := newTestStore(t)
+	w := NewWriter()
+	ctx := context.Background()
+
+	const n = 100
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			key := fmt.Sprintf("book%d/.embookshelf.toml", i)
+			sc := Sidecar{Title: fmt.Sprintf("Title-%d", i)}
+			if err := w.Write(ctx, store, key, sc); err != nil {
+				t.Errorf("Write[%d]: %v", i, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Verify each key has its own content.
+	for i := 0; i < n; i++ {
+		key := fmt.Sprintf("book%d/.embookshelf.toml", i)
+		rc, err := store.Get(ctx, key)
+		if err != nil {
+			t.Errorf("Get[%d]: %v", i, err)
+			continue
+		}
+		data, readErr := io.ReadAll(rc)
+		_ = rc.Close()
+		if readErr != nil {
+			t.Errorf("ReadAll[%d]: %v", i, readErr)
+			continue
+		}
+		parsed, parseErr := ParseTOML(data)
+		if parseErr != nil {
+			t.Errorf("ParseTOML[%d]: %v", i, parseErr)
+			continue
+		}
+		expected := fmt.Sprintf("Title-%d", i)
+		if parsed.Title != expected {
+			t.Errorf("key %s: title got %q want %q", key, parsed.Title, expected)
+		}
 	}
 }
