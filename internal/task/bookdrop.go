@@ -11,11 +11,15 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
+	"strings"
 
 	"github.com/riverqueue/river"
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/sidecar"
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // BookDropIngestArgs is the payload for processing a single bookdrop item.
@@ -29,7 +33,8 @@ func (BookDropIngestArgs) Kind() string { return "bookdrop.ingest" }
 
 // BookDropDeps groups the services BookDropIngest needs.
 type BookDropDeps struct {
-	Svc *service.BookDropService
+	Svc     *service.BookDropService
+	Storage storage.Storage // optional; nil disables sidecar lookup
 }
 
 // BookDropIngest runs the ingest pipeline for one bookdrop item:
@@ -81,11 +86,45 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 		return nil
 	}
 
+	if deps.Storage != nil {
+		// Convert the absolute path into a storage key (Plan A LocalFS is
+		// rooted at "/" so we strip the leading slash). Then take the
+		// directory portion as the lookup prefix.
+		key := strings.TrimPrefix(item.Path, "/")
+		prefix := path.Dir(key)
+		if sc, scErr := sidecar.Read(ctx, deps.Storage, prefix); scErr == nil && !sc.IsZero() {
+			meta = layerSidecar(meta, sc)
+		} else if scErr != nil {
+			slog.Warn("bookdrop sidecar read failed", "item_id", itemID, "prefix", prefix, "err", scErr)
+			// non-fatal — proceed with embedded metadata only
+		}
+	}
+
 	return deps.Svc.RecordMetadata(
 		ctx, itemID,
 		meta.Title, meta.Author, meta.Description, meta.Language,
 		meta.CoverBytes, meta.CoverMime,
 	)
+}
+
+// layerSidecar overlays non-empty sidecar fields onto metadata returned
+// by the embedded extractor. Only the fields the sidecar carries are
+// considered; ground-truth-derived fields (cover bytes, duration, format)
+// are never overwritten.
+func layerSidecar(m fileproc.Metadata, s sidecar.Sidecar) fileproc.Metadata {
+	if s.Title != "" {
+		m.Title = s.Title
+	}
+	if s.Author != "" {
+		m.Author = s.Author
+	}
+	if s.Description != "" {
+		m.Description = s.Description
+	}
+	if s.Language != "" {
+		m.Language = s.Language
+	}
+	return m
 }
 
 // hashFile streams item.Path through sha256 and returns the digest.

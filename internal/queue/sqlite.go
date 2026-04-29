@@ -54,7 +54,7 @@ func newSQLiteQueue(
 		doneCh:   make(chan struct{}),
 	}
 
-	bdropDeps := task.BookDropDeps{Svc: bdropSvc}
+	bdropDeps := task.BookDropDeps{Svc: bdropSvc, Storage: store}
 	libDeps := task.LibraryScanDeps{
 		BookDrop: bdropSvc,
 		Lib:      libSvc,
