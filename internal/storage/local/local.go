@@ -172,6 +172,7 @@ func (fs *LocalFS) Get(ctx context.Context, key string, opts ...storage.GetOptio
 	}
 	return f, nil
 }
+
 // Put writes r to key atomically using write-temp-then-rename.
 // LocalFS does not support conditional writes (CapConditional is off);
 // passing WithIfMatch or WithIfNoneMatch returns ErrUnsupportedOption.
