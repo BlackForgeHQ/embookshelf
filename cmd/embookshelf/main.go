@@ -250,6 +250,10 @@ func main() {
 		}
 	}()
 
+	// Missing-files purge sweeper: deletes files rows whose missing_since
+	// is older than 24h. Runs hourly until the application shuts down.
+	go task.LoopMissingPurge(ctx, fileRepo, time.Hour)
+
 	// File watcher goroutine.
 	watcher := &ingest.Watcher{
 		Path:     cfg.BookDropPath,
