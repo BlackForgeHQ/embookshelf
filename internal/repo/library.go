@@ -1016,3 +1016,33 @@ func (r *LibraryRepo) SearchSuggestLibraries(ctx context.Context, q string, limi
 	}
 	return out, rows.Err()
 }
+
+// SetBackendID wires a library to a storage backend by writing the
+// backend_id FK column. Pass an empty string to clear the association.
+// Used by StorageBackendRepo tests and the library-update handler.
+func (r *LibraryRepo) SetBackendID(ctx context.Context, libraryID, backendID string) error {
+	const qPG = `UPDATE libraries SET backend_id = $2 WHERE id = $1`
+	const qSQLite = `UPDATE libraries SET backend_id = ? WHERE id = ?`
+	var nilableBackend any
+	if backendID != "" {
+		nilableBackend = backendID
+	}
+	var res sql.Result
+	var err error
+	if r.db.Dialect == db.DialectSQLite {
+		res, err = r.db.SQL.ExecContext(ctx, qSQLite, nilableBackend, libraryID)
+	} else {
+		res, err = r.db.SQL.ExecContext(ctx, qPG, libraryID, nilableBackend)
+	}
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
