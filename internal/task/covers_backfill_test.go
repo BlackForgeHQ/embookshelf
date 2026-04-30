@@ -42,7 +42,7 @@ func createBookWithLegacyCover(
 	t.Helper()
 	ctx := context.Background()
 
-	lib, err := lr.CreateLibrary(ctx, "Cover Backfill Lib", "cover-backfill-lib", "/tmp/cbl")
+	lib, err := lr.CreateLibrary(ctx, "Cover Backfill Lib", "cover-backfill-lib", "/tmp/cbl", nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestRunCoversBackfill_missingLegacyFileSkipped(t *testing.T) {
 	deps, lr, _ := newCoversBackfillDeps(t)
 	ctx := context.Background()
 
-	lib, err := lr.CreateLibrary(ctx, "Skip Lib", "skip-lib", "/tmp/sl")
+	lib, err := lr.CreateLibrary(ctx, "Skip Lib", "skip-lib", "/tmp/sl", nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary: %v", err)
 	}

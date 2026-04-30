@@ -61,6 +61,7 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.PATCH("/me", h.AccountUpdateName)
 			authed.POST("/me/password", h.AccountChangePassword)
 			authed.GET("/instance", h.InstanceSummary)
+			authed.GET("/config", h.AppConfig)
 
 			// Cross-entity search powering the global command palette
 			// and the library page combobox.

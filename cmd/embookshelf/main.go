@@ -128,7 +128,13 @@ func main() {
 	covers := coverstore.New(filepath.Join(cfg.DataPath, "covers"))
 
 	// Services.
-	libSvc := service.NewLibraryService(libRepo)
+	backendRepo := repo.NewStorageBackendRepo(dbh)
+	libSvc := service.NewLibraryService(libRepo, service.LibraryServiceDeps{
+		Backends: backendRepo,
+		SharedS3: cfg.SharedS3,
+		Resolver: storageResolver,
+		Dialect:  config.Dialect(string(dbh.Dialect)),
+	})
 	shelfSvc := service.NewShelfService(shelfRepo)
 	searchSvc := service.NewSearchService(libRepo, shelfRepo)
 	authSvc := service.NewAuthService(userRepo, sessionRepo, hub)

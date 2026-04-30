@@ -8,6 +8,24 @@ import (
 	"time"
 )
 
+// SharedS3Config carries the bucket-level S3 configuration shared by
+// every s3-kind library in the deployment. Env-driven; not editable
+// from the UI. Per-library prefix is computed from libraries.slug.
+type SharedS3Config struct {
+	Bucket          string
+	Region          string
+	Endpoint        string
+	AccessKeyID     string
+	SecretAccessKey string
+	ForcePathStyle  bool
+}
+
+// Configured reports whether the shared bucket is set. Used by the
+// library-create handler to gate the kind=s3 path.
+func (s SharedS3Config) Configured() bool {
+	return strings.TrimSpace(s.Bucket) != ""
+}
+
 type Config struct {
 	Port             int
 	DatabaseURL      string
@@ -31,6 +49,11 @@ type Config struct {
 	// Unset = plaintext storage (dev mode); the server logs a warning
 	// on boot so the fact doesn't silently linger.
 	SecretKey string
+
+	// SharedS3 is the shared bucket configuration for libraries created with
+	// kind=s3. Populated from EMBOOKSHELF_S3_* env vars. When Bucket is
+	// empty, s3-kind library creation is disabled.
+	SharedS3 SharedS3Config
 
 	// S3EventQueueURL is the SQS queue URL from which S3 event notifications
 	// are polled. When empty (default) the SQS poll loop is disabled and the
@@ -74,6 +97,14 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	// Shared S3 bucket config. Region defaults to "us-east-1" only when
+	// bucket is set (matching Plan F's per-backend behaviour).
+	s3Bucket := envStr("EMBOOKSHELF_S3_BUCKET", "")
+	s3Region := envStr("EMBOOKSHELF_S3_REGION", "")
+	if s3Bucket != "" && s3Region == "" {
+		s3Region = "us-east-1"
+	}
+
 	cfg := Config{
 		Port:             envInt("EMBOOKSHELF_PORT", 6060),
 		DatabaseURL:      envStr("DATABASE_URL", "sqlite://./data/embookshelf.db"),
@@ -89,6 +120,15 @@ func Load() (Config, error) {
 
 		AppURL:    strings.TrimRight(envStr("APP_URL", ""), "/"),
 		SecretKey: envStr("EMBOOKSHELF_SECRET_KEY", ""),
+
+		SharedS3: SharedS3Config{
+			Bucket:          s3Bucket,
+			Region:          s3Region,
+			Endpoint:        envStr("EMBOOKSHELF_S3_ENDPOINT", ""),
+			AccessKeyID:     envStr("EMBOOKSHELF_S3_ACCESS_KEY_ID", ""),
+			SecretAccessKey: envStr("EMBOOKSHELF_S3_SECRET_ACCESS_KEY", ""),
+			ForcePathStyle:  envBool("EMBOOKSHELF_S3_FORCE_PATH_STYLE", false),
+		},
 
 		S3EventQueueURL:     envStr("EMBOOKSHELF_S3_EVENT_QUEUE", ""),
 		S3EventQueueRegion:  envStr("EMBOOKSHELF_S3_EVENT_REGION", "us-east-1"),

@@ -22,11 +22,11 @@ func setupReattach(t *testing.T) (*repo.FileRepo, string, string) {
 	lr := repo.NewLibraryRepo(d)
 	ctx := context.Background()
 
-	lib1, err := lr.CreateLibrary(ctx, "Library One", "lib-one", "/tmp/lib1")
+	lib1, err := lr.CreateLibrary(ctx, "Library One", "lib-one", "/tmp/lib1", nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary lib1: %v", err)
 	}
-	lib2, err := lr.CreateLibrary(ctx, "Library Two", "lib-two", "/tmp/lib2")
+	lib2, err := lr.CreateLibrary(ctx, "Library Two", "lib-two", "/tmp/lib2", nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary lib2: %v", err)
 	}

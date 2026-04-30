@@ -15,6 +15,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/pattern"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/service"
 )
 
 // settingsLibraryDTO exposes the library row plus its scan aggregates
@@ -64,7 +65,8 @@ func (h *Handler) SettingsLibraries(c *gin.Context) {
 // best-effort because they're owned by this service.
 func (h *Handler) SettingsLibraryDelete(c *gin.Context) {
 	id := c.Param("id")
-	bookIDs, err := h.lib.DeleteLibrary(c.Request.Context(), id)
+	purge := c.Query("purge") == "true"
+	bookIDs, err := h.lib.DeleteLibrary(c.Request.Context(), id, purge)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "library not found")
@@ -85,7 +87,8 @@ func (h *Handler) SettingsLibraryDelete(c *gin.Context) {
 
 type createLibraryReq struct {
 	Name string `json:"name"`
-	Path string `json:"path"`
+	Kind string `json:"kind"` // "local" (default) | "s3"
+	Path string `json:"path"` // required for kind=local; ignored for kind=s3
 	Scan bool   `json:"scan"`
 }
 
@@ -103,23 +106,27 @@ func (h *Handler) SettingsLibraryCreate(c *gin.Context) {
 		return
 	}
 	name := strings.TrimSpace(body.Name)
+	kind := service.LibraryKind(strings.TrimSpace(body.Kind))
 	path := strings.TrimRight(strings.TrimSpace(body.Path), "/")
 	if name == "" {
 		writeError(c, http.StatusBadRequest, "name is required")
 		return
 	}
-	if path == "" {
-		writeError(c, http.StatusBadRequest, "path is required")
+	// path is required for local libraries but optional for s3 libraries.
+	if kind != service.LibraryKindS3 && path == "" {
+		writeError(c, http.StatusBadRequest, "path is required for local libraries")
 		return
 	}
 
-	lib, err := h.lib.Create(c.Request.Context(), name, path)
+	lib, err := h.lib.Create(c.Request.Context(), name, kind, path)
 	if err != nil {
 		switch {
 		case errors.Is(err, repo.ErrLibraryNameTaken):
 			writeError(c, http.StatusConflict, "a library with that name already exists")
 		case errors.Is(err, repo.ErrLibraryPathTaken):
 			writeError(c, http.StatusConflict, "that filesystem path is already bound to another library")
+		case errors.Is(err, service.ErrS3NotConfigured):
+			writeError(c, http.StatusBadRequest, err.Error())
 		default:
 			writeServerError(c, "settings library create", err)
 		}

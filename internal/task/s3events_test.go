@@ -107,7 +107,7 @@ func TestS3EventLoop_ObjectCreated_Insert(t *testing.T) {
 	fr, lr := newEventTestRepo(t)
 	ctx := context.Background()
 
-	lib, err := lr.CreateLibrary(ctx, "Lib", "lib", "/tmp/lib")
+	lib, err := lr.CreateLibrary(ctx, "Lib", "lib", "/tmp/lib", nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestS3EventLoop_ObjectRemoved_MarkMissing(t *testing.T) {
 	fr, lr := newEventTestRepo(t)
 	ctx := context.Background()
 
-	lib, err := lr.CreateLibrary(ctx, "Lib2", "lib2", "/tmp/lib2")
+	lib, err := lr.CreateLibrary(ctx, "Lib2", "lib2", "/tmp/lib2", nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestS3EventLoop_ObjectRemoved_UnknownFile(t *testing.T) {
 	fr, lr := newEventTestRepo(t)
 	ctx := context.Background()
 
-	lib, err := lr.CreateLibrary(ctx, "Lib3", "lib3", "/tmp/lib3")
+	lib, err := lr.CreateLibrary(ctx, "Lib3", "lib3", "/tmp/lib3", nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestS3EventLoop_ObjectCreated_ClearMissing(t *testing.T) {
 	fr, lr := newEventTestRepo(t)
 	ctx := context.Background()
 
-	lib, err := lr.CreateLibrary(ctx, "Lib4", "lib4", "/tmp/lib4")
+	lib, err := lr.CreateLibrary(ctx, "Lib4", "lib4", "/tmp/lib4", nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestS3EventLoop_EmptyRecords(t *testing.T) {
 	fr, lr := newEventTestRepo(t)
 	ctx := context.Background()
 
-	_, err := lr.CreateLibrary(ctx, "Lib5", "lib5", "/tmp/lib5")
+	_, err := lr.CreateLibrary(ctx, "Lib5", "lib5", "/tmp/lib5", nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary: %v", err)
 	}
