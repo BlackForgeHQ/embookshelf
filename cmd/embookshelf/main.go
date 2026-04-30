@@ -139,7 +139,8 @@ func main() {
 	searchSvc := service.NewSearchService(libRepo, shelfRepo)
 	authSvc := service.NewAuthService(userRepo, sessionRepo, hub)
 	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, appSettingsRepo, covers, hub, fileRepo).
-		WithResolver(storageResolver)
+		WithResolver(storageResolver).
+		WithPlacerBuilder(service.DefaultPlacerBuilder(storageResolver))
 	progressSvc := service.NewProgressService(progressRepo, readingSessionRepo)
 	annotationSvc := service.NewAnnotationService(annotationRepo)
 	statsSvc := service.NewStatsService(statsRepo)

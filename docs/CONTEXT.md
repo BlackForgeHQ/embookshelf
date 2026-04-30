@@ -68,6 +68,8 @@ This file complements `docs/architecture.md` (technical layout) and `docs/spec/`
 
 **BookSource** — `handler.BookSource`; a *delivery decision* for the file-serve handler: `{Kind: "local", Path}` (stream via `c.File()`) or `{Kind: "presign", URL, TTL}` (302 redirect). Plan G. **Distinct from `storage.Source`** — that's a byte-access primitive; this is a routing answer.
 
+**Placer** — `service.Placer`; the seam Approve uses to materialize a bookdrop file at its final library location. Two adapters: `LocalPlacer` (filesystem rename + collision-suffix under the library root) and `BackendPlacer` (stream-upload to a `Storage` then drop the local source). Returns `PlaceResult{Location, Size, Mtime}` — the values the `files` row needs. The `PlacerBuilder` factory injected at boot picks the adapter from `Library.BackendID`. Approve never branches on local-vs-S3.
+
 ---
 
 ## Vocabulary discipline

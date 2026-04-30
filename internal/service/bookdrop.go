@@ -8,9 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/coverstore"
@@ -37,6 +34,10 @@ type BookDropService struct {
 	// resolver maps backend_id to Storage. Used by Approve to open a
 	// Source for audio re-extraction. nil disables the re-extract block.
 	resolver storage.Resolver
+	// newPlacer constructs the Placer for a given Library. Injected so
+	// tests can supply a fake without standing up a Resolver. nil
+	// disables placement (the bookdrop file stays where it landed).
+	newPlacer PlacerBuilder
 }
 
 func NewBookDropService(
@@ -60,6 +61,15 @@ func NewBookDropService(
 // The resolver is used in Approve to open Sources for audio re-extraction.
 func (s *BookDropService) WithResolver(r storage.Resolver) *BookDropService {
 	s.resolver = r
+	return s
+}
+
+// WithPlacerBuilder injects the factory Approve uses to materialize a
+// bookdrop file at its final location. main.go wires the default
+// (DefaultPlacerBuilder); tests can pass a fake to capture placement
+// without touching disk or a backend.
+func (s *BookDropService) WithPlacerBuilder(b PlacerBuilder) *BookDropService {
+	s.newPlacer = b
 	return s
 }
 
@@ -178,48 +188,25 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 		CoverMime:   item.CoverMime,
 	}
 
-	// fileLocation is what we record on the files row. Set in both the
-	// s3-upload and local-placement branches below; left empty when
-	// neither path produces a usable destination (we still create the
-	// book, just without a files row to track its bytes).
-	var fileLocation string
-	// fileSize is filled from the source bytes for the files row's
-	// initial size column. After upload (s3) or move (local) the source
-	// stat is the authoritative one; we capture it before the bytes
-	// move out of reach.
-	var fileSize int64
-	var fileMtime time.Time
-	if st, statErr := os.Stat(item.Path); statErr == nil {
-		fileSize = st.Size()
-		fileMtime = st.ModTime()
-	} else {
-		fileMtime = time.Now()
+	// Place the bookdrop bytes at their final location. The Placer
+	// adapter (LocalPlacer or BackendPlacer, picked by newPlacer) is
+	// the only thing that knows the local-vs-S3 distinction. Approve
+	// just records the result on the book + files row.
+	if s.newPlacer == nil {
+		return model.Book{}, errors.New("approve: placer not configured")
 	}
-
-	if lib.BackendID != nil && s.resolver != nil {
-		// S3 (or any non-local) library: stream-upload the bookdrop's
-		// bytes into the backend at the pattern-resolved key, then
-		// drop the local file. book.Path becomes the library-relative
-		// key — handlers go through BookSource (Plan G) which resolves
-		// the right backend, so this works for serve/presign.
-		store, rerr := s.resolver.Resolve(*lib.BackendID)
-		if rerr != nil {
-			return model.Book{}, fmt.Errorf("approve: resolve backend: %w", rerr)
-		}
-		key, uerr := s.uploadToBackend(ctx, store, lib, item)
-		if uerr != nil {
-			return model.Book{}, fmt.Errorf("approve: upload: %w", uerr)
-		}
-		book.Path = key
-		fileLocation = key
-	} else {
-		// Local-backed library: move file to library root using original
-		// filename. Failures keep the original path; book still gets created.
-		if newPath, ok := s.placeLocal(ctx, libraryID, item); ok {
-			book.Path = newPath
-		}
-		fileLocation = relativizeBookLocation(ctx, s.libs, libraryID, book.Path)
+	placer, perr := s.newPlacer(lib)
+	if perr != nil {
+		return model.Book{}, fmt.Errorf("approve: build placer: %w", perr)
 	}
+	res, perr := placer.Place(ctx, PlaceSource{Path: item.Path, Format: item.Format})
+	if perr != nil {
+		return model.Book{}, fmt.Errorf("approve: place: %w", perr)
+	}
+	book.Path = res.Location
+	fileLocation := res.Location
+	fileSize := res.Size
+	fileMtime := res.Mtime
 
 	created, err := s.libs.Create(ctx, book)
 	if err != nil {
@@ -290,15 +277,14 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 	// but never fatal: the book still imports without duration.
 	if isAudioFormat(created.Format) && created.Path != "" && s.resolver != nil {
 		backendID := ""
-		if lib, lErr := s.libs.GetByID(ctx, libraryID); lErr == nil && lib.BackendID != nil {
+		if lib.BackendID != nil {
 			backendID = *lib.BackendID
 		}
 		store, rerr := s.resolver.Resolve(backendID)
 		if rerr != nil {
 			slog.Warn("approve: resolve backend for audio re-extract", "err", rerr)
 		} else {
-			loc := relativizeBookLocation(ctx, s.libs, libraryID, created.Path)
-			src, oerr := store.Open(ctx, loc)
+			src, oerr := store.Open(ctx, created.Path)
 			if oerr != nil {
 				slog.Warn("approve: open source for audio re-extract", "path", created.Path, "err", oerr)
 			} else {
@@ -370,173 +356,6 @@ func (s *BookDropService) ClearProcessed(ctx context.Context) (int, error) {
 	return len(ids), nil
 }
 
-// placeLocal moves an approved bookdrop file under its target library's
-// path using the original filename as the destination basename.
-// Returns (new absolute path, true) when the file was moved, or
-// ("", false) when the file is already at the destination or the move
-// failed (the original path is kept in that case).
-//
-// The move uses os.Rename where possible and falls back to copy+remove
-// when source/destination straddle different filesystems.
-// Destination collisions are resolved by appending " (2)", " (3)", etc.
-//
-// Local-libraries only — s3-backed libraries upload via uploadToBackend.
-func (s *BookDropService) placeLocal(
-	ctx context.Context,
-	libraryID string,
-	item model.BookDropItem,
-) (string, bool) {
-	lib, err := s.libs.GetByID(ctx, libraryID)
-	if err != nil {
-		slog.Warn("skip library placement: library lookup failed", "library_id", libraryID, "err", err)
-		return "", false
-	}
-	root := strings.TrimRight(lib.Path, "/")
-	if root == "" {
-		slog.Warn("skip library placement: library has no path", "library_id", libraryID)
-		return "", false
-	}
-
-	dest := filepath.Join(root, filepath.Base(item.Path))
-	if dest == item.Path {
-		return "", false
-	}
-	dest = uniqueDestination(dest)
-	if err := moveFile(item.Path, dest); err != nil {
-		slog.Warn("bookdrop move failed, keeping original path",
-			"src", item.Path, "dest", dest, "err", err)
-		return "", false
-	}
-	return dest, true
-}
-
-// uploadToBackend streams the bookdrop file's bytes into the library's
-// backend at the original filename as the key, then removes the local
-// bookdrop file. Returns the key the file was stored at (the location
-// to record on the files row).
-//
-// Used by Approve when the target library is backed by an s3 (or any
-// non-local) backend. Local libraries continue to go through
-// placeLocal's filesystem move.
-func (s *BookDropService) uploadToBackend(
-	ctx context.Context,
-	store storage.Storage,
-	_ model.Library,
-	item model.BookDropItem,
-) (string, error) {
-	key := filepath.Base(item.Path)
-	src, err := os.Open(item.Path)
-	if err != nil {
-		return "", fmt.Errorf("open bookdrop file: %w", err)
-	}
-	defer func() { _ = src.Close() }()
-
-	mime := storageMIMEForFormat(item.Format)
-	opts := []storage.PutOption{}
-	if mime != "" {
-		opts = append(opts, storage.WithContentType(mime))
-	}
-	if _, err := store.Put(ctx, key, src, opts...); err != nil {
-		return "", fmt.Errorf("upload to backend: %w", err)
-	}
-
-	// Remove the local bookdrop file — the bytes now live in the
-	// backend. Failure is logged but non-fatal: the watcher will
-	// re-discover it next tick (and bookdrop_items.path is already
-	// marked imported so the row won't reappear).
-	if err := os.Remove(item.Path); err != nil {
-		slog.Warn("approve s3: remove local bookdrop file",
-			"path", item.Path, "err", err)
-	}
-	return key, nil
-}
-
-// storageMIMEForFormat mirrors the response Content-Type the file
-// handler emits for downloads. Used as the S3 ContentType on Put so
-// presigned URLs serve with the correct content-type header.
-func storageMIMEForFormat(format string) string {
-	switch format {
-	case "EPUB":
-		return "application/epub+zip"
-	case "PDF":
-		return "application/pdf"
-	case "CBZ":
-		return "application/vnd.comicbook+zip"
-	case "MP3":
-		return "audio/mpeg"
-	case "M4B":
-		return "audio/mp4"
-	}
-	return ""
-}
-
-// moveFile atomically moves src to dest. Falls back to copy+remove when
-// os.Rename fails (cross-filesystem moves return syscall.EXDEV, but the
-// spec's pragma is "try Rename, on any failure try the portable path").
-// The destination directory is created as needed.
-func moveFile(src, dest string) error {
-	if src == dest {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return fmt.Errorf("mkdir: %w", err)
-	}
-	if err := os.Rename(src, dest); err == nil {
-		return nil
-	}
-	// Copy + sync + remove fallback. Intentionally not checking the
-	// specific error type — any failure we can't rename through should
-	// try the portable path before giving up.
-	if err := copyFile(src, dest); err != nil {
-		return err
-	}
-	if err := os.Remove(src); err != nil {
-		// Leave the copy in place so the DB row still points to a valid
-		// file; log so the admin can reap the source manually.
-		slog.Warn("copy succeeded but source remove failed", "src", src, "err", err)
-	}
-	return nil
-}
-
-func copyFile(src, dest string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("open src: %w", err)
-	}
-	defer func() { _ = in.Close() }()
-	out, err := os.Create(dest)
-	if err != nil {
-		return fmt.Errorf("create dest: %w", err)
-	}
-	defer func() { _ = out.Close() }()
-	if _, err := io.Copy(out, in); err != nil {
-		return fmt.Errorf("copy: %w", err)
-	}
-	if err := out.Sync(); err != nil {
-		return fmt.Errorf("fsync: %w", err)
-	}
-	return nil
-}
-
-// uniqueDestination walks " (2)", " (3)", … suffixes until it finds a free
-// name. Preserves the original extension so the file still opens after
-// renaming. Returns the input unchanged if it doesn't already exist.
-func uniqueDestination(dest string) string {
-	if _, err := os.Stat(dest); os.IsNotExist(err) {
-		return dest
-	}
-	dir := filepath.Dir(dest)
-	ext := filepath.Ext(dest)
-	base := strings.TrimSuffix(filepath.Base(dest), ext)
-	for i := 2; i < 10_000; i++ {
-		cand := filepath.Join(dir, fmt.Sprintf("%s (%d)%s", base, i, ext))
-		if _, err := os.Stat(cand); os.IsNotExist(err) {
-			return cand
-		}
-	}
-	return dest
-}
-
 func (s *BookDropService) Reject(ctx context.Context, id string) error {
 	if err := s.bdrop.SetState(ctx, id, model.BookDropRejected, 100, ""); err != nil {
 		return err
@@ -566,30 +385,3 @@ func fallback(s, def string) string {
 	return s
 }
 
-// relativizeBookLocation strips the library root from abs, returning the
-// path the files table stores. Falls back to abs on any lookup failure or
-// when the path doesn't sit under the library root.
-func relativizeBookLocation(ctx context.Context, libs *repo.LibraryRepo, libraryID, abs string) string {
-	lib, err := libs.GetByID(ctx, libraryID)
-	if err != nil {
-		return abs
-	}
-	root := ""
-	if lib.Root != nil {
-		root = *lib.Root
-	}
-	if root == "" {
-		root = lib.Path
-	}
-	if root == "" {
-		return abs
-	}
-	prefix := root
-	if !strings.HasSuffix(prefix, "/") {
-		prefix += "/"
-	}
-	if strings.HasPrefix(abs, prefix) {
-		return abs[len(prefix):]
-	}
-	return abs
-}
