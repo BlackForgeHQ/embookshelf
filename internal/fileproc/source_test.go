@@ -50,3 +50,32 @@ func TestMemSource_ReadAt(t *testing.T) {
 		t.Errorf("got %q, want %q", buf[:n], "world")
 	}
 }
+
+// TestMemSource_FromFile verifies that memSourceFromFile reads a real file
+// into a memSource with the correct size and content.
+func TestMemSource_FromFile(t *testing.T) {
+	// Write a temp file and read it back via memSourceFromFile.
+	f, err := os.CreateTemp(t.TempDir(), "src-*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("test payload 42")
+	if _, err := f.Write(payload); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	name := f.Name()
+	_ = f.Close()
+
+	src := memSourceFromFile(t, name)
+	defer func() { _ = src.Close() }()
+
+	if src.Size() != int64(len(payload)) {
+		t.Fatalf("Size=%d, want %d", src.Size(), len(payload))
+	}
+	buf := make([]byte, src.Size())
+	n, _ := src.ReadAt(buf, 0)
+	if string(buf[:n]) != string(payload) {
+		t.Errorf("content mismatch: got %q, want %q", buf[:n], payload)
+	}
+}
