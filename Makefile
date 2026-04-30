@@ -64,6 +64,11 @@ seed: ## Load dev seed data (runs psql inside the postgres container)
 build: ui-build ## Build the server binary (includes embedded SPA)
 	go build -o ./tmp/embookshelf ./cmd/embookshelf
 
+.PHONY: tag
+tag: ## Build and run embookshelf-tag (pass ARGS="-dry-run" for dry run)
+	go build -o ./tmp/embookshelf-tag ./cmd/embookshelf-tag
+	./tmp/embookshelf-tag $(ARGS)
+
 # ---- Docker image ----------------------------------------------------------
 # Mirrors the shape of .github/workflows/image.yml: VERSION + COMMIT get
 # baked into the binary via -ldflags and into OCI labels. Override

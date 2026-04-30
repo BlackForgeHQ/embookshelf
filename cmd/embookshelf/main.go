@@ -14,6 +14,9 @@ import (
 
 	"github.com/joho/godotenv"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	awssqs "github.com/aws/aws-sdk-go-v2/service/sqs"
+
 	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/crypto"
@@ -27,6 +30,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sse"
 	"github.com/blackforge/embookshelf/internal/staticfs"
+	s3backend "github.com/blackforge/embookshelf/internal/storage/s3"
 	"github.com/blackforge/embookshelf/internal/storageloader"
 	"github.com/blackforge/embookshelf/internal/task"
 	"github.com/blackforge/embookshelf/internal/telemetry"
@@ -271,6 +275,54 @@ func main() {
 	// Missing-files purge sweeper: deletes files rows whose missing_since
 	// is older than 24h. Runs hourly until the application shuts down.
 	go task.LoopMissingPurge(ctx, fileRepo, time.Hour)
+
+	// S3 event loop: poll an SQS queue for S3 event notifications and
+	// reconcile them into the files table without waiting for the next
+	// full library scan. Disabled when EMBOOKSHELF_S3_EVENT_QUEUE is unset.
+	if cfg.S3EventQueueURL != "" {
+		sqsAwsCfg, sqsErr := awsconfig.LoadDefaultConfig(ctx,
+			awsconfig.WithRegion(cfg.S3EventQueueRegion),
+		)
+		if sqsErr != nil {
+			slog.Error("s3 events: build SQS client", "err", sqsErr)
+			os.Exit(1)
+		}
+		sqsCli := awssqs.NewFromConfig(sqsAwsCfg)
+
+		// Build the bucket→library map by walking libraries + resolving backends.
+		bucketToLibrary := make(map[string]string)
+		allLibs, libsErr := libRepo.List(ctx)
+		if libsErr != nil {
+			slog.Warn("s3 events: list libraries for bucket map", "err", libsErr)
+		} else {
+			for _, lib := range allLibs {
+				if lib.BackendID == nil {
+					continue
+				}
+				be, beErr := storageResolver.Resolve(*lib.BackendID)
+				if beErr != nil {
+					continue
+				}
+				if s3b, ok := be.(*s3backend.Backend); ok {
+					bucketToLibrary[s3b.Bucket()] = lib.ID
+				}
+			}
+		}
+
+		slog.Info("s3 events loop starting",
+			"queue", cfg.S3EventQueueURL,
+			"region", cfg.S3EventQueueRegion,
+			"poll_interval", cfg.S3EventPollInterval,
+			"bucket_map", bucketToLibrary,
+		)
+		go task.RunS3EventLoop(ctx, task.S3EventLoopDeps{
+			SQS:             sqsCli,
+			QueueURL:        cfg.S3EventQueueURL,
+			Files:           fileRepo,
+			BucketToLibrary: bucketToLibrary,
+			PollInterval:    cfg.S3EventPollInterval,
+		})
+	}
 
 	// File watcher goroutine.
 	watcher := &ingest.Watcher{

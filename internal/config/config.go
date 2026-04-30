@@ -32,6 +32,18 @@ type Config struct {
 	// on boot so the fact doesn't silently linger.
 	SecretKey string
 
+	// S3EventQueueURL is the SQS queue URL from which S3 event notifications
+	// are polled. When empty (default) the SQS poll loop is disabled and the
+	// existing periodic full-walk handles reconciliation.
+	S3EventQueueURL string
+	// S3EventQueueRegion is the AWS region used when creating the SQS client.
+	// Defaults to "us-east-1" when unset.
+	S3EventQueueRegion string
+	// S3EventPollInterval is the sleep duration between empty SQS polls.
+	// Defaults to 30s. Non-positive values are clamped to 30s inside
+	// task.RunS3EventLoop.
+	S3EventPollInterval time.Duration
+
 	// PresignTTL is the lifetime of presigned URLs issued for S3-backed book
 	// files. Default is 10 minutes. Configurable via EMBOOKSHELF_PRESIGN_TTL
 	// (any value parseable by time.ParseDuration, e.g. "15m", "1h").
@@ -77,6 +89,10 @@ func Load() (Config, error) {
 
 		AppURL:    strings.TrimRight(envStr("APP_URL", ""), "/"),
 		SecretKey: envStr("EMBOOKSHELF_SECRET_KEY", ""),
+
+		S3EventQueueURL:     envStr("EMBOOKSHELF_S3_EVENT_QUEUE", ""),
+		S3EventQueueRegion:  envStr("EMBOOKSHELF_S3_EVENT_REGION", "us-east-1"),
+		S3EventPollInterval: envDuration("EMBOOKSHELF_S3_EVENT_POLL_INTERVAL", 30*time.Second),
 
 		PresignTTL:      envDuration("EMBOOKSHELF_PRESIGN_TTL", 10*time.Minute),
 		PresignFallback: envStr("EMBOOKSHELF_PRESIGN_FALLBACK", ""),

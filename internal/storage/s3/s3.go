@@ -99,6 +99,15 @@ func New(ctx context.Context, cfg Config) (*Backend, error) {
 // Capabilities reports the optional features this backend supports.
 func (b *Backend) Capabilities() storage.Capability { return b.capab }
 
+// Bucket returns the S3 bucket name this backend is rooted in.
+func (b *Backend) Bucket() string { return b.bucket }
+
+// Prefix returns the key prefix (normalized with trailing slash, or empty).
+func (b *Backend) Prefix() string { return b.prefix }
+
+// Client returns the underlying S3 client, e.g. for PutObjectTagging.
+func (b *Backend) Client() *s3.Client { return b.cli }
+
 // validateBucket calls GetBucketVersioning + GetBucketEncryption and
 // fails fast when the bucket is misconfigured.
 func (b *Backend) validateBucket(ctx context.Context) error {
