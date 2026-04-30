@@ -53,7 +53,6 @@ import {
 } from "@/api/oidc"
 import { fetchMe, meQueryKey } from "@/api/auth"
 import { Icon } from "@/components/Icon"
-import { NamingPatternsPanel } from "@/components/NamingPatternsPanel"
 import {
   AdminGate,
   Avatar,
@@ -83,7 +82,6 @@ export const Route = createFileRoute("/_app/settings")({
 
 type SectionKey =
   | "libraries"
-  | "patterns"
   | "providers"
   | "email"
   | "users"
@@ -100,7 +98,6 @@ type SectionSpec = {
 
 const SECTIONS: Array<SectionSpec> = [
   { key: "libraries", label: "Libraries", adminOnly: true },
-  { key: "patterns", label: "File naming patterns", adminOnly: true },
   { key: "providers", label: "Metadata providers", adminOnly: true },
   { key: "email", label: "Email delivery", adminOnly: true },
   { key: "users", label: "Users & roles", adminOnly: true },
@@ -153,7 +150,6 @@ function Admin() {
         isAdmin={isAdmin}
       >
         {active === "libraries" && <LibrariesPanel isAdmin={isAdmin} />}
-        {active === "patterns" && <NamingPatternsPanel isAdmin={isAdmin} />}
         {active === "providers" && <ProvidersPanel isAdmin={isAdmin} />}
         {active === "email" && <EmailPanel isAdmin={isAdmin} />}
         {active === "users" && (
