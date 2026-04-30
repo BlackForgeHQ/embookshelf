@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"path"
 
 	"github.com/blackforge/embookshelf/internal/storage"
@@ -27,7 +28,11 @@ func KeyFor(bookKey string) string {
 // `<basename>.embookshelf.json`. The JSON sidecar wins on field
 // conflicts because it's the format embookshelf actively writes.
 //
-// A missing book or no sidecars present returns Sidecar{}, nil.
+// A book key with no sidecars present returns Sidecar{}, nil. A
+// malformed sidecar at any layer is logged via slog.Warn and
+// treated as absent, so the next overlay layer (or the empty
+// fallback) takes effect — corrupt user-edited JSON never breaks
+// ingest.
 func Read(ctx context.Context, store storage.Storage, bookKey string) (Sidecar, error) {
 	var merged Sidecar
 
@@ -68,8 +73,8 @@ func readAndParse(ctx context.Context, store storage.Storage, key string, fn fun
 	}
 	parsed, parseErr := fn(data)
 	if parseErr != nil {
-		// Malformed sidecar: log via caller; return empty so the
-		// caller can fall back to the next layer.
+		slog.Warn("sidecar: malformed payload, ignoring",
+			"key", key, "err", parseErr)
 		return Sidecar{}, nil
 	}
 	return parsed, nil
