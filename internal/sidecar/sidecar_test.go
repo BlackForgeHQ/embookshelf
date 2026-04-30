@@ -367,7 +367,7 @@ func TestWriter_SingleWriteHappyPath(t *testing.T) {
 	ctx := context.Background()
 
 	sc := Sidecar{Title: "Hello", Author: "World"}
-	if err := w.Write(ctx, store, "book.embookshelf.toml", sc); err != nil {
+	if err := w.Write(ctx, store, "book.embookshelf.toml", sc, ModeFull, "EPUB"); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -404,7 +404,7 @@ func TestWriter_ConcurrentWritesSameKey(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			sc := Sidecar{Title: fmt.Sprintf("Title-%d", i)}
-			if err := w.Write(ctx, store, key, sc); err != nil {
+			if err := w.Write(ctx, store, key, sc, ModeFull, "EPUB"); err != nil {
 				t.Errorf("Write[%d]: %v", i, err)
 			}
 		}()
@@ -437,7 +437,7 @@ func TestWriter_ConcurrentWritesDistinctKeys(t *testing.T) {
 			defer wg.Done()
 			key := fmt.Sprintf("book%d/.embookshelf.toml", i)
 			sc := Sidecar{Title: fmt.Sprintf("Title-%d", i)}
-			if err := w.Write(ctx, store, key, sc); err != nil {
+			if err := w.Write(ctx, store, key, sc, ModeFull, "EPUB"); err != nil {
 				t.Errorf("Write[%d]: %v", i, err)
 			}
 		}()
@@ -684,6 +684,46 @@ func TestJSON_MalformedReturnsError(t *testing.T) {
 	_, err := DecodeJSON([]byte(`{"fields":{"title":not-a-string}}`))
 	if err == nil {
 		t.Fatal("DecodeJSON malformed: want error, got nil")
+	}
+}
+
+func TestWriter_WritesJSONWithCorrectContentType(t *testing.T) {
+	root := t.TempDir()
+	fs, err := local.New(root)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	w := NewWriter()
+	s := Sidecar{Title: "T", Tags: []string{"a"}}
+	if err := w.Write(context.Background(), fs, "books/x.embookshelf.json", s, ModeFull, "EPUB"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	// File on disk should be valid JSON of the v1 envelope shape.
+	rc, err := fs.Get(context.Background(), "books/x.embookshelf.json")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	got, err := DecodeJSON(data)
+	if err != nil {
+		t.Fatalf("DecodeJSON: %v", err)
+	}
+	if got.Title != "T" {
+		t.Errorf("got.Title=%q want T", got.Title)
+	}
+	if !bytes.Contains(data, []byte(`"version": 1`)) {
+		t.Errorf("envelope missing version=1 marker; data=%s", data)
+	}
+	if !bytes.Contains(data, []byte(`"mode": "full"`)) {
+		t.Errorf("envelope missing mode=full marker; data=%s", data)
+	}
+	if !bytes.Contains(data, []byte(`"format": "EPUB"`)) {
+		t.Errorf("envelope missing format=EPUB marker; data=%s", data)
 	}
 }
 
