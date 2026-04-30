@@ -17,6 +17,19 @@ import (
 	"time"
 )
 
+// Source is the random-access byte view of an object. Returned by
+// Storage.Open. Distinct from Storage.Get (which returns a sequential
+// io.ReadCloser) — Source is for callers that need to seek to read a
+// container format's directory or footer.
+//
+// Size is the total object size in bytes. Implementations must return
+// the same value for repeated calls.
+type Source interface {
+	io.ReaderAt
+	io.Closer
+	Size() int64
+}
+
 // ObjectInfo is the metadata returned by List and Head.
 type ObjectInfo struct {
 	// Key is the object's key relative to the backend root.
@@ -108,6 +121,10 @@ type Storage interface {
 	// when src and dst share a filesystem, falling back to copy + unlink.
 	// On S3 it is a server-side copy.
 	Copy(ctx context.Context, srcKey, dstKey string) (CopyResult, error)
+
+	// Open returns a random-access view of the object at key. Returns
+	// ErrNotFound when missing. Callers must Close the returned Source.
+	Open(ctx context.Context, key string) (Source, error)
 }
 
 // Sentinel errors. Backends wrap their underlying error with
