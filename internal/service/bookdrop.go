@@ -19,6 +19,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/pattern"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/sse"
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // BookDropService orchestrates the bookdrop ingest pipeline. It sits between
@@ -35,6 +36,9 @@ type BookDropService struct {
 	// files row alongside the new book. nil disables the write so callers
 	// (e.g. tests) that don't need the row don't have to supply a repo.
 	files *repo.FileRepo
+	// resolver maps backend_id to Storage. Used by Approve to open a
+	// Source for audio re-extraction. nil disables the re-extract block.
+	resolver storage.Resolver
 }
 
 func NewBookDropService(
@@ -53,6 +57,13 @@ func NewBookDropService(
 		hub:      hub,
 		files:    files,
 	}
+}
+
+// WithResolver sets the storage resolver on an existing BookDropService.
+// The resolver is used in Approve to open Sources for audio re-extraction.
+func (s *BookDropService) WithResolver(r storage.Resolver) *BookDropService {
+	s.resolver = r
+	return s
 }
 
 func (s *BookDropService) List(ctx context.Context) ([]model.BookDropItem, error) {
@@ -248,20 +259,36 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 	// is bounded — for a typical M4B it's a single mvhd atom read; for
 	// MP3 the XING header at the start of the file. Failure is logged
 	// but never fatal: the book still imports without duration.
-	if isAudioFormat(created.Format) && created.Path != "" {
-		if meta, err := (fileproc.AudioProcessor{}).Extract(ctx, created.Path); err == nil {
-			if err := s.libs.UpdateAudio(ctx, created.ID,
-				meta.DurationSeconds, meta.Narrator, nil,
-			); err != nil {
-				slog.Warn("update audio metadata", "book_id", created.ID, "err", err)
-			} else {
-				if meta.DurationSeconds != nil {
-					created.DurationSeconds = meta.DurationSeconds
-				}
-				created.Narrator = meta.Narrator
-			}
+	if isAudioFormat(created.Format) && created.Path != "" && s.resolver != nil {
+		backendID := ""
+		if lib, lErr := s.libs.GetByID(ctx, libraryID); lErr == nil && lib.BackendID != nil {
+			backendID = *lib.BackendID
+		}
+		store, rerr := s.resolver.Resolve(backendID)
+		if rerr != nil {
+			slog.Warn("approve: resolve backend for audio re-extract", "err", rerr)
 		} else {
-			slog.Warn("re-extract audio metadata", "book_id", created.ID, "err", err)
+			loc := relativizeBookLocation(ctx, s.libs, libraryID, created.Path)
+			src, oerr := store.Open(ctx, loc)
+			if oerr != nil {
+				slog.Warn("approve: open source for audio re-extract", "path", created.Path, "err", oerr)
+			} else {
+				defer func() { _ = src.Close() }()
+				if meta, err := (fileproc.AudioProcessor{}).Extract(ctx, src); err == nil {
+					if err := s.libs.UpdateAudio(ctx, created.ID,
+						meta.DurationSeconds, meta.Narrator, nil,
+					); err != nil {
+						slog.Warn("update audio metadata", "book_id", created.ID, "err", err)
+					} else {
+						if meta.DurationSeconds != nil {
+							created.DurationSeconds = meta.DurationSeconds
+						}
+						created.Narrator = meta.Narrator
+					}
+				} else {
+					slog.Warn("re-extract audio metadata", "book_id", created.ID, "err", err)
+				}
+			}
 		}
 	}
 
