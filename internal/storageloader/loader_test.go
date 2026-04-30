@@ -58,24 +58,43 @@ func TestLoadStorageBackends_LocalRow(t *testing.T) {
 	}
 }
 
-// TestLoadStorageBackends_LocalMissingRootErrors verifies that a local backend
-// row with a missing config.root field returns an error.
-func TestLoadStorageBackends_LocalMissingRootErrors(t *testing.T) {
+// TestLoadStorageBackends_LocalIgnoresConfigRoot verifies that a local
+// backend row's config.root is informational only — the LocalFS is always
+// constructed rooted at "/" so callers can pass absolute paths as keys.
+// Per-library rooting belongs to S3 (per-bucket-prefix), not local FS.
+func TestLoadStorageBackends_LocalIgnoresConfigRoot(t *testing.T) {
 	t.Setenv("REPOTEST_DIALECT", "sqlite")
 	d := repotest.New(t)
 	backendRepo := repo.NewStorageBackendRepo(d)
 
-	// Create a local backend with no root.
-	_, err := backendRepo.Create(context.Background(), "local", map[string]any{})
-	if err != nil {
-		t.Fatalf("create backend row: %v", err)
+	// Various config.root values — including missing, empty, relative,
+	// and a non-existent absolute path — all produce a working backend.
+	for _, cfg := range []map[string]any{
+		{},
+		{"root": ""},
+		{"root": "./data/main"},
+		{"root": "/absolute/somewhere/that/does/not/exist"},
+	} {
+		row, err := backendRepo.Create(context.Background(), "local", cfg)
+		if err != nil {
+			t.Fatalf("create backend row %v: %v", cfg, err)
+		}
+		resolver, err := storageloader.LoadStorageBackends(context.Background(), backendRepo, config.DialectSQLite)
+		if err != nil {
+			t.Fatalf("LoadStorageBackends with config %v: %v", cfg, err)
+		}
+		store, err := resolver.Resolve(row.ID)
+		if err != nil {
+			t.Fatalf("resolve %s: %v", row.ID, err)
+		}
+		if store == nil {
+			t.Fatalf("expected non-nil storage for config %v", cfg)
+		}
+		// Cleanup so the next iteration sees a clean table.
+		if err := backendRepo.Delete(context.Background(), row.ID); err != nil {
+			t.Fatalf("delete backend row: %v", err)
+		}
 	}
-
-	_, err = storageloader.LoadStorageBackends(context.Background(), backendRepo, config.DialectSQLite)
-	if err == nil {
-		t.Fatal("expected error for local backend with missing root")
-	}
-	t.Logf("got expected error: %v", err)
 }
 
 // TestLoadStorageBackends_SQLiteWithS3Errors verifies that having an S3 row
@@ -108,28 +127,4 @@ func TestLoadStorageBackends_SQLiteWithS3Errors(t *testing.T) {
 		t.Fatal("expected error for SQLite+S3 combination")
 	}
 	t.Logf("got expected error (SQLite+S3 rejected): %v", err)
-}
-
-// TestLoadStorageBackends_RelativeLocalRoot verifies that a local backend
-// stored with a relative root (a pre-storage_v2 library config copied
-// verbatim by the Plan-B backfill) resolves to absolute via filepath.Abs
-// rather than failing the local.New "must be absolute" check. Regression
-// guard for the boot-time error reported by users upgrading from older
-// installs whose libraries.path was "./data/main" or similar.
-func TestLoadStorageBackends_RelativeLocalRoot(t *testing.T) {
-	t.Setenv("REPOTEST_DIALECT", "sqlite")
-	d := repotest.New(t)
-	backendRepo := repo.NewStorageBackendRepo(d)
-
-	if _, err := backendRepo.Create(context.Background(), "local", map[string]any{"root": "./data/main"}); err != nil {
-		t.Fatalf("create backend row with relative root: %v", err)
-	}
-
-	resolver, err := storageloader.LoadStorageBackends(context.Background(), backendRepo, config.DialectSQLite)
-	if err != nil {
-		t.Fatalf("LoadStorageBackends: %v", err)
-	}
-	if resolver == nil {
-		t.Fatal("expected non-nil resolver")
-	}
 }

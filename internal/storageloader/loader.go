@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 
 	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/model"
@@ -78,23 +77,17 @@ func LoadStorageBackends(ctx context.Context, backendRepo *repo.StorageBackendRe
 func buildBackend(ctx context.Context, row model.StorageBackend) (storage.Storage, error) {
 	switch row.Kind {
 	case "local":
-		root, ok := row.Config["root"].(string)
-		if !ok || root == "" {
-			return nil, fmt.Errorf("missing or invalid config.root")
-		}
-		// Pre-storage_v2 libraries could be configured with relative
-		// paths (e.g. "./data/main"). The Plan-B backfill copies that
-		// value verbatim into storage_backends.config.root, but
-		// local.New requires absolute paths. Resolve here against the
-		// process cwd so an upgrade doesn't refuse to boot.
-		if !filepath.IsAbs(root) {
-			abs, err := filepath.Abs(root)
-			if err != nil {
-				return nil, fmt.Errorf("resolve root %q: %w", root, err)
-			}
-			root = abs
-		}
-		ls, err := local.New(root)
+		// LocalFS is always rooted at "/". The library's actual root
+		// path lives in libraries.root; callers (scan worker, bookdrop
+		// ingest, file handler) pass absolute paths as keys, which the
+		// "/"-rooted LocalFS resolves correctly. Per-library rooting
+		// for LocalFS was an over-application of Plan F's S3 bucket
+		// model — S3 needs per-bucket-prefix rooting, but the local
+		// filesystem doesn't, and rooting per-library broke every
+		// caller that passes absolute paths.
+		//
+		// row.Config["root"] is informational only for the local kind.
+		ls, err := local.New("/")
 		if err != nil {
 			return nil, err
 		}
