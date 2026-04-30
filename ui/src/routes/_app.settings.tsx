@@ -6,6 +6,7 @@ import type { CSSProperties, ReactNode } from "react"
 
 import type { ApiError } from "@/api/client"
 import type {
+  LibraryKind,
   MetadataSettings,
   ProviderConfigField,
   ProviderInfo,
@@ -20,12 +21,14 @@ import type {
 } from "@/api/oidc"
 import type { AuthUser } from "@/api/auth"
 import {
+  appConfigQueryKey,
   approveSettingsUser,
   createLibrary,
   createSettingsUser,
   deleteLibrary,
   deleteSettingsUser,
   denySettingsUser,
+  fetchAppConfig,
   fetchInstanceInfo,
   fetchMetadataSettings,
   fetchProviderSettings,
@@ -178,6 +181,11 @@ function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
     enabled: isAdmin,
   })
 
+  const appConfig = useQuery({
+    queryKey: appConfigQueryKey,
+    queryFn: fetchAppConfig,
+  })
+
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: settingsLibrariesQueryKey })
     queryClient.invalidateQueries({ queryKey: ["libraries"] })
@@ -192,7 +200,8 @@ function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
     onError: (e) => toast.error((e as unknown as ApiError).message),
   })
   const deleteLibraryMut = useMutation({
-    mutationFn: (id: string) => deleteLibrary(id),
+    mutationFn: ({ id, purge }: { id: string; purge: boolean }) =>
+      deleteLibrary(id, { purge }),
     onSuccess: () => {
       invalidate()
       toast.success("Library removed.")
@@ -240,7 +249,9 @@ function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
           rescanBusy={rescanMut.isPending}
           deleteBusy={deleteLibraryMut.isPending}
           onRescan={() => rescanMut.mutate(lib.id)}
-          onDeleteLibrary={() => deleteLibraryMut.mutate(lib.id)}
+          onDeleteLibrary={(purge) =>
+            deleteLibraryMut.mutate({ id: lib.id, purge })
+          }
         />
       ))}
 
@@ -248,6 +259,7 @@ function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
         open={creatorOpen}
         onOpenChange={setCreatorOpen}
         existingNames={existingNames}
+        s3Available={appConfig.data?.s3Available ?? false}
         onCreated={() => {
           invalidate()
           setCreatorOpen(false)
@@ -261,19 +273,41 @@ type LibraryCreatorDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   existingNames: Array<string>
+  s3Available: boolean
   onCreated: () => void
+}
+
+// slugify mirrors the Go service implementation so the prefix preview is
+// consistent with what the server will derive.
+function slugify(name: string): string {
+  const lower = name.toLowerCase()
+  let slug = ""
+  let dash = true
+  for (const ch of lower) {
+    if (/[a-z0-9]/.test(ch)) {
+      slug += ch
+      dash = false
+    } else if (!dash) {
+      slug += "-"
+      dash = true
+    }
+  }
+  return slug.replace(/^-+|-+$/g, "")
 }
 
 // Modeled after spec/library-creation.spec.md §3 + §4. Embookshelf's library
 // model is simpler than BookLore's (no icon/watch/format policy yet), so the
-// form collapses to name + paths + an opt-in "scan immediately" toggle.
+// form collapses to name + kind selector + paths + an opt-in "scan immediately"
+// toggle.
 function LibraryCreatorDialog({
   open,
   onOpenChange,
   existingNames,
+  s3Available,
   onCreated,
 }: LibraryCreatorDialogProps) {
   const [name, setName] = useState("")
+  const [kind, setKind] = useState<LibraryKind>("local")
   const [path, setPath] = useState("")
   const [scanOnCreate, setScanOnCreate] = useState(true)
   const [prescan, setPrescan] = useState<{
@@ -287,6 +321,7 @@ function LibraryCreatorDialog({
     // Prop→state sync on close; not a cascading render.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setName("")
+    setKind("local")
     setPath("")
     setScanOnCreate(true)
     setPrescan(null)
@@ -298,7 +333,13 @@ function LibraryCreatorDialog({
     (existing) => existing.toLowerCase() === trimmedName.toLowerCase()
   )
   const nameValid = trimmedName !== "" && !nameCollision
-  const pathValid = trimmedPath !== ""
+  // path is required only for local libraries
+  const pathValid = kind === "s3" || trimmedPath !== ""
+
+  const derivedPrefix =
+    kind === "s3" && trimmedName !== ""
+      ? `libraries/${slugify(trimmedName)}/`
+      : null
 
   const prescanMut = useMutation({
     mutationFn: (value: string) => prescanLibraryPaths([value]),
@@ -309,7 +350,8 @@ function LibraryCreatorDialog({
     mutationFn: () =>
       createLibrary({
         name: trimmedName,
-        path: trimmedPath,
+        kind,
+        path: kind === "s3" ? undefined : trimmedPath,
         scan: scanOnCreate,
       }),
     onSuccess: () => {
@@ -331,9 +373,8 @@ function LibraryCreatorDialog({
         <DialogHeader>
           <DialogTitle>New library</DialogTitle>
           <DialogDescription>
-            Point embookshelf at one folder on disk. Approved books are moved
-            under that folder on accept, renamed via the library&apos;s
-            file-naming pattern. The path is fixed at creation time.
+            Create a new library backed by a local filesystem folder or an S3
+            bucket prefix. The storage choice is fixed at creation time.
           </DialogDescription>
         </DialogHeader>
 
@@ -363,61 +404,152 @@ function LibraryCreatorDialog({
           </div>
 
           <div>
-            <Label
-              htmlFor="lib-path"
-              style={{ display: "block", marginBottom: 6 }}
-            >
-              Folder
-            </Label>
-            <Input
-              id="lib-path"
-              value={path}
-              onChange={(e) => {
-                setPath(e.target.value)
-                setPrescan(null)
-              }}
-              placeholder="/absolute/path/to/books"
-              className="mono text-[12.5px]"
-            />
-            <div
-              className="t-micro"
-              style={{ marginTop: 6, fontStyle: "italic" }}
-            >
-              This folder is fixed once the library is created and cannot be
-              changed later.
+            <Label style={{ display: "block", marginBottom: 6 }}>Storage</Label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setKind("local")}
+                style={{
+                  flex: 1,
+                  padding: "8px 12px",
+                  border: `1px solid ${kind === "local" ? "var(--color-accent)" : "var(--color-rule-soft)"}`,
+                  borderRadius: 4,
+                  background:
+                    kind === "local"
+                      ? "var(--color-accent-subtle)"
+                      : "var(--color-paper-0)",
+                  cursor: "pointer",
+                  textAlign: "left" as const,
+                }}
+              >
+                <div className="t-small" style={{ fontWeight: 500 }}>
+                  Local filesystem
+                </div>
+                <div className="t-micro" style={{ fontStyle: "italic" }}>
+                  Books stored on disk
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => s3Available && setKind("s3")}
+                disabled={!s3Available}
+                title={
+                  s3Available ? undefined : "Set EMBOOKSHELF_S3_BUCKET to enable"
+                }
+                style={{
+                  flex: 1,
+                  padding: "8px 12px",
+                  border: `1px solid ${kind === "s3" ? "var(--color-accent)" : "var(--color-rule-soft)"}`,
+                  borderRadius: 4,
+                  background:
+                    kind === "s3"
+                      ? "var(--color-accent-subtle)"
+                      : "var(--color-paper-0)",
+                  cursor: s3Available ? "pointer" : "not-allowed",
+                  opacity: s3Available ? 1 : 0.5,
+                  textAlign: "left" as const,
+                }}
+              >
+                <div className="t-small" style={{ fontWeight: 500 }}>
+                  S3 bucket
+                </div>
+                <div className="t-micro" style={{ fontStyle: "italic" }}>
+                  {s3Available
+                    ? "Books stored in shared bucket"
+                    : "EMBOOKSHELF_S3_BUCKET not set"}
+                </div>
+              </button>
             </div>
           </div>
 
-          {pathValid && (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-                padding: "10px 12px",
-                border: "1px dashed var(--color-rule-soft)",
-                borderRadius: 2,
-              }}
-            >
-              <div className="grow">
-                <div className="t-small" style={{ fontWeight: 500 }}>
-                  Pre-create scan
-                </div>
-                <div className="t-micro" style={{ fontStyle: "italic" }}>
-                  {prescanFresh
-                    ? `${prescan.count.toLocaleString()} supported file${prescan.count === 1 ? "" : "s"} found`
-                    : "Counts files before creation so you can spot typos."}
+          {kind === "local" ? (
+            <>
+              <div>
+                <Label
+                  htmlFor="lib-path"
+                  style={{ display: "block", marginBottom: 6 }}
+                >
+                  Folder
+                </Label>
+                <Input
+                  id="lib-path"
+                  value={path}
+                  onChange={(e) => {
+                    setPath(e.target.value)
+                    setPrescan(null)
+                  }}
+                  placeholder="/absolute/path/to/books"
+                  className="mono text-[12.5px]"
+                />
+                <div
+                  className="t-micro"
+                  style={{ marginTop: 6, fontStyle: "italic" }}
+                >
+                  This folder is fixed once the library is created and cannot be
+                  changed later.
                 </div>
               </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => prescanMut.mutate(trimmedPath)}
-                disabled={prescanMut.isPending}
+
+              {pathValid && trimmedPath !== "" && (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    padding: "10px 12px",
+                    border: "1px dashed var(--color-rule-soft)",
+                    borderRadius: 2,
+                  }}
+                >
+                  <div className="grow">
+                    <div className="t-small" style={{ fontWeight: 500 }}>
+                      Pre-create scan
+                    </div>
+                    <div className="t-micro" style={{ fontStyle: "italic" }}>
+                      {prescanFresh
+                        ? `${prescan.count.toLocaleString()} supported file${prescan.count === 1 ? "" : "s"} found`
+                        : "Counts files before creation so you can spot typos."}
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => prescanMut.mutate(trimmedPath)}
+                    disabled={prescanMut.isPending}
+                  >
+                    {prescanMut.isPending ? "Counting…" : "Count files"}
+                  </Button>
+                </div>
+              )}
+            </>
+          ) : (
+            <div>
+              <Label style={{ display: "block", marginBottom: 6 }}>
+                Bucket prefix (auto-derived)
+              </Label>
+              <div
+                className="mono"
+                style={{
+                  padding: "8px 12px",
+                  background: "var(--color-paper-2)",
+                  borderRadius: 4,
+                  fontSize: 12.5,
+                  color: derivedPrefix
+                    ? "inherit"
+                    : "var(--color-ink-3)",
+                  fontStyle: derivedPrefix ? "normal" : "italic",
+                }}
               >
-                {prescanMut.isPending ? "Counting…" : "Count files"}
-              </Button>
+                {derivedPrefix ?? "Enter a name above to preview"}
+              </div>
+              <div
+                className="t-micro"
+                style={{ marginTop: 6, fontStyle: "italic" }}
+              >
+                Prefix is derived from the library name and cannot be changed
+                later. Files sync to this prefix in the shared bucket.
+              </div>
             </div>
           )}
 
@@ -433,9 +565,7 @@ function LibraryCreatorDialog({
               checked={scanOnCreate}
               onCheckedChange={(v) => setScanOnCreate(Boolean(v))}
             />
-            <span className="t-small">
-              Scan folder immediately after creating
-            </span>
+            <span className="t-small">Scan immediately after creating</span>
           </label>
         </div>
 
@@ -466,7 +596,14 @@ type LibraryCardProps = {
   rescanBusy: boolean
   deleteBusy: boolean
   onRescan: () => void
-  onDeleteLibrary: () => void
+  onDeleteLibrary: (purge: boolean) => void
+}
+
+// isS3Library is a heuristic: s3 libraries have an empty path but a
+// non-empty backend_id. The SettingsLibrary DTO doesn't expose backend_id
+// directly, but we can infer it from the empty path.
+function isS3Library(lib: SettingsLibrary) {
+  return lib.path === ""
 }
 
 function LibraryCard({
@@ -529,9 +666,10 @@ function LibraryCard({
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         library={library}
+        isS3={isS3Library(library)}
         busy={deleteBusy}
-        onConfirm={() => {
-          onDeleteLibrary()
+        onConfirm={(purge) => {
+          onDeleteLibrary(purge)
           setConfirmOpen(false)
         }}
       />
@@ -596,21 +734,27 @@ function DeleteLibraryDialog({
   open,
   onOpenChange,
   library,
+  isS3,
   busy,
   onConfirm,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   library: SettingsLibrary
+  isS3: boolean
   busy: boolean
-  onConfirm: () => void
+  onConfirm: (purge: boolean) => void
 }) {
   const [confirmInput, setConfirmInput] = useState("")
+  const [purge, setPurge] = useState(false)
 
   useEffect(() => {
-    // Reset the typed confirmation on close — prop→state sync.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!open) setConfirmInput("")
+    // Reset the typed confirmation and purge flag on close — prop→state sync.
+    if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setConfirmInput("")
+      setPurge(false)
+    }
   }, [open])
 
   const matches = confirmInput.trim() === library.name
@@ -623,8 +767,10 @@ function DeleteLibraryDialog({
           <DialogDescription>
             This removes <strong>{library.name}</strong>, all{" "}
             {library.bookCount} book records, their cover images, and every
-            annotation, reading session, and shelf assignment inside it. Source
-            files on disk are left alone.
+            annotation, reading session, and shelf assignment inside it.{" "}
+            {isS3
+              ? "S3 objects are left alone unless you check the purge option below."
+              : "Source files on disk are left alone."}
           </DialogDescription>
         </DialogHeader>
 
@@ -640,6 +786,22 @@ function DeleteLibraryDialog({
           />
         </div>
 
+        {isS3 && (
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              cursor: "pointer",
+            }}
+          >
+            <Switch checked={purge} onCheckedChange={(v) => setPurge(Boolean(v))} />
+            <span className="t-small">
+              Also delete all files in the S3 bucket prefix
+            </span>
+          </label>
+        )}
+
         <DialogFooter>
           <Button
             type="button"
@@ -652,7 +814,7 @@ function DeleteLibraryDialog({
           <Button
             type="button"
             variant="destructive"
-            onClick={onConfirm}
+            onClick={() => onConfirm(purge)}
             disabled={!matches || busy}
           >
             {busy ? "Deleting…" : "Delete library"}

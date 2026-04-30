@@ -22,16 +22,23 @@ export async function fetchSettingsLibraries(): Promise<
   return libraries
 }
 
-export async function createLibrary(body: {
+export type LibraryKind = "local" | "s3"
+
+export type CreateLibraryInput = {
   name: string
-  path: string
+  kind: LibraryKind
+  path?: string // required for kind='local'; omitted for 's3'
   scan?: boolean
-}): Promise<SettingsLibrary> {
+}
+
+export async function createLibrary(
+  input: CreateLibraryInput
+): Promise<SettingsLibrary> {
   const { library } = await api<{ library: SettingsLibrary }>(
     "/api/v1/settings/libraries",
     {
       method: "POST",
-      body: JSON.stringify(body),
+      body: JSON.stringify(input),
     }
   )
   return library
@@ -53,8 +60,14 @@ export async function prescanLibraryPaths(
 // deleteLibrary tears down a library and every book/annotation/etc
 // that depends on it. Source files on disk are left alone (they live
 // under the user-managed root); cover images and DB rows are removed.
-export async function deleteLibrary(id: string): Promise<void> {
-  await api<void>(`/api/v1/settings/libraries/${id}`, {
+// When opts.purge is true and the library is backed by an S3 backend,
+// all objects under the library's prefix are also deleted.
+export async function deleteLibrary(
+  id: string,
+  opts?: { purge?: boolean }
+): Promise<void> {
+  const qs = opts?.purge ? "?purge=true" : ""
+  await api<void>(`/api/v1/settings/libraries/${id}${qs}`, {
     method: "DELETE",
   })
 }
@@ -142,6 +155,17 @@ export const defaultNamingPatternQueryKey = [
 ] as const
 
 export const settingsLibrariesQueryKey = ["settings", "libraries"] as const
+
+// AppConfig is the lightweight feature-flag payload from GET /api/v1/config.
+export type AppConfig = {
+  s3Available: boolean
+}
+
+export async function fetchAppConfig(): Promise<AppConfig> {
+  return api<AppConfig>("/api/v1/config")
+}
+
+export const appConfigQueryKey = ["app", "config"] as const
 
 // --- Instance info ---------------------------------------------------------
 
