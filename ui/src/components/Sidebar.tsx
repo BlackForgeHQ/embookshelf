@@ -2,7 +2,6 @@ import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useRouterState } from "@tanstack/react-router"
 
-import { accentColor } from "./AccentPicker"
 import { Icon } from "./Icon"
 import { RuleEditor } from "./RuleEditor"
 import { useUserSettingsDialog } from "./UserSettingsDialog"
@@ -48,14 +47,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-
-// Library colors are a design concern (no DB column backs them) so we key
-// a stable palette by library slug. Unknown slugs fall back to the accent.
-const LIBRARY_COLORS: Record<string, string> = {
-  main: "oklch(0.48 0.09 35)",
-  academic: "oklch(0.42 0.06 110)",
-  comics: "oklch(0.38 0.05 200)",
-}
 
 const BUILTIN_SHELF_ICONS: Record<string, IconName> = {
   reading: "book-open",
@@ -182,14 +173,6 @@ export function AppSidebar() {
                 active={isLibrary && !activeShelf && !activeLibrary}
               />
               <NavItem
-                to="/library"
-                search={{ shelf: "reading" }}
-                icon="book-open"
-                label="Reading Now"
-                count={shelfList.find((s) => s.slug === "reading")?.bookCount}
-                active={activeShelf === "reading"}
-              />
-              <NavItem
                 to="/notebook"
                 icon="note"
                 label="Notebook"
@@ -220,9 +203,9 @@ export function AppSidebar() {
                   key={lib.id}
                   to="/library"
                   search={{ library: lib.slug }}
+                  icon="library"
                   label={lib.name}
                   count={lib.bookCount}
-                  color={LIBRARY_COLORS[lib.slug] ?? "var(--color-accent)"}
                   active={activeLibrary === lib.slug}
                 />
               ))}
@@ -232,7 +215,7 @@ export function AppSidebar() {
 
         <SidebarGroup>
           <SidebarGroupLabel>Shelves</SidebarGroupLabel>
-          <SidebarGroupAction
+          <SidebarGroupAction className="group-data-[collapsible=icon]:!hidden"
             title="New shelf"
             aria-label="New shelf"
             onClick={() => shelfDraft.open()}
@@ -249,7 +232,6 @@ export function AppSidebar() {
                   icon={BUILTIN_SHELF_ICONS[s.slug] ?? "folder"}
                   label={s.name}
                   count={s.bookCount}
-                  color={accentColor(s.accent)}
                   active={activeShelf === s.slug}
                 />
               ))}
@@ -259,7 +241,7 @@ export function AppSidebar() {
 
         <SidebarGroup>
           <SidebarGroupLabel>Magic Shelves</SidebarGroupLabel>
-          <SidebarGroupAction
+          <SidebarGroupAction className="group-data-[collapsible=icon]:!hidden"
             title="New smart shelf"
             aria-label="New smart shelf"
             onClick={() => setSmartDraft({ mode: "create" })}
@@ -373,20 +355,16 @@ function SmartShelfRow({
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={shelf.name}>
         <Link to="/library" search={{ shelf: shelf.slug }}>
-          <span
-            aria-hidden
-            className="relative size-1.5 shrink-0 rounded-full"
-            style={{ background: accentColor(shelf.accent) }}
-          />
           <Icon name="sparkle" size={13} aria-label="smart shelf" />
           <span>{shelf.name}</span>
         </Link>
       </SidebarMenuButton>
-      <SidebarMenuBadge className="group-focus-within/menu-item:hidden group-hover/menu-item:hidden">
+      <SidebarMenuBadge className="group-focus-within/menu-item:hidden group-hover/menu-item:hidden group-data-[collapsible=icon]:!hidden">
         {shelf.bookCount}
       </SidebarMenuBadge>
       <SidebarMenuAction
         showOnHover
+        className="group-data-[collapsible=icon]:!hidden"
         title="Edit rule"
         aria-label={`Edit ${shelf.name}`}
         onClick={(e) => {
@@ -399,7 +377,7 @@ function SmartShelfRow({
       </SidebarMenuAction>
       <SidebarMenuAction
         showOnHover
-        className="right-7"
+        className="right-7 group-data-[collapsible=icon]:!hidden"
         title="Delete"
         aria-label={`Delete ${shelf.name}`}
         onClick={(e) => {
@@ -515,7 +493,6 @@ type NavItemProps = {
   icon?: IconName
   label: string
   count?: number
-  color?: string
   active?: boolean
 }
 
@@ -525,25 +502,17 @@ function NavItem({
   icon,
   label,
   count,
-  color,
   active,
 }: NavItemProps) {
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={label}>
         <Link to={to} search={search}>
-          {color && (
-            <span
-              aria-hidden
-              className="size-1.5 shrink-0 rounded-full"
-              style={{ background: color }}
-            />
-          )}
           {icon && <Icon name={icon} size={15} />}
           <NavLabel>{label}</NavLabel>
         </Link>
       </SidebarMenuButton>
-      {count != null && <SidebarMenuBadge>{count}</SidebarMenuBadge>}
+      {count != null && <SidebarMenuBadge className="group-data-[collapsible=icon]:!hidden">{count}</SidebarMenuBadge>}
     </SidebarMenuItem>
   )
 }

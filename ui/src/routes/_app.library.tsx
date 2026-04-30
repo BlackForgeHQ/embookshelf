@@ -131,7 +131,8 @@ function LibraryView() {
 
   const layoutBtn = (name: Layout, label: string) => (
     <Button
-      variant={layout === name ? "default" : "outline"}
+      variant={layout === name ? "default" : "ghost"}
+      className={layout === name ? "shadow-sm" : ""}
       size="icon-sm"
       onClick={() => setLayout(name)}
       title={label}
@@ -155,7 +156,7 @@ function LibraryView() {
         searchVariant="command"
         commandHint={false}
         right={
-          <div style={{ display: "flex", gap: 4 }}>
+          <div className="flex items-center gap-1 bg-muted p-1 rounded-md border border-border">
             {layoutBtn("shelf", "Shelf")}
             {layoutBtn("grid", "Grid")}
             {layoutBtn("list", "List")}
@@ -165,20 +166,13 @@ function LibraryView() {
 
       {/* Filter rail */}
       <div
-        style={{
-          padding: "12px 32px",
-          borderBottom: "1px solid var(--color-rule-soft)",
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          background: "var(--color-paper-1)",
-        }}
+        className="flex flex-wrap items-center gap-3 px-4 md:px-8 py-3 border-b border-border bg-muted/50"
       >
-        <span className="t-label">Filter</span>
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Filter</span>
         {[null, "EPUB", "PDF", "CBZ", "M4B"].map((f) => (
           <button
             key={f ?? "all"}
-            className={`chip ${filterFormat === f ? "active" : ""}`}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer ${filterFormat === f ? "bg-primary text-primary-foreground" : "bg-transparent hover:bg-muted text-muted-foreground"}`}
             onClick={() => setFilterFormat(f)}
             style={{ border: "none" }}
           >
@@ -186,7 +180,7 @@ function LibraryView() {
           </button>
         ))}
         <div className="grow" />
-        <span className="t-label">Sort</span>
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Sort</span>
         <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
           <SelectTrigger size="sm" className="w-auto">
             <SelectValue />
@@ -207,7 +201,7 @@ function LibraryView() {
       </div>
 
       {/* Content */}
-      <div style={{ padding: "28px 32px 80px", flex: 1 }}>
+      <div className="flex-1 p-4 md:p-8 pb-20">
         {books.isError ? (
           <ErrorPanel message="Failed to load books." />
         ) : rows.length === 0 && !books.isLoading ? (
@@ -236,11 +230,11 @@ function ShelfLayout({
   for (let i = 0; i < books.length; i += perRow)
     chunks.push(books.slice(i, i + perRow))
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 42 }}>
+    <div className="flex flex-col gap-10">
       {chunks.map((row, ri) => (
         <div key={ri} className="shelf-row">
-          <div className="shelf-scroll">
-            <div className="shelf-covers">
+          <div className="w-full relative max-w-full overflow-hidden">
+            <div className="flex gap-4 overflow-x-auto pb-4 snap-x">
               {row.map((b) => (
                 <Cover
                   key={b.id}
@@ -267,11 +261,7 @@ function GridLayout({
 }) {
   return (
     <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
-        gap: "32px 24px",
-      }}
+      className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] md:grid-cols-[repeat(auto-fill,minmax(110px,1fr))] md:grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-x-6 gap-y-8"
     >
       {books.map((b) => (
         <BookCard key={b.id} book={b} onOpen={onOpen} layout="grid" />
@@ -291,28 +281,17 @@ function ListLayout({
 }) {
   return (
     <div
-      style={{
-        background: "var(--color-paper-0)",
-        border: "1px solid var(--color-rule-soft)",
-        borderRadius: 2,
-      }}
+      className="bg-card border border-border rounded-lg shadow-sm overflow-hidden"
     >
       <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: LIST_GRID,
-          gap: 16,
-          padding: "10px 16px",
-          borderBottom: "1px solid var(--color-rule)",
-          background: "var(--color-paper-2)",
-        }}
+        className="grid grid-cols-[46px_2fr_1.2fr_80px_80px_60px] items-center gap-4 px-4 py-2.5 border-b border-border bg-muted/50 text-sm"
       >
         <span />
-        <span className="t-label">Title</span>
-        <span className="t-label">Author</span>
-        <span className="t-label">Format</span>
-        <span className="t-label">Rating</span>
-        <span className="t-label">Year</span>
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Title</span>
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Author</span>
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Format</span>
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Rating</span>
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Year</span>
       </div>
       {books.map((b) => (
         <BookCard key={b.id} book={b} onOpen={onOpen} layout="list" />
@@ -331,27 +310,20 @@ function BookCard({
   layout: "grid" | "list"
 }) {
   if (layout === "list") {
-    const rowStyle: CSSProperties = {
-      display: "grid",
-      gridTemplateColumns: LIST_GRID,
-      alignItems: "center",
-      gap: 16,
-      padding: "10px 16px",
-      borderBottom: "1px solid var(--color-rule-soft)",
-    }
+    
     return (
       <button
         type="button"
         onClick={() => onOpen(book.id)}
-        className="card-row"
+        className="group grid grid-cols-[46px_2fr_1.2fr_80px_80px_60px] items-center gap-4 px-4 py-3 text-left border-b border-border hover:bg-muted/30 transition-colors w-full last:border-0"
         aria-label={`Open ${book.title}`}
-        style={rowStyle}
+        
       >
         <Cover book={book} size="xs" />
         <div>
           <div style={{ fontWeight: 500, fontSize: 14 }}>{book.title}</div>
           {book.series && (
-            <div className="t-small" style={{ fontStyle: "italic" }}>
+            <div className="text-sm italic text-muted-foreground">
               {book.series}
               {book.seriesNum ? ` #${book.seriesNum}` : ""}
             </div>
@@ -380,23 +352,17 @@ function BookCard({
     <button
       type="button"
       onClick={() => onOpen(book.id)}
-      className="card-tile"
+      className="group flex flex-col gap-3 text-left w-full max-w-[150px] mx-auto transition-transform duration-200 hover:scale-[1.02]"
       aria-label={`Open ${book.title}`}
-      style={{ display: "flex", flexDirection: "column", gap: 10, width: 130 }}
     >
       <Cover book={book} size="md" />
       <div>
         <div
-          style={{
-            fontSize: 13,
-            fontWeight: 500,
-            lineHeight: 1.3,
-            textWrap: "balance",
-          }}
+          className="text-[13px] font-medium leading-snug text-balance mt-1 group-hover:text-primary transition-colors"
         >
           {book.title}
         </div>
-        <div className="t-small" style={{ fontSize: 12, fontStyle: "italic" }}>
+        <div className="t-small" className="text-xs italic text-muted-foreground mt-0.5">
           {book.author}
         </div>
         {book.progress > 0 && book.progress < 1 && (
@@ -412,18 +378,12 @@ function BookCard({
 function EmptyPanel() {
   return (
     <div
-      style={{
-        padding: "48px 24px",
-        textAlign: "center",
-        border: "1px dashed var(--color-rule)",
-        borderRadius: 2,
-        background: "var(--color-paper-0)",
-      }}
+      className="p-12 text-center border-2 border-dashed border-border rounded-lg bg-card text-muted-foreground"
     >
-      <div className="t-h3" style={{ marginBottom: 8 }}>
+      <div className="text-lg font-serif font-medium text-foreground" style={{ marginBottom: 8 }}>
         Nothing to show yet.
       </div>
-      <div className="t-small" style={{ fontStyle: "italic" }}>
+      <div className="text-sm italic text-muted-foreground">
         Drop an EPUB into <span className="mono">/bookdrop</span> or register a
         library path in Settings.
       </div>
@@ -434,14 +394,7 @@ function EmptyPanel() {
 function ErrorPanel({ message }: { message: string }) {
   return (
     <div
-      style={{
-        padding: 16,
-        border: "1px solid var(--color-accent-soft)",
-        background: "var(--color-accent-soft)",
-        color: "var(--color-accent-ink)",
-        borderRadius: 2,
-        fontSize: 13,
-      }}
+      className="p-4 border border-destructive/20 bg-destructive/10 text-destructive rounded-lg text-sm"
     >
       {message}
     </div>

@@ -43,15 +43,13 @@ export const Route = createFileRoute("/_app/bookdrop")({
   component: BookDrop,
 })
 
-// State → status dot color. Calibrated to be visible against the warm
-// paper background (no more paper-3 ghost dots for "failed").
-const STATUS_COLOR: Record<BookDropState, string> = {
-  ready: "oklch(0.58 0.12 140)", // green
-  processing: "oklch(0.65 0.10 70)", // amber
-  discovered: "var(--color-ink-3)",
-  failed: "var(--color-accent-ink)", // burgundy
-  imported: "var(--color-ink-4)", // muted (terminal, success)
-  rejected: "var(--color-ink-4)", // muted (terminal, dismissed)
+const STATE_LABEL: Record<BookDropState, string> = {
+  ready: "ready",
+  processing: "processing",
+  discovered: "queued",
+  failed: "failed",
+  imported: "imported",
+  rejected: "discarded",
 }
 
 function BookDrop() {
@@ -61,17 +59,12 @@ function BookDrop() {
   const queue = useQuery({
     queryKey: bookdropQueryKey,
     queryFn: fetchBookDrop,
-    // Realtime invalidations via SSE drive refreshes — see
-    // frontend/src/api/realtime.ts. No poll interval needed; the
-    // "Rescan" button in the top bar is the fallback manual trigger.
   })
   const libraries = useQuery({
     queryKey: librariesQueryKey,
     queryFn: fetchLibraries,
   })
 
-  // Surface only the still-actionable items at the top — approved/rejected
-  // rows land below under a collapsed section.
   const { active, finished } = useMemo(() => {
     const all = queue.data ?? []
     return {
@@ -86,13 +79,9 @@ function BookDrop() {
 
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
-  // Auto-select the first actionable row on first load + whenever the
-  // current selection disappears (approved / rejected / deleted).
   const current =
     queue.data?.find((i) => i.id === selectedId) ?? active[0] ?? finished[0]
   if (current && current.id !== selectedId) {
-    // setState-in-render is a defensible TanStack Query pattern for sync
-    // effects; React will flush on the same commit.
     queueMicrotask(() => setSelectedId(current.id))
   }
 
@@ -103,8 +92,6 @@ function BookDrop() {
       queryClient.invalidateQueries({ queryKey: bookdropQueryKey })
       queryClient.invalidateQueries({ queryKey: booksQueryKey() })
       queryClient.invalidateQueries({ queryKey: librariesQueryKey })
-      // Jump the user straight to the freshly-imported book so they can
-      // verify the metadata landed correctly.
       void navigate({ to: "/book/$id", params: { id: book.id } })
     },
   })
@@ -127,13 +114,15 @@ function BookDrop() {
     rejectMut.error ??
     clearMut.error) as unknown as ApiError | null
 
+  const readyCount = active.filter((i) => i.state === "ready").length
+
   return (
-    <div className="fade-in flex h-full min-h-0 flex-col">
+    <div className="fade-in bdrop-shell">
       <TopBar
         title="BookDrop"
         subtitle="Drop files into /bookdrop and they'll appear here for review before joining your library."
         right={
-          <div style={{ display: "flex", gap: 8 }}>
+          <div className="flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -145,9 +134,7 @@ function BookDrop() {
             </Button>
             <Button
               size="sm"
-              disabled={
-                approveMut.isPending || active.every((i) => i.state !== "ready")
-              }
+              disabled={approveMut.isPending || readyCount === 0}
               onClick={() => {
                 for (const item of active) {
                   if (item.state === "ready") {
@@ -156,221 +143,99 @@ function BookDrop() {
                 }
               }}
             >
-              <Icon name="check" size={13} /> Approve all ready
+              <Icon name="check" size={13} /> Approve {readyCount > 0 ? readyCount : "all"}
             </Button>
           </div>
         }
       />
 
-      <div className="grid min-h-0 flex-1 grid-cols-[440px_minmax(0,1fr)]">
-        {/* Left — drop zone + queue */}
-        <aside className="flex min-h-0 flex-col overflow-y-auto border-r border-(--color-rule-soft)">
-          <div className="px-6 pt-6 pb-2">
-            <DropZone
-              onUploaded={() => {
-                queryClient.invalidateQueries({ queryKey: bookdropQueryKey })
-              }}
-            />
-          </div>
-
-          <RailHeader
-            label="In queue"
-            count={active.length}
-          />
-          {queue.isLoading && <RailEmpty>Loading queue…</RailEmpty>}
-          {queue.isError && (
-            <div className="mx-6 my-3 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink)" style={{ fontSize: 13 }}>
-              Failed to load the ingest queue.
-            </div>
-          )}
-          {active.length === 0 && !queue.isLoading && !queue.isError && (
-            <RailEmpty>
-              Queue is empty. Drop a file into{" "}
-              <span className="mono">/bookdrop</span>.
-            </RailEmpty>
-          )}
-          <div className="divide-y divide-(--color-rule-soft) border-y border-(--color-rule-soft)">
-            {active.map((f) => (
-              <QueueRow
-                key={f.id}
-                item={f}
-                selected={selectedId === f.id}
-                onSelect={() => setSelectedId(f.id)}
-              />
-            ))}
-          </div>
-
-          {finished.length > 0 && (
-            <>
-              <RailHeader
-                label="Recently processed"
-                count={finished.length}
-                action={
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={clearMut.isPending}
-                    title="Remove every imported / rejected row from the queue history"
-                    onClick={() => setClearConfirmOpen(true)}
-                  >
-                    <Icon name="close" size={11} />{" "}
-                    {clearMut.isPending ? "Clearing…" : "Clear"}
-                  </Button>
+      <div className="bdrop-grid">
+        <aside className="bdrop-rail">
+          <div className="bdrop-rail-inner">
+            <div className="px-5 pt-5 pb-4">
+              <DropZone
+                onUploaded={() =>
+                  queryClient.invalidateQueries({ queryKey: bookdropQueryKey })
                 }
               />
-              <div className="divide-y divide-(--color-rule-soft) border-y border-(--color-rule-soft)">
-                {finished.map((f) => (
-                  <QueueRow
-                    key={f.id}
-                    item={f}
-                    selected={selectedId === f.id}
-                    onSelect={() => setSelectedId(f.id)}
-                  />
-                ))}
+            </div>
+
+            <RailSectionHeader label="In queue" count={active.length} />
+            {queue.isLoading && <RailEmpty>Loading queue…</RailEmpty>}
+            {queue.isError && (
+              <div className="mx-5 my-2 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink) text-[12.5px]">
+                Failed to load the ingest queue.
               </div>
-            </>
-          )}
+            )}
+            {active.length === 0 && !queue.isLoading && !queue.isError && (
+              <RailEmpty>
+                Queue is empty. Drop a file above or into{" "}
+                <span className="mono">/bookdrop</span>.
+              </RailEmpty>
+            )}
+            <div>
+              {active.map((f, i) => (
+                <QueueRow
+                  key={f.id}
+                  item={f}
+                  index={i}
+                  selected={selectedId === f.id}
+                  onSelect={() => setSelectedId(f.id)}
+                />
+              ))}
+            </div>
+
+            {finished.length > 0 && (
+              <div className="bdrop-finished">
+                <RailSectionHeader
+                  label="Recently processed"
+                  count={finished.length}
+                  action={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={clearMut.isPending}
+                      onClick={() => setClearConfirmOpen(true)}
+                    >
+                      <Icon name="close" size={11} />
+                      {clearMut.isPending ? "Clearing…" : "Clear"}
+                    </Button>
+                  }
+                />
+                <div>
+                  {finished.map((f, i) => (
+                    <QueueRow
+                      key={f.id}
+                      item={f}
+                      index={i}
+                      selected={selectedId === f.id}
+                      onSelect={() => setSelectedId(f.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </aside>
 
-        {/* Right — detail */}
-        <main className="min-h-0 overflow-y-auto">
+        <main className="bdrop-detail">
           {current ? (
-            <div className="mx-auto max-w-[820px] px-10 py-10">
-              {error && (
-                <div
-                  className="mb-6 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink)"
-                  style={{ fontSize: 13 }}
-                  role="alert"
-                >
-                  {error.message}
-                </div>
-              )}
-
-              <div className="mb-8 flex items-baseline justify-between gap-3 border-b border-(--color-rule-soft) pb-3">
-                <div>
-                  <p className="t-micro mb-2">Review import</p>
-                  <h2
-                    className="t-h2 wrap-break-word"
-                    style={{ fontWeight: 500 }}
-                  >
-                    {current.title || "Untitled file"}
-                  </h2>
-                </div>
-                <StatusBadge state={current.state} />
-              </div>
-
-              <p
-                className="mono mb-8 break-all"
-                style={{ fontSize: 12, color: "var(--color-ink-3)" }}
-              >
-                {current.path}
-              </p>
-
-              <div className="grid grid-cols-[180px_minmax(0,1fr)] gap-10">
-                <CoverPanel item={current} />
-
-                <div className="min-w-0">
-                  <dl className="grid grid-cols-2 gap-x-6 gap-y-5">
-                    <InfoField
-                      label="Title"
-                      value={current.title}
-                      missing="Could not detect"
-                    />
-                    <InfoField
-                      label="Author"
-                      value={current.author}
-                      missing="Could not detect"
-                    />
-                    <InfoField label="Format" value={current.format} mono />
-                    <InfoField
-                      label="Size"
-                      value={formatBytes(current.fileSize)}
-                      mono
-                    />
-                    <InfoField
-                      label="Language"
-                      value={current.language}
-                      mono
-                      missing="—"
-                    />
-                    <InfoField
-                      label="State"
-                      value={current.state}
-                      mono
-                    />
-                  </dl>
-
-                  {current.description && (
-                    <div className="mt-8">
-                      <p className="t-label mb-2">Description</p>
-                      <p
-                        className="font-serif"
-                        style={{
-                          fontSize: 14.5,
-                          lineHeight: 1.6,
-                          color: "var(--color-ink-1)",
-                          maxWidth: 560,
-                          textWrap: "pretty",
-                        }}
-                      >
-                        {current.description}
-                      </p>
-                    </div>
-                  )}
-
-                  {current.state === "failed" && current.errorMsg && (
-                    <div
-                      className="mt-6 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink)"
-                      style={{ fontSize: 13 }}
-                    >
-                      Processing error: {current.errorMsg}
-                    </div>
-                  )}
-
-                  <div className="mt-8 border-t border-(--color-rule-soft) pt-6">
-                    {current.state === "imported" && current.bookId ? (
-                      <Button
-                        onClick={() =>
-                          void navigate({
-                            to: "/book/$id",
-                            params: { id: current.bookId! },
-                          })
-                        }
-                      >
-                        <Icon name="book-open" size={13} /> Open imported book
-                      </Button>
-                    ) : current.state === "rejected" ? (
-                      <p
-                        className="t-small italic"
-                        style={{ color: "var(--color-ink-3)" }}
-                      >
-                        This item was dismissed.
-                      </p>
-                    ) : (
-                      <ApprovalBar
-                        item={current}
-                        libraries={libraries.data ?? []}
-                        disabled={approveMut.isPending || rejectMut.isPending}
-                        onApprove={(libraryId) =>
-                          approveMut.mutate({ id: current.id, libraryId })
-                        }
-                        onReject={() => rejectMut.mutate(current.id)}
-                      />
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
+            <DetailPane
+              item={current}
+              libraries={libraries.data ?? []}
+              error={error}
+              busy={approveMut.isPending || rejectMut.isPending}
+              onApprove={(libraryId) =>
+                approveMut.mutate({ id: current.id, libraryId })
+              }
+              onReject={() => rejectMut.mutate(current.id)}
+              onOpenBook={(id) =>
+                void navigate({ to: "/book/$id", params: { id } })
+              }
+            />
           ) : (
-            <div className="flex h-full items-center justify-center px-8">
-              <p
-                className="t-small italic"
-                style={{ color: "var(--color-ink-3)", maxWidth: 320, textAlign: "center" }}
-              >
-                Drop a file into the queue to start reviewing.
-              </p>
-            </div>
+            <EmptyDetail />
           )}
         </main>
       </div>
@@ -413,7 +278,7 @@ function BookDrop() {
   )
 }
 
-function RailHeader({
+function RailSectionHeader({
   label,
   count,
   action,
@@ -423,16 +288,11 @@ function RailHeader({
   action?: ReactNode
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 px-6 pt-6 pb-2">
-      <div className="flex items-baseline gap-2">
-        <span className="t-label">{label}</span>
-        <span
-          className="mono tabular-nums"
-          style={{ fontSize: 11, color: "var(--color-ink-3)" }}
-        >
-          {count}
-        </span>
-      </div>
+    <div className="bdrop-section-header">
+      <span className="bdrop-section-header-label">
+        {label}
+        <span className="bdrop-section-header-count">{count}</span>
+      </span>
       {action}
     </div>
   )
@@ -440,41 +300,12 @@ function RailHeader({
 
 function RailEmpty({ children }: { children: ReactNode }) {
   return (
-    <div
-      className="t-small italic px-6 py-3"
-      style={{ color: "var(--color-ink-3)" }}
-    >
+    <div className="t-small italic px-6 py-3 text-(--color-ink-3)">
       {children}
     </div>
   )
 }
 
-function StatusBadge({ state }: { state: BookDropState }) {
-  return (
-    <span
-      className="mono inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap"
-      style={{
-        fontSize: 10.5,
-        letterSpacing: "0.06em",
-        textTransform: "uppercase",
-        color: "var(--color-ink-2)",
-      }}
-    >
-      <span
-        aria-hidden
-        style={{
-          width: 7,
-          height: 7,
-          borderRadius: "50%",
-          background: STATUS_COLOR[state],
-        }}
-      />
-      {state}
-    </span>
-  )
-}
-
-// Formats accepted by the ingest pipeline (mirrors fileproc.SupportedExts).
 const ACCEPT_EXTS = ".epub,.pdf,.cbz,.cbr,.cb7,.mp3,.m4a,.m4b,.mobi,.azw3,.fb2"
 
 function DropZone({ onUploaded }: { onUploaded: () => void }) {
@@ -498,8 +329,6 @@ function DropZone({ onUploaded }: { onUploaded: () => void }) {
         setProgress(total > 0 ? loaded / total : 0)
       })
       setResults(out)
-      // Refresh the queue even if some files errored — successful ones
-      // are already in the DB and should surface immediately.
       onUploaded()
     } catch (e) {
       setErr((e as { message?: string }).message ?? "upload failed")
@@ -537,74 +366,31 @@ function DropZone({ onUploaded }: { onUploaded: () => void }) {
             inputRef.current?.click()
           }
         }}
-        style={{
-          padding: "32px 20px",
-          border: `1px dashed ${
-            dragOver ? "var(--color-editorial-accent)" : "var(--color-rule)"
-          }`,
-          borderRadius: 3,
-          background: dragOver
-            ? "var(--color-paper-2)"
-            : "transparent",
-          textAlign: "center",
-          cursor: uploading ? "wait" : "pointer",
-          transition:
-            "background 160ms cubic-bezier(0.16,1,0.3,1), border-color 160ms",
-        }}
+        className="bdrop-drop"
+        data-drag={dragOver}
+        style={{ cursor: uploading ? "wait" : "pointer" }}
       >
-        <div
-          aria-hidden
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 36,
-            height: 36,
-            borderRadius: "50%",
-            background: dragOver
-              ? "var(--color-editorial-accent)"
-              : "var(--color-paper-3)",
-            color: dragOver
-              ? "var(--color-paper-0)"
-              : "var(--color-ink-2)",
-            transition: "background 160ms, color 160ms",
-            marginBottom: 10,
-          }}
-        >
-          <Icon name="upload" size={16} />
+        <span className="bdrop-drop-stamp">Bookdrop</span>
+        <div className="bdrop-drop-icon" aria-hidden>
+          <Icon name="upload" size={18} />
         </div>
-        <div
-          className="font-serif"
-          style={{ fontSize: 16, fontWeight: 500, marginBottom: 4 }}
-        >
+        <div className="font-serif text-[15.5px] font-medium leading-tight">
           {uploading
             ? "Uploading…"
             : dragOver
               ? "Drop to queue"
               : "Drop files or click to browse"}
         </div>
-        <div
-          className="t-small italic"
-          style={{ fontSize: 12, color: "var(--color-ink-3)" }}
-        >
-          EPUB, PDF, CBZ, MOBI, AZW3, FB2, audio
+        <div className="t-small italic mt-1 text-[12px] text-(--color-ink-3)">
+          EPUB · PDF · CBZ · MOBI · AZW3 · FB2 · audio
         </div>
 
         {uploading && (
-          <div
-            style={{
-              marginTop: 14,
-              height: 3,
-              background: "var(--color-paper-3)",
-              borderRadius: 2,
-              overflow: "hidden",
-            }}
-          >
+          <div className="mt-3 h-[3px] overflow-hidden rounded-[2px] bg-(--color-paper-3)">
             <div
+              className="h-full bg-(--color-editorial-accent)"
               style={{
-                height: "100%",
                 width: `${Math.round(progress * 100)}%`,
-                background: "var(--color-editorial-accent)",
                 transition: "width 80ms linear",
               }}
             />
@@ -619,17 +405,15 @@ function DropZone({ onUploaded }: { onUploaded: () => void }) {
           onChange={(e) => {
             const files = Array.from(e.target.files ?? [])
             void upload(files)
-            // Reset so picking the same file twice still fires change.
             e.target.value = ""
           }}
-          style={{ display: "none" }}
+          className="hidden"
         />
       </div>
 
       {err && (
         <div
-          className="mt-2.5 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink)"
-          style={{ fontSize: 12.5 }}
+          className="mt-2.5 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-[12.5px] text-(--color-accent-ink)"
           role="alert"
         >
           {err}
@@ -637,20 +421,24 @@ function DropZone({ onUploaded }: { onUploaded: () => void }) {
       )}
 
       {results && (
-        <div
-          className="mt-2.5 rounded-[3px] border border-(--color-rule-soft) px-3 py-2"
-          style={{ fontSize: 12.5 }}
-        >
-          <div style={{ marginBottom: failedCount ? 4 : 0 }}>
-            {okCount} queued{failedCount ? ` · ${failedCount} failed` : ""}
+        <div className="mt-2.5 rounded-[3px] border border-(--color-rule-soft) bg-(--color-paper-0) px-3 py-2 text-[12.5px]">
+          <div className={failedCount ? "mb-1" : ""}>
+            <span className="font-medium">{okCount}</span> queued
+            {failedCount ? (
+              <>
+                {" · "}
+                <span className="text-(--color-accent-ink) font-medium">
+                  {failedCount} failed
+                </span>
+              </>
+            ) : null}
           </div>
           {results
             .filter((r) => r.error)
             .map((r) => (
               <div
                 key={r.filename}
-                className="mono"
-                style={{ fontSize: 11, color: "var(--color-accent-ink)" }}
+                className="mono text-[10.5px] text-(--color-accent-ink)"
               >
                 {r.filename}: {r.error}
               </div>
@@ -663,137 +451,202 @@ function DropZone({ onUploaded }: { onUploaded: () => void }) {
 
 function QueueRow({
   item,
+  index,
   selected,
   onSelect,
 }: {
   item: BookDropItem
+  index: number
   selected: boolean
   onSelect: () => void
 }) {
+  const isProcessing = item.state === "processing"
   return (
     <button
       type="button"
       onClick={onSelect}
       aria-pressed={selected}
-      className="card-row relative flex w-full items-center gap-3 px-6 py-3 text-left"
-      style={{
-        background: selected ? "var(--color-paper-2)" : "transparent",
-      }}
+      data-selected={selected}
+      className="bdrop-queue-row card-row"
+      style={{ ["--bdrop-i" as string]: index }}
     >
-      {selected && (
-        <span
-          aria-hidden
-          className="absolute inset-y-0 left-0 w-[2px]"
-          style={{ background: "var(--color-editorial-accent)" }}
-        />
-      )}
-      <div
-        className="mono shrink-0"
-        style={{
-          width: 36,
-          height: 48,
-          background: "var(--color-paper-2)",
-          border: "1px solid var(--color-rule)",
-          borderRadius: 2,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 9,
-          color: "var(--color-ink-3)",
-        }}
-      >
+      <span className="bdrop-format-tag" aria-hidden>
         {item.format}
-      </div>
-      <div className="min-w-0 grow">
+      </span>
+      <div className="min-w-0 flex-1">
         <div
-          className="mono truncate"
-          style={{ fontSize: 11, color: "var(--color-ink-3)" }}
-        >
-          {item.filename}
-        </div>
-        <div
-          className="truncate font-serif"
-          style={{
-            fontSize: 13.5,
-            fontWeight: 500,
-            marginTop: 2,
-            fontStyle: item.title ? "normal" : "italic",
-            color: item.title ? "var(--color-ink-1)" : "var(--color-ink-3)",
-          }}
+          className="bdrop-row-title"
+          data-missing={!item.title}
         >
           {item.title || "Could not detect metadata"}
         </div>
-        <div className="mt-1.5 flex items-center gap-2">
-          <span
-            aria-hidden
-            style={{
-              width: 6,
-              height: 6,
-              borderRadius: "50%",
-              background: STATUS_COLOR[item.state],
-            }}
-          />
-          <span className="t-micro" style={{ fontSize: 9.5 }}>
-            {item.state}
-          </span>
-          <span
-            className="mono"
-            style={{ fontSize: 10, color: "var(--color-ink-3)" }}
-          >
-            {formatBytes(item.fileSize)}
-          </span>
+        <div className="bdrop-row-meta">
+          <span className="bdrop-dot" data-state={item.state} />
+          <span>{STATE_LABEL[item.state]}</span>
+          <span className="bdrop-row-meta-divider" aria-hidden />
+          <span>{formatBytes(item.fileSize)}</span>
+          {item.author && (
+            <>
+              <span className="bdrop-row-meta-divider" aria-hidden />
+              <span className="truncate max-w-[120px]">{item.author}</span>
+            </>
+          )}
         </div>
+        {isProcessing && (
+          <div className="bdrop-row-progress" aria-hidden>
+            <span />
+          </div>
+        )}
       </div>
     </button>
   )
 }
 
-function CoverPanel({ item }: { item: BookDropItem }) {
-  const sharedBox: React.CSSProperties = {
-    width: 180,
-    height: 270,
-    borderRadius: 2,
-  }
-  if (item.hasCover) {
-    return (
-      <img
-        src={bookdropCoverUrl(item.id)}
-        alt=""
-        width={180}
-        height={270}
-        style={{
-          ...sharedBox,
-          objectFit: "cover",
-          boxShadow:
-            "inset 0 0 0 1px oklch(0 0 0 / 0.08), 2px 4px 14px oklch(0.2 0.02 60 / 0.16)",
-          background: "var(--color-paper-2)",
-        }}
-      />
-    )
-  }
+function DetailPane({
+  item,
+  libraries,
+  error,
+  busy,
+  onApprove,
+  onReject,
+  onOpenBook,
+}: {
+  item: BookDropItem
+  libraries: Array<Library>
+  error: ApiError | null
+  busy: boolean
+  onApprove: (libraryId?: string) => void
+  onReject: () => void
+  onOpenBook: (id: string) => void
+}) {
+  const eyebrow =
+    item.state === "imported"
+      ? "Imported"
+      : item.state === "rejected"
+        ? "Discarded"
+        : item.state === "failed"
+          ? "Needs attention"
+          : item.state === "ready"
+            ? "Review import"
+            : item.state === "processing"
+              ? "Extracting metadata"
+              : "Discovered"
+
   return (
-    <div
-      className="flex flex-col items-center justify-center"
-      style={{
-        ...sharedBox,
-        background:
-          "repeating-linear-gradient(135deg, var(--color-paper-3) 0 8px, var(--color-paper-2) 8px 16px)",
-        border: "1px solid var(--color-rule)",
-        textAlign: "center",
-        padding: 20,
-      }}
-    >
+    <div className="bdrop-detail-inner">
+      {error && (
+        <div
+          role="alert"
+          className="mb-6 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-[13px] text-(--color-accent-ink)"
+        >
+          {error.message}
+        </div>
+      )}
+
+      <div className="bdrop-detail-head">
+        <div className="min-w-0">
+          <p className="bdrop-eyebrow">{eyebrow}</p>
+          <h2 className="bdrop-title wrap-break-word">
+            {item.title || "Untitled file"}
+          </h2>
+        </div>
+        <span className="bdrop-state-ribbon">
+          <span className="bdrop-dot" data-state={item.state} />
+          {STATE_LABEL[item.state]}
+        </span>
+      </div>
+
+      <div className="bdrop-filepath" title={item.path}>
+        {item.path}
+      </div>
+
+      <div className="bdrop-content">
+        <CoverPanel item={item} />
+
+        <div className="min-w-0">
+          <dl className="bdrop-meta-grid">
+            <MetaCell label="Title" value={item.title} missing="Could not detect" />
+            <MetaCell label="Author" value={item.author} missing="Could not detect" />
+            <MetaCell label="Format" value={item.format} mono />
+            <MetaCell label="Size" value={formatBytes(item.fileSize)} mono />
+            <MetaCell label="Language" value={item.language} mono missing="—" />
+            <MetaCell label="State" value={STATE_LABEL[item.state]} mono />
+          </dl>
+
+          {item.description && (
+            <div className="bdrop-desc">
+              <p className="t-label mb-2">Description</p>
+              <p className="bdrop-desc-body">{item.description}</p>
+            </div>
+          )}
+
+          {item.state === "failed" && item.errorMsg && (
+            <div className="bdrop-error">
+              <strong className="not-italic font-medium">Processing error.</strong>{" "}
+              {item.errorMsg}
+            </div>
+          )}
+
+          <div className="bdrop-actions">
+            {item.state === "imported" && item.bookId ? (
+              <Button onClick={() => onOpenBook(item.bookId!)}>
+                <Icon name="book-open" size={13} /> Open imported book
+              </Button>
+            ) : item.state === "rejected" ? (
+              <p className="t-small italic text-(--color-ink-3)">
+                This item was discarded.
+              </p>
+            ) : (
+              <ApprovalBar
+                item={item}
+                libraries={libraries}
+                disabled={busy}
+                onApprove={onApprove}
+                onReject={onReject}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function EmptyDetail() {
+  return (
+    <div className="bdrop-empty">
+      <div className="bdrop-empty-art" aria-hidden>
+        <span className="bdrop-empty-art-sheet" />
+        <span className="bdrop-empty-art-sheet" />
+        <span className="bdrop-empty-art-sheet" />
+      </div>
+      <p className="t-label mb-3">Nothing to review</p>
       <p
-        className="font-serif italic"
-        style={{
-          fontSize: 14,
-          color: "var(--color-ink-2)",
-          lineHeight: 1.4,
-          textWrap: "balance",
-        }}
+        className="font-serif italic text-[15px] text-(--color-ink-2)"
+        style={{ maxWidth: 360, lineHeight: 1.55 }}
       >
-        no cover detected
+        Drop a file into the queue to start reviewing metadata before it joins
+        a library.
       </p>
+    </div>
+  )
+}
+
+function CoverPanel({ item }: { item: BookDropItem }) {
+  return (
+    <div className="bdrop-cover-frame">
+      {item.hasCover ? (
+        <img src={bookdropCoverUrl(item.id)} alt="" />
+      ) : (
+        <div className="bdrop-cover-blank">
+          <Icon
+            name="book"
+            size={28}
+            className="mb-2 text-(--color-ink-3)"
+          />
+          <span className="bdrop-cover-blank-label">no cover detected</span>
+        </div>
+      )}
     </div>
   )
 }
@@ -817,30 +670,34 @@ function ApprovalBar({
   const approvable = item.state === "ready" || item.state === "failed"
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <>
       {libraries.length > 0 && (
-        <Select
-          value={libraryId}
-          onValueChange={(v) => setLibraryId(v || undefined)}
-        >
-          <SelectTrigger size="sm" className="w-auto">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {libraries.map((lib) => (
-              <SelectItem key={lib.id} value={lib.id}>
-                {lib.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-2">
+          <span className="t-label">Add to</span>
+          <Select
+            value={libraryId}
+            onValueChange={(v) => setLibraryId(v || undefined)}
+          >
+            <SelectTrigger size="sm" className="w-auto min-w-[160px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {libraries.map((lib) => (
+                <SelectItem key={lib.id} value={lib.id}>
+                  {lib.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       )}
       <Button
         disabled={disabled || !approvable}
         onClick={() => onApprove(libraryId)}
       >
-        <Icon name="check" size={13} /> Approve &amp; add to library
+        <Icon name="check" size={13} /> Approve import
       </Button>
+      <span className="spacer" />
       <Button
         variant="ghost"
         disabled={disabled}
@@ -849,11 +706,11 @@ function ApprovalBar({
       >
         Discard file
       </Button>
-    </div>
+    </>
   )
 }
 
-function InfoField({
+function MetaCell({
   label,
   value,
   missing,
@@ -867,18 +724,11 @@ function InfoField({
   const v = (value ?? "").trim()
   const isMissing = v === ""
   return (
-    <div className="min-w-0">
-      <dt className="t-label mb-1.5">{label}</dt>
+    <div className="bdrop-meta-cell">
+      <dt className="bdrop-meta-label">{label}</dt>
       <dd
-        className={
-          (mono ? "mono " : "font-serif ") + "block min-w-0 wrap-break-word"
-        }
-        style={{
-          fontSize: mono ? 13 : 14.5,
-          fontWeight: mono ? 400 : 500,
-          color: isMissing ? "var(--color-ink-3)" : "var(--color-ink-1)",
-          fontStyle: isMissing ? "italic" : "normal",
-        }}
+        className={"bdrop-meta-value" + (mono ? " mono" : "")}
+        data-missing={isMissing}
       >
         {isMissing ? (missing ?? "—") : v}
       </dd>

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { cn } from "@/lib/utils"
 
 import { AvatarFallback, Avatar as ShadcnAvatar } from "@/components/ui/avatar"
 import {
@@ -14,19 +15,9 @@ import { Switch } from "@/components/ui/switch"
 // (global) pages. Extracted so the two routes can import them without
 // duplicating 100 lines each.
 
-export function Card({ children }: { children: ReactNode }) {
+export function Card({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div
-      style={{
-        padding: 16,
-        border: "1px solid var(--color-rule-soft)",
-        background: "var(--color-paper-0)",
-        marginBottom: 0,
-        display: "flex",
-        flexDirection: "column",
-        gap: 14,
-      }}
-    >
+    <div className={cn("flex flex-col gap-3.5 p-4 mb-4 bg-card border border-border rounded-lg shadow-sm", className)}>
       {children}
     </div>
   )
@@ -40,7 +31,7 @@ export function Field({
   children: ReactNode
 }) {
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+    <label className="flex flex-col gap-1.5">
       <span className="t-label">{label}</span>
       {children}
     </label>
@@ -90,20 +81,11 @@ export function Toggle({
   onChange: (v: boolean) => void
 }) {
   return (
-    <label
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 12,
-        padding: "8px 0",
-        borderTop: "1px dashed var(--color-rule-soft)",
-        cursor: "pointer",
-      }}
-    >
+    <label className="flex items-center gap-3 py-2 cursor-pointer border-t border-dashed border-border first:border-0">
       <Switch checked={checked} onCheckedChange={onChange} />
       <div className="grow">
-        <div style={{ fontSize: 13.5 }}>{label}</div>
-        {hint && <div className="t-item-sub">{hint}</div>}
+        <div className="text-[13.5px] font-medium leading-none mb-1">{label}</div>
+        {hint && <div className="text-sm text-muted-foreground">{hint}</div>}
       </div>
     </label>
   )
@@ -111,27 +93,9 @@ export function Toggle({
 
 export function DefRow({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        gap: 12,
-        padding: "6px 0",
-        alignItems: "baseline",
-      }}
-    >
-      <div className="t-label" style={{ width: 160, flexShrink: 0 }}>
-        {label}
-      </div>
-      <div
-        style={{
-          fontSize: 13.5,
-          flex: 1,
-          minWidth: 0,
-          wordBreak: "break-word",
-        }}
-      >
-        {value}
-      </div>
+    <div className="flex gap-3 py-1.5 items-baseline">
+      <div className="t-label w-40 shrink-0">{label}</div>
+      <div className="text-[13.5px] flex-1 min-w-0 break-words">{value}</div>
     </div>
   )
 }
@@ -166,10 +130,8 @@ export function Avatar({
 export function AdminGate({ label }: { label: string }) {
   return (
     <>
-      <h2 className="t-h2" style={{ marginBottom: 24 }}>
-        {label}
-      </h2>
-      <div className="t-small" style={{ fontStyle: "italic" }}>
+      <h2 className="t-h2 mb-6">{label}</h2>
+      <div className="t-small italic text-muted-foreground">
         {label} are admin-only.
       </div>
     </>
@@ -198,16 +160,8 @@ export function SettingsShell<TKey extends string>({
   children: ReactNode
 }) {
   return (
-    <div
-      style={{
-        padding: "28px 32px",
-        display: "grid",
-        gridTemplateColumns: "220px 1fr",
-        gap: 40,
-        maxWidth: 960,
-      }}
-    >
-      <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+    <div className="p-4 md:p-8 grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6 md:gap-10 max-w-[960px] mx-auto w-full">
+      <nav className="flex md:flex-col gap-1 overflow-x-auto pb-2 md:pb-0 scrollbar-hide -mx-4 px-4 md:mx-0 md:px-0 border-b md:border-b-0 border-border">
         {sections.map((s) => {
           const selected = s.key === active
           const gated = s.adminOnly && !isAdmin
@@ -217,37 +171,23 @@ export function SettingsShell<TKey extends string>({
               type="button"
               onClick={() => onSelect(s.key)}
               disabled={gated}
-              style={{
-                padding: "8px 12px",
-                textAlign: "left",
-                background: selected ? "var(--color-paper-3)" : "transparent",
-                border: "none",
-                cursor: gated ? "default" : "pointer",
-                fontFamily: "var(--font-serif)",
-                fontSize: 13.5,
-                borderLeft: selected
-                  ? "2px solid var(--color-accent)"
-                  : "2px solid transparent",
-                color: gated
-                  ? "var(--color-ink-4)"
-                  : selected
-                    ? "var(--color-ink-1)"
-                    : "var(--color-ink-2)",
-                opacity: gated ? 0.6 : 1,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-              }}
+              className={cn(
+                "flex items-center gap-2 px-3 py-2 text-left whitespace-nowrap transition-colors rounded-md md:rounded-none md:border-l-2 font-serif text-[13.5px]",
+                selected
+                  ? "bg-muted md:bg-transparent md:border-primary text-foreground"
+                  : "border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                gated && "opacity-50 cursor-not-allowed"
+              )}
               title={gated ? "Admin-only" : undefined}
             >
-              <span style={{ flex: 1 }}>{s.label}</span>
+              <span className="flex-1">{s.label}</span>
               {s.badge}
             </button>
           )
         })}
       </nav>
 
-      <div style={{ maxWidth: 640 }}>{children}</div>
+      <div className="max-w-[640px] w-full">{children}</div>
     </div>
   )
 }
