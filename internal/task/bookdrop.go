@@ -88,17 +88,9 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 	}
 	_ = format
 
-	meta, err := proc.Extract(ctx, item.Path)
-	if err != nil {
-		slog.Warn("bookdrop extract failed", "item_id", itemID, "path", item.Path, "err", err)
-		_ = deps.Svc.Fail(ctx, itemID, err)
-		return nil
-	}
-
-	// Resolve the storage for sidecar reads. Bookdrop ingest doesn't know the
-	// library_id at this point, so we always use the default backend (empty
-	// backend_id). Sidecars for libraries on non-default backends are not
-	// discovered here — Plan F2 addresses this when bookdrop carries library_id.
+	// Resolve the default storage backend for Source-based extraction and
+	// sidecar reads. Bookdrop ingest doesn't know the library_id at this
+	// point, so we always use the default backend (empty backend_id).
 	var store storage.Storage
 	if deps.Resolver != nil {
 		if resolved, resolveErr := deps.Resolver.Resolve(""); resolveErr == nil {
@@ -110,10 +102,34 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 		store = deps.Storage
 	}
 
+	// Open the staged file via the resolved storage backend.
+	var meta fileproc.Metadata
 	if store != nil {
-		// Convert the absolute path into a storage key (Plan A LocalFS is
-		// rooted at "/" so we strip the leading slash). Then take the
-		// directory portion as the lookup prefix.
+		key := strings.TrimPrefix(item.Path, "/")
+		src, openErr := store.Open(ctx, key)
+		if openErr != nil {
+			slog.Warn("bookdrop: open source", "path", item.Path, "err", openErr)
+			_ = deps.Svc.Fail(ctx, itemID, openErr)
+			return nil
+		}
+		defer func() { _ = src.Close() }()
+		meta, err = proc.Extract(ctx, src)
+	} else {
+		_ = deps.Svc.Fail(ctx, itemID, errors.New("no storage backend available"))
+		return nil
+	}
+	if err != nil {
+		slog.Warn("bookdrop extract failed", "item_id", itemID, "path", item.Path, "err", err)
+		_ = deps.Svc.Fail(ctx, itemID, err)
+		return nil
+	}
+
+	// Read the sidecar from the same backend (store is non-nil here;
+	// we returned early above if it was nil).
+	// Convert the absolute path into a storage key (Plan A LocalFS is
+	// rooted at "/" so we strip the leading slash). Then take the
+	// directory portion as the lookup prefix.
+	{
 		key := strings.TrimPrefix(item.Path, "/")
 		prefix := path.Dir(key)
 		if sc, scErr := sidecar.Read(ctx, store, prefix); scErr == nil && !sc.IsZero() {

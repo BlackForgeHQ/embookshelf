@@ -4,13 +4,12 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/dhowden/tag"
+
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // AudioProcessor handles single-file audiobooks: MP3 (ID3v2-tagged) and
@@ -24,22 +23,27 @@ import (
 // reader UI just shows "—" instead.
 type AudioProcessor struct{}
 
-func (AudioProcessor) Extract(ctx context.Context, filePath string) (Metadata, error) {
+func (AudioProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, error) {
 	_ = ctx
 
-	f, err := os.Open(filePath)
-	if err != nil {
-		return Metadata{}, fmt.Errorf("open audio: %w", err)
-	}
-	defer func() { _ = f.Close() }()
+	// Wrap the Source as an io.ReadSeeker via SectionReader so tag.ReadFrom
+	// and the duration parsers can seek without consuming the full object.
+	f := io.NewSectionReader(src, 0, src.Size())
 
-	m := Metadata{Format: audioFormatTag(filePath)}
+	m := Metadata{Format: "MP3"} // default; overridden below if we know the format
 
 	// Tags + cover are best-effort. ReadFrom seeks the file; on bare MP3
 	// streams without an ID3v2 tag it can return an error — fall through
 	// without erroring out.
 	if t, err := tag.ReadFrom(f); err == nil {
 		applyAudioTags(&m, t)
+		// Refine the format from the parsed tag type when available.
+		switch t.FileType() {
+		case tag.MP3:
+			m.Format = "MP3"
+		case tag.M4A, tag.M4B, tag.M4P:
+			m.Format = "M4B"
+		}
 	}
 
 	// Duration: re-seek the file because tag.ReadFrom moved the cursor.
@@ -56,27 +60,11 @@ func (AudioProcessor) Extract(ctx context.Context, filePath string) (Metadata, e
 		}
 	}
 
-	// Title fallback: if we still have nothing, derive from filename
-	// (minus extension) so the bookdrop UI shows something humane.
-	if strings.TrimSpace(m.Title) == "" {
-		base := filepath.Base(filePath)
-		m.Title = strings.TrimSuffix(base, filepath.Ext(base))
-	}
+	// Title fallback: without a filename we leave Title empty rather than
+	// deriving something meaningless. Callers can supply a filename-derived
+	// title via the sidecar layer.
 
 	return m, nil
-}
-
-// audioFormatTag normalizes the file extension to one of the canonical
-// format tags the rest of the system uses. M4A rides under MP3 today
-// (the bookshelf grouping treats them as one row in filter chips).
-func audioFormatTag(p string) string {
-	switch strings.ToLower(filepath.Ext(p)) {
-	case ".mp3":
-		return "MP3"
-	case ".m4a", ".m4b":
-		return "M4B"
-	}
-	return "MP3"
 }
 
 func applyAudioTags(m *Metadata, t tag.Metadata) {

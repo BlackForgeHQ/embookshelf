@@ -225,6 +225,37 @@ func (fs *LocalFS) Delete(ctx context.Context, key string, opts ...storage.Delet
 	return nil
 }
 
+// localSource wraps *os.File with Size() so it satisfies storage.Source.
+// *os.File already provides ReadAt + Close.
+type localSource struct {
+	*os.File
+	size int64
+}
+
+func (s *localSource) Size() int64 { return s.size }
+
+// Open returns a random-access view of the object at key. Returns
+// ErrNotFound when missing. Callers must Close the returned Source.
+func (fs *LocalFS) Open(ctx context.Context, key string) (storage.Source, error) {
+	abs, err := fs.resolve(key)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, errors.Join(storage.ErrNotFound, err)
+		}
+		return nil, err
+	}
+	st, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return &localSource{File: f, size: st.Size()}, nil
+}
+
 func (fs *LocalFS) Copy(ctx context.Context, srcKey, dstKey string) (storage.CopyResult, error) {
 	srcAbs, err := fs.resolve(srcKey)
 	if err != nil {

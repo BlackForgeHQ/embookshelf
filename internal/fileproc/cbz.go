@@ -9,6 +9,8 @@ import (
 	"path"
 	"sort"
 	"strings"
+
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // CBZProcessor extracts metadata and cover image from a CBZ comic archive.
@@ -37,16 +39,17 @@ type comicInfoXML struct {
 	PageCount   string   `xml:"PageCount"`
 }
 
-func (CBZProcessor) Extract(ctx context.Context, filePath string) (Metadata, error) {
+func (CBZProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, error) {
 	_ = ctx
 
-	zr, err := zip.OpenReader(filePath)
+	zr, err := zip.NewReader(src, src.Size())
 	if err != nil {
 		return Metadata{}, fmt.Errorf("open cbz: %w", err)
 	}
-	defer func() { _ = zr.Close() }()
+	// zr is *zip.Reader (not *zip.ReadCloser); no Close needed.
+	// The caller is responsible for closing the Source.
 
-	pages := comicPages(&zr.Reader)
+	pages := comicPages(zr)
 	if len(pages) == 0 {
 		return Metadata{}, fmt.Errorf("cbz contains no images")
 	}
@@ -60,7 +63,7 @@ func (CBZProcessor) Extract(ctx context.Context, filePath string) (Metadata, err
 		if base != "comicinfo.xml" {
 			continue
 		}
-		if b, err := readZipFile(&zr.Reader, f.Name); err == nil {
+		if b, err := readZipFile(zr, f.Name); err == nil {
 			var info comicInfoXML
 			if xml.Unmarshal(b, &info) == nil {
 				applyComicInfo(&m, info)
@@ -71,11 +74,11 @@ func (CBZProcessor) Extract(ctx context.Context, filePath string) (Metadata, err
 
 	// Cover: prefer a top-level `cover.*` if present, otherwise first
 	// page after natural sort.
-	coverName := preferredCoverName(&zr.Reader)
+	coverName := preferredCoverName(zr)
 	if coverName == "" {
 		coverName = pages[0]
 	}
-	if b, err := readZipFile(&zr.Reader, coverName); err == nil {
+	if b, err := readZipFile(zr, coverName); err == nil {
 		m.HasCover = true
 		m.CoverBytes = b
 		m.CoverMime = mimeFromExt(path.Ext(coverName))

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // Metadata is the result of a successful extraction. Fields that the
@@ -40,7 +42,7 @@ type Metadata struct {
 
 // Processor is the strategy interface implemented per file format.
 type Processor interface {
-	Extract(ctx context.Context, path string) (Metadata, error)
+	Extract(ctx context.Context, src storage.Source) (Metadata, error)
 }
 
 // ErrUnsupportedFormat is returned by Dispatch when the extension is unknown.

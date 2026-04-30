@@ -266,3 +266,34 @@ func TestDelete_WithVersionIDReturnsErrUnsupported(t *testing.T) {
 		t.Fatalf("got %v, want ErrUnsupportedOption", err)
 	}
 }
+
+func TestOpen_RandomAccess(t *testing.T) {
+	root := t.TempDir()
+	fs, _ := New(root)
+	ctx := context.Background()
+	_, _ = fs.Put(ctx, "f", strings.NewReader("0123456789"))
+	src, err := fs.Open(ctx, "f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = src.Close() }()
+	if src.Size() != 10 {
+		t.Errorf("Size=%d, want 10", src.Size())
+	}
+	buf := make([]byte, 4)
+	n, err := src.ReadAt(buf, 3)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 4 || string(buf) != "3456" {
+		t.Errorf("got %q, want %q", buf[:n], "3456")
+	}
+}
+
+func TestOpen_MissingReturnsErrNotFound(t *testing.T) {
+	fs, _ := New(t.TempDir())
+	_, err := fs.Open(context.Background(), "nope")
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("got %v, want ErrNotFound", err)
+	}
+}

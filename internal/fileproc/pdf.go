@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io"
 	"regexp"
 	"strings"
+
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // PDFProcessor extracts minimal metadata from a PDF — title and author when
@@ -26,14 +27,12 @@ type PDFProcessor struct{}
 // For those, we fall back to the filename.
 var pdfInfoFieldRe = regexp.MustCompile(`/([A-Za-z][A-Za-z0-9]*)\s*\(((?:\\.|[^)])*)\)`)
 
-func (PDFProcessor) Extract(ctx context.Context, filePath string) (Metadata, error) {
+func (PDFProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, error) {
 	_ = ctx
 
-	f, err := os.Open(filePath)
-	if err != nil {
-		return Metadata{}, fmt.Errorf("open pdf: %w", err)
-	}
-	defer func() { _ = f.Close() }()
+	// Wrap the Source as an io.ReadSeeker via SectionReader so we can
+	// use Read and Seek without consuming the full object.
+	f := io.NewSectionReader(src, 0, src.Size())
 
 	// Sniff the magic so a non-PDF file with a .pdf extension surfaces as
 	// a processor error instead of silently producing empty metadata.
@@ -45,10 +44,7 @@ func (PDFProcessor) Extract(ctx context.Context, filePath string) (Metadata, err
 	// The Info dict typically lives either near the top (linearized PDFs)
 	// or in the trailer at the end. Sample both windows so small fixtures
 	// and most real-world files land in one of them.
-	st, err := f.Stat()
-	if err != nil {
-		return Metadata{}, err
-	}
+	size := src.Size()
 	const window = 1 << 20 // 1 MB
 	if _, err := f.Seek(0, 0); err != nil {
 		return Metadata{}, err
@@ -58,9 +54,9 @@ func (PDFProcessor) Extract(ctx context.Context, filePath string) (Metadata, err
 	head = head[:hn]
 
 	var tail []byte
-	if st.Size() > int64(hn) {
+	if size > int64(hn) {
 		const tailSize = 8 << 10 // 8 KB
-		pos := st.Size() - tailSize
+		pos := size - tailSize
 		if pos < int64(hn) {
 			pos = int64(hn)
 		}
@@ -79,10 +75,7 @@ func (PDFProcessor) Extract(ctx context.Context, filePath string) (Metadata, err
 	if subject := pdfInfoField(scan, "Subject"); subject != "" {
 		m.Description = subject
 	}
-	if m.Title == "" {
-		base := filepath.Base(filePath)
-		m.Title = strings.TrimSuffix(base, filepath.Ext(base))
-	}
+	// No filename fallback — callers supply a Source, not a path.
 	return m, nil
 }
 

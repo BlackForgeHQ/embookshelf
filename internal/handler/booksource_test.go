@@ -45,6 +45,9 @@ func (s *stubPresigner) Delete(_ context.Context, _ string, _ ...storage.DeleteO
 func (s *stubPresigner) Copy(_ context.Context, _, _ string) (storage.CopyResult, error) {
 	return storage.CopyResult{}, nil
 }
+func (s *stubPresigner) Open(_ context.Context, _ string) (storage.Source, error) {
+	return nil, storage.ErrNotFound
+}
 
 // stubResolver returns the same backend for any backend id.
 type stubResolver struct{ backend storage.Storage }
