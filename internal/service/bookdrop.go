@@ -163,6 +163,13 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 		libraryID = libs[0].ID
 	}
 
+	// Look up the library once — needed by both the upload path
+	// (s3-backed libraries) and the placement path (local-backed).
+	lib, libErr := s.libs.GetByID(ctx, libraryID)
+	if libErr != nil {
+		return model.Book{}, fmt.Errorf("approve: library lookup: %w", libErr)
+	}
+
 	book := model.Book{
 		LibraryID:   libraryID,
 		Title:       fallback(item.Title, "Untitled"),
@@ -174,13 +181,47 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 		CoverMime:   item.CoverMime,
 	}
 
-	// File-naming pattern (spec/file-naming-patterns.spec.md §5.1). When
-	// the target library has a pattern and at least one registered path,
-	// resolve the template and physically move the file out of bookdrop
-	// into the library root. Failures are logged but don't abort import —
-	// the book still gets created pointing at the original bookdrop path.
-	if newPath, ok := s.applyNamingPattern(ctx, libraryID, item); ok {
-		book.Path = newPath
+	// fileLocation is what we record on the files row. Set in both the
+	// s3-upload and local-placement branches below; left empty when
+	// neither path produces a usable destination (we still create the
+	// book, just without a files row to track its bytes).
+	var fileLocation string
+	// fileSize is filled from the source bytes for the files row's
+	// initial size column. After upload (s3) or move (local) the source
+	// stat is the authoritative one; we capture it before the bytes
+	// move out of reach.
+	var fileSize int64
+	var fileMtime time.Time
+	if st, statErr := os.Stat(item.Path); statErr == nil {
+		fileSize = st.Size()
+		fileMtime = st.ModTime()
+	} else {
+		fileMtime = time.Now()
+	}
+
+	if lib.BackendID != nil && s.resolver != nil {
+		// S3 (or any non-local) library: stream-upload the bookdrop's
+		// bytes into the backend at the pattern-resolved key, then
+		// drop the local file. book.Path becomes the library-relative
+		// key — handlers go through BookSource (Plan G) which resolves
+		// the right backend, so this works for serve/presign.
+		store, rerr := s.resolver.Resolve(*lib.BackendID)
+		if rerr != nil {
+			return model.Book{}, fmt.Errorf("approve: resolve backend: %w", rerr)
+		}
+		key, uerr := s.uploadToBackend(ctx, store, lib, item)
+		if uerr != nil {
+			return model.Book{}, fmt.Errorf("approve: upload: %w", uerr)
+		}
+		book.Path = key
+		fileLocation = key
+	} else {
+		// Local-backed library: existing pattern + filesystem move.
+		// Failures keep the original path; book still gets created.
+		if newPath, ok := s.applyNamingPattern(ctx, libraryID, item); ok {
+			book.Path = newPath
+		}
+		fileLocation = relativizeBookLocation(ctx, s.libs, libraryID, book.Path)
 	}
 
 	created, err := s.libs.Create(ctx, book)
@@ -191,22 +232,13 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 	// Persist the storage_v2 files row alongside the book. content_hash
 	// was computed at ingest (Task 9); fall back to nil if it's missing,
 	// the boot worker will fill it on next start.
-	if s.files != nil {
-		location := relativizeBookLocation(ctx, s.libs, libraryID, book.Path)
-		size := int64(0)
-		var mtime time.Time
-		if st, statErr := os.Stat(book.Path); statErr == nil {
-			size = st.Size()
-			mtime = st.ModTime()
-		} else {
-			mtime = time.Now()
-		}
+	if s.files != nil && fileLocation != "" {
 		f := model.File{
 			LibraryID:   libraryID,
 			BookID:      created.ID,
-			Location:    location,
-			Size:        size,
-			Mtime:       mtime,
+			Location:    fileLocation,
+			Size:        fileSize,
+			Mtime:       fileMtime,
 			ContentHash: item.ContentHash,
 			Format:      created.Format,
 			LastScanned: time.Now(),
@@ -341,6 +373,45 @@ func (s *BookDropService) ClearProcessed(ctx context.Context) (int, error) {
 	return len(ids), nil
 }
 
+// resolveDestKey computes the library-relative destination key for an
+// approved bookdrop item using the library's FileNamingPattern (or the
+// instance default, or the original filename as a final fallback).
+// The returned key uses forward slashes — suitable as both an OS path
+// fragment (for local libraries) and an S3 key (for s3 libraries).
+//
+// Returns the empty string when no pattern matches and no fallback
+// produces a usable key, in which case the caller should keep the
+// item's original path.
+func (s *BookDropService) resolveDestKey(ctx context.Context, lib model.Library, item model.BookDropItem) string {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(item.Path)), ".")
+	in := pattern.Input{
+		Title:           item.Title,
+		Authors:         splitAuthors(item.Author),
+		Language:        item.Language,
+		Extension:       ext,
+		CurrentFilename: filepath.Base(item.Path),
+	}
+	tmpl := ""
+	if lib.FileNamingPattern != nil {
+		tmpl = strings.TrimSpace(*lib.FileNamingPattern)
+	}
+	if tmpl == "" && s.settings != nil {
+		if def, err := s.settings.GetDefaultNamingPattern(ctx); err != nil {
+			slog.Warn("bookdrop: read default naming pattern", "err", err)
+		} else {
+			tmpl = strings.TrimSpace(def)
+		}
+	}
+	var resolved string
+	if tmpl != "" {
+		resolved = pattern.Resolve(tmpl, in)
+	}
+	if resolved == "" {
+		resolved = in.CurrentFilename
+	}
+	return resolved
+}
+
 // applyNamingPattern places an approved bookdrop file under its
 // target library's path. The library's FileNamingPattern (when set)
 // decides the sub-path and filename; otherwise the original filename
@@ -351,6 +422,8 @@ func (s *BookDropService) ClearProcessed(ctx context.Context) (int, error) {
 // The move uses os.Rename where possible and falls back to copy+remove
 // when source/destination straddle different filesystems (EXDEV).
 // Destination collisions are resolved by appending " (2)", " (3)", etc.
+//
+// Local-libraries only — s3-backed libraries upload via uploadToBackend.
 func (s *BookDropService) applyNamingPattern(
 	ctx context.Context,
 	libraryID string,
@@ -367,37 +440,9 @@ func (s *BookDropService) applyNamingPattern(
 		return "", false
 	}
 
-	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(item.Path)), ".")
-	in := pattern.Input{
-		Title:           item.Title,
-		Authors:         splitAuthors(item.Author),
-		Language:        item.Language,
-		Extension:       ext,
-		CurrentFilename: filepath.Base(item.Path),
-	}
-	// Pattern precedence: library override → instance default → no pattern.
-	// Settings lookup is best-effort; a failure keeps the original filename
-	// rather than wedging an approval on a transient DB blip.
-	tmpl := ""
-	if lib.FileNamingPattern != nil {
-		tmpl = strings.TrimSpace(*lib.FileNamingPattern)
-	}
-	if tmpl == "" && s.settings != nil {
-		if def, err := s.settings.GetDefaultNamingPattern(ctx); err != nil {
-			slog.Warn("bookdrop: read default naming pattern", "err", err)
-		} else {
-			tmpl = strings.TrimSpace(def)
-		}
-	}
-	var resolved string
-	if tmpl != "" {
-		resolved = pattern.Resolve(tmpl, in)
-	}
-	// Fallback to the original filename when no pattern is set or the
-	// resolver returned empty — books still land under the library
-	// root, just without a rename.
+	resolved := s.resolveDestKey(ctx, lib, item)
 	if resolved == "" {
-		resolved = in.CurrentFilename
+		return "", false
 	}
 
 	// Forward-slash-only resolver output → OS-native path separator.
@@ -412,6 +457,69 @@ func (s *BookDropService) applyNamingPattern(
 		return "", false
 	}
 	return dest, true
+}
+
+// uploadToBackend streams the bookdrop file's bytes into the library's
+// backend at the resolved key, then removes the local bookdrop file.
+// Returns the key the file was stored at (the location to record on
+// the files row).
+//
+// Used by Approve when the target library is backed by an s3 (or any
+// non-local) backend. Local libraries continue to go through
+// applyNamingPattern's filesystem move.
+func (s *BookDropService) uploadToBackend(
+	ctx context.Context,
+	store storage.Storage,
+	lib model.Library,
+	item model.BookDropItem,
+) (string, error) {
+	key := s.resolveDestKey(ctx, lib, item)
+	if key == "" {
+		return "", fmt.Errorf("could not resolve destination key for bookdrop %s", item.ID)
+	}
+	src, err := os.Open(item.Path)
+	if err != nil {
+		return "", fmt.Errorf("open bookdrop file: %w", err)
+	}
+	defer func() { _ = src.Close() }()
+
+	mime := storageMIMEForFormat(item.Format)
+	opts := []storage.PutOption{}
+	if mime != "" {
+		opts = append(opts, storage.WithContentType(mime))
+	}
+	if _, err := store.Put(ctx, key, src, opts...); err != nil {
+		return "", fmt.Errorf("upload to backend: %w", err)
+	}
+
+	// Remove the local bookdrop file — the bytes now live in the
+	// backend. Failure is logged but non-fatal: the watcher will
+	// re-discover it next tick (and bookdrop_items.path is already
+	// marked imported so the row won't reappear).
+	if err := os.Remove(item.Path); err != nil {
+		slog.Warn("approve s3: remove local bookdrop file",
+			"path", item.Path, "err", err)
+	}
+	return key, nil
+}
+
+// storageMIMEForFormat mirrors the response Content-Type the file
+// handler emits for downloads. Used as the S3 ContentType on Put so
+// presigned URLs serve with the correct content-type header.
+func storageMIMEForFormat(format string) string {
+	switch format {
+	case "EPUB":
+		return "application/epub+zip"
+	case "PDF":
+		return "application/pdf"
+	case "CBZ":
+		return "application/vnd.comicbook+zip"
+	case "MP3":
+		return "audio/mpeg"
+	case "M4B":
+		return "audio/mp4"
+	}
+	return ""
 }
 
 // splitAuthors turns the bookdrop's single author string into a slice the
