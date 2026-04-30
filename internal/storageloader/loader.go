@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/model"
@@ -80,6 +81,18 @@ func buildBackend(ctx context.Context, row model.StorageBackend) (storage.Storag
 		root, ok := row.Config["root"].(string)
 		if !ok || root == "" {
 			return nil, fmt.Errorf("missing or invalid config.root")
+		}
+		// Pre-storage_v2 libraries could be configured with relative
+		// paths (e.g. "./data/main"). The Plan-B backfill copies that
+		// value verbatim into storage_backends.config.root, but
+		// local.New requires absolute paths. Resolve here against the
+		// process cwd so an upgrade doesn't refuse to boot.
+		if !filepath.IsAbs(root) {
+			abs, err := filepath.Abs(root)
+			if err != nil {
+				return nil, fmt.Errorf("resolve root %q: %w", root, err)
+			}
+			root = abs
 		}
 		ls, err := local.New(root)
 		if err != nil {

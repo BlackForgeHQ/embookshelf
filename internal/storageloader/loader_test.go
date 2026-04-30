@@ -109,3 +109,27 @@ func TestLoadStorageBackends_SQLiteWithS3Errors(t *testing.T) {
 	}
 	t.Logf("got expected error (SQLite+S3 rejected): %v", err)
 }
+
+// TestLoadStorageBackends_RelativeLocalRoot verifies that a local backend
+// stored with a relative root (a pre-storage_v2 library config copied
+// verbatim by the Plan-B backfill) resolves to absolute via filepath.Abs
+// rather than failing the local.New "must be absolute" check. Regression
+// guard for the boot-time error reported by users upgrading from older
+// installs whose libraries.path was "./data/main" or similar.
+func TestLoadStorageBackends_RelativeLocalRoot(t *testing.T) {
+	t.Setenv("REPOTEST_DIALECT", "sqlite")
+	d := repotest.New(t)
+	backendRepo := repo.NewStorageBackendRepo(d)
+
+	if _, err := backendRepo.Create(context.Background(), "local", map[string]any{"root": "./data/main"}); err != nil {
+		t.Fatalf("create backend row with relative root: %v", err)
+	}
+
+	resolver, err := storageloader.LoadStorageBackends(context.Background(), backendRepo, config.DialectSQLite)
+	if err != nil {
+		t.Fatalf("LoadStorageBackends: %v", err)
+	}
+	if resolver == nil {
+		t.Fatal("expected non-nil resolver")
+	}
+}
