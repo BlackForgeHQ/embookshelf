@@ -10,7 +10,6 @@ export type SettingsLibrary = Library & {
   lastScannedAt: string | null
   fileCount: number
   discoveredCount: number
-  fileNamingPattern: string | null
 }
 
 export async function fetchSettingsLibraries(): Promise<
@@ -79,80 +78,6 @@ export async function rescanLibrary(id: string): Promise<void> {
     method: "POST",
   })
 }
-
-// updateLibraryNamingPattern stores or clears the per-library file naming
-// pattern. Pass null to clear (library falls back to "keep original
-// filename" on bookdrop approval).
-export async function updateLibraryNamingPattern(
-  id: string,
-  pattern: string | null
-): Promise<SettingsLibrary> {
-  const { library } = await api<{ library: SettingsLibrary }>(
-    `/api/v1/settings/libraries/${id}/file-naming-pattern`,
-    {
-      method: "PATCH",
-      body: JSON.stringify({ fileNamingPattern: pattern }),
-    }
-  )
-  return library
-}
-
-export type PreviewPatternSample = {
-  title?: string
-  subtitle?: string
-  authors?: Array<string>
-  year?: number
-  series?: string
-  seriesIndex?: number
-  language?: string
-  publisher?: string
-  isbn?: string
-  currentFilename?: string
-  extension?: string
-}
-
-export async function previewNamingPattern(
-  pattern: string,
-  sample?: PreviewPatternSample
-): Promise<string> {
-  const { resolved } = await api<{ resolved: string }>(
-    "/api/v1/settings/libraries/pattern/preview",
-    {
-      method: "POST",
-      body: JSON.stringify({ pattern, sample }),
-    }
-  )
-  return resolved
-}
-
-// fetchDefaultNamingPattern returns the instance-wide default pattern
-// used as a fallback when a library does not set its own. Empty string
-// means "keep the original filename on approval".
-export async function fetchDefaultNamingPattern(): Promise<string> {
-  const { pattern } = await api<{ pattern: string }>(
-    "/api/v1/settings/libraries/pattern/default"
-  )
-  return pattern
-}
-
-export async function updateDefaultNamingPattern(
-  pattern: string
-): Promise<string> {
-  const { pattern: saved } = await api<{ pattern: string }>(
-    "/api/v1/settings/libraries/pattern/default",
-    {
-      method: "PUT",
-      body: JSON.stringify({ pattern }),
-    }
-  )
-  return saved
-}
-
-export const defaultNamingPatternQueryKey = [
-  "settings",
-  "libraries",
-  "default-pattern",
-] as const
 
 export const settingsLibrariesQueryKey = ["settings", "libraries"] as const
 

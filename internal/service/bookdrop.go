@@ -16,7 +16,6 @@ import (
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/pattern"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/sse"
 	"github.com/blackforge/embookshelf/internal/storage"
@@ -27,11 +26,10 @@ import (
 // processor results). All state transitions go through here so SSE events,
 // cover-file side effects, and the state machine stay in one place.
 type BookDropService struct {
-	bdrop    *repo.BookDropRepo
-	libs     *repo.LibraryRepo
-	settings *repo.AppSettingsRepo
-	covers   *coverstore.Store
-	hub      *sse.Hub
+	bdrop  *repo.BookDropRepo
+	libs   *repo.LibraryRepo
+	covers *coverstore.Store
+	hub    *sse.Hub
 	// files is the storage_v2 file repo. When non-nil, Approve writes a
 	// files row alongside the new book. nil disables the write so callers
 	// (e.g. tests) that don't need the row don't have to supply a repo.
@@ -44,18 +42,17 @@ type BookDropService struct {
 func NewBookDropService(
 	bdrop *repo.BookDropRepo,
 	libs *repo.LibraryRepo,
-	settings *repo.AppSettingsRepo,
+	_ *repo.AppSettingsRepo, // retained for signature compatibility; unused after naming-pattern removal
 	covers *coverstore.Store,
 	hub *sse.Hub,
 	files *repo.FileRepo,
 ) *BookDropService {
 	return &BookDropService{
-		bdrop:    bdrop,
-		libs:     libs,
-		settings: settings,
-		covers:   covers,
-		hub:      hub,
-		files:    files,
+		bdrop:  bdrop,
+		libs:   libs,
+		covers: covers,
+		hub:    hub,
+		files:  files,
 	}
 }
 
@@ -216,9 +213,9 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 		book.Path = key
 		fileLocation = key
 	} else {
-		// Local-backed library: existing pattern + filesystem move.
-		// Failures keep the original path; book still gets created.
-		if newPath, ok := s.applyNamingPattern(ctx, libraryID, item); ok {
+		// Local-backed library: move file to library root using original
+		// filename. Failures keep the original path; book still gets created.
+		if newPath, ok := s.placeLocal(ctx, libraryID, item); ok {
 			book.Path = newPath
 		}
 		fileLocation = relativizeBookLocation(ctx, s.libs, libraryID, book.Path)
@@ -373,58 +370,18 @@ func (s *BookDropService) ClearProcessed(ctx context.Context) (int, error) {
 	return len(ids), nil
 }
 
-// resolveDestKey computes the library-relative destination key for an
-// approved bookdrop item using the library's FileNamingPattern (or the
-// instance default, or the original filename as a final fallback).
-// The returned key uses forward slashes — suitable as both an OS path
-// fragment (for local libraries) and an S3 key (for s3 libraries).
-//
-// Returns the empty string when no pattern matches and no fallback
-// produces a usable key, in which case the caller should keep the
-// item's original path.
-func (s *BookDropService) resolveDestKey(ctx context.Context, lib model.Library, item model.BookDropItem) string {
-	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(item.Path)), ".")
-	in := pattern.Input{
-		Title:           item.Title,
-		Authors:         splitAuthors(item.Author),
-		Language:        item.Language,
-		Extension:       ext,
-		CurrentFilename: filepath.Base(item.Path),
-	}
-	tmpl := ""
-	if lib.FileNamingPattern != nil {
-		tmpl = strings.TrimSpace(*lib.FileNamingPattern)
-	}
-	if tmpl == "" && s.settings != nil {
-		if def, err := s.settings.GetDefaultNamingPattern(ctx); err != nil {
-			slog.Warn("bookdrop: read default naming pattern", "err", err)
-		} else {
-			tmpl = strings.TrimSpace(def)
-		}
-	}
-	var resolved string
-	if tmpl != "" {
-		resolved = pattern.Resolve(tmpl, in)
-	}
-	if resolved == "" {
-		resolved = in.CurrentFilename
-	}
-	return resolved
-}
-
-// applyNamingPattern places an approved bookdrop file under its
-// target library's path. The library's FileNamingPattern (when set)
-// decides the sub-path and filename; otherwise the original filename
-// is reused. Returns (new absolute path, true) when the file was
-// moved, or (false) when the file is already sitting where it should
-// be and no move is needed.
+// placeLocal moves an approved bookdrop file under its target library's
+// path using the original filename as the destination basename.
+// Returns (new absolute path, true) when the file was moved, or
+// ("", false) when the file is already at the destination or the move
+// failed (the original path is kept in that case).
 //
 // The move uses os.Rename where possible and falls back to copy+remove
-// when source/destination straddle different filesystems (EXDEV).
+// when source/destination straddle different filesystems.
 // Destination collisions are resolved by appending " (2)", " (3)", etc.
 //
 // Local-libraries only — s3-backed libraries upload via uploadToBackend.
-func (s *BookDropService) applyNamingPattern(
+func (s *BookDropService) placeLocal(
 	ctx context.Context,
 	libraryID string,
 	item model.BookDropItem,
@@ -440,13 +397,7 @@ func (s *BookDropService) applyNamingPattern(
 		return "", false
 	}
 
-	resolved := s.resolveDestKey(ctx, lib, item)
-	if resolved == "" {
-		return "", false
-	}
-
-	// Forward-slash-only resolver output → OS-native path separator.
-	dest := filepath.Join(root, filepath.FromSlash(resolved))
+	dest := filepath.Join(root, filepath.Base(item.Path))
 	if dest == item.Path {
 		return "", false
 	}
@@ -460,23 +411,20 @@ func (s *BookDropService) applyNamingPattern(
 }
 
 // uploadToBackend streams the bookdrop file's bytes into the library's
-// backend at the resolved key, then removes the local bookdrop file.
-// Returns the key the file was stored at (the location to record on
-// the files row).
+// backend at the original filename as the key, then removes the local
+// bookdrop file. Returns the key the file was stored at (the location
+// to record on the files row).
 //
 // Used by Approve when the target library is backed by an s3 (or any
 // non-local) backend. Local libraries continue to go through
-// applyNamingPattern's filesystem move.
+// placeLocal's filesystem move.
 func (s *BookDropService) uploadToBackend(
 	ctx context.Context,
 	store storage.Storage,
-	lib model.Library,
+	_ model.Library,
 	item model.BookDropItem,
 ) (string, error) {
-	key := s.resolveDestKey(ctx, lib, item)
-	if key == "" {
-		return "", fmt.Errorf("could not resolve destination key for bookdrop %s", item.ID)
-	}
+	key := filepath.Base(item.Path)
 	src, err := os.Open(item.Path)
 	if err != nil {
 		return "", fmt.Errorf("open bookdrop file: %w", err)
@@ -520,25 +468,6 @@ func storageMIMEForFormat(format string) string {
 		return "audio/mp4"
 	}
 	return ""
-}
-
-// splitAuthors turns the bookdrop's single author string into a slice the
-// resolver can reason about. Commas are the canonical separator since the
-// extractor writes authors that way ("Name, Other Name"); a single name
-// round-trips unchanged.
-func splitAuthors(s string) []string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if t := strings.TrimSpace(p); t != "" {
-			out = append(out, t)
-		}
-	}
-	return out
 }
 
 // moveFile atomically moves src to dest. Falls back to copy+remove when

@@ -86,7 +86,7 @@ func NewLibraryRepo(d *db.DB) *LibraryRepo {
 const libCols = `
 	l.id, l.name, l.slug, l.path,
 	l.last_scanned_at, l.file_count, l.discovered_count,
-	l.file_naming_pattern, l.created_at,
+	l.created_at,
 	COALESCE(
 		(SELECT COUNT(*) FROM books b
 		 WHERE b.library_id = l.id AND b.deleted_at IS NULL),
@@ -100,7 +100,7 @@ const libCols = `
 const libColsReturning = `
 	id, name, slug, path,
 	last_scanned_at, file_count, discovered_count,
-	file_naming_pattern, created_at,
+	created_at,
 	COALESCE(
 		(SELECT COUNT(*) FROM books b
 		 WHERE b.library_id = libraries.id AND b.deleted_at IS NULL),
@@ -180,8 +180,8 @@ func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
 	return libs, rows.Err()
 }
 
-// GetByID returns a single library row. Used by pattern-preview + scan
-// flows that need the current path/pattern without a full listing.
+// GetByID returns a single library row. Used by scan flows that need
+// the current path without a full listing.
 func (r *LibraryRepo) GetByID(ctx context.Context, id string) (model.Library, error) {
 	const qPG = `
 		SELECT ` + libCols + `
@@ -248,7 +248,7 @@ func (r *LibraryRepo) scanLibrary(s scanner) (model.Library, error) {
 	err := s.Scan(
 		&l.ID, &l.Name, &l.Slug, &l.Path,
 		&lastScannedAny, &l.FileCount, &l.DiscoveredCount,
-		&l.FileNamingPattern, &createdAny, &l.BookCount,
+		&createdAny, &l.BookCount,
 		&backendID, &root, &l.OrgMode,
 	)
 	if err != nil {
@@ -320,31 +320,6 @@ func (r *LibraryRepo) DeleteLibrary(ctx context.Context, id string) ([]string, e
 		return nil, err
 	}
 	return bookIDs, nil
-}
-
-// SetFileNamingPattern writes (or clears) the per-library naming pattern.
-// Pass nil to revert to the fallback (keep original filename on approval).
-func (r *LibraryRepo) SetFileNamingPattern(ctx context.Context, id string, pattern *string) error {
-	const qPG = `UPDATE libraries SET file_naming_pattern = $2 WHERE id = $1`
-	const qSQLite = `UPDATE libraries SET file_naming_pattern = ? WHERE id = ?`
-	var res sql.Result
-	var err error
-	if r.db.Dialect == db.DialectSQLite {
-		res, err = r.db.SQL.ExecContext(ctx, qSQLite, pattern, id)
-	} else {
-		res, err = r.db.SQL.ExecContext(ctx, qPG, id, pattern)
-	}
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
 }
 
 // Search lists books scoped to a specific user's progress. An empty

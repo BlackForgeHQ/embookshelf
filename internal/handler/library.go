@@ -18,26 +18,22 @@ import (
 	"github.com/blackforge/embookshelf/internal/repo"
 )
 
-// libraryDTO is the wire shape for a library row. `fileNamingPattern` is
-// nullable — nil means the library will keep the original filename on
-// bookdrop approval (no rename).
+// libraryDTO is the wire shape for a library row.
 type libraryDTO struct {
-	ID                string  `json:"id"`
-	Name              string  `json:"name"`
-	Slug              string  `json:"slug"`
-	BookCount         int     `json:"bookCount"`
-	CreatedAt         string  `json:"createdAt"`
-	FileNamingPattern *string `json:"fileNamingPattern"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Slug      string `json:"slug"`
+	BookCount int    `json:"bookCount"`
+	CreatedAt string `json:"createdAt"`
 }
 
 func toLibraryDTO(l model.Library) libraryDTO {
 	return libraryDTO{
-		ID:                l.ID,
-		Name:              l.Name,
-		Slug:              l.Slug,
-		BookCount:         l.BookCount,
-		CreatedAt:         l.CreatedAt.UTC().Format(time.RFC3339),
-		FileNamingPattern: l.FileNamingPattern,
+		ID:        l.ID,
+		Name:      l.Name,
+		Slug:      l.Slug,
+		BookCount: l.BookCount,
+		CreatedAt: l.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
 

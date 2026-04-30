@@ -8,18 +8,13 @@ type Library struct {
 	Slug string
 	// Path is the filesystem root this library owns. Set at creation
 	// time and immutable afterwards — book approvals physically move
-	// files under here and rename them via FileNamingPattern.
+	// files under here using the original filename.
 	Path            string
 	LastScannedAt   *time.Time
 	FileCount       int
 	DiscoveredCount int
 	BookCount       int
 	CreatedAt       time.Time
-	// FileNamingPattern is the per-library override template used by
-	// the bookdrop approval flow to organize accepted files on disk.
-	// nil means "use the hard-coded fallback" (keep the original
-	// filename).
-	FileNamingPattern *string
 	// BackendID is the FK to storage_backends. nil when the library has
 	// not yet been wired to a backend (legacy libraries created before
 	// the storage_v2 migration).
