@@ -578,3 +578,12 @@ func TestRead_MalformedTOML_ReturnsError(t *testing.T) {
 		t.Fatal("expected error for malformed TOML, got nil")
 	}
 }
+
+func TestWriteMode_String(t *testing.T) {
+	if got := string(ModeSpillover); got != "spillover" {
+		t.Errorf("ModeSpillover = %q, want %q", got, "spillover")
+	}
+	if got := string(ModeFull); got != "full" {
+		t.Errorf("ModeFull = %q, want %q", got, "full")
+	}
+}
