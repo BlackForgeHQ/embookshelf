@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/hashing"
+	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
@@ -41,52 +42,21 @@ func RunFilesBackfill(ctx context.Context, deps FilesBackfillDeps) error {
 	if deps.Resolver == nil && deps.Storage == nil {
 		return nil // not yet wired
 	}
-	batchSize := deps.BatchSize
-	if batchSize <= 0 {
-		batchSize = 100
+	cfg := DrainConfig{
+		Name:      "files-hash",
+		BatchSize: deps.BatchSize,
+		Sleep:     deps.Sleep,
 	}
-
-	total := 0
-	// skipped tracks IDs that failed in this run so we don't re-fetch them
-	// from ListPendingHash on the next iteration (they stay NULL until a
-	// future boot).
-	skipped := make(map[string]bool)
-
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		batch, err := deps.Files.ListPendingHash(ctx, batchSize+len(skipped))
-		if err != nil {
-			return err
-		}
-
-		// Filter out rows we already attempted this run.
-		pending := batch[:0]
-		for _, f := range batch {
-			if !skipped[f.ID] {
-				pending = append(pending, f)
-			}
-		}
-		// Limit to batchSize after filtering.
-		if len(pending) > batchSize {
-			pending = pending[:batchSize]
-		}
-
-		if len(pending) == 0 {
-			if total > 0 {
-				slog.Info("files backfill complete", "hashed", total)
-			}
-			return nil
-		}
-		for _, f := range pending {
+	_, err := Drain(ctx, cfg,
+		deps.Files.ListPendingHash,
+		func(f model.File) string { return f.ID },
+		func(ctx context.Context, f model.File) error {
 			// Resolve key: <library.root>/<location>
 			lib, err := deps.Libraries.GetByID(ctx, f.LibraryID)
 			if err != nil {
 				slog.Warn("files backfill: library lookup failed",
 					"file_id", f.ID, "library_id", f.LibraryID, "err", err)
-				skipped[f.ID] = true
-				continue
+				return err
 			}
 			root := ""
 			if lib.Root != nil {
@@ -105,8 +75,7 @@ func RunFilesBackfill(ctx context.Context, deps FilesBackfillDeps) error {
 				if resolveErr != nil {
 					slog.Warn("files backfill: backend resolve failed",
 						"file_id", f.ID, "backend_id", backendID, "err", resolveErr)
-					skipped[f.ID] = true
-					continue
+					return resolveErr
 				}
 				store = resolved
 			}
@@ -115,8 +84,7 @@ func RunFilesBackfill(ctx context.Context, deps FilesBackfillDeps) error {
 			if err != nil {
 				slog.Warn("files backfill: hash failed",
 					"file_id", f.ID, "key", key, "err", err)
-				skipped[f.ID] = true
-				continue
+				return err
 			}
 			info, headErr := store.Head(ctx, key)
 			mtime := time.Now()
@@ -127,19 +95,12 @@ func RunFilesBackfill(ctx context.Context, deps FilesBackfillDeps) error {
 			if err := deps.Files.SetContentHash(ctx, f.ID, hash, size, mtime); err != nil {
 				slog.Warn("files backfill: set hash failed",
 					"file_id", f.ID, "err", err)
-				skipped[f.ID] = true
-				continue
+				return err
 			}
-			total++
-		}
-		if deps.Sleep > 0 {
-			select {
-			case <-time.After(deps.Sleep):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-	}
+			return nil
+		},
+	)
+	return err
 }
 
 // joinKey concatenates a backend root with a file location into a
