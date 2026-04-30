@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/coverstore"
+	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 )
 
@@ -31,60 +32,50 @@ func RunCoversBackfill(ctx context.Context, deps CoversBackfillDeps) error {
 	if deps.Library == nil || deps.Covers == nil {
 		return nil
 	}
-	books, err := deps.Library.ListBooksMissingCoverHash(ctx)
-	if err != nil {
-		return err
+	cfg := DrainConfig{
+		Name:  "covers-hash",
+		Sleep: deps.Sleep,
 	}
-	migrated := 0
-	for _, b := range books {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		legacy := deps.Covers.BookPath(b.ID)
-		f, err := os.Open(legacy)
-		if err != nil {
-			slog.Warn("covers backfill: open legacy", "book_id", b.ID, "err", err)
-			continue
-		}
-
-		h := sha256.New()
-		if _, err := io.Copy(h, f); err != nil {
-			_ = f.Close()
-			slog.Warn("covers backfill: hash", "book_id", b.ID, "err", err)
-			continue
-		}
-		_ = f.Close()
-		sum := h.Sum(nil)
-
-		// Re-read to write to the hashed path.
-		data, err := os.ReadFile(legacy)
-		if err != nil {
-			slog.Warn("covers backfill: re-read", "book_id", b.ID, "err", err)
-			continue
-		}
-		if err := deps.Covers.SaveBookHashed(sum, b.CoverMime, data); err != nil {
-			slog.Warn("covers backfill: save hashed", "book_id", b.ID, "err", err)
-			continue
-		}
-		if err := deps.Library.SetCoverHash(ctx, b.ID, sum); err != nil {
-			slog.Warn("covers backfill: set hash", "book_id", b.ID, "err", err)
-			continue
-		}
-		if err := deps.Covers.DeleteBook(b.ID); err != nil {
-			slog.Warn("covers backfill: delete legacy", "book_id", b.ID, "err", err)
-			// non-fatal: the file still serves through legacy fallback
-		}
-		migrated++
-		if deps.Sleep > 0 {
-			select {
-			case <-time.After(deps.Sleep):
-			case <-ctx.Done():
-				return ctx.Err()
+	_, err := Drain(ctx, cfg,
+		deps.Library.ListBooksMissingCoverHash,
+		func(b model.Book) string { return b.ID },
+		func(ctx context.Context, b model.Book) error {
+			legacy := deps.Covers.BookPath(b.ID)
+			f, err := os.Open(legacy)
+			if err != nil {
+				slog.Warn("covers backfill: open legacy", "book_id", b.ID, "err", err)
+				return err
 			}
-		}
-	}
-	if migrated > 0 {
-		slog.Info("covers backfill done", "migrated", migrated)
-	}
-	return nil
+
+			h := sha256.New()
+			if _, err := io.Copy(h, f); err != nil {
+				_ = f.Close()
+				slog.Warn("covers backfill: hash", "book_id", b.ID, "err", err)
+				return err
+			}
+			_ = f.Close()
+			sum := h.Sum(nil)
+
+			// Re-read to write to the hashed path.
+			data, err := os.ReadFile(legacy)
+			if err != nil {
+				slog.Warn("covers backfill: re-read", "book_id", b.ID, "err", err)
+				return err
+			}
+			if err := deps.Covers.SaveBookHashed(sum, b.CoverMime, data); err != nil {
+				slog.Warn("covers backfill: save hashed", "book_id", b.ID, "err", err)
+				return err
+			}
+			if err := deps.Library.SetCoverHash(ctx, b.ID, sum); err != nil {
+				slog.Warn("covers backfill: set hash", "book_id", b.ID, "err", err)
+				return err
+			}
+			if err := deps.Covers.DeleteBook(b.ID); err != nil {
+				slog.Warn("covers backfill: delete legacy", "book_id", b.ID, "err", err)
+				// non-fatal: the file still serves through legacy fallback
+			}
+			return nil
+		},
+	)
+	return err
 }

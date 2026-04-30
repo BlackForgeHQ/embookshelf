@@ -611,18 +611,22 @@ func (r *LibraryRepo) SetCoverHash(ctx context.Context, bookID string, hash []by
 
 // ListBooksMissingCoverHash returns books that have a cover on disk
 // (has_cover = TRUE) but have not yet been assigned a cover_hash.
-// Used by the boot-time covers backfill worker. Capped at 500 rows;
-// the worker re-runs on subsequent boots until all rows are filled.
-func (r *LibraryRepo) ListBooksMissingCoverHash(ctx context.Context) ([]model.Book, error) {
+// Used by the boot-time covers backfill worker. batchSize controls the
+// LIMIT applied; 0 defaults to 100. Re-issued each call so Drain can
+// page through all pending rows.
+func (r *LibraryRepo) ListBooksMissingCoverHash(ctx context.Context, batchSize int) ([]model.Book, error) {
+	if batchSize <= 0 {
+		batchSize = 100
+	}
 	const qPG = `SELECT ` + bookCols + ` ` + bookFromPG + `
 		WHERE b.has_cover = TRUE AND b.cover_hash IS NULL AND b.deleted_at IS NULL
-		LIMIT 500`
+		LIMIT $2`
 	const qSQLite = `SELECT ` + bookCols + ` ` + bookFromSQLite + `
 		WHERE b.has_cover = TRUE AND b.cover_hash IS NULL AND b.deleted_at IS NULL
-		LIMIT 500`
+		LIMIT ?2`
 	// user_id = '' matches no rows in user_book_progress; that's intentional —
 	// the backfill only needs cover data, not per-user progress.
-	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), "")
+	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), "", batchSize)
 	if err != nil {
 		return nil, err
 	}
