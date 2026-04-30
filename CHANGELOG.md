@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.7](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.6...v0.2.7) (2026-04-30)
+
+
+### Features
+
+* **coverstore:** hash-keyed cover layout + backfill (Plan E of 8) ([#59](https://github.com/BlackForgeHQ/embookshelf/issues/59)) ([ebb873d](https://github.com/BlackForgeHQ/embookshelf/commit/ebb873dbe5a75c256f5fae6e4d1d22ddfdd9988b))
+* **handler:** presigned URL redirect for S3-backed books (Plan G of 8) ([#62](https://github.com/BlackForgeHQ/embookshelf/issues/62)) ([f18dd49](https://github.com/BlackForgeHQ/embookshelf/commit/f18dd49b6ba33193c6d96040ac4474845de0fbbe))
+* S3 events + tier tagging (Plan H of 8) ([#63](https://github.com/BlackForgeHQ/embookshelf/issues/63)) ([71dbcca](https://github.com/BlackForgeHQ/embookshelf/commit/71dbccab4588a50401bec6c7c764974f8270cf08))
+* **storage:** S3 backend + per-library resolver (Plan F of 8) ([#61](https://github.com/BlackForgeHQ/embookshelf/issues/61)) ([1ee6924](https://github.com/BlackForgeHQ/embookshelf/commit/1ee6924d36dbcd0764298b1bebcd6cda6396a93b))
+
 ## [0.2.6](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.5...v0.2.6) (2026-04-29)
 
 
