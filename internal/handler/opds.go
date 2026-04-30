@@ -222,7 +222,7 @@ func (h *Handler) OPDSDownload(c *gin.Context) {
 	if mime == "" {
 		mime = "application/octet-stream"
 	}
-	if err := h.serveBookFile(c, book.Path, mime); err != nil {
+	if err := h.serveBookFile(c, book, mime); err != nil {
 		slog.Warn("opds serve", "id", id, "err", err)
 		c.String(http.StatusForbidden, err.Error())
 		return
