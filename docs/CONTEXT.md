@@ -46,6 +46,8 @@ This file complements `docs/architecture.md` (technical layout) and `docs/spec/`
 
 **Reattach** — `internal/scan.MaybeReattach`; on a Changed file's hash matching another row in the same Library, treats as a rename and preserves `book_id` continuity.
 
+**Drainer** — `task.Drain[T]`; the loop shape used by boot-time backfills that read pending rows from a predicate query, do per-item work that may fail per item, and exit when the predicate is empty or no item in a batch made progress. Owns logging + the in-run skip set so closures stay focused on the work itself. Used by Files backfill (sha256 fill) and Covers backfill (legacy → hash-keyed). Distinct from a schema-bootstrap backfill (`migrator.BackfillStorageV2`), which runs once after `migrate.Up`, sentinel-gated, DB-only.
+
 **Files backfill** — `task.RunFilesBackfill`; one-shot at-boot worker that fills `files.content_hash` for rows backfilled by the migration with NULL hashes.
 
 **Covers backfill** — `task.RunCoversBackfill`; one-shot at-boot worker that re-keys legacy book-id-keyed cover files to the hash-keyed layout. Plan E.
