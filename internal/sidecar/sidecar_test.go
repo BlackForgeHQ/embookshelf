@@ -587,3 +587,49 @@ func TestWriteMode_String(t *testing.T) {
 		t.Errorf("ModeFull = %q, want %q", got, "full")
 	}
 }
+
+func TestJSON_RoundTrip(t *testing.T) {
+	original := Sidecar{
+		Title:         "The Great Gatsby",
+		TitleSort:     "Great Gatsby, The",
+		Subtitle:      "A Story",
+		Author:        "F. Scott Fitzgerald",
+		Description:   "Jazz Age tragedy",
+		Language:      "en",
+		Publisher:     "Scribner",
+		PublishedDate: "1925",
+		ISBN:          "978-0-7432-7356-5",
+		Series:        "American Classics",
+		SeriesIndex:   3,
+		Tags:          []string{"jazz-age", "tragedy"},
+		Genres:        []string{"fiction", "literary"},
+	}
+
+	data, err := EncodeJSON(original, ModeFull, "EPUB")
+	if err != nil {
+		t.Fatalf("EncodeJSON: %v", err)
+	}
+	got, err := DecodeJSON(data)
+	if err != nil {
+		t.Fatalf("DecodeJSON: %v", err)
+	}
+	if got.Title != original.Title ||
+		got.TitleSort != original.TitleSort ||
+		got.Subtitle != original.Subtitle ||
+		got.Author != original.Author ||
+		got.Description != original.Description ||
+		got.Language != original.Language ||
+		got.Publisher != original.Publisher ||
+		got.PublishedDate != original.PublishedDate ||
+		got.ISBN != original.ISBN ||
+		got.Series != original.Series ||
+		got.SeriesIndex != original.SeriesIndex {
+		t.Errorf("scalar field mismatch.\n got=%+v\nwant=%+v", got, original)
+	}
+	if len(got.Tags) != 2 || got.Tags[0] != "jazz-age" || got.Tags[1] != "tragedy" {
+		t.Errorf("Tags=%v, want [jazz-age tragedy]", got.Tags)
+	}
+	if len(got.Genres) != 2 || got.Genres[0] != "fiction" || got.Genres[1] != "literary" {
+		t.Errorf("Genres=%v, want [fiction literary]", got.Genres)
+	}
+}

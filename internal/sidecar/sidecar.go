@@ -1,7 +1,7 @@
 // Package sidecar reads and writes per-book metadata files that live
 // next to the book bytes on disk (or in object storage). Two formats:
 // metadata.opf (Calibre-compatible XML, read-only) and
-// .embookshelf.toml (native, read+write).
+// <basename>.embookshelf.json (native, read+write, paired filename).
 package sidecar
 
 // Sidecar holds the editable subset of a book's metadata. Fields
@@ -9,19 +9,19 @@ package sidecar
 // derived (page count, duration, cover bytes) stays in the embedded
 // extractor's output and is not overwritten by sidecars.
 type Sidecar struct {
-	Title         string   `toml:"title"`
-	TitleSort     string   `toml:"title_sort"`
-	Subtitle      string   `toml:"subtitle"`
-	Author        string   `toml:"author"`
-	Description   string   `toml:"description"`
-	Language      string   `toml:"language"`
-	Publisher     string   `toml:"publisher"`
-	PublishedDate string   `toml:"published_date"` // free text per spec §4
-	ISBN          string   `toml:"isbn"`
-	Series        string   `toml:"series"`
-	SeriesIndex   int      `toml:"series_index"`
-	Tags          []string `toml:"tags"`
-	Genres        []string `toml:"genres"`
+	Title         string   `json:"title,omitempty"`
+	TitleSort     string   `json:"title_sort,omitempty"`
+	Subtitle      string   `json:"subtitle,omitempty"`
+	Author        string   `json:"author,omitempty"`
+	Description   string   `json:"description,omitempty"`
+	Language      string   `json:"language,omitempty"`
+	Publisher     string   `json:"publisher,omitempty"`
+	PublishedDate string   `json:"published_date,omitempty"`
+	ISBN          string   `json:"isbn,omitempty"`
+	Series        string   `json:"series,omitempty"`
+	SeriesIndex   int      `json:"series_index,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	Genres        []string `json:"genres,omitempty"`
 }
 
 // IsZero reports whether s carries no information. Used to short-
