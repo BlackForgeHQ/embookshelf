@@ -110,26 +110,39 @@ const libColsReturning = `
 `
 
 // CreateLibrary inserts a new library row and returns the persisted
-// record. `slug` is UNIQUE (000001) and `path` is UNIQUE (000018) — a
-// collision on either surfaces as a typed sentinel (ErrLibraryNameTaken
-// or ErrLibraryPathTaken) so the handler can map it to a 409.
+// record. `slug` is UNIQUE (000001) and `path` is UNIQUE (000018, partial
+// — excludes empty strings so multiple s3 libraries with empty path don't
+// collide) — a collision on either surfaces as a typed sentinel
+// (ErrLibraryNameTaken or ErrLibraryPathTaken) so the handler can map it
+// to a 409.
+//
+// backendID == nil → INSERT with NULL backend_id (local libraries).
+// backendID != nil → INSERT with that value; path should be "".
+// root for s3 libraries is empty (the backend has the prefix encoded);
+// root for local libraries equals path.
 //
 // UUID is generated app-side via db.NewID() so the same INSERT works on
 // both Postgres (UUID column) and SQLite (TEXT column).
-func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug, path string) (model.Library, error) {
+func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug, path string, backendID *string) (model.Library, error) {
 	id := db.NewID()
+	// root mirrors path for local libraries; empty for s3 libraries (the
+	// backend already encodes the prefix).
+	root := path
+	if backendID != nil {
+		root = ""
+	}
 	const qPG = `
-		INSERT INTO libraries (id, name, slug, path)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO libraries (id, name, slug, path, backend_id, root)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING ` + libColsReturning
 
 	const qSQLite = `
-		INSERT INTO libraries (id, name, slug, path)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO libraries (id, name, slug, path, backend_id, root)
+		VALUES (?, ?, ?, ?, ?, ?)
 		RETURNING ` + libColsReturning
 
 	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite),
-		id, name, slug, path)
+		id, name, slug, path, backendID, root)
 	l, err := r.scanLibrary(row)
 	if err != nil {
 		if ok, constraint := dberr.IsUniqueViolation(err); ok {

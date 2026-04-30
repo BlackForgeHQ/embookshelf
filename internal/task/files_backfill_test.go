@@ -42,7 +42,7 @@ func newTestDeps(t *testing.T) (task.FilesBackfillDeps, *repo.LibraryRepo) {
 // file locations against that directory.
 func seedLibrary(t *testing.T, lr *repo.LibraryRepo, tmpDir string) model.Library {
 	t.Helper()
-	lib, err := lr.CreateLibrary(context.Background(), "Test Library", "test-lib", tmpDir)
+	lib, err := lr.CreateLibrary(context.Background(), "Test Library", "test-lib", tmpDir, nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary: %v", err)
 	}

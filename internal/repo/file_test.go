@@ -23,7 +23,7 @@ func TestFileRepo_matrix(t *testing.T) {
 			ctx := context.Background()
 
 			// Seed a library that files can reference.
-			lib, err := lr.CreateLibrary(ctx, "Test Library", "test-library", "/tmp/test")
+			lib, err := lr.CreateLibrary(ctx, "Test Library", "test-library", "/tmp/test", nil)
 			if err != nil {
 				t.Fatalf("CreateLibrary: %v", err)
 			}
@@ -313,7 +313,7 @@ func TestFileRepo_matrix(t *testing.T) {
 			}
 
 			// --- 12. ListByLibrary isolation ---
-			lib2, err := lr.CreateLibrary(ctx, "Other Library", "other-library", "/tmp/other")
+			lib2, err := lr.CreateLibrary(ctx, "Other Library", "other-library", "/tmp/other", nil)
 			if err != nil {
 				t.Fatalf("CreateLibrary lib2: %v", err)
 			}

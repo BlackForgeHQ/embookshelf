@@ -55,7 +55,7 @@ func TestRunMissingPurge_nilFiles(t *testing.T) {
 func TestRunMissingPurge_noMissingRows(t *testing.T) {
 	fr, lr := newPurgeTestRepo(t)
 	ctx := context.Background()
-	lib, err := lr.CreateLibrary(ctx, "Purge Test", "purge-test", "/tmp/purge")
+	lib, err := lr.CreateLibrary(ctx, "Purge Test", "purge-test", "/tmp/purge", nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestRunMissingPurge_noMissingRows(t *testing.T) {
 func TestRunMissingPurge_withinTTL(t *testing.T) {
 	fr, lr := newPurgeTestRepo(t)
 	ctx := context.Background()
-	lib, err := lr.CreateLibrary(ctx, "Purge Test TTL", "purge-ttl", "/tmp/purge-ttl")
+	lib, err := lr.CreateLibrary(ctx, "Purge Test TTL", "purge-ttl", "/tmp/purge-ttl", nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestRunMissingPurge_withinTTL(t *testing.T) {
 func TestRunMissingPurge_beyondTTL(t *testing.T) {
 	fr, lr := newPurgeTestRepo(t)
 	ctx := context.Background()
-	lib, err := lr.CreateLibrary(ctx, "Purge Test Old", "purge-old", "/tmp/purge-old")
+	lib, err := lr.CreateLibrary(ctx, "Purge Test Old", "purge-old", "/tmp/purge-old", nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestRunMissingPurge_beyondTTL(t *testing.T) {
 func TestRunMissingPurge_mixed(t *testing.T) {
 	fr, lr := newPurgeTestRepo(t)
 	ctx := context.Background()
-	lib, err := lr.CreateLibrary(ctx, "Purge Test Mix", "purge-mix", "/tmp/purge-mix")
+	lib, err := lr.CreateLibrary(ctx, "Purge Test Mix", "purge-mix", "/tmp/purge-mix", nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestLoopMissingPurge_nilFiles(t *testing.T) {
 func TestLoopMissingPurge_cancellation(t *testing.T) {
 	fr, lr := newPurgeTestRepo(t)
 	ctx := context.Background()
-	lib, err := lr.CreateLibrary(ctx, "Loop Test", "loop-test", "/tmp/loop-test")
+	lib, err := lr.CreateLibrary(ctx, "Loop Test", "loop-test", "/tmp/loop-test", nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary: %v", err)
 	}

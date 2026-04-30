@@ -25,15 +25,17 @@ func TestLibraryRepo_backendFields(t *testing.T) {
 			ctx := context.Background()
 
 			// 1. Fresh library has nil BackendID and nil Root; OrgMode defaults to 'book_per_folder'.
-			lib, err := lr.CreateLibrary(ctx, "Backend Test", "backend-test", "/tmp/bt")
+			lib, err := lr.CreateLibrary(ctx, "Backend Test", "backend-test", "/tmp/bt", nil)
 			if err != nil {
 				t.Fatalf("CreateLibrary: %v", err)
 			}
 			if lib.BackendID != nil {
 				t.Fatalf("BackendID should be nil on fresh library, got %v", lib.BackendID)
 			}
-			if lib.Root != nil {
-				t.Fatalf("Root should be nil on fresh library, got %v", lib.Root)
+			// Root equals path for local libraries (plan spec: "root for local
+			// libraries equals path").
+			if lib.Root == nil || *lib.Root != "/tmp/bt" {
+				t.Fatalf("Root should be /tmp/bt on fresh local library, got %v", lib.Root)
 			}
 			if lib.OrgMode != "book_per_folder" {
 				t.Fatalf("OrgMode=%q want book_per_folder", lib.OrgMode)
@@ -87,7 +89,7 @@ func TestLibraryRepo_setCoverHash(t *testing.T) {
 			r := repo.NewLibraryRepo(d)
 			ctx := context.Background()
 
-			lib, err := r.CreateLibrary(ctx, "Cover Test", "cover-test", "/tmp/ct")
+			lib, err := r.CreateLibrary(ctx, "Cover Test", "cover-test", "/tmp/ct", nil)
 			if err != nil {
 				t.Fatalf("CreateLibrary: %v", err)
 			}
@@ -162,7 +164,7 @@ func TestLibraryRepo_matrix(t *testing.T) {
 			ctx := context.Background()
 
 			// 1. Create
-			lib, err := r.CreateLibrary(ctx, "My Library", "my-library", "/tmp/books")
+			lib, err := r.CreateLibrary(ctx, "My Library", "my-library", "/tmp/books", nil)
 			if err != nil {
 				t.Fatalf("CreateLibrary: %v", err)
 			}
@@ -192,7 +194,7 @@ func TestLibraryRepo_matrix(t *testing.T) {
 			}
 
 			// 4. Duplicate slug → ErrLibraryNameTaken
-			_, err = r.CreateLibrary(ctx, "Other Name", "my-library", "/tmp/different")
+			_, err = r.CreateLibrary(ctx, "Other Name", "my-library", "/tmp/different", nil)
 			if !errors.Is(err, repo.ErrLibraryNameTaken) {
 				t.Fatalf("dup slug: got err=%v, want ErrLibraryNameTaken", err)
 			}

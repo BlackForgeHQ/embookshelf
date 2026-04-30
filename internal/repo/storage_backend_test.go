@@ -81,7 +81,7 @@ func TestStorageBackendRepo_matrix(t *testing.T) {
 				t.Fatalf("Create b2: %v", err)
 			}
 			// Create a library that points at b2.
-			lib, err := lr.CreateLibrary(ctx, "Ref Library", "ref-library", "/tmp/ref")
+			lib, err := lr.CreateLibrary(ctx, "Ref Library", "ref-library", "/tmp/ref", nil)
 			if err != nil {
 				t.Fatalf("CreateLibrary: %v", err)
 			}

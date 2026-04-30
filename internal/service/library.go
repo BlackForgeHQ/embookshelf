@@ -27,7 +27,7 @@ func (s *LibraryService) List(ctx context.Context) ([]model.Library, error) {
 func (s *LibraryService) Create(ctx context.Context, name, path string) (model.Library, error) {
 	name = strings.TrimSpace(name)
 	path = strings.TrimRight(strings.TrimSpace(path), "/")
-	return s.repo.CreateLibrary(ctx, name, slugify(name), path)
+	return s.repo.CreateLibrary(ctx, name, slugify(name), path, nil)
 }
 
 // TouchScan stamps the library row with scan-completion aggregates.
