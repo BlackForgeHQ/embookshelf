@@ -109,7 +109,7 @@ func (s *LibraryService) TouchScan(ctx context.Context, id string, fileCount, di
 	return s.repo.TouchScan(ctx, id, fileCount, discovered)
 }
 
-// GetByID returns a single library (with its naming pattern) by id.
+// GetByID returns a single library by id.
 func (s *LibraryService) GetByID(ctx context.Context, id string) (model.Library, error) {
 	return s.repo.GetByID(ctx, id)
 }
@@ -172,21 +172,6 @@ func (s *LibraryService) purgeBackend(ctx context.Context, backendID string) {
 	if err := s.deps.Backends.Delete(ctx, backendID); err != nil {
 		slog.Warn("library purge: delete backend row", "id", backendID, "err", err)
 	}
-}
-
-// SetFileNamingPattern stores (or clears) the per-library template used by
-// the bookdrop approval flow. An empty trimmed string clears the pattern so
-// the library falls back to keeping the original filename on disk.
-func (s *LibraryService) SetFileNamingPattern(ctx context.Context, id string, pattern *string) error {
-	if pattern != nil {
-		trimmed := strings.TrimSpace(*pattern)
-		if trimmed == "" {
-			pattern = nil
-		} else {
-			pattern = &trimmed
-		}
-	}
-	return s.repo.SetFileNamingPattern(ctx, id, pattern)
 }
 
 // slugify collapses a human-readable name into a URL-safe slug:
