@@ -660,3 +660,29 @@ func TestJSON_RoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestJSON_UnknownKeysIgnored(t *testing.T) {
+	raw := []byte(`{
+	  "version": 1,
+	  "format": "EPUB",
+	  "fields": {"title": "T", "tags": ["a"]},
+	  "future_extension": {"weird": "thing"}
+	}`)
+	got, err := DecodeJSON(raw)
+	if err != nil {
+		t.Fatalf("DecodeJSON: %v", err)
+	}
+	if got.Title != "T" {
+		t.Errorf("Title=%q want T", got.Title)
+	}
+	if len(got.Tags) != 1 || got.Tags[0] != "a" {
+		t.Errorf("Tags=%v want [a]", got.Tags)
+	}
+}
+
+func TestJSON_MalformedReturnsError(t *testing.T) {
+	_, err := DecodeJSON([]byte(`{"fields":{"title":not-a-string}}`))
+	if err == nil {
+		t.Fatal("DecodeJSON malformed: want error, got nil")
+	}
+}
