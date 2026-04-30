@@ -301,6 +301,10 @@ func main() {
 		Covers:       covers,
 		Hub:          hub,
 		Queue:        q,
+		Resolver:     storageResolver,
+		LibRepo:      libRepo,
+		FileRepo:     fileRepo,
+		PresignTTL:   cfg.PresignTTL,
 	})
 
 	srv := &http.Server{
