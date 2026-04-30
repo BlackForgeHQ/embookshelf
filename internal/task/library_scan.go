@@ -44,9 +44,12 @@ type LibraryScanDeps struct {
 	BookDrop *service.BookDropService
 	Lib      *service.LibraryService
 	Queue    BookDropEnqueuer
-	// Storage reads the library's filesystem (or object store) during
-	// the walk. Plan A only uses List; future plans use Get/Head for
-	// content-hash computation and metadata extraction.
+	// Resolver maps a library's backend_id to the right Storage. Plan F+.
+	// When non-nil, LibraryScan resolves the backend per library instead of
+	// using the single Storage field.
+	Resolver storage.Resolver
+	// Storage is the legacy single-backend field. Still used when Resolver
+	// is nil (e.g. SQLite queue tests that pass nil for both).
 	Storage storage.Storage
 	// Files is the storage_v2 file repo. When non-nil the scan uses the
 	// two-phase walk+diff pipeline. nil disables the new pipeline and
@@ -74,9 +77,24 @@ func LibraryScan(ctx context.Context, args LibraryScanArgs, deps LibraryScanDeps
 		return nil
 	}
 
-	// Fall back to legacy implementation when deps are missing (e.g. in
+	// Resolve the Storage for this library's backend. When a Resolver is
+	// configured, use it; otherwise fall back to the legacy single-Storage
+	// field. A nil resolver AND nil storage → legacy scan (SQLite queue tests).
+	store := deps.Storage
+	if deps.Resolver != nil {
+		backendID := orZero(lib.BackendID)
+		resolved, resolveErr := deps.Resolver.Resolve(backendID)
+		if resolveErr != nil {
+			slog.Warn("library scan: backend resolve failed, falling back to legacy scan",
+				"library_id", lib.ID, "backend_id", backendID, "err", resolveErr)
+			return legacyScan(ctx, lib, deps)
+		}
+		store = resolved
+	}
+
+	// Fall back to legacy implementation when storage is missing (e.g. in
 	// the SQLite queue tests that pass nil for both).
-	if deps.Storage == nil || deps.Files == nil {
+	if store == nil || deps.Files == nil {
 		return legacyScan(ctx, lib, deps)
 	}
 
@@ -88,7 +106,7 @@ func LibraryScan(ctx context.Context, args LibraryScanArgs, deps LibraryScanDeps
 
 	// Phase 2: walk storage and collect WalkEntry slice.
 	var walked []scan.WalkEntry
-	entries, errc := scan.Walk(ctx, deps.Storage, root)
+	entries, errc := scan.Walk(ctx, store, root)
 	for e := range entries {
 		// Convert the absolute key (LocalFS rooted at "/") to library-
 		// relative location so it matches what the DB stores.
@@ -118,7 +136,7 @@ func LibraryScan(ctx context.Context, args LibraryScanArgs, deps LibraryScanDeps
 	// Changed: re-hash and update the row in place (or reattach on rename).
 	for _, ce := range cs.Changed {
 		key := joinKey(root, ce.Walk.Location)
-		hash, size, herr := hashing.HashFile(ctx, deps.Storage, key)
+		hash, size, herr := hashing.HashFile(ctx, store, key)
 		if herr != nil {
 			slog.Warn("library scan: rehash failed", "loc", ce.Walk.Location, "err", herr)
 			continue
@@ -302,4 +320,12 @@ func relativizeLocation(lib model.Library, abs string) string {
 		return abs[len(prefix):]
 	}
 	return abs
+}
+
+// orZero dereferences a *string, returning "" when nil.
+func orZero(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }

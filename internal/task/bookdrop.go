@@ -33,7 +33,16 @@ func (BookDropIngestArgs) Kind() string { return "bookdrop.ingest" }
 
 // BookDropDeps groups the services BookDropIngest needs.
 type BookDropDeps struct {
-	Svc     *service.BookDropService
+	Svc *service.BookDropService
+	// Resolver maps a backend_id to Storage (Plan F). When non-nil, bookdrop
+	// ingest uses the default backend (empty backend_id) for sidecar reads,
+	// because the bookdrop item does not yet carry a library_id at ingest time.
+	// Limitation: sidecars for libraries on non-default backends are not read
+	// during bookdrop ingest. Plan F2 addresses this when bookdrop carries
+	// library_id.
+	Resolver storage.Resolver
+	// Storage is the legacy single-backend field kept for backward compat.
+	// Used when Resolver is nil.
 	Storage storage.Storage // optional; nil disables sidecar lookup
 }
 
@@ -86,13 +95,28 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 		return nil
 	}
 
-	if deps.Storage != nil {
+	// Resolve the storage for sidecar reads. Bookdrop ingest doesn't know the
+	// library_id at this point, so we always use the default backend (empty
+	// backend_id). Sidecars for libraries on non-default backends are not
+	// discovered here — Plan F2 addresses this when bookdrop carries library_id.
+	var store storage.Storage
+	if deps.Resolver != nil {
+		if resolved, resolveErr := deps.Resolver.Resolve(""); resolveErr == nil {
+			store = resolved
+		} else {
+			slog.Warn("bookdrop sidecar resolve failed", "item_id", itemID, "err", resolveErr)
+		}
+	} else {
+		store = deps.Storage
+	}
+
+	if store != nil {
 		// Convert the absolute path into a storage key (Plan A LocalFS is
 		// rooted at "/" so we strip the leading slash). Then take the
 		// directory portion as the lookup prefix.
 		key := strings.TrimPrefix(item.Path, "/")
 		prefix := path.Dir(key)
-		if sc, scErr := sidecar.Read(ctx, deps.Storage, prefix); scErr == nil && !sc.IsZero() {
+		if sc, scErr := sidecar.Read(ctx, store, prefix); scErr == nil && !sc.IsZero() {
 			meta = layerSidecar(meta, sc)
 		} else if scErr != nil {
 			slog.Warn("bookdrop sidecar read failed", "item_id", itemID, "prefix", prefix, "err", scErr)

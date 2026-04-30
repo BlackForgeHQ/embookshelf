@@ -44,7 +44,7 @@ func newSQLiteQueue(
 	d *db.DB,
 	bdropSvc *service.BookDropService,
 	libSvc *service.LibraryService,
-	store storage.Storage,
+	resolver storage.Resolver,
 	fileRepo *repo.FileRepo,
 ) (*sqliteQueue, error) {
 	q := &sqliteQueue{
@@ -54,12 +54,12 @@ func newSQLiteQueue(
 		doneCh:   make(chan struct{}),
 	}
 
-	bdropDeps := task.BookDropDeps{Svc: bdropSvc, Storage: store}
+	bdropDeps := task.BookDropDeps{Svc: bdropSvc, Resolver: resolver}
 	libDeps := task.LibraryScanDeps{
 		BookDrop: bdropSvc,
 		Lib:      libSvc,
 		Queue:    q, // back-reference so LibraryScan can enqueue children
-		Storage:  store,
+		Resolver: resolver,
 		Files:    fileRepo,
 	}
 
