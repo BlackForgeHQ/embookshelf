@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 
@@ -631,5 +632,31 @@ func TestJSON_RoundTrip(t *testing.T) {
 	}
 	if len(got.Genres) != 2 || got.Genres[0] != "fiction" || got.Genres[1] != "literary" {
 		t.Errorf("Genres=%v, want [fiction literary]", got.Genres)
+	}
+
+	// Defense-in-depth: assert the wire-format keys are snake_case
+	// (spec §4.1). encoding/json round-trips PascalCase symmetrically
+	// when struct tags are absent, so the field-by-field check above
+	// would pass even if all tags were accidentally stripped — this
+	// pins the on-disk shape.
+	str := string(data)
+	for _, want := range []string{
+		`"title"`,
+		`"title_sort"`,
+		`"subtitle"`,
+		`"author"`,
+		`"description"`,
+		`"language"`,
+		`"publisher"`,
+		`"published_date"`,
+		`"isbn"`,
+		`"series"`,
+		`"series_index"`,
+		`"tags"`,
+		`"genres"`,
+	} {
+		if !strings.Contains(str, want) {
+			t.Errorf("encoded JSON missing key %s\noutput=%s", want, str)
+		}
 	}
 }
