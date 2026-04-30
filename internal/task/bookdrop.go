@@ -11,7 +11,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path"
 	"strings"
 
 	"github.com/riverqueue/river"
@@ -125,11 +124,10 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 	// directory portion as the lookup prefix.
 	{
 		key := strings.TrimPrefix(item.Path, "/")
-		prefix := path.Dir(key)
-		if sc, scErr := sidecar.Read(ctx, store, prefix); scErr == nil && !sc.IsZero() {
+		if sc, scErr := sidecar.Read(ctx, store, key); scErr == nil && !sc.IsZero() {
 			meta = layerSidecar(meta, sc)
 		} else if scErr != nil {
-			slog.Warn("bookdrop sidecar read failed", "item_id", itemID, "prefix", prefix, "err", scErr)
+			slog.Warn("bookdrop sidecar read failed", "item_id", itemID, "key", key, "err", scErr)
 			// non-fatal — proceed with embedded metadata only
 		}
 	}
