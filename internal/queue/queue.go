@@ -35,14 +35,14 @@ func New(
 	d *db.DB,
 	bdropSvc *service.BookDropService,
 	libSvc *service.LibraryService,
-	store storage.Storage,
+	resolver storage.Resolver,
 	fileRepo *repo.FileRepo,
 ) (Client, error) {
 	switch d.Dialect {
 	case db.DialectPostgres:
-		return newRiver(ctx, d, bdropSvc, libSvc, store, fileRepo)
+		return newRiver(ctx, d, bdropSvc, libSvc, resolver, fileRepo)
 	case db.DialectSQLite:
-		return newSQLiteQueue(ctx, d, bdropSvc, libSvc, store, fileRepo)
+		return newSQLiteQueue(ctx, d, bdropSvc, libSvc, resolver, fileRepo)
 	default:
 		return nil, fmt.Errorf("queue: unknown dialect %q", d.Dialect)
 	}
@@ -60,7 +60,7 @@ func newRiver(
 	d *db.DB,
 	bdropSvc *service.BookDropService,
 	libSvc *service.LibraryService,
-	store storage.Storage,
+	resolver storage.Resolver,
 	fileRepo *repo.FileRepo,
 ) (*RiverClient, error) {
 	if d.PG == nil {
@@ -78,7 +78,7 @@ func newRiver(
 	}
 
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &task.BookDropWorker{Deps: task.BookDropDeps{Svc: bdropSvc, Storage: store}})
+	river.AddWorker(workers, &task.BookDropWorker{Deps: task.BookDropDeps{Svc: bdropSvc, Resolver: resolver}})
 
 	// The scan worker needs to enqueue bookdrop.ingest jobs; wire that up
 	// after the client is constructed (circular dep resolved via the
@@ -87,7 +87,7 @@ func newRiver(
 		Deps: task.LibraryScanDeps{
 			BookDrop: bdropSvc,
 			Lib:      libSvc,
-			Storage:  store,
+			Resolver: resolver,
 			Files:    fileRepo,
 			// Queue is set after the river.Client is constructed (cyclic dep).
 		},

@@ -27,7 +27,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sse"
 	"github.com/blackforge/embookshelf/internal/staticfs"
-	"github.com/blackforge/embookshelf/internal/storage/local"
+	"github.com/blackforge/embookshelf/internal/storageloader"
 	"github.com/blackforge/embookshelf/internal/task"
 	"github.com/blackforge/embookshelf/internal/telemetry"
 )
@@ -93,9 +93,13 @@ func main() {
 		}
 	}
 
-	fileStorage, err := local.New("/")
+	storageResolver, err := storageloader.LoadStorageBackends(
+		ctx,
+		repo.NewStorageBackendRepo(dbh),
+		config.Dialect(string(dbh.Dialect)),
+	)
 	if err != nil {
-		slog.Error("storage init", "err", err)
+		slog.Error("storage backends", "err", err)
 		os.Exit(1)
 	}
 
@@ -217,7 +221,7 @@ func main() {
 	}
 
 	// Background queue. PG → River; SQLite → polling worker (queue.New dispatches by dialect).
-	q, err := queue.New(ctx, dbh, bdropSvc, libSvc, fileStorage, fileRepo)
+	q, err := queue.New(ctx, dbh, bdropSvc, libSvc, storageResolver, fileRepo)
 	if err != nil {
 		slog.Error("queue", "err", err)
 		os.Exit(1)
@@ -244,7 +248,7 @@ func main() {
 			Files:     fileRepo,
 			Libraries: libRepo,
 			Backends:  repo.NewStorageBackendRepo(dbh),
-			Storage:   fileStorage,
+			Resolver:  storageResolver,
 		}); err != nil {
 			slog.Warn("files backfill", "err", err)
 		}
