@@ -107,7 +107,7 @@ func TestLibraryRepo_setCoverHash(t *testing.T) {
 			}
 
 			// ListBooksMissingCoverHash should return our book.
-			missing, err := r.ListBooksMissingCoverHash(ctx)
+			missing, err := r.ListBooksMissingCoverHash(ctx, 100)
 			if err != nil {
 				t.Fatalf("ListBooksMissingCoverHash: %v", err)
 			}
@@ -137,7 +137,7 @@ func TestLibraryRepo_setCoverHash(t *testing.T) {
 			}
 
 			// ListBooksMissingCoverHash should no longer return our book.
-			missing2, err := r.ListBooksMissingCoverHash(ctx)
+			missing2, err := r.ListBooksMissingCoverHash(ctx, 100)
 			if err != nil {
 				t.Fatalf("ListBooksMissingCoverHash (after set): %v", err)
 			}

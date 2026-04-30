@@ -78,23 +78,16 @@ func storageV2AlreadyBackfilled(ctx context.Context, d *db.DB) (bool, error) {
 
 func setStorageV2Sentinel(ctx context.Context, d *db.DB) error {
 	val := `"true"` // JSON-encoded scalar string
-	switch d.Dialect {
-	case db.DialectPostgres:
-		_, err := d.SQL.ExecContext(ctx, `
-			INSERT INTO app_settings (name, value)
+	_, err := dialectExec(ctx, d,
+		`INSERT INTO app_settings (name, value)
 			VALUES ('storage_v2_backfilled', $1::jsonb)
-			ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
-		`, val)
-		return err
-	case db.DialectSQLite:
-		_, err := d.SQL.ExecContext(ctx, `
-			INSERT INTO app_settings (name, value, updated_at)
+			ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+		`INSERT INTO app_settings (name, value, updated_at)
 			VALUES ('storage_v2_backfilled', $1, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-			ON CONFLICT (name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-		`, val)
-		return err
-	}
-	return fmt.Errorf("unsupported dialect %q", d.Dialect)
+			ON CONFLICT (name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		val,
+	)
+	return err
 }
 
 // seedStorageBackends inserts one storage_backends row per distinct non-empty
@@ -128,16 +121,11 @@ func seedStorageBackends(ctx context.Context, d *db.DB) (int, error) {
 		}
 
 		var existsCount int
-		var checkSQL string
-		switch d.Dialect {
-		case db.DialectPostgres:
-			checkSQL = `SELECT count(*) FROM storage_backends WHERE kind = 'local' AND config->>'root' = $1`
-		case db.DialectSQLite:
-			checkSQL = `SELECT count(*) FROM storage_backends WHERE kind = 'local' AND json_extract(config, '$.root') = $1`
-		default:
-			return inserted, fmt.Errorf("unsupported dialect %q", d.Dialect)
-		}
-		if err := d.SQL.QueryRowContext(ctx, checkSQL, p).Scan(&existsCount); err != nil {
+		if err := dialectQueryRow(ctx, d,
+			`SELECT count(*) FROM storage_backends WHERE kind = 'local' AND config->>'root' = $1`,
+			`SELECT count(*) FROM storage_backends WHERE kind = 'local' AND json_extract(config, '$.root') = $1`,
+			p,
+		).Scan(&existsCount); err != nil {
 			return inserted, err
 		}
 		if existsCount > 0 {
@@ -145,16 +133,11 @@ func seedStorageBackends(ctx context.Context, d *db.DB) (int, error) {
 		}
 
 		id := uuid.NewString()
-		var insertSQL string
-		switch d.Dialect {
-		case db.DialectPostgres:
-			insertSQL = `INSERT INTO storage_backends (id, kind, config) VALUES ($1, 'local', $2::jsonb)`
-		case db.DialectSQLite:
-			insertSQL = `INSERT INTO storage_backends (id, kind, config, created_at) VALUES ($1, 'local', $2, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`
-		default:
-			return inserted, fmt.Errorf("unsupported dialect %q", d.Dialect)
-		}
-		if _, err := d.SQL.ExecContext(ctx, insertSQL, id, string(cfg)); err != nil {
+		if _, err := dialectExec(ctx, d,
+			`INSERT INTO storage_backends (id, kind, config) VALUES ($1, 'local', $2::jsonb)`,
+			`INSERT INTO storage_backends (id, kind, config, created_at) VALUES ($1, 'local', $2, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+			id, string(cfg),
+		); err != nil {
 			return inserted, err
 		}
 		inserted++
@@ -165,34 +148,24 @@ func seedStorageBackends(ctx context.Context, d *db.DB) (int, error) {
 // wireLibraries updates each library with a non-empty path to reference its
 // storage_backend and copies path → root. Returns the number of rows updated.
 func wireLibraries(ctx context.Context, d *db.DB) (int, error) {
-	var sqlStr string
-	switch d.Dialect {
-	case db.DialectPostgres:
-		sqlStr = `
-			UPDATE libraries
+	res, err := dialectExec(ctx, d,
+		`UPDATE libraries
 			SET backend_id = sb.id,
 			    root       = libraries.path
 			FROM storage_backends sb
 			WHERE sb.kind = 'local'
 			  AND sb.config->>'root' = libraries.path
 			  AND libraries.path <> ''
-			  AND libraries.backend_id IS NULL
-		`
-	case db.DialectSQLite:
+			  AND libraries.backend_id IS NULL`,
 		// SQLite UPDATE doesn't support FROM; use a subquery.
-		sqlStr = `
-			UPDATE libraries
+		`UPDATE libraries
 			SET backend_id = (
 				SELECT id FROM storage_backends
 				WHERE kind = 'local' AND json_extract(config, '$.root') = libraries.path
 			),
 			root = libraries.path
-			WHERE libraries.path <> '' AND libraries.backend_id IS NULL
-		`
-	default:
-		return 0, fmt.Errorf("unsupported dialect %q", d.Dialect)
-	}
-	res, err := d.SQL.ExecContext(ctx, sqlStr)
+			WHERE libraries.path <> '' AND libraries.backend_id IS NULL`,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -289,24 +262,41 @@ func seedFilesFromBooks(ctx context.Context, d *db.DB) (int, error) {
 			}
 		}
 
-		var stmt string
-		switch d.Dialect {
-		case db.DialectPostgres:
-			stmt = `INSERT INTO files (id, library_id, book_id, location, size, mtime, format, last_scanned)
+		if _, err := dialectExec(ctx, d,
+			`INSERT INTO files (id, library_id, book_id, location, size, mtime, format, last_scanned)
 					VALUES ($1, $2, $3, $4, 0, $5, $6, $5)
-					ON CONFLICT (library_id, location) DO NOTHING`
-		case db.DialectSQLite:
-			stmt = `INSERT INTO files (id, library_id, book_id, location, size, mtime, format, last_scanned)
+					ON CONFLICT (library_id, location) DO NOTHING`,
+			`INSERT INTO files (id, library_id, book_id, location, size, mtime, format, last_scanned)
 					VALUES ($1, $2, $3, $4, 0, $5, $6, $5)
-					ON CONFLICT(library_id, location) DO NOTHING`
-		default:
-			return 0, fmt.Errorf("unsupported dialect %q", d.Dialect)
-		}
-		if _, err := d.SQL.ExecContext(ctx, stmt,
+					ON CONFLICT(library_id, location) DO NOTHING`,
 			uuid.NewString(), bf.libraryID, bf.bookID, loc, bf.updatedAt, bf.format,
 		); err != nil {
 			return 0, err
 		}
 	}
 	return len(batch), nil
+}
+
+// dialectExec executes pgSQL on Postgres or sqliteSQL on SQLite.
+func dialectExec(ctx context.Context, d *db.DB, pgSQL, sqliteSQL string, args ...any) (sql.Result, error) {
+	switch d.Dialect {
+	case db.DialectPostgres:
+		return d.SQL.ExecContext(ctx, pgSQL, args...)
+	case db.DialectSQLite:
+		return d.SQL.ExecContext(ctx, sqliteSQL, args...)
+	}
+	return nil, fmt.Errorf("unsupported dialect %q", d.Dialect)
+}
+
+// dialectQueryRow executes pgSQL on Postgres or sqliteSQL on SQLite,
+// returning a single row for scanning. Panics on an unknown dialect — this
+// represents a programmer error, not a runtime condition.
+func dialectQueryRow(ctx context.Context, d *db.DB, pgSQL, sqliteSQL string, args ...any) *sql.Row {
+	switch d.Dialect {
+	case db.DialectPostgres:
+		return d.SQL.QueryRowContext(ctx, pgSQL, args...)
+	case db.DialectSQLite:
+		return d.SQL.QueryRowContext(ctx, sqliteSQL, args...)
+	}
+	panic(fmt.Sprintf("unsupported dialect %q", d.Dialect))
 }
