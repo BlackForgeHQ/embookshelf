@@ -2,6 +2,9 @@ package repo
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"time"
 
 	"github.com/blackforge/embookshelf/internal/db"
 )
@@ -12,6 +15,33 @@ type ProgressRepo struct {
 
 func NewProgressRepo(db *db.DB) *ProgressRepo {
 	return &ProgressRepo{db: db}
+}
+
+// LatestForBook returns the most recent last_read_at across all users
+// for the given bookID. Returns a zero time.Time when no progress rows
+// exist (book never opened).
+func (r *ProgressRepo) LatestForBook(ctx context.Context, bookID string) (time.Time, error) {
+	const qPG = `SELECT MAX(last_read_at) FROM user_book_progress WHERE book_id = $1`
+	const qSQLite = `SELECT MAX(last_read_at) FROM user_book_progress WHERE book_id = ?`
+
+	var raw any
+	err := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), bookID).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return time.Time{}, nil
+		}
+		return time.Time{}, err
+	}
+	if raw == nil {
+		// No rows matched — book has never been read.
+		return time.Time{}, nil
+	}
+
+	var t time.Time
+	if err := db.ScanTime(r.db.Dialect, raw, &t); err != nil {
+		return time.Time{}, err
+	}
+	return t, nil
 }
 
 // Set records a user's progress for a book. The CFI argument is optional; an
