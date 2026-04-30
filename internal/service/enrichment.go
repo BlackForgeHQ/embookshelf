@@ -35,6 +35,7 @@ type EnrichmentService struct {
 	providers []provider.Provider
 	settings  *repo.ProviderSettingsRepo
 	libs      *repo.LibraryRepo
+	books     *repo.BookRepo
 	covers    *coverstore.Store
 	http      *http.Client
 	// cipher encrypts password-kind config fields (API keys, tokens,
@@ -91,6 +92,7 @@ func NewEnrichmentService(
 	providers []provider.Provider,
 	settings *repo.ProviderSettingsRepo,
 	libs *repo.LibraryRepo,
+	books *repo.BookRepo,
 	covers *coverstore.Store,
 	cipher crypto.Cipher,
 ) *EnrichmentService {
@@ -101,6 +103,7 @@ func NewEnrichmentService(
 		providers: providers,
 		settings:  settings,
 		libs:      libs,
+		books:     books,
 		covers:    covers,
 		http:      &http.Client{Timeout: 15 * time.Second},
 		cipher:    cipher,
@@ -641,7 +644,7 @@ func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m p
 		}
 	}
 
-	if err := s.libs.UpdateMetadata(ctx, book); err != nil {
+	if err := s.books.UpdateMetadata(ctx, book); err != nil {
 		return model.Book{}, err
 	}
 
@@ -902,7 +905,7 @@ func (s *EnrichmentService) ImportCoverFromURL(ctx context.Context, bookID, rawU
 	if err := s.covers.SaveBook(bookID, body); err != nil {
 		return "", err
 	}
-	if err := s.libs.SetCover(ctx, bookID, true, mime); err != nil {
+	if err := s.books.SetCover(ctx, bookID, true, mime); err != nil {
 		return "", err
 	}
 	return mime, nil

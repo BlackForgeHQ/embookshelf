@@ -13,6 +13,7 @@
 package coverstore
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -130,6 +131,34 @@ func (s *Store) HashedPath(hash []byte, mime string) string {
 	hex := fmt.Sprintf("%x", hash)
 	bucket := hex[:2]
 	return filepath.Join(s.hashedDir(), bucket, hex+extForMIME(mime))
+}
+
+// PromoteBookDrop reads a staged cover at bookdrop/{id}, hashes it,
+// writes the bytes under the hash-keyed namespace (covers/<hh>/<hex><ext>),
+// and best-effort deletes the bookdrop staging file. Returns the sha256
+// digest the caller should record on the books row's cover_hash column.
+//
+// Each step short-circuits on failure: if Open fails, SaveBookHashed
+// never runs; if SaveBookHashed fails, DeleteBookDrop never runs. The
+// staging file survives any failure so a future retry can pick up where
+// this one left off.
+func (s *Store) PromoteBookDrop(bookdropID, mime string) ([]byte, error) {
+	rc, err := s.OpenBookDrop(bookdropID)
+	if err != nil {
+		return nil, fmt.Errorf("open bookdrop cover: %w", err)
+	}
+	data, err := io.ReadAll(rc)
+	_ = rc.Close()
+	if err != nil {
+		return nil, fmt.Errorf("read bookdrop cover: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	if err := s.SaveBookHashed(sum[:], mime, data); err != nil {
+		return nil, fmt.Errorf("save hashed cover: %w", err)
+	}
+	// Best-effort cleanup; non-fatal — the bytes are already promoted.
+	_ = s.DeleteBookDrop(bookdropID)
+	return sum[:], nil
 }
 
 // SaveBookHashed writes data atomically to the hash-keyed path.

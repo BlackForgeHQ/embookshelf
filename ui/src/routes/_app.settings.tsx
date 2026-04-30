@@ -1,25 +1,8 @@
-import { useEffect, useMemo, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMemo, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
-import { toast } from "sonner"
-import type { CSSProperties, ReactNode } from "react"
+import type { ReactNode } from "react"
 
-import type { ApiError } from "@/api/client"
-import type {
-  LibraryKind,
-  MetadataSettings,
-  ProviderConfigField,
-  ProviderInfo,
-  ProviderPatch,
-  SettingsLibrary,
-} from "@/api/settings"
-import type {
-  OidcAdminSettings,
-  OidcTestCheck,
-  OidcTestResult,
-  ProviderSlug,
-} from "@/api/oidc"
-import type { AuthUser } from "@/api/auth"
 import { AboutPanel } from "@/components/settings/AboutPanel"
 import { BackupsPanel } from "@/components/settings/BackupsPanel"
 import { OidcPanel } from "@/components/settings/OidcPanel"
@@ -28,60 +11,14 @@ import { EmailPanel } from "@/components/settings/EmailPanel"
 import { ProvidersPanel } from "@/components/settings/ProvidersPanel"
 import { LibrariesPanel } from "@/components/settings/LibrariesPanel"
 import {
-  appConfigQueryKey,
-  approveSettingsUser,
-  createLibrary,
-  createSettingsUser,
-  deleteLibrary,
-  deleteSettingsUser,
-  denySettingsUser,
-  fetchAppConfig,
-  fetchInstanceInfo,
-  fetchMetadataSettings,
-  fetchProviderSettings,
-  fetchSettingsLibraries,
   fetchSettingsUsers,
-  instanceInfoQueryKey,
-  metadataSettingsQueryKey,
-  prescanLibraryPaths,
-  providerSettingsQueryKey,
-  rescanLibrary,
-  settingsLibrariesQueryKey,
   settingsUsersQueryKey,
-  updateMetadataSettings,
-  updateProviderSetting,
-  updateSettingsUserRole,
 } from "@/api/settings"
-import {
-  fetchOidcAdminSettings,
-  oidcAdminSettingsQueryKey,
-  saveOidcAdminSettings,
-  testOidcProvider,
-} from "@/api/oidc"
 import { fetchMe, meQueryKey } from "@/api/auth"
-import { Icon } from "@/components/Icon"
 import {
-  AdminGate,
-  Avatar,
-  Card,
-  DefRow,
-  Field,
-  Select,
   SettingsShell,
 } from "@/components/SettingsShared"
 import { TopBar } from "@/components/TopBar"
-import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
 
 export const Route = createFileRoute("/_app/settings")({
   component: Admin,
@@ -169,8 +106,6 @@ function Admin() {
     </div>
   )
 }
-
-
 
 function PendingBadge({ count }: { count: number }) {
   return (

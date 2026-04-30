@@ -1,81 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { createFileRoute } from "@tanstack/react-router"
-import { toast } from "sonner"
-import type { CSSProperties, ReactNode } from "react"
-
-import type { ApiError } from "@/api/client"
-import type {
-  LibraryKind,
-  MetadataSettings,
-  ProviderConfigField,
-  ProviderInfo,
-  ProviderPatch,
-  SettingsLibrary,
-} from "@/api/settings"
-import type {
-  OidcAdminSettings,
-  OidcTestCheck,
-  OidcTestResult,
-  ProviderSlug,
-} from "@/api/oidc"
-import type { AuthUser } from "@/api/auth"
-import {
-  appConfigQueryKey,
-  approveSettingsUser,
-  createLibrary,
-  createSettingsUser,
-  deleteLibrary,
-  deleteSettingsUser,
-  denySettingsUser,
-  fetchAppConfig,
-  fetchInstanceInfo,
-  fetchMetadataSettings,
-  fetchProviderSettings,
-  fetchSettingsLibraries,
-  fetchSettingsUsers,
-  instanceInfoQueryKey,
-  metadataSettingsQueryKey,
-  prescanLibraryPaths,
-  providerSettingsQueryKey,
-  rescanLibrary,
-  settingsLibrariesQueryKey,
-  settingsUsersQueryKey,
-  updateMetadataSettings,
-  updateProviderSetting,
-  updateSettingsUserRole,
-} from "@/api/settings"
-import {
-  fetchOidcAdminSettings,
-  oidcAdminSettingsQueryKey,
-  saveOidcAdminSettings,
-  testOidcProvider,
-} from "@/api/oidc"
-import { fetchMe, meQueryKey } from "@/api/auth"
-import { Icon } from "@/components/Icon"
-import {
-  AdminGate,
-  Avatar,
-  Card,
-  DefRow,
-  Field,
-  Select,
-  SettingsShell,
-} from "@/components/SettingsShared"
-import { TopBar } from "@/components/TopBar"
-import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
-
+import { AdminGate, Card, DefRow } from "@/components/SettingsShared"
 
 export function EmailPanel({ isAdmin }: { isAdmin: boolean }) {
   if (!isAdmin) return <AdminGate label="Email delivery" />
@@ -101,29 +24,6 @@ export function EmailPanel({ isAdmin }: { isAdmin: boolean }) {
         server.
       </p>
     </>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Users & roles (admin CRUD)
-// ---------------------------------------------------------------------------
-
-function PendingBadge({ count }: { count: number }) {
-  return (
-    <span
-      data-testid="users-tab-badge"
-      style={{
-        padding: "1px 6px",
-        borderRadius: 999,
-        background: "var(--color-amber-bg, #fff5cc)",
-        color: "var(--color-amber-ink, #8a5b00)",
-        fontSize: 10,
-        fontWeight: 600,
-        lineHeight: 1.6,
-      }}
-    >
-      {count}
-    </span>
   )
 }
 

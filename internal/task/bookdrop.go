@@ -134,11 +134,37 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 		}
 	}
 
-	return deps.Svc.RecordMetadata(
+	if err := deps.Svc.RecordMetadata(
 		ctx, itemID,
 		meta.Title, meta.Author, meta.Description, meta.Language,
 		meta.CoverBytes, meta.CoverMime,
-	)
+	); err != nil {
+		return err
+	}
+
+	// Audio formats: persist duration / narrator on the bookdrop row so
+	// Approve doesn't need a re-extract pass post-Place. Non-audio
+	// processors leave these zero, so the call is a no-op shape (NULL
+	// duration, empty narrator, nil chapters) — but we skip it anyway
+	// to avoid an unnecessary UPDATE.
+	if isAudioFormat(item.Format) {
+		if err := deps.Svc.SetAudio(ctx, itemID, meta.DurationSeconds, meta.Narrator, nil); err != nil {
+			slog.Warn("bookdrop set audio failed", "item_id", itemID, "err", err)
+			// Non-fatal: text metadata is already recorded. Approve
+			// will simply leave the audio fields empty.
+		}
+	}
+	return nil
+}
+
+// isAudioFormat reports whether a books.format / bookdrop_items.format
+// value names an audio file the AudioProcessor extracts metadata from.
+func isAudioFormat(f string) bool {
+	switch f {
+	case "MP3", "M4B":
+		return true
+	}
+	return false
 }
 
 // layerSidecar overlays non-empty sidecar fields onto metadata returned

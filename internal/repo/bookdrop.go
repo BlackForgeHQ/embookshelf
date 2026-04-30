@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -21,7 +22,8 @@ func NewBookDropRepo(d *db.DB) *BookDropRepo {
 
 const bdCols = `id, path, file_size, format, state, progress, error_msg,
                 title, author, description, language, has_cover, cover_mime, book_id,
-                discovered_at, updated_at, content_hash`
+                discovered_at, updated_at, content_hash,
+                duration_seconds, narrator, chapters`
 
 // Insert records a newly-discovered file. Returns the inserted row; if a row
 // already exists for that path, returns (existing, ErrAlreadyExists).
@@ -178,11 +180,14 @@ func (r *BookDropRepo) scanBookDrop(s scanner) (model.BookDropItem, error) {
 		state         string
 		discoveredAny any
 		updatedAny    any
+		durationAny   any
+		chaptersAny   any
 	)
 	err := s.Scan(
 		&item.ID, &item.Path, &item.FileSize, &item.Format, &state, &item.Progress, &item.ErrorMsg,
 		&item.Title, &item.Author, &item.Description, &item.Language, &item.HasCover, &item.CoverMime, &item.BookID,
 		&discoveredAny, &updatedAny, &item.ContentHash,
+		&durationAny, &item.Narrator, &chaptersAny,
 	)
 	if err != nil {
 		if dberr.IsNotFound(err) {
@@ -197,7 +202,78 @@ func (r *BookDropRepo) scanBookDrop(s scanner) (model.BookDropItem, error) {
 	if err := db.ScanTime(r.db.Dialect, updatedAny, &item.UpdatedAt); err != nil {
 		return item, fmt.Errorf("scan updated_at: %w", err)
 	}
+	if v, ok := durationAny.(int64); ok {
+		n := int(v)
+		item.DurationSeconds = &n
+	}
+	// chapters: TEXT JSON on SQLite, JSONB on PG. NULL → nil slice.
+	if chaptersAny != nil {
+		var raw []byte
+		switch v := chaptersAny.(type) {
+		case []byte:
+			raw = v
+		case string:
+			raw = []byte(v)
+		}
+		if len(raw) > 0 {
+			var ch []model.Chapter
+			if err := json.Unmarshal(raw, &ch); err == nil && len(ch) > 0 {
+				item.Chapters = ch
+			}
+		}
+	}
 	return item, nil
+}
+
+// SetAudio writes the audiobook fields extracted at ingest. nil
+// chapters writes SQL NULL so the UI can distinguish "no chapter
+// metadata" from "empty chapter list". Approve carries these straight
+// to the books row, removing the need for a re-extract pass post-Place.
+func (r *BookDropRepo) SetAudio(
+	ctx context.Context,
+	itemID string,
+	durationSeconds *int,
+	narrator string,
+	chapters []model.Chapter,
+) error {
+	var chaptersVal any
+	if chapters != nil {
+		b, err := json.Marshal(chapters)
+		if err != nil {
+			return fmt.Errorf("encode chapters: %w", err)
+		}
+		chaptersVal = string(b)
+	}
+	const qPG = `
+		UPDATE bookdrop_items
+		SET duration_seconds = $2, narrator = $3, chapters = $4,
+		    updated_at = now()
+		WHERE id = $1
+	`
+	const qSQLite = `
+		UPDATE bookdrop_items
+		SET duration_seconds = ?, narrator = ?, chapters = ?,
+		    updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		WHERE id = ?
+	`
+	var res sql.Result
+	var err error
+	if r.db.Dialect == db.DialectSQLite {
+		res, err = r.db.SQL.ExecContext(ctx, qSQLite, durationSeconds, narrator, chaptersVal, itemID)
+	} else {
+		res, err = r.db.SQL.ExecContext(ctx, qPG, itemID, durationSeconds, narrator, chaptersVal)
+	}
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // SetContentHash records the sha256 computed during ingest.

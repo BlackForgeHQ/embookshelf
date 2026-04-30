@@ -18,10 +18,11 @@ func newLibSvc(t *testing.T, dialect string, deps service.LibraryServiceDeps) *s
 	t.Helper()
 	d := repotest.NewWithDialect(t, dialect)
 	lr := repo.NewLibraryRepo(d)
+	bookr := repo.NewBookRepo(d)
 	br := repo.NewStorageBackendRepo(d)
 	deps.Backends = br
 	deps.Dialect = config.Dialect(dialect)
-	return service.NewLibraryService(lr, deps)
+	return service.NewLibraryService(lr, bookr, deps)
 }
 
 // TestLibraryService_Create_local verifies that creating a local library

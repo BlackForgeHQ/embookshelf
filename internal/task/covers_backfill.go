@@ -15,9 +15,9 @@ import (
 
 // CoversBackfillDeps groups the dependencies the cover migration needs.
 type CoversBackfillDeps struct {
-	Library *repo.LibraryRepo
-	Covers  *coverstore.Store
-	Sleep   time.Duration // pause between books; 0 → no pause
+	Books  *repo.BookRepo
+	Covers *coverstore.Store
+	Sleep  time.Duration // pause between books; 0 → no pause
 }
 
 // RunCoversBackfill walks every book whose CoverHash is NULL and has
@@ -29,7 +29,7 @@ type CoversBackfillDeps struct {
 // are backfilled, so subsequent calls are no-ops. Errors per-book are
 // logged and skipped; the next boot retries.
 func RunCoversBackfill(ctx context.Context, deps CoversBackfillDeps) error {
-	if deps.Library == nil || deps.Covers == nil {
+	if deps.Books == nil || deps.Covers == nil {
 		return nil
 	}
 	cfg := DrainConfig{
@@ -37,7 +37,7 @@ func RunCoversBackfill(ctx context.Context, deps CoversBackfillDeps) error {
 		Sleep: deps.Sleep,
 	}
 	_, err := Drain(ctx, cfg,
-		deps.Library.ListBooksMissingCoverHash,
+		deps.Books.ListMissingCoverHash,
 		func(b model.Book) string { return b.ID },
 		func(ctx context.Context, b model.Book) error {
 			legacy := deps.Covers.BookPath(b.ID)
@@ -66,7 +66,7 @@ func RunCoversBackfill(ctx context.Context, deps CoversBackfillDeps) error {
 				slog.Warn("covers backfill: save hashed", "book_id", b.ID, "err", err)
 				return err
 			}
-			if err := deps.Library.SetCoverHash(ctx, b.ID, sum); err != nil {
+			if err := deps.Books.SetCoverHash(ctx, b.ID, sum); err != nil {
 				slog.Warn("covers backfill: set hash", "book_id", b.ID, "err", err)
 				return err
 			}

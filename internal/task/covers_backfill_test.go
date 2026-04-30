@@ -17,17 +17,18 @@ import (
 
 // newCoversBackfillDeps creates a CoversBackfillDeps wired to a fresh SQLite
 // DB and a coverstore rooted at a temp directory.
-func newCoversBackfillDeps(t *testing.T) (task.CoversBackfillDeps, *repo.LibraryRepo, string) {
+func newCoversBackfillDeps(t *testing.T) (task.CoversBackfillDeps, *repo.LibraryRepo, *repo.BookRepo, string) {
 	t.Helper()
 	d := repotest.NewWithDialect(t, "sqlite")
 	coverRoot := t.TempDir()
 	cs := coverstore.New(coverRoot)
 	lr := repo.NewLibraryRepo(d)
+	br := repo.NewBookRepo(d)
 	deps := task.CoversBackfillDeps{
-		Library: lr,
-		Covers:  cs,
+		Books:  br,
+		Covers: cs,
 	}
-	return deps, lr, coverRoot
+	return deps, lr, br, coverRoot
 }
 
 // createBookWithLegacyCover creates a library + book row with has_cover=true
@@ -35,6 +36,7 @@ func newCoversBackfillDeps(t *testing.T) (task.CoversBackfillDeps, *repo.Library
 func createBookWithLegacyCover(
 	t *testing.T,
 	lr *repo.LibraryRepo,
+	br *repo.BookRepo,
 	cs *coverstore.Store,
 	coverRoot string,
 	data []byte,
@@ -46,7 +48,7 @@ func createBookWithLegacyCover(
 	if err != nil {
 		t.Fatalf("CreateLibrary: %v", err)
 	}
-	book, err := lr.Create(ctx, model.Book{
+	book, err := br.Create(ctx, model.Book{
 		LibraryID: lib.ID,
 		Title:     "Legacy Cover Book",
 		HasCover:  true,
@@ -70,7 +72,7 @@ func createBookWithLegacyCover(
 
 // TestRunCoversBackfill_noBooksNoOp verifies that 0 books missing hash → no-op.
 func TestRunCoversBackfill_noBooksNoOp(t *testing.T) {
-	deps, _, _ := newCoversBackfillDeps(t)
+	deps, _, _, _ := newCoversBackfillDeps(t)
 	if err := task.RunCoversBackfill(context.Background(), deps); err != nil {
 		t.Fatalf("no books: got %v, want nil", err)
 	}
@@ -80,11 +82,11 @@ func TestRunCoversBackfill_noBooksNoOp(t *testing.T) {
 // 1 book with legacy cover, NULL cover_hash → after backfill: hash computed,
 // file at hashed path matches bytes, DB row has cover_hash, legacy file deleted.
 func TestRunCoversBackfill_migratesLegacyCover(t *testing.T) {
-	deps, lr, coverRoot := newCoversBackfillDeps(t)
+	deps, lr, br, coverRoot := newCoversBackfillDeps(t)
 	cs := coverstore.New(coverRoot)
 
 	coverData := []byte("fake jpeg cover bytes")
-	book := createBookWithLegacyCover(t, lr, cs, coverRoot, coverData)
+	book := createBookWithLegacyCover(t, lr, br, cs, coverRoot, coverData)
 
 	ctx := context.Background()
 	if err := task.RunCoversBackfill(ctx, deps); err != nil {
@@ -92,7 +94,7 @@ func TestRunCoversBackfill_migratesLegacyCover(t *testing.T) {
 	}
 
 	// DB row should now have cover_hash set.
-	got, err := lr.GetBookByID(ctx, "", book.ID)
+	got, err := br.GetByID(ctx, "", book.ID)
 	if err != nil {
 		t.Fatalf("GetBookByID after backfill: %v", err)
 	}
@@ -126,14 +128,14 @@ func TestRunCoversBackfill_migratesLegacyCover(t *testing.T) {
 // TestRunCoversBackfill_missingLegacyFileSkipped verifies that a book with
 // NULL cover_hash but a missing legacy file is skipped gracefully (no DB change).
 func TestRunCoversBackfill_missingLegacyFileSkipped(t *testing.T) {
-	deps, lr, _ := newCoversBackfillDeps(t)
+	deps, lr, br, _ := newCoversBackfillDeps(t)
 	ctx := context.Background()
 
 	lib, err := lr.CreateLibrary(ctx, "Skip Lib", "skip-lib", "/tmp/sl", nil)
 	if err != nil {
 		t.Fatalf("CreateLibrary: %v", err)
 	}
-	book, err := lr.Create(ctx, model.Book{
+	book, err := br.Create(ctx, model.Book{
 		LibraryID: lib.ID,
 		Title:     "No File Book",
 		HasCover:  true,
@@ -149,7 +151,7 @@ func TestRunCoversBackfill_missingLegacyFileSkipped(t *testing.T) {
 	}
 
 	// DB row should still have nil CoverHash.
-	got, err := lr.GetBookByID(ctx, "", book.ID)
+	got, err := br.GetByID(ctx, "", book.ID)
 	if err != nil {
 		t.Fatalf("GetBookByID: %v", err)
 	}
@@ -161,11 +163,11 @@ func TestRunCoversBackfill_missingLegacyFileSkipped(t *testing.T) {
 // TestRunCoversBackfill_idempotent verifies that re-running after success is a
 // no-op (the LIMIT-500 query returns no rows).
 func TestRunCoversBackfill_idempotent(t *testing.T) {
-	deps, lr, coverRoot := newCoversBackfillDeps(t)
+	deps, lr, br, coverRoot := newCoversBackfillDeps(t)
 	cs := coverstore.New(coverRoot)
 
 	coverData := []byte("idempotent cover")
-	book := createBookWithLegacyCover(t, lr, cs, coverRoot, coverData)
+	book := createBookWithLegacyCover(t, lr, br, cs, coverRoot, coverData)
 
 	ctx := context.Background()
 
@@ -175,7 +177,7 @@ func TestRunCoversBackfill_idempotent(t *testing.T) {
 	}
 
 	// Verify it was set.
-	got, err := lr.GetBookByID(ctx, "", book.ID)
+	got, err := br.GetByID(ctx, "", book.ID)
 	if err != nil {
 		t.Fatalf("GetBookByID after first run: %v", err)
 	}
@@ -190,7 +192,7 @@ func TestRunCoversBackfill_idempotent(t *testing.T) {
 		t.Fatalf("second run: %v", err)
 	}
 
-	got2, err := lr.GetBookByID(ctx, "", book.ID)
+	got2, err := br.GetByID(ctx, "", book.ID)
 	if err != nil {
 		t.Fatalf("GetBookByID after second run: %v", err)
 	}

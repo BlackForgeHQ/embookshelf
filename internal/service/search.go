@@ -15,6 +15,7 @@ import (
 // they run concurrently and an error in any cancels the others.
 type SearchService struct {
 	lib   *repo.LibraryRepo
+	books *repo.BookRepo
 	shelf *repo.ShelfRepo
 }
 
@@ -35,8 +36,8 @@ const (
 	maxSuggestLimit     = 20
 )
 
-func NewSearchService(lib *repo.LibraryRepo, shelf *repo.ShelfRepo) *SearchService {
-	return &SearchService{lib: lib, shelf: shelf}
+func NewSearchService(lib *repo.LibraryRepo, books *repo.BookRepo, shelf *repo.ShelfRepo) *SearchService {
+	return &SearchService{lib: lib, books: books, shelf: shelf}
 }
 
 // Suggest runs the three repo queries in parallel and assembles the
@@ -56,7 +57,7 @@ func (s *SearchService) Suggest(ctx context.Context, userID, q string, limit int
 	var result SuggestResult
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		books, err := s.lib.SearchSuggestBooks(ctx, q, limit)
+		books, err := s.books.SearchSuggest(ctx, q, limit)
 		if err != nil {
 			return err
 		}
@@ -72,7 +73,7 @@ func (s *SearchService) Suggest(ctx context.Context, userID, q string, limit int
 		return nil
 	})
 	g.Go(func() error {
-		libs, err := s.lib.SearchSuggestLibraries(ctx, q, limit)
+		libs, err := s.lib.SearchSuggest(ctx, q, limit)
 		if err != nil {
 			return err
 		}

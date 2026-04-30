@@ -41,12 +41,13 @@ type LibraryServiceDeps struct {
 }
 
 type LibraryService struct {
-	repo *repo.LibraryRepo
-	deps LibraryServiceDeps
+	repo  *repo.LibraryRepo
+	books *repo.BookRepo
+	deps  LibraryServiceDeps
 }
 
-func NewLibraryService(r *repo.LibraryRepo, deps LibraryServiceDeps) *LibraryService {
-	return &LibraryService{repo: r, deps: deps}
+func NewLibraryService(r *repo.LibraryRepo, b *repo.BookRepo, deps LibraryServiceDeps) *LibraryService {
+	return &LibraryService{repo: r, books: b, deps: deps}
 }
 
 func (s *LibraryService) List(ctx context.Context) ([]model.Library, error) {
@@ -200,19 +201,19 @@ func slugify(name string) string {
 }
 
 func (s *LibraryService) Books(ctx context.Context, userID, librarySlug string) ([]model.Book, error) {
-	return s.repo.BooksByLibrarySlug(ctx, userID, librarySlug)
+	return s.books.BooksByLibrarySlug(ctx, userID, librarySlug)
 }
 
 func (s *LibraryService) Search(ctx context.Context, userID, librarySlug string, p model.SearchParams) ([]model.Book, error) {
-	return s.repo.Search(ctx, userID, librarySlug, p)
+	return s.books.Search(ctx, userID, librarySlug, p)
 }
 
 func (s *LibraryService) GetBook(ctx context.Context, userID, id string) (model.Book, error) {
-	return s.repo.GetBookByID(ctx, userID, id)
+	return s.books.GetByID(ctx, userID, id)
 }
 
 func (s *LibraryService) UpdateBookMetadata(ctx context.Context, b model.Book) error {
-	return s.repo.UpdateMetadata(ctx, b)
+	return s.books.UpdateMetadata(ctx, b)
 }
 
 // DeleteBook hard-deletes a book. FKs on shelf_books, annotations,
@@ -221,12 +222,12 @@ func (s *LibraryService) UpdateBookMetadata(ctx context.Context, b model.Book) e
 // service stays out of the filesystem to keep this layer testable
 // without a mounted library root.
 func (s *LibraryService) DeleteBook(ctx context.Context, id string) error {
-	return s.repo.Delete(ctx, id)
+	return s.books.Delete(ctx, id)
 }
 
 // BookExistsByPath reports whether any non-deleted book already references
 // this on-disk path. Used by the library scanner to avoid re-queuing files
 // that are already in the library.
 func (s *LibraryService) BookExistsByPath(ctx context.Context, path string) (bool, error) {
-	return s.repo.BookExistsByPath(ctx, path)
+	return s.books.ExistsByPath(ctx, path)
 }

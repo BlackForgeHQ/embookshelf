@@ -35,6 +35,12 @@ type BookDropItem struct {
 	// ContentHash is the SHA-256 digest of the file content, computed
 	// during ingest. nil (or empty) until Task 9 fills it.
 	ContentHash []byte
+	// Audiobook metadata extracted at ingest. Approve carries these
+	// straight to the books row, so audio formats no longer need a
+	// re-extract pass post-Place. Non-audio formats leave them zero.
+	DurationSeconds *int
+	Narrator        string
+	Chapters        []Chapter
 }
 
 // IsTerminal reports whether no further transitions are expected.

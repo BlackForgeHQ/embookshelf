@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import type { CSSProperties } from "react"
 
 import type { Book } from "@/api/books"
 import {
@@ -270,8 +269,6 @@ function GridLayout({
   )
 }
 
-const LIST_GRID = "46px 2fr 1.2fr 80px 80px 60px"
-
 function ListLayout({
   books,
   onOpen,
@@ -362,7 +359,7 @@ function BookCard({
         >
           {book.title}
         </div>
-        <div className="t-small" className="text-xs italic text-muted-foreground mt-0.5">
+        <div className="text-xs italic text-muted-foreground mt-0.5">
           {book.author}
         </div>
         {book.progress > 0 && book.progress < 1 && (

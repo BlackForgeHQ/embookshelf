@@ -109,6 +109,7 @@ func main() {
 
 	// Repositories.
 	libRepo := repo.NewLibraryRepo(dbh)
+	bookRepo := repo.NewBookRepo(dbh)
 	shelfRepo := repo.NewShelfRepo(dbh)
 	userRepo := repo.NewUserRepo(dbh)
 	sessionRepo := repo.NewSessionRepo(dbh)
@@ -129,14 +130,14 @@ func main() {
 
 	// Services.
 	backendRepo := repo.NewStorageBackendRepo(dbh)
-	libSvc := service.NewLibraryService(libRepo, service.LibraryServiceDeps{
+	libSvc := service.NewLibraryService(libRepo, bookRepo, service.LibraryServiceDeps{
 		Backends: backendRepo,
 		SharedS3: cfg.SharedS3,
 		Resolver: storageResolver,
 		Dialect:  config.Dialect(string(dbh.Dialect)),
 	})
 	shelfSvc := service.NewShelfService(shelfRepo)
-	searchSvc := service.NewSearchService(libRepo, shelfRepo)
+	searchSvc := service.NewSearchService(libRepo, bookRepo, shelfRepo)
 	authSvc := service.NewAuthService(userRepo, sessionRepo, hub)
 	libStore := service.NewLibraryStore(service.LibraryStoreDeps{
 		Libs:            libRepo,
@@ -146,7 +147,7 @@ func main() {
 		PresignTTL:      cfg.PresignTTL,
 		PresignFallback: cfg.PresignFallback,
 	})
-	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, appSettingsRepo, covers, hub, fileRepo).
+	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, bookRepo, appSettingsRepo, covers, hub, fileRepo).
 		WithLibraryStore(libStore)
 	progressSvc := service.NewProgressService(progressRepo, readingSessionRepo)
 	annotationSvc := service.NewAnnotationService(annotationRepo)
@@ -193,7 +194,7 @@ func main() {
 		slog.Warn("EMBOOKSHELF_SECRET_KEY unset — provider secrets stored in plaintext. " +
 			"Set a base64-encoded 32-byte key for at-rest encryption.")
 	}
-	enrichSvc := service.NewEnrichmentService(providers, providerSettingsRepo, libRepo, covers, secretCipher)
+	enrichSvc := service.NewEnrichmentService(providers, providerSettingsRepo, libRepo, bookRepo, covers, secretCipher)
 	// Push stored per-provider config (API keys, language, …) into the
 	// running provider instances. Failure here is non-fatal — providers
 	// fall back to their no-config defaults.
@@ -201,7 +202,7 @@ func main() {
 		slog.Warn("load provider configs", "err", err)
 	}
 	deviceSvc := service.NewDeviceService(
-		deviceRepo, libRepo,
+		deviceRepo, bookRepo,
 		service.NewRemarkableDriver(),
 	)
 
@@ -275,8 +276,8 @@ func main() {
 		backfillCoversCtx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
 		defer cancel()
 		if err := task.RunCoversBackfill(backfillCoversCtx, task.CoversBackfillDeps{
-			Library: libRepo,
-			Covers:  covers,
+			Books:  bookRepo,
+			Covers: covers,
 		}); err != nil {
 			slog.Warn("covers backfill", "err", err)
 		}

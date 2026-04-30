@@ -15,11 +15,11 @@ import (
 // driver, register it once here, and every handler/UI flow picks it up.
 type DeviceService struct {
 	devices *repo.DeviceRepo
-	books   *repo.LibraryRepo
+	books   *repo.BookRepo
 	drivers map[model.DeviceKind]DeviceDriver
 }
 
-func NewDeviceService(devices *repo.DeviceRepo, books *repo.LibraryRepo, drivers ...DeviceDriver) *DeviceService {
+func NewDeviceService(devices *repo.DeviceRepo, books *repo.BookRepo, drivers ...DeviceDriver) *DeviceService {
 	m := make(map[model.DeviceKind]DeviceDriver, len(drivers))
 	for _, d := range drivers {
 		m[d.Kind()] = d
@@ -73,7 +73,7 @@ func (s *DeviceService) Send(ctx context.Context, userID, deviceID, bookID strin
 		return ErrUnsupportedKind
 	}
 
-	book, err := s.books.GetBookByID(ctx, userID, bookID)
+	book, err := s.books.GetByID(ctx, userID, bookID)
 	if err != nil {
 		return err
 	}

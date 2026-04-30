@@ -1,68 +1,26 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { createFileRoute } from "@tanstack/react-router"
 import { toast } from "sonner"
-import type { CSSProperties, ReactNode } from "react"
 
 import type { ApiError } from "@/api/client"
 import type {
   LibraryKind,
-  MetadataSettings,
-  ProviderConfigField,
-  ProviderInfo,
-  ProviderPatch,
   SettingsLibrary,
 } from "@/api/settings"
-import type {
-  OidcAdminSettings,
-  OidcTestCheck,
-  OidcTestResult,
-  ProviderSlug,
-} from "@/api/oidc"
-import type { AuthUser } from "@/api/auth"
 import {
   appConfigQueryKey,
-  approveSettingsUser,
   createLibrary,
-  createSettingsUser,
   deleteLibrary,
-  deleteSettingsUser,
-  denySettingsUser,
   fetchAppConfig,
-  fetchInstanceInfo,
-  fetchMetadataSettings,
-  fetchProviderSettings,
   fetchSettingsLibraries,
-  fetchSettingsUsers,
-  instanceInfoQueryKey,
-  metadataSettingsQueryKey,
   prescanLibraryPaths,
-  providerSettingsQueryKey,
   rescanLibrary,
   settingsLibrariesQueryKey,
-  settingsUsersQueryKey,
-  updateMetadataSettings,
-  updateProviderSetting,
-  updateSettingsUserRole,
 } from "@/api/settings"
-import {
-  fetchOidcAdminSettings,
-  oidcAdminSettingsQueryKey,
-  saveOidcAdminSettings,
-  testOidcProvider,
-} from "@/api/oidc"
-import { fetchMe, meQueryKey } from "@/api/auth"
 import { Icon } from "@/components/Icon"
 import {
   AdminGate,
-  Avatar,
-  Card,
-  DefRow,
-  Field,
-  Select,
-  SettingsShell,
 } from "@/components/SettingsShared"
-import { TopBar } from "@/components/TopBar"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -75,7 +33,6 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
-
 
 export function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
   const queryClient = useQueryClient()
@@ -722,4 +679,3 @@ function DeleteLibraryDialog({
 // ---------------------------------------------------------------------------
 // Metadata providers
 // ---------------------------------------------------------------------------
-
