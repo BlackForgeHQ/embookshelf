@@ -121,6 +121,24 @@ type instanceSummaryDTO struct {
 	Books     int    `json:"books"`
 }
 
+// appConfigDTO is the lightweight feature-flag response for GET /api/v1/config.
+// All signed-in users can read it so the UI can gate features pre-emptively
+// without requiring an admin round-trip.
+type appConfigDTO struct {
+	// S3Available reports whether EMBOOKSHELF_S3_BUCKET is configured. When
+	// false the UI disables the "S3" kind option in the library-create form
+	// so the user learns immediately rather than on submit.
+	S3Available bool `json:"s3Available"`
+}
+
+// AppConfig returns lightweight feature flags derived from the server
+// configuration. Session-authed, not admin-gated.
+func (h *Handler) AppConfig(c *gin.Context) {
+	c.JSON(http.StatusOK, appConfigDTO{
+		S3Available: h.cfg.SharedS3.Configured(),
+	})
+}
+
 // InstanceSummary returns the non-sensitive instance fields (version
 // and catalog-size counts). Session-authed but not admin-gated — the
 // status bar at the bottom of every page reads this.
