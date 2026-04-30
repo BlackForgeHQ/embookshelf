@@ -8,6 +8,8 @@ import (
 	"io"
 	"path"
 	"strings"
+
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // EPUBProcessor parses EPUB 2/3 files to pull title, author, description,
@@ -67,20 +69,21 @@ type opfItem struct {
 	Properties string `xml:"properties,attr"`
 }
 
-func (EPUBProcessor) Extract(ctx context.Context, filePath string) (Metadata, error) {
+func (EPUBProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, error) {
 	_ = ctx
 
-	zr, err := zip.OpenReader(filePath)
+	zr, err := zip.NewReader(src, src.Size())
 	if err != nil {
 		return Metadata{}, fmt.Errorf("open epub: %w", err)
 	}
-	defer func() { _ = zr.Close() }()
+	// zr is *zip.Reader (not *zip.ReadCloser); no Close needed.
+	// The caller is responsible for closing the Source.
 
-	opfPath, err := rootfilePath(&zr.Reader)
+	opfPath, err := rootfilePath(zr)
 	if err != nil {
 		return Metadata{}, err
 	}
-	opfBytes, err := readZipFile(&zr.Reader, opfPath)
+	opfBytes, err := readZipFile(zr, opfPath)
 	if err != nil {
 		return Metadata{}, fmt.Errorf("read opf: %w", err)
 	}
@@ -106,7 +109,7 @@ func (EPUBProcessor) Extract(ctx context.Context, filePath string) (Metadata, er
 	// Cover extraction is best-effort: a malformed or missing cover never
 	// fails the whole extraction.
 	if href, mime := findCover(pkg); href != "" {
-		if bytes, mt, err := readCover(&zr.Reader, opfPath, href, mime); err == nil {
+		if bytes, mt, err := readCover(zr, opfPath, href, mime); err == nil {
 			m.HasCover = true
 			m.CoverBytes = bytes
 			m.CoverMime = mt
