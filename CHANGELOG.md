@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.8](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.7...v0.2.8) (2026-04-30)
+
+
+### Features
+
+* S3 libraries via shared bucket ([#70](https://github.com/BlackForgeHQ/embookshelf/issues/70)) ([5331411](https://github.com/BlackForgeHQ/embookshelf/commit/53314117836cb81b50295e12986c2d83da443d7a))
+* **service:** Approve uploads to S3 for s3-backed libraries ([#71](https://github.com/BlackForgeHQ/embookshelf/issues/71)) ([148086c](https://github.com/BlackForgeHQ/embookshelf/commit/148086c0edfabea2cc44e4a99ef6a92a3b6f48cf))
+
+
+### Bug Fixes
+
+* **storageloader:** resolve relative local backend root via filepath.Abs ([#66](https://github.com/BlackForgeHQ/embookshelf/issues/66)) ([243bc8e](https://github.com/BlackForgeHQ/embookshelf/commit/243bc8e540dc9fb6053ce047b8f2063bdb891c82))
+* **storageloader:** root LocalFS at "/" regardless of config.root ([#68](https://github.com/BlackForgeHQ/embookshelf/issues/68)) ([abc26b1](https://github.com/BlackForgeHQ/embookshelf/commit/abc26b19d03e50eeae372ccc741894167c5e0c53))
+
 ## [0.2.7](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.6...v0.2.7) (2026-04-30)
 
 
