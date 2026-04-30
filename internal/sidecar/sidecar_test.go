@@ -686,3 +686,22 @@ func TestJSON_MalformedReturnsError(t *testing.T) {
 		t.Fatal("DecodeJSON malformed: want error, got nil")
 	}
 }
+
+func TestKeyFor_PairedFilename(t *testing.T) {
+	cases := []struct {
+		bookKey string
+		want    string
+	}{
+		{"library/folder/harry-potter.epub", "library/folder/harry-potter.embookshelf.json"},
+		{"books/dune.pdf", "books/dune.embookshelf.json"},
+		{"audio/dune/disc-1.m4b", "audio/dune/disc-1.embookshelf.json"},
+		{"flat-file.epub", "flat-file.embookshelf.json"},
+		{"no-ext", "no-ext.embookshelf.json"},
+	}
+	for _, c := range cases {
+		got := KeyFor(c.bookKey)
+		if got != c.want {
+			t.Errorf("KeyFor(%q) = %q, want %q", c.bookKey, got, c.want)
+		}
+	}
+}

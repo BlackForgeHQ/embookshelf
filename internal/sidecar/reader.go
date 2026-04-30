@@ -4,10 +4,23 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path"
 	"strings"
 
 	"github.com/blackforge/embookshelf/internal/storage"
 )
+
+// KeyFor returns the paired sidecar storage key for a book file's key.
+// "harry-potter.epub" → "harry-potter.embookshelf.json" (same dir).
+func KeyFor(bookKey string) string {
+	dir, base := path.Split(bookKey)
+	ext := path.Ext(base)
+	stem := base
+	if ext != "" {
+		stem = base[:len(base)-len(ext)]
+	}
+	return dir + stem + ".embookshelf.json"
+}
 
 // SidecarFiles is the set of sibling filenames the reader looks for,
 // in priority order. TOML wins (it's the native, app-edited format).
