@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.8...v0.3.0) (2026-04-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* drop file-naming-patterns feature ([#72](https://github.com/BlackForgeHQ/embookshelf/issues/72))
+
+### Features
+
+* drop file-naming-patterns feature ([#72](https://github.com/BlackForgeHQ/embookshelf/issues/72)) ([d7936bf](https://github.com/BlackForgeHQ/embookshelf/commit/d7936bffd28f23deea14e1e4281df6a08981c519))
+
 ## [0.2.8](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.7...v0.2.8) (2026-04-30)
 
 
