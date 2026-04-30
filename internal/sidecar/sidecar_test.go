@@ -483,7 +483,7 @@ func putFile(t *testing.T, store storage.Storage, key string, content []byte) {
 
 func TestRead_NoSidecars(t *testing.T) {
 	store := newTestStore(t)
-	s, err := Read(context.Background(), store, "books/mybook")
+	s, err := Read(context.Background(), store, "books/mybook.epub")
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -504,7 +504,7 @@ func TestRead_OnlyOPF(t *testing.T) {
 </package>`)
 	putFile(t, store, "books/mybook/metadata.opf", opf)
 
-	s, err := Read(context.Background(), store, "books/mybook")
+	s, err := Read(context.Background(), store, "books/mybook/dune.epub")
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -516,27 +516,7 @@ func TestRead_OnlyOPF(t *testing.T) {
 	}
 }
 
-func TestRead_OnlyTOML(t *testing.T) {
-	store := newTestStore(t)
-	tomlContent := []byte(`title = "TOML Title"
-author = "TOML Author"
-language = "fr"
-`)
-	putFile(t, store, "books/mybook/.embookshelf.toml", tomlContent)
-
-	s, err := Read(context.Background(), store, "books/mybook")
-	if err != nil {
-		t.Fatalf("Read: %v", err)
-	}
-	if s.Title != "TOML Title" {
-		t.Errorf("Title: got %q want TOML Title", s.Title)
-	}
-	if s.Author != "TOML Author" {
-		t.Errorf("Author: got %q want TOML Author", s.Author)
-	}
-}
-
-func TestRead_BothPresent_TOMLWinsOnOverlap(t *testing.T) {
+func TestRead_BothPresent_JSONWinsOnOverlap(t *testing.T) {
 	store := newTestStore(t)
 	opf := []byte(`<?xml version='1.0' encoding='utf-8'?>
 <package xmlns="http://www.idpf.org/2007/opf">
@@ -547,36 +527,48 @@ func TestRead_BothPresent_TOMLWinsOnOverlap(t *testing.T) {
     <dc:publisher>OPF Publisher</dc:publisher>
   </metadata>
 </package>`)
-	tomlContent := []byte(`title = "TOML Title"
-author = "TOML Author"
-`)
+	jsonData, err := EncodeJSON(Sidecar{Title: "JSON Title", Author: "JSON Author"}, ModeFull, "EPUB")
+	if err != nil {
+		t.Fatalf("EncodeJSON: %v", err)
+	}
 	putFile(t, store, "books/mybook/metadata.opf", opf)
-	putFile(t, store, "books/mybook/.embookshelf.toml", tomlContent)
+	putFile(t, store, "books/mybook/dune.embookshelf.json", jsonData)
 
-	s, err := Read(context.Background(), store, "books/mybook")
+	s, err := Read(context.Background(), store, "books/mybook/dune.epub")
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	// TOML wins on overlapping fields
-	if s.Title != "TOML Title" {
-		t.Errorf("Title: got %q want TOML Title (TOML should win)", s.Title)
+	// JSON wins on overlapping fields
+	if s.Title != "JSON Title" {
+		t.Errorf("Title: got %q want JSON Title (JSON should win)", s.Title)
 	}
-	if s.Author != "TOML Author" {
-		t.Errorf("Author: got %q want TOML Author (TOML should win)", s.Author)
+	if s.Author != "JSON Author" {
+		t.Errorf("Author: got %q want JSON Author (JSON should win)", s.Author)
 	}
-	// OPF fills fields absent from TOML
+	// OPF fills fields absent from JSON
 	if s.Publisher != "OPF Publisher" {
 		t.Errorf("Publisher: got %q want OPF Publisher (OPF fills remainder)", s.Publisher)
 	}
 }
 
-func TestRead_MalformedTOML_ReturnsError(t *testing.T) {
+func TestRead_MalformedJSON_FallsBackToOPF(t *testing.T) {
 	store := newTestStore(t)
-	putFile(t, store, "books/mybook/.embookshelf.toml", []byte("not valid toml [[["))
+	opf := []byte(`<?xml version='1.0' encoding='utf-8'?>
+<package xmlns="http://www.idpf.org/2007/opf">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>OPF Title</dc:title>
+  </metadata>
+</package>`)
+	putFile(t, store, "books/mybook/metadata.opf", opf)
+	putFile(t, store, "books/mybook/dune.embookshelf.json", []byte("not valid json {{{"))
 
-	_, err := Read(context.Background(), store, "books/mybook")
-	if err == nil {
-		t.Fatal("expected error for malformed TOML, got nil")
+	s, err := Read(context.Background(), store, "books/mybook/dune.epub")
+	if err != nil {
+		t.Fatalf("Read: unexpected err %v", err)
+	}
+	// Malformed JSON should not error; OPF fill remains.
+	if s.Title != "OPF Title" {
+		t.Errorf("Title: got %q want OPF Title (malformed JSON falls back)", s.Title)
 	}
 }
 
@@ -724,6 +716,45 @@ func TestWriter_WritesJSONWithCorrectContentType(t *testing.T) {
 	}
 	if !bytes.Contains(data, []byte(`"format": "EPUB"`)) {
 		t.Errorf("envelope missing format=EPUB marker; data=%s", data)
+	}
+}
+
+func TestRead_PairedJSONSidecar(t *testing.T) {
+	root := t.TempDir()
+	fs, err := local.New(root)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	ctx := context.Background()
+	w := NewWriter()
+	bookKey := "library/dune.epub"
+	wantTitle := "Dune"
+
+	if err := w.Write(ctx, fs, KeyFor(bookKey), Sidecar{Title: wantTitle}, ModeFull, "EPUB"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	got, err := Read(ctx, fs, bookKey)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got.Title != wantTitle {
+		t.Errorf("Title=%q want %q", got.Title, wantTitle)
+	}
+}
+
+func TestRead_NoSidecar(t *testing.T) {
+	root := t.TempDir()
+	fs, err := local.New(root)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	got, err := Read(context.Background(), fs, "library/missing.epub")
+	if err != nil {
+		t.Fatalf("Read missing: got err %v, want nil", err)
+	}
+	if !got.IsZero() {
+		t.Errorf("got=%+v want zero Sidecar", got)
 	}
 }
 

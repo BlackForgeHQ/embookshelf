@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"path"
-	"strings"
 
 	"github.com/blackforge/embookshelf/internal/storage"
 )
@@ -22,49 +21,59 @@ func KeyFor(bookKey string) string {
 	return dir + stem + ".embookshelf.json"
 }
 
-// SidecarFiles is the set of sibling filenames the reader looks for,
-// in priority order. TOML wins (it's the native, app-edited format).
-var SidecarFiles = []string{
-	"metadata.opf",
-	".embookshelf.toml",
-}
-
-// Read locates sidecar files under the given storage prefix
-// (typically the directory containing a book). It parses each one
-// it finds and merges them in priority order: OPF first, then TOML
-// over it. A missing prefix or no sidecars present is not an error;
-// the function returns Sidecar{}, nil.
-func Read(ctx context.Context, store storage.Storage, prefix string) (Sidecar, error) {
+// Read locates sidecar files near the given book key and returns the
+// merged result. Lookup order: Calibre `metadata.opf` (in the book's
+// directory, read-only compat) overlaid by the paired
+// `<basename>.embookshelf.json`. The JSON sidecar wins on field
+// conflicts because it's the format embookshelf actively writes.
+//
+// A missing book or no sidecars present returns Sidecar{}, nil.
+func Read(ctx context.Context, store storage.Storage, bookKey string) (Sidecar, error) {
 	var merged Sidecar
-	for _, name := range SidecarFiles {
-		key := strings.TrimRight(prefix, "/") + "/" + name
-		rc, err := store.Get(ctx, key)
-		if err != nil {
-			if errors.Is(err, storage.ErrNotFound) {
-				continue
-			}
-			return Sidecar{}, err
-		}
-		data, readErr := io.ReadAll(rc)
-		_ = rc.Close()
-		if readErr != nil {
-			return Sidecar{}, readErr
-		}
 
-		var parsed Sidecar
-		var parseErr error
-		switch name {
-		case "metadata.opf":
-			parsed, parseErr = ParseOPF(data)
-		case ".embookshelf.toml":
-			parsed, parseErr = ParseTOML(data)
-		}
-		if parseErr != nil {
-			// A malformed sidecar is logged via the caller; here we
-			// surface the error so the scan worker can record it.
-			return merged, parseErr
-		}
+	// 1. Calibre OPF in the book's directory.
+	dir, _ := path.Split(bookKey)
+	opfKey := dir + "metadata.opf"
+	if parsed, err := readAndParse(ctx, store, opfKey, parseOPFData); err != nil {
+		return Sidecar{}, err
+	} else if !parsed.IsZero() {
 		merged = Merge(merged, parsed)
 	}
+
+	// 2. Paired native JSON sidecar.
+	jsonKey := KeyFor(bookKey)
+	if parsed, err := readAndParse(ctx, store, jsonKey, parseJSONData); err != nil {
+		return Sidecar{}, err
+	} else if !parsed.IsZero() {
+		merged = Merge(merged, parsed)
+	}
+
 	return merged, nil
 }
+
+// readAndParse fetches a single sidecar object and parses via fn.
+// ErrNotFound is treated as a non-error empty Sidecar.
+func readAndParse(ctx context.Context, store storage.Storage, key string, fn func([]byte) (Sidecar, error)) (Sidecar, error) {
+	rc, err := store.Get(ctx, key)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return Sidecar{}, nil
+		}
+		return Sidecar{}, err
+	}
+	data, readErr := io.ReadAll(rc)
+	_ = rc.Close()
+	if readErr != nil {
+		return Sidecar{}, readErr
+	}
+	parsed, parseErr := fn(data)
+	if parseErr != nil {
+		// Malformed sidecar: log via caller; return empty so the
+		// caller can fall back to the next layer.
+		return Sidecar{}, nil
+	}
+	return parsed, nil
+}
+
+func parseOPFData(data []byte) (Sidecar, error)  { return ParseOPF(data) }
+func parseJSONData(data []byte) (Sidecar, error) { return DecodeJSON(data) }
