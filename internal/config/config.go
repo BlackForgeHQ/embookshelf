@@ -32,6 +32,16 @@ type Config struct {
 	// on boot so the fact doesn't silently linger.
 	SecretKey string
 
+	// PresignTTL is the lifetime of presigned URLs issued for S3-backed book
+	// files. Default is 10 minutes. Configurable via EMBOOKSHELF_PRESIGN_TTL
+	// (any value parseable by time.ParseDuration, e.g. "15m", "1h").
+	PresignTTL time.Duration
+	// PresignFallback controls what happens when the storage backend
+	// supports presign. Set to "stream" to disable redirects and serve
+	// bytes through the app server instead (useful for clients that
+	// can't follow cross-origin redirects). Default: "" (redirect).
+	PresignFallback string
+
 	// OIDC seed values. These are applied to app_settings on first
 	// boot only — the DB is authoritative after that so admins can
 	// edit config in the UI without redeploying.
@@ -67,6 +77,9 @@ func Load() (Config, error) {
 
 		AppURL:    strings.TrimRight(envStr("APP_URL", ""), "/"),
 		SecretKey: envStr("EMBOOKSHELF_SECRET_KEY", ""),
+
+		PresignTTL:      envDuration("EMBOOKSHELF_PRESIGN_TTL", 10*time.Minute),
+		PresignFallback: envStr("EMBOOKSHELF_PRESIGN_FALLBACK", ""),
 
 		OIDCIssuerURL:    envStr("OIDC_ISSUER_URL", ""),
 		OIDCClientID:     envStr("OIDC_CLIENT_ID", ""),
@@ -122,6 +135,15 @@ func envFloat(key string, def float64) float64 {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			return f
+		}
+	}
+	return def
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
 		}
 	}
 	return def

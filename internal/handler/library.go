@@ -755,7 +755,7 @@ func (h *Handler) BookFile(c *gin.Context) {
 			fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`,
 				asciiFallback(filename), url.PathEscape(filename)))
 	}
-	if err := h.serveBookFile(c, book.Path, mime); err != nil {
+	if err := h.serveBookFile(c, book, mime); err != nil {
 		writeError(c, http.StatusForbidden, err.Error())
 		return
 	}

@@ -364,6 +364,38 @@ func (r *FileRepo) ListByLibrary(ctx context.Context, libraryID string) ([]model
 	return out, rows.Err()
 }
 
+// ListByBook returns all files rows for bookID ordered by id.
+// Returns an empty slice (not nil) when no rows match.
+func (r *FileRepo) ListByBook(ctx context.Context, bookID string) ([]model.File, error) {
+	const qPG = `
+		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
+		FROM files
+		WHERE book_id = $1
+		ORDER BY id
+	`
+	const qSQLite = `
+		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
+		FROM files
+		WHERE book_id = ?
+		ORDER BY id
+	`
+	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), bookID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := []model.File{}
+	for rows.Next() {
+		f, err := r.scanFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
 // UpdateLocation moves a row to a new location within the same
 // library. Used by hash-based reattach when a file is renamed.
 // Returns ErrFileLocationTaken on (library_id, location) conflict.
