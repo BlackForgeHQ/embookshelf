@@ -38,6 +38,8 @@ var fakePNG = []byte{
 	0x89,
 }
 
+// writeCBZ writes a CBZ archive to a temp file and returns its path.
+// Used by tests that need a real path (CBZPages, CBZPage).
 func writeCBZ(t *testing.T, dir string, entries map[string][]byte) string {
 	t.Helper()
 	p := filepath.Join(dir, "test.cbz")
@@ -62,14 +64,36 @@ func writeCBZ(t *testing.T, dir string, entries map[string][]byte) string {
 	return p
 }
 
+// cbzSource builds a CBZ archive in memory and returns a memSource backed by its bytes.
+// Used by CBZProcessor.Extract tests (no filesystem I/O).
+func cbzSource(t *testing.T, entries map[string][]byte) *memSource {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, body := range entries {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b := buf.Bytes()
+	return &memSource{Reader: bytes.NewReader(b), size: int64(len(b))}
+}
+
 func TestCBZExtract_BasicCover(t *testing.T) {
-	dir := t.TempDir()
-	cbz := writeCBZ(t, dir, map[string][]byte{
+	src := cbzSource(t, map[string][]byte{
 		"page10.png": []byte("ten"),  // out-of-order: tests natural sort
 		"page2.png":  fakePNG,        // should win as cover (page 2 < page 10)
 		"notes.txt":  []byte("skip"), // non-image, ignored
 	})
-	meta, err := CBZProcessor{}.Extract(context.Background(), cbz)
+	defer func() { _ = src.Close() }()
+	meta, err := CBZProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -88,12 +112,12 @@ func TestCBZExtract_BasicCover(t *testing.T) {
 }
 
 func TestCBZExtract_PreferredCover(t *testing.T) {
-	dir := t.TempDir()
-	cbz := writeCBZ(t, dir, map[string][]byte{
+	src := cbzSource(t, map[string][]byte{
 		"01.png":    []byte("first-page"),
 		"cover.png": fakePNG, // should win over 01.png
 	})
-	meta, err := CBZProcessor{}.Extract(context.Background(), cbz)
+	defer func() { _ = src.Close() }()
+	meta, err := CBZProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -103,7 +127,6 @@ func TestCBZExtract_PreferredCover(t *testing.T) {
 }
 
 func TestCBZExtract_ComicInfo(t *testing.T) {
-	dir := t.TempDir()
 	info := []byte(`<?xml version="1.0"?>
 <ComicInfo>
   <Series>Saga</Series>
@@ -112,11 +135,12 @@ func TestCBZExtract_ComicInfo(t *testing.T) {
   <Summary>Test summary.</Summary>
   <LanguageISO>en</LanguageISO>
 </ComicInfo>`)
-	cbz := writeCBZ(t, dir, map[string][]byte{
+	src := cbzSource(t, map[string][]byte{
 		"01.png":        fakePNG,
 		"ComicInfo.xml": info,
 	})
-	meta, err := CBZProcessor{}.Extract(context.Background(), cbz)
+	defer func() { _ = src.Close() }()
+	meta, err := CBZProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -135,11 +159,11 @@ func TestCBZExtract_ComicInfo(t *testing.T) {
 }
 
 func TestCBZExtract_NoImagesFails(t *testing.T) {
-	dir := t.TempDir()
-	cbz := writeCBZ(t, dir, map[string][]byte{
+	src := cbzSource(t, map[string][]byte{
 		"readme.txt": []byte("nothing here"),
 	})
-	if _, err := (CBZProcessor{}).Extract(context.Background(), cbz); err == nil {
+	defer func() { _ = src.Close() }()
+	if _, err := (CBZProcessor{}).Extract(context.Background(), src); err == nil {
 		t.Fatal("expected error for image-less archive")
 	}
 }
