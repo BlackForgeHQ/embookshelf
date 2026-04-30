@@ -38,6 +38,7 @@ func RunSuite(t *testing.T, make MakeBackend) {
 	t.Run("ListPrefixFilters", func(t *testing.T) { testListPrefixFilters(t, make) })
 	t.Run("ListEmptyOnMissingPrefix", func(t *testing.T) { testListEmptyOnMissingPrefix(t, make) })
 	t.Run("CapabilitiesIsStable", func(t *testing.T) { testCapabilitiesIsStable(t, make) })
+	t.Run("OpenReadsBytesAtRandomOffsets", func(t *testing.T) { testOpenRandomAccess(t, make) })
 }
 
 func testPutThenGet(t *testing.T, mk MakeBackend) {
@@ -196,5 +197,28 @@ func testCapabilitiesIsStable(t *testing.T, mk MakeBackend) {
 	c2 := s.Capabilities()
 	if c1 != c2 {
 		t.Fatalf("Capabilities() unstable: %v vs %v", c1, c2)
+	}
+}
+
+func testOpenRandomAccess(t *testing.T, mk MakeBackend) {
+	s, cleanup := mk(t)
+	defer cleanup()
+	ctx := context.Background()
+	_, _ = s.Put(ctx, "obj", bytes.NewReader([]byte("ABCDEFGHIJ")))
+	src, err := s.Open(ctx, "obj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = src.Close() }()
+	if src.Size() != 10 {
+		t.Errorf("size=%d, want 10", src.Size())
+	}
+	buf := make([]byte, 3)
+	n, err := src.ReadAt(buf, 5)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if n != 3 || string(buf) != "FGH" {
+		t.Errorf("got %q at offset 5", buf[:n])
 	}
 }
