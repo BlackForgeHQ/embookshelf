@@ -15,7 +15,6 @@ import (
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/sse"
-	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // BookDropService orchestrates the bookdrop ingest pipeline. It sits between
@@ -31,13 +30,10 @@ type BookDropService struct {
 	// files row alongside the new book. nil disables the write so callers
 	// (e.g. tests) that don't need the row don't have to supply a repo.
 	files *repo.FileRepo
-	// resolver maps backend_id to Storage. Used by Approve to open a
-	// Source for audio re-extraction. nil disables the re-extract block.
-	resolver storage.Resolver
-	// newPlacer constructs the Placer for a given Library. Injected so
-	// tests can supply a fake without standing up a Resolver. nil
-	// disables placement (the bookdrop file stays where it landed).
-	newPlacer PlacerBuilder
+	// libStore is the deep seam Approve uses for everything library-aware:
+	// fetching the Library row, building the Placer, opening Sources for
+	// audio re-extract. nil disables Approve (it cannot place without it).
+	libStore LibraryStore
 }
 
 func NewBookDropService(
@@ -57,19 +53,12 @@ func NewBookDropService(
 	}
 }
 
-// WithResolver sets the storage resolver on an existing BookDropService.
-// The resolver is used in Approve to open Sources for audio re-extraction.
-func (s *BookDropService) WithResolver(r storage.Resolver) *BookDropService {
-	s.resolver = r
-	return s
-}
-
-// WithPlacerBuilder injects the factory Approve uses to materialize a
-// bookdrop file at its final location. main.go wires the default
-// (DefaultPlacerBuilder); tests can pass a fake to capture placement
-// without touching disk or a backend.
-func (s *BookDropService) WithPlacerBuilder(b PlacerBuilder) *BookDropService {
-	s.newPlacer = b
+// WithLibraryStore wires the LibraryStore used by Approve. main.go
+// builds the default (NewLibraryStore); tests can inject a fake to
+// capture placement decisions and audio re-extract without touching
+// disk, the resolver, or a backend.
+func (s *BookDropService) WithLibraryStore(ls LibraryStore) *BookDropService {
+	s.libStore = ls
 	return s
 }
 
@@ -170,11 +159,18 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 		libraryID = libs[0].ID
 	}
 
-	// Look up the library once — needed by both the upload path
-	// (s3-backed libraries) and the placement path (local-backed).
-	lib, libErr := s.libs.GetByID(ctx, libraryID)
-	if libErr != nil {
-		return model.Book{}, fmt.Errorf("approve: library lookup: %w", libErr)
+	// Library access goes through LibraryStore. Approve never branches
+	// on local-vs-S3 itself; the LibraryHandle's Placer is whichever
+	// adapter was wired at construction (LocalPlacer or BackendPlacer).
+	if s.libStore == nil {
+		return model.Book{}, errors.New("approve: library store not configured")
+	}
+	handle, hErr := s.libStore.For(ctx, libraryID)
+	if hErr != nil {
+		return model.Book{}, fmt.Errorf("approve: library lookup: %w", hErr)
+	}
+	if handle.Placer == nil {
+		return model.Book{}, errors.New("approve: no placer for library")
 	}
 
 	book := model.Book{
@@ -188,18 +184,7 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 		CoverMime:   item.CoverMime,
 	}
 
-	// Place the bookdrop bytes at their final location. The Placer
-	// adapter (LocalPlacer or BackendPlacer, picked by newPlacer) is
-	// the only thing that knows the local-vs-S3 distinction. Approve
-	// just records the result on the book + files row.
-	if s.newPlacer == nil {
-		return model.Book{}, errors.New("approve: placer not configured")
-	}
-	placer, perr := s.newPlacer(lib)
-	if perr != nil {
-		return model.Book{}, fmt.Errorf("approve: build placer: %w", perr)
-	}
-	res, perr := placer.Place(ctx, PlaceSource{Path: item.Path, Format: item.Format})
+	res, perr := handle.Placer.Place(ctx, PlaceSource{Path: item.Path, Format: item.Format})
 	if perr != nil {
 		return model.Book{}, fmt.Errorf("approve: place: %w", perr)
 	}
@@ -275,34 +260,25 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 	// is bounded — for a typical M4B it's a single mvhd atom read; for
 	// MP3 the XING header at the start of the file. Failure is logged
 	// but never fatal: the book still imports without duration.
-	if isAudioFormat(created.Format) && created.Path != "" && s.resolver != nil {
-		backendID := ""
-		if lib.BackendID != nil {
-			backendID = *lib.BackendID
-		}
-		store, rerr := s.resolver.Resolve(backendID)
-		if rerr != nil {
-			slog.Warn("approve: resolve backend for audio re-extract", "err", rerr)
+	if isAudioFormat(created.Format) && created.Path != "" && handle.Storage != nil {
+		src, oerr := handle.Open(ctx, created.Path)
+		if oerr != nil {
+			slog.Warn("approve: open source for audio re-extract", "path", created.Path, "err", oerr)
 		} else {
-			src, oerr := store.Open(ctx, created.Path)
-			if oerr != nil {
-				slog.Warn("approve: open source for audio re-extract", "path", created.Path, "err", oerr)
-			} else {
-				defer func() { _ = src.Close() }()
-				if meta, err := (fileproc.AudioProcessor{}).Extract(ctx, src); err == nil {
-					if err := s.libs.UpdateAudio(ctx, created.ID,
-						meta.DurationSeconds, meta.Narrator, nil,
-					); err != nil {
-						slog.Warn("update audio metadata", "book_id", created.ID, "err", err)
-					} else {
-						if meta.DurationSeconds != nil {
-							created.DurationSeconds = meta.DurationSeconds
-						}
-						created.Narrator = meta.Narrator
-					}
+			defer func() { _ = src.Close() }()
+			if meta, err := (fileproc.AudioProcessor{}).Extract(ctx, src); err == nil {
+				if err := s.libs.UpdateAudio(ctx, created.ID,
+					meta.DurationSeconds, meta.Narrator, nil,
+				); err != nil {
+					slog.Warn("update audio metadata", "book_id", created.ID, "err", err)
 				} else {
-					slog.Warn("re-extract audio metadata", "book_id", created.ID, "err", err)
+					if meta.DurationSeconds != nil {
+						created.DurationSeconds = meta.DurationSeconds
+					}
+					created.Narrator = meta.Narrator
 				}
+			} else {
+				slog.Warn("re-extract audio metadata", "book_id", created.ID, "err", err)
 			}
 		}
 	}

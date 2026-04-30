@@ -138,9 +138,16 @@ func main() {
 	shelfSvc := service.NewShelfService(shelfRepo)
 	searchSvc := service.NewSearchService(libRepo, shelfRepo)
 	authSvc := service.NewAuthService(userRepo, sessionRepo, hub)
+	libStore := service.NewLibraryStore(service.LibraryStoreDeps{
+		Libs:            libRepo,
+		Resolver:        storageResolver,
+		NewPlacer:       service.DefaultPlacerBuilder(storageResolver),
+		Files:           fileRepo,
+		PresignTTL:      cfg.PresignTTL,
+		PresignFallback: cfg.PresignFallback,
+	})
 	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, appSettingsRepo, covers, hub, fileRepo).
-		WithResolver(storageResolver).
-		WithPlacerBuilder(service.DefaultPlacerBuilder(storageResolver))
+		WithLibraryStore(libStore)
 	progressSvc := service.NewProgressService(progressRepo, readingSessionRepo)
 	annotationSvc := service.NewAnnotationService(annotationRepo)
 	statsSvc := service.NewStatsService(statsRepo)
@@ -230,7 +237,7 @@ func main() {
 	}
 
 	// Background queue. PG → River; SQLite → polling worker (queue.New dispatches by dialect).
-	q, err := queue.New(ctx, dbh, bdropSvc, libSvc, storageResolver, fileRepo)
+	q, err := queue.New(ctx, dbh, bdropSvc, libSvc, storageResolver, libStore, fileRepo)
 	if err != nil {
 		slog.Error("queue", "err", err)
 		os.Exit(1)
@@ -254,10 +261,8 @@ func main() {
 		backfillCtx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
 		defer cancel()
 		if err := task.RunFilesBackfill(backfillCtx, task.FilesBackfillDeps{
-			Files:     fileRepo,
-			Libraries: libRepo,
-			Backends:  repo.NewStorageBackendRepo(dbh),
-			Resolver:  storageResolver,
+			Files:    fileRepo,
+			LibStore: libStore,
 		}); err != nil {
 			slog.Warn("files backfill", "err", err)
 		}
@@ -358,10 +363,7 @@ func main() {
 		Covers:       covers,
 		Hub:          hub,
 		Queue:        q,
-		Resolver:     storageResolver,
-		LibRepo:      libRepo,
-		FileRepo:     fileRepo,
-		PresignTTL:   cfg.PresignTTL,
+		LibStore:     libStore,
 	})
 
 	srv := &http.Server{

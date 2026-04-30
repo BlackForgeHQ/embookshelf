@@ -34,16 +34,12 @@ func (BookDropIngestArgs) Kind() string { return "bookdrop.ingest" }
 // BookDropDeps groups the services BookDropIngest needs.
 type BookDropDeps struct {
 	Svc *service.BookDropService
-	// Resolver maps a backend_id to Storage (Plan F). When non-nil, bookdrop
-	// ingest uses the default backend (empty backend_id) for sidecar reads,
-	// because the bookdrop item does not yet carry a library_id at ingest time.
-	// Limitation: sidecars for libraries on non-default backends are not read
-	// during bookdrop ingest. Plan F2 addresses this when bookdrop carries
-	// library_id.
+	// Resolver maps a backend_id to Storage. Bookdrop ingest uses the
+	// default backend (empty backend_id) because the bookdrop item does
+	// not yet carry a library_id at ingest time. Limitation: sidecars
+	// for libraries on non-default backends are not read during ingest.
+	// Plan F2 addresses this when bookdrop carries library_id.
 	Resolver storage.Resolver
-	// Storage is the legacy single-backend field kept for backward compat.
-	// Used when Resolver is nil.
-	Storage storage.Storage // optional; nil disables sidecar lookup
 }
 
 // BookDropIngest runs the ingest pipeline for one bookdrop item:
@@ -90,7 +86,7 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 
 	// Resolve the default storage backend for Source-based extraction and
 	// sidecar reads. Bookdrop ingest doesn't know the library_id at this
-	// point, so we always use the default backend (empty backend_id).
+	// point, so always use the default backend (empty backend_id).
 	var store storage.Storage
 	if deps.Resolver != nil {
 		if resolved, resolveErr := deps.Resolver.Resolve(""); resolveErr == nil {
@@ -98,8 +94,6 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 		} else {
 			slog.Warn("bookdrop sidecar resolve failed", "item_id", itemID, "err", resolveErr)
 		}
-	} else {
-		store = deps.Storage
 	}
 
 	// Open the staged file via the resolved storage backend.

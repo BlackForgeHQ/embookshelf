@@ -12,9 +12,21 @@ import (
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/repo/repotest"
+	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/storage"
 	"github.com/blackforge/embookshelf/internal/storage/local"
 	"github.com/blackforge/embookshelf/internal/task"
 )
+
+// newTestLibStore builds a LibraryStore wired to a real LibraryRepo and a
+// ConstantResolver returning fs for every backend lookup. Mirrors the
+// production main.go shape with everything stitched in-memory.
+func newTestLibStore(lr *repo.LibraryRepo, fs storage.Storage) service.LibraryStore {
+	return service.NewLibraryStore(service.LibraryStoreDeps{
+		Libs:     lr,
+		Resolver: storage.ConstantResolver{S: fs},
+	})
+}
 
 // newTestDeps creates a FilesBackfillDeps wired to a fresh SQLite DB and a
 // LocalFS rooted at "/" (matching the production main.go configuration).
@@ -30,10 +42,8 @@ func newTestDeps(t *testing.T) (task.FilesBackfillDeps, *repo.LibraryRepo) {
 	}
 	lr := repo.NewLibraryRepo(d)
 	deps := task.FilesBackfillDeps{
-		Files:     repo.NewFileRepo(d),
-		Libraries: lr,
-		Backends:  repo.NewStorageBackendRepo(d),
-		Storage:   fs,
+		Files:    repo.NewFileRepo(d),
+		LibStore: newTestLibStore(lr, fs),
 	}
 	return deps, lr
 }
@@ -75,26 +85,26 @@ func insertFile(t *testing.T, fr *repo.FileRepo, libID, location string) model.F
 	return f
 }
 
-// TestRunFilesBackfill_nilDeps verifies that nil Storage or Files returns nil
-// immediately (guards against incomplete wiring at startup).
+// TestRunFilesBackfill_nilDeps verifies that nil LibStore or Files returns
+// nil immediately (guards against incomplete wiring at startup).
 func TestRunFilesBackfill_nilDeps(t *testing.T) {
 	ctx := context.Background()
 
-	// nil Storage
+	// nil LibStore
 	if err := task.RunFilesBackfill(ctx, task.FilesBackfillDeps{
-		Files:   repo.NewFileRepo(nil),
-		Storage: nil,
+		Files:    repo.NewFileRepo(nil),
+		LibStore: nil,
 	}); err != nil {
-		t.Fatalf("nil Storage: got %v, want nil", err)
+		t.Fatalf("nil LibStore: got %v, want nil", err)
 	}
 
 	// nil Files
 	d := repotest.NewWithDialect(t, "sqlite")
 	fs, _ := local.New("/")
+	lr := repo.NewLibraryRepo(d)
 	if err := task.RunFilesBackfill(ctx, task.FilesBackfillDeps{
 		Files:    nil,
-		Storage:  fs,
-		Backends: repo.NewStorageBackendRepo(d),
+		LibStore: newTestLibStore(lr, fs),
 	}); err != nil {
 		t.Fatalf("nil Files: got %v, want nil", err)
 	}
