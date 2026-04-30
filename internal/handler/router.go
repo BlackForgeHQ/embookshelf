@@ -132,10 +132,6 @@ func (h *Handler) Engine() *gin.Engine {
 				admin.GET("/libraries", h.SettingsLibraries)
 				admin.POST("/libraries", h.SettingsLibraryCreate)
 				admin.POST("/libraries/scan", h.SettingsLibraryScan)
-				admin.POST("/libraries/pattern/preview", h.SettingsLibraryPreviewPattern)
-				admin.GET("/libraries/pattern/default", h.SettingsDefaultNamingPatternGet)
-				admin.PUT("/libraries/pattern/default", h.SettingsDefaultNamingPatternUpdate)
-				admin.PATCH("/libraries/:id/file-naming-pattern", h.SettingsLibraryUpdateNamingPattern)
 				admin.POST("/libraries/:id/rescan", h.SettingsLibraryRescan)
 				admin.DELETE("/libraries/:id", h.SettingsLibraryDelete)
 

@@ -205,9 +205,6 @@ func main() {
 	if err := appSettingsRepo.SeedOIDCIfAbsent(ctx); err != nil {
 		slog.Warn("seed oidc settings", "err", err)
 	}
-	if err := appSettingsRepo.SeedDefaultNamingPatternIfAbsent(ctx); err != nil {
-		slog.Warn("seed default naming pattern", "err", err)
-	}
 	if cfg.HasOIDCEnvSeed() {
 		existing, err := appSettingsRepo.GetGenericOIDC(ctx)
 		if err == nil && existing.IssuerURI == "" {
