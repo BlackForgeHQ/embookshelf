@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sidecar"
@@ -114,6 +115,48 @@ func TestMetadataWriter_Write_ManualEdit_FiresSidecar(t *testing.T) {
 	}
 	if got.Format != "PDF" {
 		t.Errorf("Format=%q want PDF", got.Format)
+	}
+}
+
+// fakeEmbedder stubs fileproc.DispatchEmbedder.
+type fakeEmbedder struct {
+	embeddedFor []string
+	out         []byte
+	err         error
+}
+
+func (f *fakeEmbedder) Embed(ctx context.Context, src storage.Source, in fileproc.EmbedInput) ([]byte, error) {
+	f.embeddedFor = append(f.embeddedFor, in.Title)
+	return f.out, f.err
+}
+
+func TestMetadataWriter_Write_EPUBLocal_FullPipeline(t *testing.T) {
+	books := &fakeBookWriter{}
+	rec := &recordingSidecarWriter{}
+	emb := &fakeEmbedder{out: []byte("rezipped-epub-bytes")}
+	handle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", BackendID: nil},
+	}
+	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+		Books:    books,
+		LibStore: &fakeLibStore{handle: handle},
+		Sidecar:  rec,
+	})
+	book := model.Book{
+		ID: "b1", LibraryID: "lib1",
+		Path: "books/x.epub", Format: "EPUB", Title: "X",
+	}
+	if err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if len(rec.calls) != 1 {
+		t.Fatalf("sidecar calls: %d want 1", len(rec.calls))
+	}
+	if rec.calls[0].Mode != sidecar.ModeFull {
+		t.Errorf("mode=%q want full (file step skipped: no Storage)", rec.calls[0].Mode)
+	}
+	if len(emb.embeddedFor) != 0 {
+		t.Errorf("embedder called %d times; want 0 (no Storage on handle)", len(emb.embeddedFor))
 	}
 }
 

@@ -1,12 +1,14 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/sidecar"
 	"github.com/blackforge/embookshelf/internal/storage"
@@ -48,6 +50,11 @@ type SidecarWriterFor interface {
 	Write(ctx context.Context, store storage.Storage, key string, s sidecar.Sidecar, mode sidecar.WriteMode, format string) error
 }
 
+// EmbedderDispatcher is the slice of fileproc.DispatchEmbedder we
+// depend on. Default impl wraps fileproc.DispatchEmbedder; tests
+// inject a fake.
+type EmbedderDispatcher func(format string) (fileproc.Embedder, error)
+
 // MetadataWriterDeps groups the dependencies MetadataWriter needs.
 // LibStore + Sidecar are nil-tolerant for the auto-enrichment-only
 // case (DB write succeeds without them).
@@ -55,6 +62,7 @@ type MetadataWriterDeps struct {
 	Books    BookMetadataWriter
 	LibStore LibraryStoreFor
 	Sidecar  SidecarWriterFor
+	Dispatch EmbedderDispatcher
 }
 
 // MetadataWriter coordinates the DB → sidecar → file pipeline for
@@ -89,8 +97,64 @@ func (w *MetadataWriter) Write(ctx context.Context, b model.Book, trigger Trigge
 		return nil
 	}
 
-	w.writeSidecar(ctx, b, sidecar.ModeFull)
+	mode := sidecar.ModeFull
+	if w.tryEmbedFile(ctx, b) {
+		mode = sidecar.ModeSpillover
+	}
+	w.writeSidecar(ctx, b, mode)
 	return nil
+}
+
+// tryEmbedFile attempts the in-file write step. Returns true when
+// the write succeeded; false (with side effects logged) when the
+// step was skipped, the format is unsupported, or the embed/Put
+// failed. Spillover-vs-full sidecar mode flows from this return.
+func (w *MetadataWriter) tryEmbedFile(ctx context.Context, b model.Book) bool {
+	if w.deps.LibStore == nil || w.deps.Dispatch == nil {
+		return false
+	}
+	handle, err := w.deps.LibStore.For(ctx, b.LibraryID)
+	if err != nil {
+		slog.Warn("metadata writer: lib store lookup", "book_id", b.ID, "err", err)
+		return false
+	}
+	if !handle.CanWriteInFile() || handle.Storage == nil {
+		return false
+	}
+	emb, err := w.deps.Dispatch(b.Format)
+	if err != nil {
+		return false
+	}
+	src, err := handle.Storage.Open(ctx, b.Path)
+	if err != nil {
+		slog.Warn("metadata writer: open source", "book_id", b.ID, "path", b.Path, "err", err)
+		return false
+	}
+	defer func() { _ = src.Close() }()
+	in := fileproc.EmbedInput{
+		Title:         b.Title,
+		Subtitle:      b.Subtitle,
+		Author:        b.Author,
+		Description:   b.Description,
+		Language:      b.Language,
+		Publisher:     b.Publisher,
+		PublishedDate: dateString(b.PublishDate),
+		ISBN:          b.ISBN,
+		Series:        b.Series,
+		SeriesIndex:   b.SeriesIndex,
+		Tags:          b.Tags,
+		Genres:        b.Genres,
+	}
+	out, err := emb.Embed(ctx, src, in)
+	if err != nil {
+		slog.Warn("metadata writer: embed", "book_id", b.ID, "format", b.Format, "err", err)
+		return false
+	}
+	if _, err := handle.Storage.Put(ctx, b.Path, bytes.NewReader(out)); err != nil {
+		slog.Warn("metadata writer: put", "book_id", b.ID, "path", b.Path, "err", err)
+		return false
+	}
+	return true
 }
 
 // writeSidecar persists the JSON sidecar. mode is decided by the
