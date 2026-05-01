@@ -258,19 +258,18 @@ func reExtractAndMerge(
 		slog.Warn("library scan: sidecar read", "key", fileKey, "err", sErr)
 	}
 
-	extracted := model.Book{
-		Title:       firstNonEmpty(side.Title, meta.Title),
-		Subtitle:    side.Subtitle,
-		Author:      firstNonEmpty(side.Author, meta.Author),
-		Description: firstNonEmpty(side.Description, meta.Description),
-		Language:    firstNonEmpty(side.Language, meta.Language),
-		Publisher:   side.Publisher,
-		ISBN:        side.ISBN,
-		Series:      side.Series,
-		SeriesIndex: side.SeriesIndex,
-		Tags:        side.Tags,
-		Genres:      side.Genres,
+	// Build the extracted shape from processor + sidecar overlay.
+	// Sidecar wins on conflicts (model.MergeEditable b-wins-on-non-zero).
+	processorEM := model.EditableMetadata{
+		Title:       meta.Title,
+		Author:      meta.Author,
+		Description: meta.Description,
+		Language:    meta.Language,
 	}
+	extractedEM := model.MergeEditable(processorEM, side)
+
+	var extracted model.Book
+	extracted.ApplyEditable(extractedEM)
 
 	current, err := deps.Books.GetByID(ctx, "", bookID)
 	if err != nil {
@@ -281,11 +280,4 @@ func reExtractAndMerge(
 	if err := deps.Books.UpdateMetadata(ctx, merged); err != nil {
 		slog.Warn("library scan: update merged metadata", "book_id", bookID, "err", err)
 	}
-}
-
-func firstNonEmpty(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
