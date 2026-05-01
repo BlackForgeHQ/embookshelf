@@ -140,22 +140,9 @@ func (w *MetadataWriter) tryEmbedFile(ctx context.Context, b model.Book) bool {
 		return false
 	}
 	defer func() { _ = src.Close() }()
-	in := fileproc.EmbedInput{
-		EditableMetadata: model.EditableMetadata{
-			Title:         b.Title,
-			Subtitle:      b.Subtitle,
-			Author:        b.Author,
-			Description:   b.Description,
-			Language:      b.Language,
-			Publisher:     b.Publisher,
-			PublishedDate: dateString(b.PublishDate),
-			ISBN:          b.ISBN,
-			Series:        b.Series,
-			SeriesIndex:   b.SeriesIndex,
-			Tags:          b.Tags,
-			Genres:        b.Genres,
-		},
-	}
+	em := b.Editable()
+	em.PublishedDate = dateString(b.PublishDate)
+	in := fileproc.EmbedInput{EditableMetadata: em}
 	out, err := emb.Embed(ctx, src, in)
 	if err != nil {
 		slog.Warn("metadata writer: embed", "book_id", b.ID, "format", b.Format, "err", err)
@@ -215,20 +202,8 @@ func (w *MetadataWriter) writeSidecar(ctx context.Context, b model.Book, mode si
 		return
 	}
 	key := handle.SidecarKey(b.Path)
-	side := sidecar.Sidecar{
-		Title:         b.Title,
-		Subtitle:      b.Subtitle,
-		Author:        b.Author,
-		Description:   b.Description,
-		Language:      b.Language,
-		Publisher:     b.Publisher,
-		PublishedDate: dateString(b.PublishDate),
-		ISBN:          b.ISBN,
-		Series:        b.Series,
-		SeriesIndex:   b.SeriesIndex,
-		Tags:          b.Tags,
-		Genres:        b.Genres,
-	}
+	side := b.Editable()
+	side.PublishedDate = dateString(b.PublishDate)
 	if err := w.deps.Sidecar.Write(ctx, handle.Storage, key, side, mode, b.Format); err != nil {
 		slog.Warn("metadata writer: sidecar write", "book_id", b.ID, "key", key, "err", err)
 	}
