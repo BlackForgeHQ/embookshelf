@@ -128,3 +128,37 @@ func TestMutateOPF_SeriesCalibreCompat(t *testing.T) {
 		}
 	}
 }
+
+func TestMutateOPF_TagsAndGenresDualWrite(t *testing.T) {
+	original := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>X</dc:title>
+  </metadata>
+  <manifest/><spine/>
+</package>`)
+	in := EmbedInput{
+		Title:  "X",
+		Tags:   []string{"jazz-age", "tragedy"},
+		Genres: []string{"fiction", "literary"},
+	}
+	out, err := mutateOPF(original, in)
+	if err != nil {
+		t.Fatalf("mutateOPF: %v", err)
+	}
+	s := string(out)
+	for _, want := range []string{
+		`<meta property="embookshelf:tag">jazz-age</meta>`,
+		`<meta property="embookshelf:tag">tragedy</meta>`,
+		`<meta property="embookshelf:genre">fiction</meta>`,
+		`<meta property="embookshelf:genre">literary</meta>`,
+		`<dc:subject>jazz-age</dc:subject>`,
+		`<dc:subject>tragedy</dc:subject>`,
+		`<dc:subject>fiction</dc:subject>`,
+		`<dc:subject>literary</dc:subject>`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("output missing %q\n%s", want, s)
+		}
+	}
+}

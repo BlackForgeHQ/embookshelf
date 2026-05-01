@@ -97,7 +97,20 @@ func writeMetadataBody(buf *bytes.Buffer, in EmbedInput) {
 		}
 	}
 
-	// Tags + Genres dual write — Task 5 expands this.
+	for _, tag := range in.Tags {
+		if tag == "" {
+			continue
+		}
+		fmt.Fprintf(buf, "    <meta property=\"embookshelf:tag\">%s</meta>\n", xmlEscape(tag))
+		fmt.Fprintf(buf, "    <dc:subject>%s</dc:subject>\n", xmlEscape(tag))
+	}
+	for _, genre := range in.Genres {
+		if genre == "" {
+			continue
+		}
+		fmt.Fprintf(buf, "    <meta property=\"embookshelf:genre\">%s</meta>\n", xmlEscape(genre))
+		fmt.Fprintf(buf, "    <dc:subject>%s</dc:subject>\n", xmlEscape(genre))
+	}
 }
 
 // xmlEscape escapes `<`, `>`, `&`, `"`, `'` for XML text content.
