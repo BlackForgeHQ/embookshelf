@@ -86,3 +86,52 @@ func TestNextObjectNumber(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildInfoBody_AllFields(t *testing.T) {
+	in := EmbedInput{
+		Title:       "T",
+		Author:      "A",
+		Description: "D",
+		Tags:        []string{"a", "b"},
+		Genres:      []string{"g1"},
+	}
+	got := buildInfoBody(in)
+	for _, want := range []string{
+		"/Title <FEFF",
+		"/Author <FEFF",
+		"/Subject <FEFF",
+		"/Keywords <FEFF",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("body missing %q\n%s", want, got)
+		}
+	}
+	want := encodePDFString("tag:a, tag:b, genre:g1")
+	if !strings.Contains(got, "/Keywords "+want) {
+		t.Errorf("Keywords payload mismatch.\nwant suffix: %s\ngot:\n%s", want, got)
+	}
+}
+
+func TestBuildInfoBody_OmitsEmpty(t *testing.T) {
+	got := buildInfoBody(EmbedInput{Title: "Only"})
+	if strings.Contains(got, "/Author") {
+		t.Error("/Author should be omitted on empty input")
+	}
+	if strings.Contains(got, "/Subject") {
+		t.Error("/Subject should be omitted on empty input")
+	}
+	if strings.Contains(got, "/Keywords") {
+		t.Error("/Keywords should be omitted on empty input")
+	}
+}
+
+func TestBuildInfoBody_NeverWritesCreationDate(t *testing.T) {
+	in := EmbedInput{
+		Title:         "T",
+		PublishedDate: "2024-01-01",
+	}
+	got := buildInfoBody(in)
+	if strings.Contains(got, "/CreationDate") {
+		t.Errorf("/CreationDate must never be written by buildInfoBody\n%s", got)
+	}
+}

@@ -92,3 +92,51 @@ func nextObjectNumber(data []byte) int {
 	}
 	return n
 }
+
+// buildInfoBody renders the /Info dict body (between "<<" and ">>")
+// for a new /Info object. Only fields PDF /Info natively carries
+// land here; everything else spills to the sidecar.
+//
+// Critical: /CreationDate is never written. PDF readers and most
+// authoring tools treat it as the file-creation timestamp;
+// rewriting it confuses every downstream consumer. Published-date
+// always goes to the sidecar for PDFs.
+func buildInfoBody(in EmbedInput) string {
+	var b strings.Builder
+	b.WriteString("<<")
+
+	emit := func(name, value string) {
+		if value == "" {
+			return
+		}
+		fmt.Fprintf(&b, " /%s %s", name, encodePDFString(value))
+	}
+
+	emit("Title", in.Title)
+	emit("Author", in.Author)
+	emit("Subject", in.Description)
+	emit("Keywords", joinKeywords(in.Tags, in.Genres))
+
+	b.WriteString(" >>")
+	return b.String()
+}
+
+// joinKeywords builds the "tag:foo, tag:bar, genre:baz" string per
+// the inline-prefix scheme. Empty slices return "" so emit drops
+// the field.
+func joinKeywords(tags, genres []string) string {
+	parts := make([]string, 0, len(tags)+len(genres))
+	for _, t := range tags {
+		if t == "" {
+			continue
+		}
+		parts = append(parts, "tag:"+t)
+	}
+	for _, g := range genres {
+		if g == "" {
+			continue
+		}
+		parts = append(parts, "genre:"+g)
+	}
+	return strings.Join(parts, ", ")
+}
