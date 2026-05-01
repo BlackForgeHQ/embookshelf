@@ -101,3 +101,30 @@ func TestMutateOPF_ScalarFields(t *testing.T) {
 		}
 	}
 }
+
+func TestMutateOPF_SeriesCalibreCompat(t *testing.T) {
+	original := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" xmlns:opf="http://www.idpf.org/2007/opf">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf"
+            xmlns:calibre="http://calibre.kovidgoyal.net/2009/metadata">
+    <dc:title>X</dc:title>
+  </metadata>
+  <manifest/><spine/>
+</package>`)
+	in := EmbedInput{Title: "X", Series: "Foundation", SeriesIndex: 3}
+	out, err := mutateOPF(original, in)
+	if err != nil {
+		t.Fatalf("mutateOPF: %v", err)
+	}
+	asString := string(out)
+	for _, want := range []string{
+		`property="belongs-to-collection"`,
+		`property="group-position">3</meta>`,
+		`<meta name="calibre:series" content="Foundation"`,
+		`<meta name="calibre:series_index" content="3"`,
+	} {
+		if !strings.Contains(asString, want) {
+			t.Errorf("output missing %q\n%s", want, asString)
+		}
+	}
+}

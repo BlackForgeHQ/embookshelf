@@ -84,11 +84,16 @@ func writeMetadataBody(buf *bytes.Buffer, in EmbedInput) {
 	emit("dc:date", in.PublishedDate)
 	emitAttr("dc:identifier", `opf:scheme="ISBN"`, in.ISBN)
 
-	// Series — Plan adds Calibre compat in Task 4.
 	if in.Series != "" {
+		// EPUB 3 native (the spec).
 		fmt.Fprintf(buf, "    <meta property=\"belongs-to-collection\" id=\"series\">%s</meta>\n", xmlEscape(in.Series))
 		if in.SeriesIndex > 0 {
 			fmt.Fprintf(buf, "    <meta refines=\"#series\" property=\"group-position\">%d</meta>\n", in.SeriesIndex)
+		}
+		// Calibre compat — uses the OPF 2 <meta name=.../> shape.
+		fmt.Fprintf(buf, "    <meta name=\"calibre:series\" content=\"%s\"/>\n", xmlEscape(in.Series))
+		if in.SeriesIndex > 0 {
+			fmt.Fprintf(buf, "    <meta name=\"calibre:series_index\" content=\"%d\"/>\n", in.SeriesIndex)
 		}
 	}
 
