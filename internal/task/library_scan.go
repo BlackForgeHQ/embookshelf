@@ -1,6 +1,7 @@
 package task
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -11,9 +12,12 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/hashing"
+	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/scan"
 	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/sidecar"
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // LibraryScanArgs is the payload for walking a library's filesystem
@@ -46,6 +50,14 @@ type LibraryScanDeps struct {
 	// Files is the storage_v2 file repo. Required by the two-phase
 	// walk+diff pipeline. nil → scan returns early.
 	Files *repo.FileRepo
+	// Books is the book repo used by the lock-aware re-extract path
+	// to load the current book row and persist the merged metadata.
+	// nil → scan skips re-extract and falls back to the legacy
+	// hash-only update on Changed files.
+	Books *repo.BookRepo
+	// LockMerger applies the lock-aware merge of file-extracted
+	// metadata onto a DB row. Default service.MergeLocked.
+	LockMerger func(current, extracted model.Book) model.Book
 }
 
 // LibraryScan walks a library's filesystem root and stages every
@@ -122,12 +134,29 @@ func LibraryScan(ctx context.Context, args LibraryScanArgs, deps LibraryScanDeps
 			slog.Warn("library scan: rehash failed", "loc", ce.Walk.Location, "err", herr)
 			continue
 		}
+
+		// Hash-stamp short-circuit: if the file's actual hash matches
+		// what the DB already recorded, this is "we just wrote it" —
+		// no metadata re-extract needed. Either the scan tick raced
+		// the MetadataWriter's hash-stamp call (rare) or scan was
+		// triggered by an mtime change without bytes changing.
+		if len(ce.DB.ContentHash) > 0 && bytes.Equal(hash, ce.DB.ContentHash) {
+			continue
+		}
+
 		reattached, rerr := scan.MaybeReattach(ctx, deps.Files, lib.ID, hash, ce.Walk.Location, ce.DB.ID)
 		if rerr != nil {
 			slog.Warn("library scan: reattach failed", "loc", ce.Walk.Location, "err", rerr)
 		} else if reattached {
 			continue
 		}
+
+		// External edit (or first-time hash on a never-stamped row):
+		// re-extract and merge with locks.
+		if deps.Books != nil && deps.LockMerger != nil {
+			reExtractAndMerge(ctx, deps, ce.DB.BookID, key, store, handle)
+		}
+
 		if err := deps.Files.SetContentHash(ctx, ce.DB.ID, hash, size, ce.Walk.Mtime); err != nil {
 			slog.Warn("library scan: update changed row", "id", ce.DB.ID, "err", err)
 		}
@@ -188,4 +217,75 @@ type LibraryScanWorker struct {
 
 func (w *LibraryScanWorker) Work(ctx context.Context, job *river.Job[LibraryScanArgs]) error {
 	return LibraryScan(ctx, job.Args, w.Deps)
+}
+
+// reExtractAndMerge runs the file-format-specific extractor on a
+// changed file, overlays the sidecar, and applies the lock-aware
+// merge into DB. Best-effort: errors are logged, never aborting
+// the scan.
+func reExtractAndMerge(
+	ctx context.Context,
+	deps LibraryScanDeps,
+	bookID, fileKey string,
+	store storage.Storage,
+	handle *service.LibraryHandle,
+) {
+	_ = handle
+	if bookID == "" {
+		return
+	}
+	src, err := store.Open(ctx, fileKey)
+	if err != nil {
+		slog.Warn("library scan: open for re-extract", "key", fileKey, "err", err)
+		return
+	}
+	defer func() { _ = src.Close() }()
+
+	proc, _, err := fileproc.Dispatch(fileKey)
+	if err != nil {
+		slog.Debug("library scan: no processor for re-extract", "key", fileKey, "err", err)
+	}
+	var meta fileproc.Metadata
+	if proc != nil {
+		meta, err = proc.Extract(ctx, src)
+		if err != nil {
+			slog.Warn("library scan: extract failed", "key", fileKey, "err", err)
+		}
+	}
+
+	side, sErr := sidecar.Read(ctx, store, fileKey)
+	if sErr != nil {
+		slog.Warn("library scan: sidecar read", "key", fileKey, "err", sErr)
+	}
+
+	extracted := model.Book{
+		Title:       firstNonEmpty(side.Title, meta.Title),
+		Subtitle:    side.Subtitle,
+		Author:      firstNonEmpty(side.Author, meta.Author),
+		Description: firstNonEmpty(side.Description, meta.Description),
+		Language:    firstNonEmpty(side.Language, meta.Language),
+		Publisher:   side.Publisher,
+		ISBN:        side.ISBN,
+		Series:      side.Series,
+		SeriesIndex: side.SeriesIndex,
+		Tags:        side.Tags,
+		Genres:      side.Genres,
+	}
+
+	current, err := deps.Books.GetByID(ctx, "", bookID)
+	if err != nil {
+		slog.Warn("library scan: load current book", "book_id", bookID, "err", err)
+		return
+	}
+	merged := deps.LockMerger(current, extracted)
+	if err := deps.Books.UpdateMetadata(ctx, merged); err != nil {
+		slog.Warn("library scan: update merged metadata", "book_id", bookID, "err", err)
+	}
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
