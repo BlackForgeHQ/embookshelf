@@ -62,6 +62,8 @@ func DispatchEmbedder(format string) (Embedder, error) {
 	switch format {
 	case "EPUB":
 		return EPUBEmbedder{}, nil
+	case "PDF":
+		return PDFEmbedder{}, nil
 	}
 	return nil, ErrUnsupportedEmbed
 }

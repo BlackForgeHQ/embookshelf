@@ -211,3 +211,67 @@ func TestMinimalPDF_Parses(t *testing.T) {
 		t.Errorf("Extract: %v", err)
 	}
 }
+
+func TestPDFEmbedder_Embed_RoundTrip(t *testing.T) {
+	original := makeMinimalPDF(t)
+	src := newBytesSource(original)
+	defer func() { _ = src.Close() }()
+
+	in := EmbedInput{
+		Title:       "Curated PDF",
+		Author:      "Curated Author",
+		Description: "A PDF.",
+		Tags:        []string{"tech"},
+		Genres:      []string{"reference"},
+	}
+	out, err := PDFEmbedder{}.Embed(context.Background(), src, in)
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+
+	// Round-trip via reader is best-effort because PDFProcessor's regex
+	// only handles literal strings, not hex strings. Assert structural
+	// markers in the output bytes.
+	if !bytes.Contains(out, []byte("/Title <FEFF")) {
+		t.Error("output missing hex-encoded /Title")
+	}
+	if !bytes.Contains(out, []byte("/Author <FEFF")) {
+		t.Error("output missing hex-encoded /Author")
+	}
+	if !bytes.Contains(out, []byte("/Keywords <FEFF")) {
+		t.Error("output missing hex-encoded /Keywords")
+	}
+
+	src2 := newBytesSource(out)
+	defer func() { _ = src2.Close() }()
+	if _, err := (PDFProcessor{}).Extract(context.Background(), src2); err != nil {
+		t.Fatalf("Extract after Embed: %v", err)
+	}
+}
+
+func TestPDFEmbedder_Embed_PreservesCreationDate(t *testing.T) {
+	original := makeMinimalPDF(t)
+	src := newBytesSource(original)
+	defer func() { _ = src.Close() }()
+
+	out, err := PDFEmbedder{}.Embed(context.Background(), src, EmbedInput{Title: "T"})
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if !bytes.HasPrefix(out, original) {
+		t.Error("Embed must not modify original bytes (incremental update only)")
+	}
+	if !bytes.Contains(out[:len(original)], []byte("/CreationDate (D:20240101120000Z)")) {
+		t.Error("/CreationDate must survive in the original prefix")
+	}
+}
+
+func TestDispatchEmbedder_PDF(t *testing.T) {
+	emb, err := DispatchEmbedder("PDF")
+	if err != nil {
+		t.Fatalf("DispatchEmbedder(PDF): %v", err)
+	}
+	if _, ok := emb.(PDFEmbedder); !ok {
+		t.Errorf("got %T, want PDFEmbedder", emb)
+	}
+}

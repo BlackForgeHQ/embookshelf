@@ -2,11 +2,14 @@ package fileproc
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf16"
+
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // encodePDFString returns a PDF hex-string literal containing the
@@ -172,4 +175,22 @@ func buildIncrementalUpdate(data []byte, in EmbedInput) ([]byte, error) {
 	out = append(out, data...)
 	out = append(out, ap.Bytes()...)
 	return out, nil
+}
+
+// PDFEmbedder writes /Info metadata into a PDF via incremental
+// update. Existing object table and trailer stay byte-identical;
+// a new revision is appended at end-of-file pointing at a fresh
+// /Info object. /CreationDate is never written.
+type PDFEmbedder struct{}
+
+// Embed implements Embedder. Returns the new PDF bytes (original +
+// incremental-update appendix). Caller writes back via storage.Put.
+func (PDFEmbedder) Embed(ctx context.Context, src storage.Source, in EmbedInput) ([]byte, error) {
+	_ = ctx
+
+	data := make([]byte, src.Size())
+	if _, err := src.ReadAt(data, 0); err != nil && err.Error() != "EOF" {
+		return nil, fmt.Errorf("read pdf: %w", err)
+	}
+	return buildIncrementalUpdate(data, in)
 }
