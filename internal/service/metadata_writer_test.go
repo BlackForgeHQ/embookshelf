@@ -2,6 +2,8 @@ package service_test
 
 import (
 	"context"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
@@ -9,6 +11,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sidecar"
 	"github.com/blackforge/embookshelf/internal/storage"
+	"github.com/blackforge/embookshelf/internal/storage/local"
 )
 
 // fakeBookWriter records UpdateMetadata calls for the test.
@@ -173,5 +176,69 @@ func TestMetadataWriter_Write_AutoEnrichment_SkipsSidecar(t *testing.T) {
 	}
 	if len(rec.calls) != 0 {
 		t.Errorf("Sidecar.Write called %d times on auto-enrichment; want 0", len(rec.calls))
+	}
+}
+
+func TestMetadataWriter_Write_EPUBLocal_SpilloverMode(t *testing.T) {
+	books := &fakeBookWriter{}
+	rec := &recordingSidecarWriter{}
+
+	root := t.TempDir()
+	fs, err := local.New(root)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	bookKey := "books/x.epub"
+	if _, err := fs.Put(context.Background(), bookKey, strings.NewReader("placeholder-epub-bytes")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	handle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", BackendID: nil},
+	}
+	handle.Storage = fs
+
+	emb := &fakeEmbedder{out: []byte("rezipped-epub-bytes")}
+	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+		Books:    books,
+		LibStore: &fakeLibStore{handle: handle},
+		Sidecar:  rec,
+		Dispatch: func(format string) (fileproc.Embedder, error) {
+			if format == "EPUB" {
+				return emb, nil
+			}
+			return nil, fileproc.ErrUnsupportedEmbed
+		},
+	})
+
+	book := model.Book{
+		ID: "b1", LibraryID: "lib1",
+		Path: bookKey, Format: "EPUB", Title: "Curated",
+	}
+	if err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if len(emb.embeddedFor) != 1 {
+		t.Fatalf("Embed called %d times; want 1", len(emb.embeddedFor))
+	}
+	if emb.embeddedFor[0] != "Curated" {
+		t.Errorf("Embed input title=%q want Curated", emb.embeddedFor[0])
+	}
+	if rec.calls[0].Mode != sidecar.ModeSpillover {
+		t.Errorf("sidecar mode=%q want spillover (file write succeeded)", rec.calls[0].Mode)
+	}
+
+	rc, err := fs.Get(context.Background(), bookKey)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	got, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(got) != "rezipped-epub-bytes" {
+		t.Errorf("file bytes=%q want rezipped-epub-bytes", got)
 	}
 }
