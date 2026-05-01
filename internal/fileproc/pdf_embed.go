@@ -140,3 +140,36 @@ func joinKeywords(tags, genres []string) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// buildIncrementalUpdate appends a new revision to data: a fresh
+// /Info object containing in's fields, a one-entry xref subsection
+// pointing at the new object, and a trailer whose /Prev chains back
+// to the original startxref. The original bytes are preserved
+// byte-identically; readers walk forward to the latest revision.
+//
+// Returns the full new PDF bytes (original + appendix). The caller
+// writes them back via storage.Put atomically.
+func buildIncrementalUpdate(data []byte, in EmbedInput) ([]byte, error) {
+	prevXref, err := findStartxref(data)
+	if err != nil {
+		return nil, err
+	}
+	objNum := nextObjectNumber(data)
+	body := buildInfoBody(in)
+
+	var ap bytes.Buffer
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		ap.WriteByte('\n')
+	}
+	objStart := int64(len(data)) + int64(ap.Len())
+	fmt.Fprintf(&ap, "%d 0 obj\n%s\nendobj\n", objNum, body)
+	xrefStart := int64(len(data)) + int64(ap.Len())
+	fmt.Fprintf(&ap, "xref\n%d 1\n%010d %05d n \n", objNum, objStart, 0)
+	fmt.Fprintf(&ap, "trailer\n<< /Size %d /Prev %d /Info %d 0 R /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n",
+		objNum+1, prevXref, objNum, xrefStart)
+
+	out := make([]byte, 0, len(data)+ap.Len())
+	out = append(out, data...)
+	out = append(out, ap.Bytes()...)
+	return out, nil
+}

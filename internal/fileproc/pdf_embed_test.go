@@ -1,6 +1,7 @@
 package fileproc
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -133,5 +134,36 @@ func TestBuildInfoBody_NeverWritesCreationDate(t *testing.T) {
 	got := buildInfoBody(in)
 	if strings.Contains(got, "/CreationDate") {
 		t.Errorf("/CreationDate must never be written by buildInfoBody\n%s", got)
+	}
+}
+
+func TestBuildIncrementalUpdate_StructureValid(t *testing.T) {
+	pdf := []byte("%PDF-1.4\n" +
+		"1 0 obj\n<<>>\nendobj\n" +
+		"xref\n0 2\n0000000000 65535 f \n0000000009 00000 n \ntrailer\n<< /Size 2 /Root 1 0 R >>\n" +
+		"startxref\n34\n%%EOF\n")
+
+	out, err := buildIncrementalUpdate(pdf, EmbedInput{Title: "X", Author: "Y"})
+	if err != nil {
+		t.Fatalf("buildIncrementalUpdate: %v", err)
+	}
+	if !bytes.HasPrefix(out, pdf) {
+		t.Error("output doesn't start with original PDF prefix")
+	}
+	if !bytes.HasSuffix(out, []byte("%%EOF\n")) {
+		t.Errorf("output doesn't end with EOF marker\n%s", out[len(out)-30:])
+	}
+	want := [][]byte{
+		[]byte("2 0 obj\n"),
+		[]byte("/Title <FEFF"),
+		[]byte("/Author <FEFF"),
+		[]byte("/Prev 34"),
+		[]byte("/Info 2 0 R"),
+		[]byte("xref\n2 1\n"),
+	}
+	for _, w := range want {
+		if !bytes.Contains(out, w) {
+			t.Errorf("output missing %q", w)
+		}
 	}
 }
