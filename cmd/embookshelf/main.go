@@ -214,6 +214,7 @@ func main() {
 		LibStore: libStore,
 		Sidecar:  sidecarWriter,
 		Dispatch: fileproc.DispatchEmbedder,
+		Files:    fileRepo,
 	})
 	libSvc.WithMetadataWriter(metadataWriter)
 	enrichSvc.WithMetadataWriter(metadataWriter)
