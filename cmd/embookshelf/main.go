@@ -21,6 +21,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/crypto"
 	"github.com/blackforge/embookshelf/internal/db"
+	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/handler"
 	"github.com/blackforge/embookshelf/internal/ingest"
 	"github.com/blackforge/embookshelf/internal/migrator"
@@ -28,6 +29,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/queue"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/sidecar"
 	"github.com/blackforge/embookshelf/internal/sse"
 	"github.com/blackforge/embookshelf/internal/staticfs"
 	s3backend "github.com/blackforge/embookshelf/internal/storage/s3"
@@ -201,6 +203,20 @@ func main() {
 	if err := enrichSvc.LoadConfigs(ctx); err != nil {
 		slog.Warn("load provider configs", "err", err)
 	}
+	// MetadataWriter coordinates DB → sidecar → file pipeline writes
+	// for metadata edits. Wired into LibraryService + EnrichmentService
+	// so manual edits and apply-match flows route through it; the
+	// auto-enrich background path passes TriggerAutoEnrichment to skip
+	// the side-effect steps and only persist the DB row.
+	sidecarWriter := sidecar.NewWriter()
+	metadataWriter := service.NewMetadataWriter(service.MetadataWriterDeps{
+		Books:    bookRepo,
+		LibStore: libStore,
+		Sidecar:  sidecarWriter,
+		Dispatch: fileproc.DispatchEmbedder,
+	})
+	libSvc.WithMetadataWriter(metadataWriter)
+	enrichSvc.WithMetadataWriter(metadataWriter)
 	deviceSvc := service.NewDeviceService(
 		deviceRepo, bookRepo,
 		service.NewRemarkableDriver(),
