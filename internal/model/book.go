@@ -211,3 +211,113 @@ var SortOptions = []struct {
 	{"year", "Year"},
 	{"rating", "Rating"},
 }
+
+// EditableMetadata is the canonical shape for the editable subset of
+// a book's metadata — the fields a user can change in the edit-metadata
+// UI, the fields a sidecar carries, the fields an in-file Embedder
+// writes back into the book file. Read-only audio fields (Duration,
+// Narrator) and structural fields (ID, LibraryID, Path) live on Book,
+// not here.
+//
+// JSON tags match docs/spec/sidecar-write.spec.md §4.1's wire format.
+type EditableMetadata struct {
+	Title         string   `json:"title,omitempty"`
+	Subtitle      string   `json:"subtitle,omitempty"`
+	Author        string   `json:"author,omitempty"`
+	Description   string   `json:"description,omitempty"`
+	Language      string   `json:"language,omitempty"`
+	Publisher     string   `json:"publisher,omitempty"`
+	PublishedDate string   `json:"published_date,omitempty"`
+	ISBN          string   `json:"isbn,omitempty"`
+	Series        string   `json:"series,omitempty"`
+	SeriesIndex   int      `json:"series_index,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	Genres        []string `json:"genres,omitempty"`
+}
+
+// IsZero reports whether em carries no information. Used to short-
+// circuit the merge when no sidecar/payload was present.
+func (em EditableMetadata) IsZero() bool {
+	return em.Title == "" && em.Subtitle == "" && em.Author == "" &&
+		em.Description == "" && em.Language == "" && em.Publisher == "" &&
+		em.PublishedDate == "" && em.ISBN == "" && em.Series == "" &&
+		em.SeriesIndex == 0 && len(em.Tags) == 0 && len(em.Genres) == 0
+}
+
+// MergeEditable overlays b on a: any non-zero field in b wins.
+func MergeEditable(a, b EditableMetadata) EditableMetadata {
+	out := a
+	if b.Title != "" {
+		out.Title = b.Title
+	}
+	if b.Subtitle != "" {
+		out.Subtitle = b.Subtitle
+	}
+	if b.Author != "" {
+		out.Author = b.Author
+	}
+	if b.Description != "" {
+		out.Description = b.Description
+	}
+	if b.Language != "" {
+		out.Language = b.Language
+	}
+	if b.Publisher != "" {
+		out.Publisher = b.Publisher
+	}
+	if b.PublishedDate != "" {
+		out.PublishedDate = b.PublishedDate
+	}
+	if b.ISBN != "" {
+		out.ISBN = b.ISBN
+	}
+	if b.Series != "" {
+		out.Series = b.Series
+	}
+	if b.SeriesIndex != 0 {
+		out.SeriesIndex = b.SeriesIndex
+	}
+	if len(b.Tags) > 0 {
+		out.Tags = b.Tags
+	}
+	if len(b.Genres) > 0 {
+		out.Genres = b.Genres
+	}
+	return out
+}
+
+// Editable returns the editable scalar subset of b. Drops IDs,
+// structural fields, audio fields, locks. PublishedDate left blank
+// — Book.PublishDate is *time.Time; conversion lives at the boundary.
+func (b Book) Editable() EditableMetadata {
+	return EditableMetadata{
+		Title:       b.Title,
+		Subtitle:    b.Subtitle,
+		Author:      b.Author,
+		Description: b.Description,
+		Language:    b.Language,
+		Publisher:   b.Publisher,
+		ISBN:        b.ISBN,
+		Series:      b.Series,
+		SeriesIndex: b.SeriesIndex,
+		Tags:        b.Tags,
+		Genres:      b.Genres,
+	}
+}
+
+// ApplyEditable copies em's fields onto b. Does not touch IDs,
+// structural fields, audio fields, locks, or PublishDate (caller
+// converts string ↔ *time.Time at the boundary).
+func (b *Book) ApplyEditable(em EditableMetadata) {
+	b.Title = em.Title
+	b.Subtitle = em.Subtitle
+	b.Author = em.Author
+	b.Description = em.Description
+	b.Language = em.Language
+	b.Publisher = em.Publisher
+	b.ISBN = em.ISBN
+	b.Series = em.Series
+	b.SeriesIndex = em.SeriesIndex
+	b.Tags = em.Tags
+	b.Genres = em.Genres
+}
