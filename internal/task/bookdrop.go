@@ -120,8 +120,8 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 	// Read the sidecar from the same backend (store is non-nil here;
 	// we returned early above if it was nil).
 	// Convert the absolute path into a storage key (Plan A LocalFS is
-	// rooted at "/" so we strip the leading slash). Then take the
-	// directory portion as the lookup prefix.
+	// rooted at "/" so we strip the leading slash). sidecar.Read derives
+	// the paired sidecar filename internally.
 	{
 		key := strings.TrimPrefix(item.Path, "/")
 		if sc, scErr := sidecar.Read(ctx, store, key); scErr == nil && !sc.IsZero() {

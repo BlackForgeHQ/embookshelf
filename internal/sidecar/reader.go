@@ -57,7 +57,9 @@ func Read(ctx context.Context, store storage.Storage, bookKey string) (Sidecar, 
 }
 
 // readAndParse fetches a single sidecar object and parses via fn.
-// ErrNotFound is treated as a non-error empty Sidecar.
+// Both ErrNotFound and parse errors return Sidecar{}, nil so the
+// caller can fall through to the next overlay layer. Parse errors
+// emit slog.Warn before swallowing.
 func readAndParse(ctx context.Context, store storage.Storage, key string, fn func([]byte) (Sidecar, error)) (Sidecar, error) {
 	rc, err := store.Get(ctx, key)
 	if err != nil {

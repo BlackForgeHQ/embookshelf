@@ -305,7 +305,7 @@ func TestWriter_ConcurrentWritesSameKey(t *testing.T) {
 	store := newTestStore(t)
 	w := NewWriter()
 	ctx := context.Background()
-	key := "concurrent.embookshelf.toml"
+	key := "concurrent.embookshelf.json"
 
 	const n = 100
 	var wg sync.WaitGroup
@@ -346,7 +346,7 @@ func TestWriter_ConcurrentWritesDistinctKeys(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			key := fmt.Sprintf("book%d/.embookshelf.toml", i)
+			key := fmt.Sprintf("book%d/.embookshelf.json", i)
 			sc := Sidecar{Title: fmt.Sprintf("Title-%d", i)}
 			if err := w.Write(ctx, store, key, sc, ModeFull, "EPUB"); err != nil {
 				t.Errorf("Write[%d]: %v", i, err)
@@ -357,7 +357,7 @@ func TestWriter_ConcurrentWritesDistinctKeys(t *testing.T) {
 
 	// Verify each key has its own content.
 	for i := 0; i < n; i++ {
-		key := fmt.Sprintf("book%d/.embookshelf.toml", i)
+		key := fmt.Sprintf("book%d/.embookshelf.json", i)
 		rc, err := store.Get(ctx, key)
 		if err != nil {
 			t.Errorf("Get[%d]: %v", i, err)
