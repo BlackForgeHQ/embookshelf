@@ -69,3 +69,20 @@ func TestFindInfoRef_Absent(t *testing.T) {
 		t.Error("findInfoRef: ok=true, want false")
 	}
 }
+
+func TestNextObjectNumber(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    int
+		comment string
+	}{
+		{"trailer\n<< /Size 5 >>", 5, "Size=5 → next object is #5 (objs 0..4 in use)"},
+		{"trailer\n<< /Size 1 /Root 1 0 R >>", 1, "Size=1 → next is #1"},
+		{"trailer\n<< /Foo 0 0 R >>", 1, "no /Size → fallback to 1"},
+	}
+	for _, c := range cases {
+		if got := nextObjectNumber([]byte(c.in)); got != c.want {
+			t.Errorf("%s: got %d want %d", c.comment, got, c.want)
+		}
+	}
+}

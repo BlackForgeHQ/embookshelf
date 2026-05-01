@@ -74,3 +74,21 @@ func findInfoRef(data []byte) (objNum, gen int, ok bool) {
 	g, _ := strconv.Atoi(string(m[2]))
 	return num, g, true
 }
+
+// sizeRe matches "/Size N" inside a trailer dict.
+var sizeRe = regexp.MustCompile(`/Size\s+(\d+)`)
+
+// nextObjectNumber returns the smallest free object number for an
+// incremental update. /Size in the trailer is the count of in-use
+// objects (0..Size-1); the next free one is therefore Size.
+func nextObjectNumber(data []byte) int {
+	m := sizeRe.FindSubmatch(data)
+	if m == nil {
+		return 1
+	}
+	n, _ := strconv.Atoi(string(m[1]))
+	if n <= 0 {
+		return 1
+	}
+	return n
+}
