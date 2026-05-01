@@ -13,95 +13,6 @@ import (
 	"github.com/blackforge/embookshelf/internal/storage/local"
 )
 
-// ---- TOML round-trip tests ----
-
-func TestTOML_RoundTrip(t *testing.T) {
-	original := Sidecar{
-		Title:         "The Great Gatsby",
-		TitleSort:     "Great Gatsby, The",
-		Subtitle:      "A Novel",
-		Author:        "F. Scott Fitzgerald",
-		Description:   "A story of the Jazz Age.",
-		Language:      "en",
-		Publisher:     "Scribner",
-		PublishedDate: "1925-04-10",
-		ISBN:          "978-0-7432-7356-5",
-		Series:        "American Classics",
-		SeriesIndex:   3,
-		Tags:          []string{"fiction", "classic"},
-		Genres:        []string{"literary fiction"},
-	}
-
-	data, err := EncodeTOML(original)
-	if err != nil {
-		t.Fatalf("EncodeTOML: %v", err)
-	}
-
-	parsed, err := ParseTOML(data)
-	if err != nil {
-		t.Fatalf("ParseTOML: %v", err)
-	}
-
-	if parsed.Title != original.Title {
-		t.Errorf("Title: got %q want %q", parsed.Title, original.Title)
-	}
-	if parsed.TitleSort != original.TitleSort {
-		t.Errorf("TitleSort: got %q want %q", parsed.TitleSort, original.TitleSort)
-	}
-	if parsed.Subtitle != original.Subtitle {
-		t.Errorf("Subtitle: got %q want %q", parsed.Subtitle, original.Subtitle)
-	}
-	if parsed.Author != original.Author {
-		t.Errorf("Author: got %q want %q", parsed.Author, original.Author)
-	}
-	if parsed.Description != original.Description {
-		t.Errorf("Description: got %q want %q", parsed.Description, original.Description)
-	}
-	if parsed.Language != original.Language {
-		t.Errorf("Language: got %q want %q", parsed.Language, original.Language)
-	}
-	if parsed.Publisher != original.Publisher {
-		t.Errorf("Publisher: got %q want %q", parsed.Publisher, original.Publisher)
-	}
-	if parsed.PublishedDate != original.PublishedDate {
-		t.Errorf("PublishedDate: got %q want %q", parsed.PublishedDate, original.PublishedDate)
-	}
-	if parsed.ISBN != original.ISBN {
-		t.Errorf("ISBN: got %q want %q", parsed.ISBN, original.ISBN)
-	}
-	if parsed.Series != original.Series {
-		t.Errorf("Series: got %q want %q", parsed.Series, original.Series)
-	}
-	if parsed.SeriesIndex != original.SeriesIndex {
-		t.Errorf("SeriesIndex: got %d want %d", parsed.SeriesIndex, original.SeriesIndex)
-	}
-	if len(parsed.Tags) != len(original.Tags) {
-		t.Errorf("Tags len: got %d want %d", len(parsed.Tags), len(original.Tags))
-	} else {
-		for i, tag := range original.Tags {
-			if parsed.Tags[i] != tag {
-				t.Errorf("Tags[%d]: got %q want %q", i, parsed.Tags[i], tag)
-			}
-		}
-	}
-	if len(parsed.Genres) != len(original.Genres) {
-		t.Errorf("Genres len: got %d want %d", len(parsed.Genres), len(original.Genres))
-	} else {
-		for i, g := range original.Genres {
-			if parsed.Genres[i] != g {
-				t.Errorf("Genres[%d]: got %q want %q", i, parsed.Genres[i], g)
-			}
-		}
-	}
-}
-
-func TestParseTOML_MalformedReturnsError(t *testing.T) {
-	_, err := ParseTOML([]byte("not valid toml [[["))
-	if err == nil {
-		t.Fatal("expected error for malformed TOML, got nil")
-	}
-}
-
 // ---- IsZero tests ----
 
 func TestIsZero_EmptySidecar(t *testing.T) {
@@ -367,11 +278,11 @@ func TestWriter_SingleWriteHappyPath(t *testing.T) {
 	ctx := context.Background()
 
 	sc := Sidecar{Title: "Hello", Author: "World"}
-	if err := w.Write(ctx, store, "book.embookshelf.toml", sc, ModeFull, "EPUB"); err != nil {
+	if err := w.Write(ctx, store, "book.embookshelf.json", sc, ModeFull, "EPUB"); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
-	rc, err := store.Get(ctx, "book.embookshelf.toml")
+	rc, err := store.Get(ctx, "book.embookshelf.json")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -381,9 +292,9 @@ func TestWriter_SingleWriteHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
 	}
-	parsed, err := ParseTOML(data)
+	parsed, err := DecodeJSON(data)
 	if err != nil {
-		t.Fatalf("ParseTOML: %v", err)
+		t.Fatalf("DecodeJSON: %v", err)
 	}
 	if parsed.Title != "Hello" || parsed.Author != "World" {
 		t.Errorf("parsed mismatch: got %+v", parsed)
@@ -418,7 +329,7 @@ func TestWriter_ConcurrentWritesSameKey(t *testing.T) {
 	}
 	defer func() { _ = rc.Close() }()
 	data, _ := io.ReadAll(rc)
-	if _, err := ParseTOML(data); err != nil {
+	if _, err := DecodeJSON(data); err != nil {
 		t.Fatalf("final read not parseable: %v", err)
 	}
 }
@@ -458,9 +369,9 @@ func TestWriter_ConcurrentWritesDistinctKeys(t *testing.T) {
 			t.Errorf("ReadAll[%d]: %v", i, readErr)
 			continue
 		}
-		parsed, parseErr := ParseTOML(data)
+		parsed, parseErr := DecodeJSON(data)
 		if parseErr != nil {
-			t.Errorf("ParseTOML[%d]: %v", i, parseErr)
+			t.Errorf("DecodeJSON[%d]: %v", i, parseErr)
 			continue
 		}
 		expected := fmt.Sprintf("Title-%d", i)
