@@ -3,6 +3,7 @@ package fileproc
 import (
 	"bytes"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -56,4 +57,20 @@ func findStartxref(data []byte) (int64, error) {
 		return 0, fmt.Errorf("pdf: %%EOF marker not found")
 	}
 	return off, nil
+}
+
+// infoRefRe matches "/Info N G R" inside a trailer dict.
+var infoRefRe = regexp.MustCompile(`/Info\s+(\d+)\s+(\d+)\s+R`)
+
+// findInfoRef returns the existing /Info object reference, if any.
+// Scans the trailer dict; absent on a fresh PDF that never had
+// metadata.
+func findInfoRef(data []byte) (objNum, gen int, ok bool) {
+	m := infoRefRe.FindSubmatch(data)
+	if m == nil {
+		return 0, 0, false
+	}
+	num, _ := strconv.Atoi(string(m[1]))
+	g, _ := strconv.Atoi(string(m[2]))
+	return num, g, true
 }

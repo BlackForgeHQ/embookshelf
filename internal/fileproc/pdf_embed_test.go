@@ -50,3 +50,22 @@ func TestFindStartxref_NoEOF(t *testing.T) {
 		t.Fatal("want error for missing trailer EOF marker, got nil")
 	}
 }
+
+func TestFindInfoRef_Present(t *testing.T) {
+	trailer := []byte("trailer\n<< /Size 5 /Root 1 0 R /Info 4 0 R >>\nstartxref\n100\n%%EOF\n")
+	num, gen, ok := findInfoRef(trailer)
+	if !ok {
+		t.Fatal("findInfoRef: ok=false, want true")
+	}
+	if num != 4 || gen != 0 {
+		t.Errorf("got num=%d gen=%d, want 4 0", num, gen)
+	}
+}
+
+func TestFindInfoRef_Absent(t *testing.T) {
+	trailer := []byte("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n100\n%%EOF\n")
+	_, _, ok := findInfoRef(trailer)
+	if ok {
+		t.Error("findInfoRef: ok=true, want false")
+	}
+}
