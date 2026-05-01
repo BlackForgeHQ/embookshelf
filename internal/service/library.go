@@ -41,13 +41,23 @@ type LibraryServiceDeps struct {
 }
 
 type LibraryService struct {
-	repo  *repo.LibraryRepo
-	books *repo.BookRepo
-	deps  LibraryServiceDeps
+	repo   *repo.LibraryRepo
+	books  *repo.BookRepo
+	deps   LibraryServiceDeps
+	writer *MetadataWriter // optional; nil falls back to direct repo write
 }
 
 func NewLibraryService(r *repo.LibraryRepo, b *repo.BookRepo, deps LibraryServiceDeps) *LibraryService {
 	return &LibraryService{repo: r, books: b, deps: deps}
+}
+
+// WithMetadataWriter wires a MetadataWriter into the service so that
+// UpdateBookMetadata routes through the DB → sidecar → file pipeline
+// instead of going straight to the book repo. Returns the receiver so
+// it can be chained at construction time.
+func (s *LibraryService) WithMetadataWriter(w *MetadataWriter) *LibraryService {
+	s.writer = w
+	return s
 }
 
 func (s *LibraryService) List(ctx context.Context) ([]model.Library, error) {
@@ -213,6 +223,9 @@ func (s *LibraryService) GetBook(ctx context.Context, userID, id string) (model.
 }
 
 func (s *LibraryService) UpdateBookMetadata(ctx context.Context, b model.Book) error {
+	if s.writer != nil {
+		return s.writer.Write(ctx, b, TriggerManualEdit)
+	}
 	return s.books.UpdateMetadata(ctx, b)
 }
 
