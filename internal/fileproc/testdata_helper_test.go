@@ -83,7 +83,9 @@ func addZip(t *testing.T, zw *zip.Writer, name string, data []byte) {
 
 // TestFixture_Generate writes the minimal EPUB to disk so manual
 // inspection is possible. Run:
-//   EMBED_FIXTURE_UPDATE=1 go test ./internal/fileproc/ -run TestFixture_Generate
+//
+//	EMBED_FIXTURE_UPDATE=1 go test ./internal/fileproc/ -run TestFixture_Generate
+//
 // to refresh testdata/minimal.epub on the filesystem. Skipped by
 // default — all real tests build the fixture in-memory.
 func TestFixture_Generate(t *testing.T) {
