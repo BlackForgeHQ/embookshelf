@@ -7,6 +7,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/blackforge/embookshelf/internal/model"
 )
 
 // bytesSource adapts a []byte to storage.Source for tests.
@@ -74,14 +76,16 @@ func TestMutateOPF_ScalarFields(t *testing.T) {
   <spine><itemref idref="ch1"/></spine>
 </package>`)
 	in := EmbedInput{
-		Title:         "New Title",
-		Subtitle:      "A Subtitle",
-		Author:        "New Author",
-		Description:   "Long description here.",
-		Language:      "fr",
-		Publisher:     "Acme Press",
-		PublishedDate: "2024-06-15",
-		ISBN:          "978-0-00-000000-0",
+		EditableMetadata: model.EditableMetadata{
+			Title:         "New Title",
+			Subtitle:      "A Subtitle",
+			Author:        "New Author",
+			Description:   "Long description here.",
+			Language:      "fr",
+			Publisher:     "Acme Press",
+			PublishedDate: "2024-06-15",
+			ISBN:          "978-0-00-000000-0",
+		},
 	}
 	out, err := mutateOPF(original, in)
 	if err != nil {
@@ -112,7 +116,7 @@ func TestMutateOPF_SeriesCalibreCompat(t *testing.T) {
   </metadata>
   <manifest/><spine/>
 </package>`)
-	in := EmbedInput{Title: "X", Series: "Foundation", SeriesIndex: 3}
+	in := EmbedInput{EditableMetadata: model.EditableMetadata{Title: "X", Series: "Foundation", SeriesIndex: 3}}
 	out, err := mutateOPF(original, in)
 	if err != nil {
 		t.Fatalf("mutateOPF: %v", err)
@@ -139,9 +143,11 @@ func TestMutateOPF_TagsAndGenresDualWrite(t *testing.T) {
   <manifest/><spine/>
 </package>`)
 	in := EmbedInput{
-		Title:  "X",
-		Tags:   []string{"jazz-age", "tragedy"},
-		Genres: []string{"fiction", "literary"},
+		EditableMetadata: model.EditableMetadata{
+			Title:  "X",
+			Tags:   []string{"jazz-age", "tragedy"},
+			Genres: []string{"fiction", "literary"},
+		},
 	}
 	out, err := mutateOPF(original, in)
 	if err != nil {
@@ -229,10 +235,12 @@ func TestEPUBEmbedder_Embed_RoundTrip(t *testing.T) {
 	defer func() { _ = src.Close() }()
 
 	in := EmbedInput{
-		Title:    "Curated Title",
-		Author:   "Curated Author",
-		Language: "es",
-		Tags:     []string{"alpha", "beta"},
+		EditableMetadata: model.EditableMetadata{
+			Title:    "Curated Title",
+			Author:   "Curated Author",
+			Language: "es",
+			Tags:     []string{"alpha", "beta"},
+		},
 	}
 	out, err := EPUBEmbedder{}.Embed(context.Background(), src, in)
 	if err != nil {
@@ -262,7 +270,11 @@ func TestEPUBEmbedder_Embed_CoverReplaced(t *testing.T) {
 	defer func() { _ = src.Close() }()
 
 	newCover := []byte("\xff\xd8\xff\xe0NEW_COVER_BYTES_PATTERN")
-	in := EmbedInput{Title: "X", CoverBytes: newCover, CoverMime: "image/jpeg"}
+	in := EmbedInput{
+		EditableMetadata: model.EditableMetadata{Title: "X"},
+		CoverBytes:       newCover,
+		CoverMime:        "image/jpeg",
+	}
 	out, err := EPUBEmbedder{}.Embed(context.Background(), src, in)
 	if err != nil {
 		t.Fatalf("Embed: %v", err)

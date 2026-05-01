@@ -141,18 +141,20 @@ func (w *MetadataWriter) tryEmbedFile(ctx context.Context, b model.Book) bool {
 	}
 	defer func() { _ = src.Close() }()
 	in := fileproc.EmbedInput{
-		Title:         b.Title,
-		Subtitle:      b.Subtitle,
-		Author:        b.Author,
-		Description:   b.Description,
-		Language:      b.Language,
-		Publisher:     b.Publisher,
-		PublishedDate: dateString(b.PublishDate),
-		ISBN:          b.ISBN,
-		Series:        b.Series,
-		SeriesIndex:   b.SeriesIndex,
-		Tags:          b.Tags,
-		Genres:        b.Genres,
+		EditableMetadata: model.EditableMetadata{
+			Title:         b.Title,
+			Subtitle:      b.Subtitle,
+			Author:        b.Author,
+			Description:   b.Description,
+			Language:      b.Language,
+			Publisher:     b.Publisher,
+			PublishedDate: dateString(b.PublishDate),
+			ISBN:          b.ISBN,
+			Series:        b.Series,
+			SeriesIndex:   b.SeriesIndex,
+			Tags:          b.Tags,
+			Genres:        b.Genres,
+		},
 	}
 	out, err := emb.Embed(ctx, src, in)
 	if err != nil {

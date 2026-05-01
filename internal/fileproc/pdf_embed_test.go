@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/blackforge/embookshelf/internal/model"
 )
 
 func TestEncodePDFString_ASCII(t *testing.T) {
@@ -92,11 +94,13 @@ func TestNextObjectNumber(t *testing.T) {
 
 func TestBuildInfoBody_AllFields(t *testing.T) {
 	in := EmbedInput{
-		Title:       "T",
-		Author:      "A",
-		Description: "D",
-		Tags:        []string{"a", "b"},
-		Genres:      []string{"g1"},
+		EditableMetadata: model.EditableMetadata{
+			Title:       "T",
+			Author:      "A",
+			Description: "D",
+			Tags:        []string{"a", "b"},
+			Genres:      []string{"g1"},
+		},
 	}
 	got := buildInfoBody(in)
 	for _, want := range []string{
@@ -116,7 +120,7 @@ func TestBuildInfoBody_AllFields(t *testing.T) {
 }
 
 func TestBuildInfoBody_OmitsEmpty(t *testing.T) {
-	got := buildInfoBody(EmbedInput{Title: "Only"})
+	got := buildInfoBody(EmbedInput{EditableMetadata: model.EditableMetadata{Title: "Only"}})
 	if strings.Contains(got, "/Author") {
 		t.Error("/Author should be omitted on empty input")
 	}
@@ -130,8 +134,10 @@ func TestBuildInfoBody_OmitsEmpty(t *testing.T) {
 
 func TestBuildInfoBody_NeverWritesCreationDate(t *testing.T) {
 	in := EmbedInput{
-		Title:         "T",
-		PublishedDate: "2024-01-01",
+		EditableMetadata: model.EditableMetadata{
+			Title:         "T",
+			PublishedDate: "2024-01-01",
+		},
 	}
 	got := buildInfoBody(in)
 	if strings.Contains(got, "/CreationDate") {
@@ -145,7 +151,7 @@ func TestBuildIncrementalUpdate_StructureValid(t *testing.T) {
 		"xref\n0 2\n0000000000 65535 f \n0000000009 00000 n \ntrailer\n<< /Size 2 /Root 1 0 R >>\n" +
 		"startxref\n34\n%%EOF\n")
 
-	out, err := buildIncrementalUpdate(pdf, EmbedInput{Title: "X", Author: "Y"})
+	out, err := buildIncrementalUpdate(pdf, EmbedInput{EditableMetadata: model.EditableMetadata{Title: "X", Author: "Y"}})
 	if err != nil {
 		t.Fatalf("buildIncrementalUpdate: %v", err)
 	}
@@ -218,11 +224,13 @@ func TestPDFEmbedder_Embed_RoundTrip(t *testing.T) {
 	defer func() { _ = src.Close() }()
 
 	in := EmbedInput{
-		Title:       "Curated PDF",
-		Author:      "Curated Author",
-		Description: "A PDF.",
-		Tags:        []string{"tech"},
-		Genres:      []string{"reference"},
+		EditableMetadata: model.EditableMetadata{
+			Title:       "Curated PDF",
+			Author:      "Curated Author",
+			Description: "A PDF.",
+			Tags:        []string{"tech"},
+			Genres:      []string{"reference"},
+		},
 	}
 	out, err := PDFEmbedder{}.Embed(context.Background(), src, in)
 	if err != nil {
@@ -254,7 +262,7 @@ func TestPDFEmbedder_Embed_PreservesCreationDate(t *testing.T) {
 	src := newBytesSource(original)
 	defer func() { _ = src.Close() }()
 
-	out, err := PDFEmbedder{}.Embed(context.Background(), src, EmbedInput{Title: "T"})
+	out, err := PDFEmbedder{}.Embed(context.Background(), src, EmbedInput{EditableMetadata: model.EditableMetadata{Title: "T"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}

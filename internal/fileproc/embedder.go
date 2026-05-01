@@ -4,34 +4,22 @@ import (
 	"context"
 	"errors"
 
+	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
 
-// EmbedInput is the editable metadata payload an Embedder writes back
-// into a book file. Mirrors the Sidecar struct's field set plus the
-// cover bytes (which live outside Sidecar today because covers
-// belong in coverstore, not in the JSON envelope). Empty fields are
-// treated as "do not write" by some embedders; "explicitly clear"
-// semantics are not supported in Phase 1 — empty edits in the UI
-// either keep the previous value or write empty per format rules.
+// EmbedInput is the editable metadata payload an Embedder writes
+// back into a book file. Composes model.EditableMetadata (the
+// canonical editable scalar set) with the cover bytes — covers
+// don't fit the Sidecar shape because they live in coverstore,
+// not in the JSON envelope.
+//
+// CoverBytes + CoverMime override the existing in-file cover when
+// non-nil. CoverBytes == nil means "leave the existing cover
+// alone." Empty CoverMime with non-nil bytes is invalid (the
+// caller must supply both).
 type EmbedInput struct {
-	Title         string
-	Subtitle      string
-	Author        string
-	Description   string
-	Language      string
-	Publisher     string
-	PublishedDate string
-	ISBN          string
-	Series        string
-	SeriesIndex   int
-	Tags          []string
-	Genres        []string
-
-	// CoverBytes + CoverMime override the existing in-file cover when
-	// non-nil. CoverBytes == nil means "leave the existing cover
-	// alone." Empty CoverMime with non-nil bytes is invalid (the
-	// caller must supply both).
+	model.EditableMetadata
 	CoverBytes []byte
 	CoverMime  string
 }
