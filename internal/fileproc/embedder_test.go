@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -56,5 +57,47 @@ func TestDispatchEmbedder_EPUB(t *testing.T) {
 	}
 	if _, ok := emb.(EPUBEmbedder); !ok {
 		t.Errorf("got %T, want EPUBEmbedder", emb)
+	}
+}
+
+func TestMutateOPF_ScalarFields(t *testing.T) {
+	original := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>Old</dc:title>
+    <dc:creator opf:role="aut">Old Author</dc:creator>
+    <dc:identifier id="bookid">urn:uuid:x</dc:identifier>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>`)
+	in := EmbedInput{
+		Title:         "New Title",
+		Subtitle:      "A Subtitle",
+		Author:        "New Author",
+		Description:   "Long description here.",
+		Language:      "fr",
+		Publisher:     "Acme Press",
+		PublishedDate: "2024-06-15",
+		ISBN:          "978-0-00-000000-0",
+	}
+	out, err := mutateOPF(original, in)
+	if err != nil {
+		t.Fatalf("mutateOPF: %v", err)
+	}
+	asString := string(out)
+	for _, want := range []string{
+		"<dc:title>New Title</dc:title>",
+		"<dc:creator>New Author</dc:creator>",
+		"<dc:description>Long description here.</dc:description>",
+		"<dc:language>fr</dc:language>",
+		"<dc:publisher>Acme Press</dc:publisher>",
+		"<dc:date>2024-06-15</dc:date>",
+		"<dc:identifier opf:scheme=\"ISBN\">978-0-00-000000-0</dc:identifier>",
+	} {
+		if !strings.Contains(asString, want) {
+			t.Errorf("mutated OPF missing %q\n--- output ---\n%s", want, asString)
+		}
 	}
 }
