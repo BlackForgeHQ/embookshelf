@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -55,6 +56,13 @@ type SidecarWriterFor interface {
 // inject a fake.
 type EmbedderDispatcher func(format string) (fileproc.Embedder, error)
 
+// FileMetadataRepo is the slice of *repo.FileRepo we depend on.
+// Defined here so tests can fake it.
+type FileMetadataRepo interface {
+	ListByBook(ctx context.Context, bookID string) ([]model.File, error)
+	SetContentHash(ctx context.Context, fileID string, hash []byte, size int64, mtime time.Time) error
+}
+
 // MetadataWriterDeps groups the dependencies MetadataWriter needs.
 // LibStore + Sidecar are nil-tolerant for the auto-enrichment-only
 // case (DB write succeeds without them).
@@ -63,6 +71,7 @@ type MetadataWriterDeps struct {
 	LibStore LibraryStoreFor
 	Sidecar  SidecarWriterFor
 	Dispatch EmbedderDispatcher
+	Files    FileMetadataRepo
 }
 
 // MetadataWriter coordinates the DB → sidecar → file pipeline for
@@ -154,7 +163,40 @@ func (w *MetadataWriter) tryEmbedFile(ctx context.Context, b model.Book) bool {
 		slog.Warn("metadata writer: put", "book_id", b.ID, "path", b.Path, "err", err)
 		return false
 	}
+	if w.deps.Files != nil {
+		w.stampFileHash(ctx, b, out)
+	}
 	return true
+}
+
+// stampFileHash computes sha256 of the freshly-written file bytes
+// and updates files.content_hash for the book's primary file row.
+// "Primary" = files row whose format matches the book's. Fallback
+// to the first row when no format match exists (mirrors BookSource
+// primary-file rule from Plan G).
+func (w *MetadataWriter) stampFileHash(ctx context.Context, b model.Book, out []byte) {
+	files, err := w.deps.Files.ListByBook(ctx, b.ID)
+	if err != nil {
+		slog.Warn("metadata writer: list files", "book_id", b.ID, "err", err)
+		return
+	}
+	var primary model.File
+	for _, f := range files {
+		if f.Format == b.Format {
+			primary = f
+			break
+		}
+	}
+	if primary.ID == "" && len(files) > 0 {
+		primary = files[0]
+	}
+	if primary.ID == "" {
+		return // no files row yet; backfill catches up
+	}
+	sum := sha256.Sum256(out)
+	if err := w.deps.Files.SetContentHash(ctx, primary.ID, sum[:], int64(len(out)), time.Now().UTC()); err != nil {
+		slog.Warn("metadata writer: set content hash", "file_id", primary.ID, "err", err)
+	}
 }
 
 // writeSidecar persists the JSON sidecar. mode is decided by the

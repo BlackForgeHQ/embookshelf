@@ -1,10 +1,13 @@
 package service_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
@@ -240,5 +243,81 @@ func TestMetadataWriter_Write_EPUBLocal_SpilloverMode(t *testing.T) {
 	}
 	if string(got) != "rezipped-epub-bytes" {
 		t.Errorf("file bytes=%q want rezipped-epub-bytes", got)
+	}
+}
+
+// fakeFileRepo records SetContentHash calls.
+type fakeFileRepo struct {
+	files    []model.File
+	listErr  error
+	stamped  []hashStamp
+	stampErr error
+}
+
+type hashStamp struct {
+	FileID string
+	Hash   []byte
+	Size   int64
+}
+
+func (f *fakeFileRepo) ListByBook(ctx context.Context, bookID string) ([]model.File, error) {
+	return f.files, f.listErr
+}
+func (f *fakeFileRepo) SetContentHash(ctx context.Context, fileID string, hash []byte, size int64, mtime time.Time) error {
+	f.stamped = append(f.stamped, hashStamp{FileID: fileID, Hash: hash, Size: size})
+	return f.stampErr
+}
+
+func TestMetadataWriter_HashStampAfterFileWrite(t *testing.T) {
+	books := &fakeBookWriter{}
+	rec := &recordingSidecarWriter{}
+
+	root := t.TempDir()
+	fs, err := local.New(root)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	bookKey := "books/x.epub"
+	if _, err := fs.Put(context.Background(), bookKey, strings.NewReader("placeholder")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	handle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", BackendID: nil},
+	}
+	handle.Storage = fs
+
+	emb := &fakeEmbedder{out: []byte("rezipped-bytes")}
+	files := &fakeFileRepo{files: []model.File{{ID: "f1", BookID: "b1", Format: "EPUB"}}}
+
+	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+		Books:    books,
+		LibStore: &fakeLibStore{handle: handle},
+		Sidecar:  rec,
+		Files:    files,
+		Dispatch: func(format string) (fileproc.Embedder, error) { return emb, nil },
+	})
+
+	book := model.Book{
+		ID: "b1", LibraryID: "lib1",
+		Path: bookKey, Format: "EPUB", Title: "X",
+	}
+	if err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if len(files.stamped) != 1 {
+		t.Fatalf("SetContentHash called %d times; want 1", len(files.stamped))
+	}
+	got := files.stamped[0]
+	wantHash := sha256.Sum256([]byte("rezipped-bytes"))
+	if !bytes.Equal(got.Hash, wantHash[:]) {
+		t.Errorf("hash=%x want %x", got.Hash, wantHash)
+	}
+	if got.Size != int64(len("rezipped-bytes")) {
+		t.Errorf("size=%d want %d", got.Size, len("rezipped-bytes"))
+	}
+	if got.FileID != "f1" {
+		t.Errorf("file_id=%q want f1", got.FileID)
 	}
 }
