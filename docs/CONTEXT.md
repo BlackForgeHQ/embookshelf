@@ -20,7 +20,22 @@ This file complements `docs/architecture.md` (technical layout) and `docs/spec/`
 
 **Source** — `storage.Source`; the random-access byte view of a single object. `io.ReaderAt + io.Closer + Size() int64`. Returned by `Storage.Open(ctx, key)`. Distinct from `storage.Get` (sequential streaming via `io.ReadCloser`) — Source is for callers that need to seek (zip directories, PDF XREF, MP4 atoms).
 
-**Sidecar** — portable, user-editable metadata file next to a book on disk: `metadata.opf` (Calibre, read-only) or `.embookshelf.toml` (native). Plan D.
+**Sidecar** — portable per-book metadata file next to the book on disk. Two flavors:
+- `metadata.opf` (Calibre) — XML, **read-only** for compat.
+- `<basename>.embookshelf.json` (native) — JSON, **read+write**. Paired filename next to the book file (e.g. `harry-potter.epub` → `harry-potter.embookshelf.json`). Same rule for both `org_mode=book_per_file` and `book_per_folder`.
+
+The earlier `.embookshelf.toml` sidecar (Plan D pre-cutover) is **dropped** — no read, no write, no migration. Users with TOML files at upgrade lose the overlay; manual re-edit through the UI re-emits the JSON sidecar.
+
+The JSON sidecar is **spillover-only on local-backed libraries**: holds fields the book's file format couldn't carry natively. EPUB OPF takes everything (including cover bytes) → JSON sidecar usually empty. PDF `/Info` takes only Title/Author/Description/Tags → JSON sidecar holds Subtitle, Language, Publisher, ISBN, Series, SeriesIndex, Genres, etc.
+
+**Full-mirror sidecar** whenever the in-file write step is skipped, for any reason:
+- Format has no in-file write target (CBZ/CBR/CB7, MOBI, AZW3, FB2, audio in Phase 1).
+- Library is **S3-backed** (`libraries.backend_id IS NOT NULL`) — Phase 1 skips in-file write to avoid Get+Put per edit.
+- In-file write attempted and failed (failure fallback so edit survives).
+
+Single rule: `inFileWritten == false → sidecar = full mirror`. `inFileWritten == true → sidecar = spillover for that format`. Triggered by **manual edit** or **apply-enrichment** only — auto-enrichment, scan re-ingest, and approve do not write file/sidecar.
+
+Read path (ingest): file embedded → OPF (if present) → JSON, each layer overlays the previous, **lock-aware** (per-field `*_locked` flags shield DB values from re-extract). Write path (user edits): DB (canonical) → JSON sidecar → file embedded (EPUB cover+text rezip; PDF `/Info` text only; audio deferred). Each step is sequenced and atomic; scan skips re-extract when `files.content_hash` matches our recorded write (hash-stamp guard).
 
 **Bookdrop** — pre-approval staging area; files land here before being approved into a Library. Each file becomes a row in `bookdrop_items` with extracted metadata + cover. Approving creates the `books` row and the `files` row.
 
