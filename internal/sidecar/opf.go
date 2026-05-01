@@ -92,8 +92,6 @@ func ParseOPF(data []byte) (Sidecar, error) {
 			var idx int
 			_, _ = fmt.Sscanf(m.Content, "%d", &idx)
 			s.SeriesIndex = idx
-		case "calibre:title_sort":
-			s.TitleSort = m.Content
 		}
 	}
 	return s, nil

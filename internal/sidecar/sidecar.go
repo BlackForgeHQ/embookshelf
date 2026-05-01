@@ -10,7 +10,6 @@ package sidecar
 // extractor's output and is not overwritten by sidecars.
 type Sidecar struct {
 	Title         string   `json:"title,omitempty"`
-	TitleSort     string   `json:"title_sort,omitempty"`
 	Subtitle      string   `json:"subtitle,omitempty"`
 	Author        string   `json:"author,omitempty"`
 	Description   string   `json:"description,omitempty"`
@@ -27,7 +26,7 @@ type Sidecar struct {
 // IsZero reports whether s carries no information. Used to short-
 // circuit the merge when no sidecar was present.
 func (s Sidecar) IsZero() bool {
-	return s.Title == "" && s.TitleSort == "" && s.Subtitle == "" &&
+	return s.Title == "" && s.Subtitle == "" &&
 		s.Author == "" && s.Description == "" && s.Language == "" &&
 		s.Publisher == "" && s.PublishedDate == "" && s.ISBN == "" &&
 		s.Series == "" && s.SeriesIndex == 0 &&
@@ -39,9 +38,6 @@ func Merge(a, b Sidecar) Sidecar {
 	out := a
 	if b.Title != "" {
 		out.Title = b.Title
-	}
-	if b.TitleSort != "" {
-		out.TitleSort = b.TitleSort
 	}
 	if b.Subtitle != "" {
 		out.Subtitle = b.Subtitle

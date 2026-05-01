@@ -29,7 +29,6 @@ func TestIsZero_AfterFieldSet(t *testing.T) {
 	}{
 		{"Title", Sidecar{Title: "x"}},
 		{"Author", Sidecar{Author: "x"}},
-		{"TitleSort", Sidecar{TitleSort: "x"}},
 		{"Subtitle", Sidecar{Subtitle: "x"}},
 		{"Description", Sidecar{Description: "x"}},
 		{"Language", Sidecar{Language: "x"}},
@@ -119,7 +118,6 @@ const calibreOPF = `<?xml version='1.0' encoding='utf-8'?>
     <dc:subject>Classic</dc:subject>
     <meta name="calibre:series" content="Dune Chronicles"/>
     <meta name="calibre:series_index" content="1"/>
-    <meta name="calibre:title_sort" content="Dune"/>
   </metadata>
 </package>`
 
@@ -157,9 +155,6 @@ func TestParseOPF_CalibreOPF(t *testing.T) {
 	}
 	if s.SeriesIndex != 1 {
 		t.Errorf("SeriesIndex: got %d want 1", s.SeriesIndex)
-	}
-	if s.TitleSort != "Dune" {
-		t.Errorf("TitleSort: got %q want Dune", s.TitleSort)
 	}
 }
 
@@ -236,7 +231,6 @@ func TestParseOPF_CalibreMeta(t *testing.T) {
     <dc:title>Foundation</dc:title>
     <meta name="calibre:series" content="Foundation Series"/>
     <meta name="calibre:series_index" content="2"/>
-    <meta name="calibre:title_sort" content="Foundation"/>
   </metadata>
 </package>`
 	s, err := ParseOPF([]byte(opf))
@@ -248,9 +242,6 @@ func TestParseOPF_CalibreMeta(t *testing.T) {
 	}
 	if s.SeriesIndex != 2 {
 		t.Errorf("SeriesIndex: got %d want 2", s.SeriesIndex)
-	}
-	if s.TitleSort != "Foundation" {
-		t.Errorf("TitleSort: got %q want Foundation", s.TitleSort)
 	}
 }
 
@@ -495,7 +486,6 @@ func TestWriteMode_String(t *testing.T) {
 func TestJSON_RoundTrip(t *testing.T) {
 	original := Sidecar{
 		Title:         "The Great Gatsby",
-		TitleSort:     "Great Gatsby, The",
 		Subtitle:      "A Story",
 		Author:        "F. Scott Fitzgerald",
 		Description:   "Jazz Age tragedy",
@@ -518,7 +508,6 @@ func TestJSON_RoundTrip(t *testing.T) {
 		t.Fatalf("DecodeJSON: %v", err)
 	}
 	if got.Title != original.Title ||
-		got.TitleSort != original.TitleSort ||
 		got.Subtitle != original.Subtitle ||
 		got.Author != original.Author ||
 		got.Description != original.Description ||
@@ -545,7 +534,6 @@ func TestJSON_RoundTrip(t *testing.T) {
 	str := string(data)
 	for _, want := range []string{
 		`"title"`,
-		`"title_sort"`,
 		`"subtitle"`,
 		`"author"`,
 		`"description"`,
