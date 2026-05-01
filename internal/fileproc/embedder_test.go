@@ -1,6 +1,7 @@
 package fileproc
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
@@ -160,5 +161,64 @@ func TestMutateOPF_TagsAndGenresDualWrite(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("output missing %q\n%s", want, s)
 		}
+	}
+}
+
+func TestRezipEPUB_PreservesNonTouchedEntries(t *testing.T) {
+	original := makeMinimalEPUB(t)
+	src := newBytesSource(original)
+	defer func() { _ = src.Close() }()
+
+	zr, err := zip.NewReader(bytes.NewReader(original), int64(len(original)))
+	if err != nil {
+		t.Fatalf("zip.NewReader: %v", err)
+	}
+	opfPath := "OEBPS/content.opf"
+	newOPF := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Rewritten</dc:title></metadata>
+  <manifest><item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/><item id="cover-img" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/></manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>`)
+
+	out, err := rezipEPUB(zr, opfPath, newOPF, "", nil, "")
+	if err != nil {
+		t.Fatalf("rezipEPUB: %v", err)
+	}
+
+	zr2, err := zip.NewReader(bytes.NewReader(out), int64(len(out)))
+	if err != nil {
+		t.Fatalf("re-open zip: %v", err)
+	}
+
+	if zr2.File[0].Name != "mimetype" {
+		t.Errorf("entry[0]=%q want mimetype", zr2.File[0].Name)
+	}
+	if zr2.File[0].Method != zip.Store {
+		t.Errorf("mimetype method=%v want Store", zr2.File[0].Method)
+	}
+
+	chapterBytes, err := readZipFile(zr2, "OEBPS/chapter1.xhtml")
+	if err != nil {
+		t.Fatalf("read chapter: %v", err)
+	}
+	if !bytes.Contains(chapterBytes, []byte("Hello.")) {
+		t.Error("chapter contents lost in rezip")
+	}
+
+	opfBytes, err := readZipFile(zr2, opfPath)
+	if err != nil {
+		t.Fatalf("read opf: %v", err)
+	}
+	if !bytes.Contains(opfBytes, []byte("Rewritten")) {
+		t.Error("OPF not rewritten")
+	}
+
+	coverBytes, err := readZipFile(zr2, "OEBPS/cover.jpg")
+	if err != nil {
+		t.Fatalf("read cover: %v", err)
+	}
+	if !bytes.Contains(coverBytes, []byte("ORIGINAL_COVER_BYTES")) {
+		t.Error("cover bytes changed when not requested")
 	}
 }

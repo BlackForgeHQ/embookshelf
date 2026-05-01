@@ -1,9 +1,11 @@
 package fileproc
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -118,4 +120,97 @@ func xmlEscape(s string) string {
 	var b strings.Builder
 	_ = xml.EscapeText(&b, []byte(s))
 	return b.String()
+}
+
+// rezipEPUB rewrites the EPUB at zr, replacing the OPF at opfPath
+// with newOPF. When coverHref != "" and newCover != nil, the
+// archive entry at coverHref is replaced with newCover (and its
+// content type aligned to coverMime via the file extension).
+//
+// The mimetype entry is copied first, uncompressed (EPUB invariant).
+// All other entries are copied through unchanged.
+func rezipEPUB(zr *zip.Reader, opfPath string, newOPF []byte, coverHref string, newCover []byte, coverMime string) ([]byte, error) {
+	_ = coverMime // file extension implies the type; the bytes are the source of truth
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+
+	// Pass 1: emit mimetype uncompressed if present.
+	for _, f := range zr.File {
+		if f.Name == "mimetype" {
+			if err := writeStored(zw, f); err != nil {
+				return nil, fmt.Errorf("rezip mimetype: %w", err)
+			}
+			break
+		}
+	}
+
+	// Pass 2: emit everything else, swapping OPF + cover.
+	for _, f := range zr.File {
+		if f.Name == "mimetype" {
+			continue
+		}
+		switch f.Name {
+		case opfPath:
+			if err := writeBytes(zw, f.Name, newOPF); err != nil {
+				return nil, fmt.Errorf("rezip opf: %w", err)
+			}
+		case coverHref:
+			if newCover != nil {
+				if err := writeBytes(zw, f.Name, newCover); err != nil {
+					return nil, fmt.Errorf("rezip cover: %w", err)
+				}
+			} else {
+				if err := writeCopy(zw, f); err != nil {
+					return nil, fmt.Errorf("rezip cover passthrough: %w", err)
+				}
+			}
+		default:
+			if err := writeCopy(zw, f); err != nil {
+				return nil, fmt.Errorf("rezip %s: %w", f.Name, err)
+			}
+		}
+	}
+
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func writeStored(zw *zip.Writer, f *zip.File) error {
+	w, err := zw.CreateHeader(&zip.FileHeader{Name: f.Name, Method: zip.Store})
+	if err != nil {
+		return err
+	}
+	rc, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rc.Close() }()
+	_, err = io.Copy(w, rc)
+	return err
+}
+
+func writeCopy(zw *zip.Writer, f *zip.File) error {
+	w, err := zw.Create(f.Name)
+	if err != nil {
+		return err
+	}
+	rc, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rc.Close() }()
+	_, err = io.Copy(w, rc)
+	return err
+}
+
+func writeBytes(zw *zip.Writer, name string, data []byte) error {
+	w, err := zw.Create(name)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(data)
+	return err
 }
