@@ -2,6 +2,8 @@ package fileproc
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -165,5 +167,47 @@ func TestBuildIncrementalUpdate_StructureValid(t *testing.T) {
 		if !bytes.Contains(out, w) {
 			t.Errorf("output missing %q", w)
 		}
+	}
+}
+
+// makeMinimalPDF returns a minimal valid PDF containing one page
+// and an /Info dict with a single /CreationDate field. Tests use it
+// to assert (a) /Info edits land via incremental update, and (b)
+// /CreationDate survives the edit.
+func makeMinimalPDF(t *testing.T) []byte {
+	t.Helper()
+	body := []byte("%PDF-1.4\n%âãÏÓ\n" +
+		"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n" +
+		"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n" +
+		"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 0 0 R >>\nendobj\n" +
+		"4 0 obj\n<< /CreationDate (D:20240101120000Z) >>\nendobj\n")
+	xrefStart := len(body)
+	xref := []byte(fmt.Sprintf(
+		"xref\n0 5\n"+
+			"0000000000 65535 f \n"+
+			"%010d 00000 n \n"+
+			"%010d 00000 n \n"+
+			"%010d 00000 n \n"+
+			"%010d 00000 n \n",
+		bytes.Index(body, []byte("1 0 obj")),
+		bytes.Index(body, []byte("2 0 obj")),
+		bytes.Index(body, []byte("3 0 obj")),
+		bytes.Index(body, []byte("4 0 obj")),
+	))
+	trailer := []byte(fmt.Sprintf(
+		"trailer\n<< /Size 5 /Root 1 0 R /Info 4 0 R >>\nstartxref\n%d\n%%%%EOF\n",
+		xrefStart,
+	))
+	out := append(body, xref...)
+	out = append(out, trailer...)
+	return out
+}
+
+func TestMinimalPDF_Parses(t *testing.T) {
+	data := makeMinimalPDF(t)
+	src := newBytesSource(data)
+	defer func() { _ = src.Close() }()
+	if _, err := (PDFProcessor{}).Extract(context.Background(), src); err != nil {
+		t.Errorf("Extract: %v", err)
 	}
 }
