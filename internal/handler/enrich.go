@@ -262,7 +262,7 @@ func (h *Handler) EnrichApplyMatch(c *gin.Context) {
 	updated, err := h.enrich.ApplyMatch(c.Request.Context(), book, match, service.ApplyOptions{
 		MergeCategories: body.MergeCategories,
 		ApplyCover:      body.ApplyCover,
-	})
+	}, service.TriggerApplyEnrichment)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")

@@ -51,6 +51,19 @@ type EnrichmentService struct {
 	cacheMu  sync.Mutex
 	cache    map[string]cacheEntry
 	cacheTTL time.Duration
+
+	// writer routes metadata writes through the DB → sidecar → file
+	// pipeline. Optional; nil falls back to direct repo write.
+	writer *MetadataWriter
+}
+
+// WithMetadataWriter wires a MetadataWriter into the service so that
+// ApplyMatch routes through the DB → sidecar → file pipeline instead
+// of going straight to the book repo. Returns the receiver so it can
+// be chained at construction time.
+func (s *EnrichmentService) WithMetadataWriter(w *MetadataWriter) *EnrichmentService {
+	s.writer = w
+	return s
 }
 
 type cacheEntry struct {
@@ -593,7 +606,7 @@ type ApplyOptions struct {
 // and the response still returns 200 with the metadata update applied.
 // That matches how the UI already handles "Use cover" — users can retry
 // independently.
-func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m provider.Match, opts ApplyOptions) (model.Book, error) {
+func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m provider.Match, opts ApplyOptions, trigger Trigger) (model.Book, error) {
 	locks := book.Locks
 
 	if !locks.Title && m.Title != "" {
@@ -644,8 +657,14 @@ func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m p
 		}
 	}
 
-	if err := s.books.UpdateMetadata(ctx, book); err != nil {
-		return model.Book{}, err
+	if s.writer != nil {
+		if err := s.writer.Write(ctx, book, trigger); err != nil {
+			return model.Book{}, err
+		}
+	} else {
+		if err := s.books.UpdateMetadata(ctx, book); err != nil {
+			return model.Book{}, err
+		}
 	}
 
 	if opts.ApplyCover && !locks.Cover && strings.TrimSpace(m.CoverURL) != "" {
@@ -746,7 +765,7 @@ func (s *EnrichmentService) AutoEnrich(ctx context.Context, book model.Book) (bo
 	if _, err := s.ApplyMatch(ctx, book, *match, ApplyOptions{
 		MergeCategories: true,
 		ApplyCover:      !originalLocks.Cover && !book.HasCover,
-	}); err != nil {
+	}, TriggerAutoEnrichment); err != nil {
 		return false, err
 	}
 	return true, nil
