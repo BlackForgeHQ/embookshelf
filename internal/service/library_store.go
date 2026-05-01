@@ -9,6 +9,7 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/sidecar"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
 
@@ -47,6 +48,21 @@ type LibraryHandle struct {
 	files           *repo.FileRepo
 	presignTTL      time.Duration
 	presignFallback string
+}
+
+// SidecarKey returns the paired JSON sidecar storage key for a book
+// file's storage key. Delegates to sidecar.KeyFor so the derivation
+// rule lives in one place.
+func (h *LibraryHandle) SidecarKey(bookLocation string) string {
+	return sidecar.KeyFor(bookLocation)
+}
+
+// CanWriteInFile reports whether this handle's library accepts
+// in-file metadata writes. Phase 1: only local-backed libraries
+// (BackendID == nil) qualify; S3 backends skip in-file write to
+// avoid Get+Put bandwidth churn per edit.
+func (h *LibraryHandle) CanWriteInFile() bool {
+	return h.Library.BackendID == nil
 }
 
 // Relativize strips the library root from abs. Returns abs unchanged
