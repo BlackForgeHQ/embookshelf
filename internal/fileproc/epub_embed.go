@@ -3,10 +3,14 @@ package fileproc
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/xml"
 	"fmt"
 	"io"
+	"path"
 	"strings"
+
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // mutateOPF parses an OPF document, replaces the <metadata> block
@@ -213,4 +217,45 @@ func writeBytes(zw *zip.Writer, name string, data []byte) error {
 	}
 	_, err = w.Write(data)
 	return err
+}
+
+// Embed implements Embedder. The returned bytes are the new EPUB;
+// caller writes them back atomically.
+func (EPUBEmbedder) Embed(ctx context.Context, src storage.Source, in EmbedInput) ([]byte, error) {
+	_ = ctx
+
+	zr, err := zip.NewReader(src, src.Size())
+	if err != nil {
+		return nil, fmt.Errorf("open epub: %w", err)
+	}
+
+	opfPath, err := rootfilePath(zr)
+	if err != nil {
+		return nil, err
+	}
+	opfBytes, err := readZipFile(zr, opfPath)
+	if err != nil {
+		return nil, fmt.Errorf("read opf: %w", err)
+	}
+
+	newOPF, err := mutateOPF(opfBytes, in)
+	if err != nil {
+		return nil, fmt.Errorf("mutate opf: %w", err)
+	}
+
+	// Locate cover-image href so rezipEPUB knows which entry to swap.
+	var coverHref string
+	if in.CoverBytes != nil {
+		var pkg opfPackage
+		if err := xml.Unmarshal(opfBytes, &pkg); err == nil {
+			href, _ := findCover(pkg)
+			if href != "" {
+				// findCover returns href relative to the OPF; resolve
+				// against the OPF's directory.
+				coverHref = path.Join(path.Dir(opfPath), href)
+			}
+		}
+	}
+
+	return rezipEPUB(zr, opfPath, newOPF, coverHref, in.CoverBytes, in.CoverMime)
 }

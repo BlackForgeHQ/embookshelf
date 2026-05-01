@@ -222,3 +222,59 @@ func TestRezipEPUB_PreservesNonTouchedEntries(t *testing.T) {
 		t.Error("cover bytes changed when not requested")
 	}
 }
+
+func TestEPUBEmbedder_Embed_RoundTrip(t *testing.T) {
+	original := makeMinimalEPUB(t)
+	src := newBytesSource(original)
+	defer func() { _ = src.Close() }()
+
+	in := EmbedInput{
+		Title:    "Curated Title",
+		Author:   "Curated Author",
+		Language: "es",
+		Tags:     []string{"alpha", "beta"},
+	}
+	out, err := EPUBEmbedder{}.Embed(context.Background(), src, in)
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+
+	src2 := newBytesSource(out)
+	defer func() { _ = src2.Close() }()
+	m, err := EPUBProcessor{}.Extract(context.Background(), src2)
+	if err != nil {
+		t.Fatalf("Extract after Embed: %v", err)
+	}
+	if m.Title != "Curated Title" {
+		t.Errorf("Title=%q want Curated Title", m.Title)
+	}
+	if m.Author != "Curated Author" {
+		t.Errorf("Author=%q want Curated Author", m.Author)
+	}
+	if m.Language != "es" {
+		t.Errorf("Language=%q want es", m.Language)
+	}
+}
+
+func TestEPUBEmbedder_Embed_CoverReplaced(t *testing.T) {
+	original := makeMinimalEPUB(t)
+	src := newBytesSource(original)
+	defer func() { _ = src.Close() }()
+
+	newCover := []byte("\xff\xd8\xff\xe0NEW_COVER_BYTES_PATTERN")
+	in := EmbedInput{Title: "X", CoverBytes: newCover, CoverMime: "image/jpeg"}
+	out, err := EPUBEmbedder{}.Embed(context.Background(), src, in)
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+
+	src2 := newBytesSource(out)
+	defer func() { _ = src2.Close() }()
+	m, err := EPUBProcessor{}.Extract(context.Background(), src2)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if !bytes.Contains(m.CoverBytes, []byte("NEW_COVER_BYTES_PATTERN")) {
+		t.Errorf("cover not replaced; got=%q", m.CoverBytes)
+	}
+}

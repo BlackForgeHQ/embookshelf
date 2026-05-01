@@ -66,14 +66,6 @@ func DispatchEmbedder(format string) (Embedder, error) {
 	return nil, ErrUnsupportedEmbed
 }
 
-// EPUBEmbedder rewrites EPUB files. Real Embed implementation lands
-// in epub_embed.go (Task 7); this stub satisfies the interface so
-// DispatchEmbedder can return it and tests can type-assert.
+// EPUBEmbedder rewrites EPUB files. Embed implementation lives in
+// epub_embed.go.
 type EPUBEmbedder struct{}
-
-// Embed is a placeholder until Task 7. It returns an error so
-// callers that wire it up early notice loudly rather than silently
-// writing nothing.
-func (EPUBEmbedder) Embed(ctx context.Context, src storage.Source, in EmbedInput) ([]byte, error) {
-	return nil, errors.New("fileproc: EPUBEmbedder.Embed not implemented")
-}
