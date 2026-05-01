@@ -38,12 +38,13 @@ func New(
 	resolver storage.Resolver,
 	libStore service.LibraryStore,
 	fileRepo *repo.FileRepo,
+	bookRepo *repo.BookRepo,
 ) (Client, error) {
 	switch d.Dialect {
 	case db.DialectPostgres:
-		return newRiver(ctx, d, bdropSvc, libSvc, resolver, libStore, fileRepo)
+		return newRiver(ctx, d, bdropSvc, libSvc, resolver, libStore, fileRepo, bookRepo)
 	case db.DialectSQLite:
-		return newSQLiteQueue(ctx, d, bdropSvc, libSvc, resolver, libStore, fileRepo)
+		return newSQLiteQueue(ctx, d, bdropSvc, libSvc, resolver, libStore, fileRepo, bookRepo)
 	default:
 		return nil, fmt.Errorf("queue: unknown dialect %q", d.Dialect)
 	}
@@ -64,6 +65,7 @@ func newRiver(
 	resolver storage.Resolver,
 	libStore service.LibraryStore,
 	fileRepo *repo.FileRepo,
+	bookRepo *repo.BookRepo,
 ) (*RiverClient, error) {
 	if d.PG == nil {
 		return nil, errors.New("queue: db.PG is nil for postgres dialect")
@@ -87,10 +89,12 @@ func newRiver(
 	// BookDropEnqueuer interface).
 	scanWorker := &task.LibraryScanWorker{
 		Deps: task.LibraryScanDeps{
-			BookDrop: bdropSvc,
-			Lib:      libSvc,
-			LibStore: libStore,
-			Files:    fileRepo,
+			BookDrop:   bdropSvc,
+			Lib:        libSvc,
+			LibStore:   libStore,
+			Files:      fileRepo,
+			Books:      bookRepo,
+			LockMerger: service.MergeLocked,
 			// Queue is set after the river.Client is constructed (cyclic dep).
 		},
 	}

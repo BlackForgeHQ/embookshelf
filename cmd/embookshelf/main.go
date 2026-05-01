@@ -255,7 +255,7 @@ func main() {
 	}
 
 	// Background queue. PG → River; SQLite → polling worker (queue.New dispatches by dialect).
-	q, err := queue.New(ctx, dbh, bdropSvc, libSvc, storageResolver, libStore, fileRepo)
+	q, err := queue.New(ctx, dbh, bdropSvc, libSvc, storageResolver, libStore, fileRepo, bookRepo)
 	if err != nil {
 		slog.Error("queue", "err", err)
 		os.Exit(1)

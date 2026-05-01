@@ -47,6 +47,7 @@ func newSQLiteQueue(
 	resolver storage.Resolver,
 	libStore service.LibraryStore,
 	fileRepo *repo.FileRepo,
+	bookRepo *repo.BookRepo,
 ) (*sqliteQueue, error) {
 	q := &sqliteQueue{
 		db:       d,
@@ -57,11 +58,13 @@ func newSQLiteQueue(
 
 	bdropDeps := task.BookDropDeps{Svc: bdropSvc, Resolver: resolver}
 	libDeps := task.LibraryScanDeps{
-		BookDrop: bdropSvc,
-		Lib:      libSvc,
-		Queue:    q, // back-reference so LibraryScan can enqueue children
-		LibStore: libStore,
-		Files:    fileRepo,
+		BookDrop:   bdropSvc,
+		Lib:        libSvc,
+		Queue:      q, // back-reference so LibraryScan can enqueue children
+		LibStore:   libStore,
+		Files:      fileRepo,
+		Books:      bookRepo,
+		LockMerger: service.MergeLocked,
 	}
 
 	q.handlers = map[string]kindHandler{
