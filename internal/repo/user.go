@@ -19,7 +19,7 @@ func NewUserRepo(d *db.DB) *UserRepo {
 	return &UserRepo{db: d}
 }
 
-const userCols = `id, email, password_hash, name, role, oidc_subject, oidc_issuer, avatar_url, status, status_changed_at, created_at, updated_at, last_seen_at`
+const userCols = `id, email, password_hash, name, role, avatar_url, status, status_changed_at, created_at, updated_at, last_seen_at`
 
 func (r *UserRepo) GetByEmail(ctx context.Context, email string) (model.User, error) {
 	const qPG = `
@@ -183,52 +183,38 @@ func (r *UserRepo) CountByRole(ctx context.Context, role model.Role) (int, error
 	return n, err
 }
 
-// GetByOIDC looks up a user by their OIDC issuer+subject pair.
-func (r *UserRepo) GetByOIDC(ctx context.Context, issuer, subject string) (model.User, error) {
-	const qPG = `
-		SELECT ` + userCols + `
-		FROM users
-		WHERE oidc_issuer = $1 AND oidc_subject = $2
-	`
-	const qSQLite = `
-		SELECT ` + userCols + `
-		FROM users
-		WHERE oidc_issuer = ? AND oidc_subject = ?
-	`
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), issuer, subject)
-	return r.scanUser(row)
-}
-
 // CreateOIDC creates a user provisioned via OIDC (no local password).
-func (r *UserRepo) CreateOIDC(ctx context.Context, email, name string, role model.Role, issuer, subject string) (model.User, error) {
+// The OIDC identity is inserted separately into user_identities by
+// the service layer; the users row only carries the profile fields.
+func (r *UserRepo) CreateOIDC(ctx context.Context, email, name string, role model.Role) (model.User, error) {
 	id := db.NewID()
 	const qPG = `
-		INSERT INTO users (id, email, name, password_hash, role, oidc_issuer, oidc_subject)
-		VALUES ($1, lower($2), $3, '', $4, $5, $6)
+		INSERT INTO users (id, email, name, password_hash, role)
+		VALUES ($1, lower($2), $3, NULL, $4)
 		RETURNING ` + userCols
 	const qSQLite = `
-		INSERT INTO users (id, email, name, password_hash, role, oidc_issuer, oidc_subject)
-		VALUES (?, lower(?), ?, '', ?, ?, ?)
+		INSERT INTO users (id, email, name, password_hash, role)
+		VALUES (?, lower(?), ?, NULL, ?)
 		RETURNING ` + userCols
 	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite),
-		id, strings.TrimSpace(email), strings.TrimSpace(name), string(role), issuer, subject)
+		id, strings.TrimSpace(email), strings.TrimSpace(name), string(role))
 	return r.scanUser(row)
 }
 
 // CreateOIDCPending mirrors CreateOIDC but inserts the user with
 // status='pending' so they cannot log in until an admin approves them.
-func (r *UserRepo) CreateOIDCPending(ctx context.Context, email, name string, role model.Role, issuer, subject string) (model.User, error) {
+func (r *UserRepo) CreateOIDCPending(ctx context.Context, email, name string, role model.Role) (model.User, error) {
 	id := db.NewID()
 	const qPG = `
-		INSERT INTO users (id, email, name, password_hash, role, oidc_issuer, oidc_subject, status, status_changed_at)
-		VALUES ($1, lower($2), $3, '', $4, $5, $6, 'pending', now())
+		INSERT INTO users (id, email, name, password_hash, role, status, status_changed_at)
+		VALUES ($1, lower($2), $3, NULL, $4, 'pending', now())
 		RETURNING ` + userCols
 	const qSQLite = `
-		INSERT INTO users (id, email, name, password_hash, role, oidc_issuer, oidc_subject, status, status_changed_at)
-		VALUES (?, lower(?), ?, '', ?, ?, ?, 'pending', (strftime('%Y-%m-%dT%H:%M:%fZ','now')))
+		INSERT INTO users (id, email, name, password_hash, role, status, status_changed_at)
+		VALUES (?, lower(?), ?, NULL, ?, 'pending', (strftime('%Y-%m-%dT%H:%M:%fZ','now')))
 		RETURNING ` + userCols
 	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite),
-		id, strings.TrimSpace(email), strings.TrimSpace(name), string(role), issuer, subject)
+		id, strings.TrimSpace(email), strings.TrimSpace(name), string(role))
 	return r.scanUser(row)
 }
 
@@ -257,19 +243,6 @@ func (r *UserRepo) UpdateStatus(ctx context.Context, id string, status model.Use
 		return ErrNotFound
 	}
 	return nil
-}
-
-// LinkOIDC sets the OIDC identity on an existing user (e.g. linking a
-// password-based user to their SSO identity on first OIDC login).
-func (r *UserRepo) LinkOIDC(ctx context.Context, userID, issuer, subject string) error {
-	const qPG = `UPDATE users SET oidc_issuer = $2, oidc_subject = $3, updated_at = now() WHERE id = $1`
-	const qSQLite = `UPDATE users SET oidc_issuer = ?, oidc_subject = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?`
-	if r.db.Dialect == db.DialectSQLite {
-		_, err := r.db.SQL.ExecContext(ctx, qSQLite, issuer, subject, userID)
-		return err
-	}
-	_, err := r.db.SQL.ExecContext(ctx, qPG, userID, issuer, subject)
-	return err
 }
 
 // SyncOIDCProfile keeps name and avatar in line with the provider on every
@@ -318,12 +291,16 @@ func scanUser(d db.Dialect, s scanner) (model.User, error) {
 		updatedAny       any
 		lastSeenAny      any
 	)
+	var passwordHash *string
 	err := s.Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.Name, &role,
-		&u.OIDCSubject, &u.OIDCIssuer, &u.AvatarURL,
+		&u.ID, &u.Email, &passwordHash, &u.Name, &role,
+		&u.AvatarURL,
 		&status, &statusChangedAny,
 		&createdAny, &updatedAny, &lastSeenAny,
 	)
+	if passwordHash != nil {
+		u.PasswordHash = *passwordHash
+	}
 	if err != nil {
 		if dberr.IsNotFound(err) {
 			return u, ErrNotFound

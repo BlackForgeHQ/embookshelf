@@ -16,7 +16,6 @@ import { Input } from "@/components/ui/input"
 const AUTH_METHODS: ReadonlyArray<{ n: string; on: boolean; sub: string }> = [
   { n: "Local (session)", on: true, sub: "Username + password" },
   { n: "OIDC", on: false, sub: "Pending" },
-  { n: "Remote / Forward Auth", on: false, sub: "Reverse proxy headers" },
 ]
 
 export function AccountPanel() {

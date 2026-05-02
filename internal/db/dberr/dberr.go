@@ -85,12 +85,14 @@ func IsUniqueViolation(err error) (bool, string) {
 // slug vs path) must continue to receive the PG-flavored name on
 // either backend.
 var sqliteUniqueIndex = map[string]string{
-	"libraries.slug":                          "libraries_slug_key",
-	"libraries.path":                          "libraries_path_key",
-	"users.email":                             "users_email_key",
-	"shelves.user_id, shelves.slug":           "shelves_user_id_slug_key",
-	"bookdrop_items.path":                     "bookdrop_items_path_key",
-	"user_devices.user_id, user_devices.name": "idx_user_devices_user_name",
-	"app_settings.name":                       "app_settings_pkey",
-	"provider_settings.id":                    "provider_settings_pkey",
+	"libraries.slug":                                    "libraries_slug_key",
+	"libraries.path":                                    "libraries_path_key",
+	"users.email":                                       "users_email_key",
+	"shelves.user_id, shelves.slug":                     "shelves_user_id_slug_key",
+	"bookdrop_items.path":                               "bookdrop_items_path_key",
+	"user_devices.user_id, user_devices.name":           "idx_user_devices_user_name",
+	"app_settings.name":                                 "app_settings_pkey",
+	"provider_settings.id":                              "provider_settings_pkey",
+	"user_identities.issuer, user_identities.subject":   "user_identities_issuer_subject_key",
+	"user_identities.user_id, user_identities.provider": "user_identities_user_id_provider_key",
 }

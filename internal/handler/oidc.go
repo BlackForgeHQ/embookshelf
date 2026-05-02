@@ -49,8 +49,10 @@ func (h *Handler) OIDCLogin(c *gin.Context) {
 	c.Redirect(http.StatusFound, authURL)
 }
 
-// OIDCCallback trades the authorization code for a session. Routing by
-// provider lives inside the service — the state token carries the slug.
+// OIDCCallback trades the authorization code for a session (login
+// flow) or attaches an identity to the signed-in user (link flow).
+// The state token carries the intent + provider slug; the service
+// dispatches based on those and returns a discriminated outcome.
 func (h *Handler) OIDCCallback(c *gin.Context) {
 	if h.oidc == nil {
 		writeError(c, http.StatusNotFound, "OIDC is not configured")
@@ -71,16 +73,34 @@ func (h *Handler) OIDCCallback(c *gin.Context) {
 		return
 	}
 
-	sess, _, err := h.oidc.Exchange(c.Request.Context(), code, state, c.Request.UserAgent())
+	// Pull the current session user (if any) so link-intent flows can
+	// verify the callback fired in the same browser that initiated the
+	// link. Login-intent flows ignore this and always issue a session.
+	var sessionUserID string
+	if u := auth.UserFromContext(c.Request.Context()); u != nil {
+		sessionUserID = u.ID
+	}
+
+	out, err := h.oidc.Exchange(c.Request.Context(), code, state, c.Request.UserAgent(), sessionUserID)
 	if err != nil {
 		if errors.Is(err, service.ErrOIDCPendingApproval) {
 			c.Redirect(http.StatusFound, "/login/pending")
 			return
 		}
+		// Link-intent errors land back on /account so the panel can
+		// render a toast next to the row the user just touched.
+		if errors.Is(err, service.ErrOIDCLinkUserMismatch) {
+			c.Redirect(http.StatusFound, "/account?error=session_expired")
+			return
+		}
 		c.Redirect(http.StatusFound, "/login?oidcError="+oidcErrorCode(err))
 		return
 	}
-	auth.SetSessionCookie(c, sess.ID, service.SessionTTL, h.Secure())
+	if out.Intent == service.IntentLink {
+		c.Redirect(http.StatusFound, "/account?linked="+out.Provider)
+		return
+	}
+	auth.SetSessionCookie(c, out.Session.ID, service.SessionTTL, h.Secure())
 	c.Redirect(http.StatusFound, "/")
 }
 
