@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.0...v0.4.1) (2026-05-02)
+
+
+### Refactors
+
+* **queue:** simplify ScanImport dependencies by removing unnecessary struct ([ccb885e](https://github.com/BlackForgeHQ/embookshelf/commit/ccb885e))
+
 ## [0.4.0](https://github.com/BlackForgeHQ/embookshelf/compare/v0.3.1...v0.4.0) (2026-05-02)
 
 
