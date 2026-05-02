@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/BlackForgeHQ/embookshelf/compare/v0.3.1...v0.4.0) (2026-05-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* libraries.org_mode column removed; new approves and edits write the folder-per-book layout. Existing flat-layout libraries keep working but converge into the new layout lazily on user edits.
+
+### Features
+
+* book-per-folder library layout (ADR-0003 + ADR-0004) ([19ab3fb](https://github.com/BlackForgeHQ/embookshelf/commit/19ab3fba97444aa904b0a1bbfcc417ef71391cfd))
+* **metadata:** implement MetadataWriter and effects decision logic ([bb48ea5](https://github.com/BlackForgeHQ/embookshelf/commit/bb48ea59a99cbed510d2590cee981de9b1e7ea8e))
+
 ## [0.3.1](https://github.com/BlackForgeHQ/embookshelf/compare/v0.3.0...v0.3.1) (2026-05-02)
 
 
