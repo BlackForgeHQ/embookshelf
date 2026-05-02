@@ -568,7 +568,29 @@ func TestRead_NoSidecar(t *testing.T) {
 	}
 }
 
-func TestKeyFor_PairedFilename(t *testing.T) {
+func TestKeyFor_FolderRoot(t *testing.T) {
+	// ADR-0003 §8: sidecar lives at the LeafBook folder root as
+	// `metadata.embookshelf.json`, one per Book regardless of how
+	// many file siblings share the folder.
+	cases := []struct {
+		bookKey string
+		want    string
+	}{
+		{"Tolkien/The Hobbit/hobbit.epub", "Tolkien/The Hobbit/metadata.embookshelf.json"},
+		{"Tolkien/The Hobbit/hobbit.mp3", "Tolkien/The Hobbit/metadata.embookshelf.json"},
+		{"books/dune.pdf", "books/metadata.embookshelf.json"},
+		{"flat-file.epub", "metadata.embookshelf.json"},
+		{"no-ext", "metadata.embookshelf.json"},
+	}
+	for _, c := range cases {
+		got := KeyFor(c.bookKey)
+		if got != c.want {
+			t.Errorf("KeyFor(%q) = %q, want %q", c.bookKey, got, c.want)
+		}
+	}
+}
+
+func TestLegacyKeyFor_PairedFilename(t *testing.T) {
 	cases := []struct {
 		bookKey string
 		want    string
@@ -580,9 +602,63 @@ func TestKeyFor_PairedFilename(t *testing.T) {
 		{"no-ext", "no-ext.embookshelf.json"},
 	}
 	for _, c := range cases {
-		got := KeyFor(c.bookKey)
+		got := LegacyKeyFor(c.bookKey)
 		if got != c.want {
-			t.Errorf("KeyFor(%q) = %q, want %q", c.bookKey, got, c.want)
+			t.Errorf("LegacyKeyFor(%q) = %q, want %q", c.bookKey, got, c.want)
 		}
+	}
+}
+
+func TestRead_LegacyPairedSidecarFallback(t *testing.T) {
+	// Pre-ADR-0003 sidecar location must still be readable so
+	// upgrades don't lose existing overlays.
+	root := t.TempDir()
+	fs, err := local.New(root)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	ctx := context.Background()
+	w := NewWriter()
+
+	bookKey := "Tolkien/Hobbit/hobbit.epub"
+	legacyKey := LegacyKeyFor(bookKey)
+	if err := w.Write(ctx, fs, legacyKey, Sidecar{Title: "Legacy Title"}, ModeFull, "EPUB"); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+
+	got, err := Read(ctx, fs, bookKey)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got.Title != "Legacy Title" {
+		t.Errorf("Title=%q want Legacy Title", got.Title)
+	}
+}
+
+func TestRead_FolderRootWinsOverLegacy(t *testing.T) {
+	// When both sidecars exist, the folder-root canonical file
+	// overlays the legacy paired one.
+	root := t.TempDir()
+	fs, err := local.New(root)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	ctx := context.Background()
+	w := NewWriter()
+
+	bookKey := "Tolkien/Hobbit/hobbit.epub"
+	if err := w.Write(ctx, fs, LegacyKeyFor(bookKey), Sidecar{Title: "Legacy"}, ModeFull, "EPUB"); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+	if err := w.Write(ctx, fs, KeyFor(bookKey), Sidecar{Title: "Canonical"}, ModeFull, "EPUB"); err != nil {
+		t.Fatalf("write canonical: %v", err)
+	}
+
+	got, err := Read(ctx, fs, bookKey)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got.Title != "Canonical" {
+		t.Errorf("Title=%q want Canonical (folder-root sidecar)", got.Title)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/repo/repotest"
+	"github.com/blackforge/embookshelf/internal/service"
 )
 
 // newTestQueue spins up a sqliteQueue against a fresh repotest DB
@@ -176,7 +177,7 @@ func TestSQLiteQueue_restartRecovery(t *testing.T) {
 	// Construct via the real path — newSQLiteQueue runs the recovery query.
 	// Pass nil services because this test only exercises the recovery query,
 	// not the handlers.
-	q, err := newSQLiteQueue(context.Background(), d, nil, nil, nil, nil, nil, nil)
+	q, err := newSQLiteQueue(context.Background(), d, nil, nil, nil, nil, nil, nil, service.ScanImportLeafBookDeps{})
 	if err != nil {
 		t.Fatalf("newSQLiteQueue: %v", err)
 	}

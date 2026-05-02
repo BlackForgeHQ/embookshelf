@@ -15,9 +15,9 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"github.com/blackforge/embookshelf/internal/extractor"
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/sidecar"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
 
@@ -73,15 +73,16 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 		}
 	}
 
-	proc, format, err := fileproc.Dispatch(item.Path)
-	if err != nil {
+	// Pre-flight format check. Dispatch is also re-run inside
+	// ingest.Extract; we run it up-front so an unsupported format
+	// short-circuits to "failed" (non-retry) before we open the file.
+	if _, _, err := fileproc.Dispatch(item.Path); err != nil {
 		if errors.Is(err, fileproc.ErrUnsupportedFormat) {
 			_ = deps.Svc.Fail(ctx, itemID, err)
 			return nil
 		}
 		return err
 	}
-	_ = format
 
 	// Resolve the default storage backend for Source-based extraction and
 	// sidecar reads. Bookdrop ingest doesn't know the library_id at this
@@ -94,59 +95,40 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 			slog.Warn("bookdrop sidecar resolve failed", "item_id", itemID, "err", resolveErr)
 		}
 	}
-
-	// Open the staged file via the resolved storage backend.
-	var meta fileproc.Metadata
-	if store != nil {
-		key := strings.TrimPrefix(item.Path, "/")
-		src, openErr := store.Open(ctx, key)
-		if openErr != nil {
-			slog.Warn("bookdrop: open source", "path", item.Path, "err", openErr)
-			_ = deps.Svc.Fail(ctx, itemID, openErr)
-			return nil
-		}
-		defer func() { _ = src.Close() }()
-		meta, err = proc.Extract(ctx, src)
-	} else {
+	if store == nil {
 		_ = deps.Svc.Fail(ctx, itemID, errors.New("no storage backend available"))
 		return nil
 	}
-	if err != nil {
-		slog.Warn("bookdrop extract failed", "item_id", itemID, "path", item.Path, "err", err)
-		_ = deps.Svc.Fail(ctx, itemID, err)
+
+	key := strings.TrimPrefix(item.Path, "/")
+	src, openErr := store.Open(ctx, key)
+	if openErr != nil {
+		slog.Warn("bookdrop: open source", "path", item.Path, "err", openErr)
+		_ = deps.Svc.Fail(ctx, itemID, openErr)
 		return nil
 	}
+	defer func() { _ = src.Close() }()
 
-	// Read the sidecar from the same backend (store is non-nil here;
-	// we returned early above if it was nil).
-	// Convert the absolute path into a storage key (Plan A LocalFS is
-	// rooted at "/" so we strip the leading slash). sidecar.Read derives
-	// the paired sidecar filename internally.
-	{
-		key := strings.TrimPrefix(item.Path, "/")
-		if sc, scErr := sidecar.Read(ctx, store, key); scErr == nil && !sc.IsZero() {
-			meta = layerSidecar(meta, sc)
-		} else if scErr != nil {
-			slog.Warn("bookdrop sidecar read failed", "item_id", itemID, "key", key, "err", scErr)
-			// non-fatal — proceed with embedded metadata only
-		}
+	res, extractErr := extractor.Extract(ctx, store, src, item.Format, key)
+	if extractErr != nil {
+		slog.Warn("bookdrop extract failed", "item_id", itemID, "path", item.Path, "err", extractErr)
+		_ = deps.Svc.Fail(ctx, itemID, extractErr)
+		return nil
 	}
 
 	if err := deps.Svc.RecordMetadata(
 		ctx, itemID,
-		meta.Title, meta.Author, meta.Description, meta.Language,
-		meta.CoverBytes, meta.CoverMime,
+		res.Title, res.Author, res.Description, res.Language,
+		res.CoverBytes, res.CoverMime,
 	); err != nil {
 		return err
 	}
 
 	// Audio formats: persist duration / narrator on the bookdrop row so
 	// Approve doesn't need a re-extract pass post-Place. Non-audio
-	// processors leave these zero, so the call is a no-op shape (NULL
-	// duration, empty narrator, nil chapters) — but we skip it anyway
-	// to avoid an unnecessary UPDATE.
+	// extraction leaves DurationSeconds nil, so we skip the UPDATE.
 	if isAudioFormat(item.Format) {
-		if err := deps.Svc.SetAudio(ctx, itemID, meta.DurationSeconds, meta.Narrator, nil); err != nil {
+		if err := deps.Svc.SetAudio(ctx, itemID, res.DurationSeconds, res.Narrator, nil); err != nil {
 			slog.Warn("bookdrop set audio failed", "item_id", itemID, "err", err)
 			// Non-fatal: text metadata is already recorded. Approve
 			// will simply leave the audio fields empty.
@@ -163,26 +145,6 @@ func isAudioFormat(f string) bool {
 		return true
 	}
 	return false
-}
-
-// layerSidecar overlays non-empty sidecar fields onto metadata returned
-// by the embedded extractor. Only the fields the sidecar carries are
-// considered; ground-truth-derived fields (cover bytes, duration, format)
-// are never overwritten.
-func layerSidecar(m fileproc.Metadata, s sidecar.Sidecar) fileproc.Metadata {
-	if s.Title != "" {
-		m.Title = s.Title
-	}
-	if s.Author != "" {
-		m.Author = s.Author
-	}
-	if s.Description != "" {
-		m.Description = s.Description
-	}
-	if s.Language != "" {
-		m.Language = s.Language
-	}
-	return m
 }
 
 // hashFile streams item.Path through sha256 and returns the digest.

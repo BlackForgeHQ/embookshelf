@@ -7,19 +7,26 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/blackforge/embookshelf/internal/layout"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // Placer materializes a bookdrop file at its final location for a Library.
-// Two adapters: LocalPlacer (filesystem move under the library root) and
-// BackendPlacer (stream-upload to a Storage backend). Approve picks the
-// adapter at runtime via PlacerBuilder, so the service never branches on
+// Two adapters: LocalPlacer (filesystem move into the per-Book folder
+// under the library root) and BackendPlacer (stream-upload to a Storage
+// backend at the equivalent key prefix). Approve picks the adapter at
+// runtime via PlacerBuilder, so the service never branches on
 // "where do bytes go".
+//
+// Per ADR-0003, every Book lives at `{library_root}/{Author}/{Title}/`.
+// PlaceSource carries Author and Title so the adapter can build that
+// folder; empty values fall back to the layout package's sentinels.
 //
 // Contract: Place is destructive on the source path. After it returns,
 // the caller MUST treat src.Path as gone. Adapters capture size/mtime
@@ -31,18 +38,25 @@ type Placer interface {
 
 // PlaceSource is the inbound description of bytes to place. Format is
 // the books.format value (used by adapters that need a Content-Type).
+// Author and Title drive the folder layout; empty values fall back to
+// `Unknown Author` / `Untitled` per ADR-0003 §2.
 type PlaceSource struct {
 	Path   string
 	Format string
+	Author string
+	Title  string
 }
 
 // PlaceResult is what the files row needs after a successful Place.
 // Location is library-relative (LocalPlacer strips the library root,
-// BackendPlacer returns the backend key directly).
+// BackendPlacer returns the backend key directly). FolderPath is the
+// library-relative directory containing the file — what books.folder_path
+// stores per ADR-0003.
 type PlaceResult struct {
-	Location string
-	Size     int64
-	Mtime    time.Time
+	Location   string
+	FolderPath string
+	Size       int64
+	Mtime      time.Time
 }
 
 // PlacerBuilder constructs the right Placer for a Library. Injected
@@ -69,10 +83,11 @@ func DefaultPlacerBuilder(resolver storage.Resolver) PlacerBuilder {
 	}
 }
 
-// LocalPlacer moves bytes into a library's filesystem root and returns
-// the library-relative location for the files row. Destination
-// collisions are resolved by appending " (2)", " (3)", … to the basename
-// before the extension.
+// LocalPlacer moves bytes into the Book's folder under the library
+// filesystem root and returns the library-relative location for the
+// files row. The folder path is `{Author}/{Title}/` per ADR-0003;
+// collisions on the title segment are resolved with a ` (2)`, ` (3)`
+// suffix.
 type LocalPlacer struct {
 	Root string
 }
@@ -85,24 +100,40 @@ func (p LocalPlacer) Place(_ context.Context, src PlaceSource) (PlaceResult, err
 	if err != nil {
 		return PlaceResult{}, fmt.Errorf("stat source: %w", err)
 	}
-	dest := filepath.Join(p.Root, filepath.Base(src.Path))
+
+	authorSeg := layout.SanitizeAuthor(src.Author)
+	titleSeg := layout.SanitizeTitle(src.Title)
+
+	authorDir := filepath.Join(p.Root, authorSeg)
+	if err := os.MkdirAll(authorDir, 0o755); err != nil {
+		return PlaceResult{}, fmt.Errorf("mkdir author dir: %w", err)
+	}
+
+	bookDir := uniqueDirectory(filepath.Join(authorDir, titleSeg))
+	if err := os.MkdirAll(bookDir, 0o755); err != nil {
+		return PlaceResult{}, fmt.Errorf("mkdir book dir: %w", err)
+	}
+
+	dest := filepath.Join(bookDir, filepath.Base(src.Path))
 	if dest != src.Path {
 		dest = uniqueDestination(dest)
 		if err := moveFile(src.Path, dest); err != nil {
 			return PlaceResult{}, fmt.Errorf("move: %w", err)
 		}
 	}
+
 	return PlaceResult{
-		Location: relativeToRoot(dest, p.Root),
-		Size:     st.Size(),
-		Mtime:    st.ModTime(),
+		Location:   relativeToRoot(dest, p.Root),
+		FolderPath: relativeToRoot(bookDir, p.Root),
+		Size:       st.Size(),
+		Mtime:      st.ModTime(),
 	}, nil
 }
 
 // BackendPlacer streams the source file into a Storage at a key derived
-// from the original basename, then removes the local source. The backend
-// itself encodes any per-library prefix (Plan F), so Place returns the
-// bare key as the location.
+// from `{Author}/{Title}/{basename}` (per ADR-0003 §7), then removes the
+// local source. The backend itself encodes any per-library prefix
+// (Plan F), so Place returns the bare key as the location.
 type BackendPlacer struct {
 	Store storage.Storage
 }
@@ -118,7 +149,12 @@ func (p BackendPlacer) Place(ctx context.Context, src PlaceSource) (PlaceResult,
 	}
 	defer func() { _ = f.Close() }()
 
-	key := filepath.Base(src.Path)
+	authorSeg := layout.SanitizeAuthor(src.Author)
+	titleSeg := layout.SanitizeTitle(src.Title)
+	folderKey := path.Join(authorSeg, titleSeg)
+	folderKey = uniqueBackendFolder(ctx, p.Store, folderKey)
+	key := path.Join(folderKey, filepath.Base(src.Path))
+
 	opts := []storage.PutOption{}
 	if mime := storageMIMEForFormat(src.Format); mime != "" {
 		opts = append(opts, storage.WithContentType(mime))
@@ -135,9 +171,10 @@ func (p BackendPlacer) Place(ctx context.Context, src PlaceSource) (PlaceResult,
 			"path", src.Path, "err", err)
 	}
 	return PlaceResult{
-		Location: key,
-		Size:     st.Size(),
-		Mtime:    st.ModTime(),
+		Location:   key,
+		FolderPath: folderKey,
+		Size:       st.Size(),
+		Mtime:      st.ModTime(),
 	}, nil
 }
 
@@ -236,4 +273,59 @@ func uniqueDestination(dest string) string {
 		}
 	}
 	return dest
+}
+
+// uniqueDirectory walks " (2)", " (3)", … suffixes on a directory path
+// until it finds one that does not already exist. Used by LocalPlacer
+// to avoid placing a Book's files into another Book's folder when
+// `{Author}/{Title}/` collides between Books.
+func uniqueDirectory(dir string) string {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return dir
+	}
+	parent := filepath.Dir(dir)
+	base := filepath.Base(dir)
+	for i := 2; i < 10_000; i++ {
+		cand := filepath.Join(parent, fmt.Sprintf("%s (%d)", base, i))
+		if _, err := os.Stat(cand); os.IsNotExist(err) {
+			return cand
+		}
+	}
+	return dir
+}
+
+// uniqueBackendFolder is the BackendPlacer counterpart to
+// uniqueDirectory. S3 has no native directories, so collision is
+// detected by probing for any object under the candidate prefix via
+// List(). The first prefix that returns no objects wins.
+func uniqueBackendFolder(ctx context.Context, store storage.Storage, folder string) string {
+	if !backendFolderHasObjects(ctx, store, folder) {
+		return folder
+	}
+	for i := 2; i < 10_000; i++ {
+		cand := folder + fmt.Sprintf(" (%d)", i)
+		if !backendFolderHasObjects(ctx, store, cand) {
+			return cand
+		}
+	}
+	return folder
+}
+
+// backendFolderHasObjects returns true if any object exists under the
+// given prefix. List errors are conservative — treat as "has objects"
+// so we keep walking suffixes rather than overwrite. The trailing slash
+// is added so the prefix matches a folder, not a basename.
+func backendFolderHasObjects(ctx context.Context, store storage.Storage, folder string) bool {
+	prefix := folder + "/"
+	it, err := store.List(ctx, prefix)
+	if err != nil {
+		return true
+	}
+	defer func() { _ = it.Close() }()
+	if _, err := it.Next(ctx); err == nil {
+		return true
+	} else if !errors.Is(err, io.EOF) {
+		return true
+	}
+	return false
 }

@@ -35,6 +35,7 @@ func (LibraryScanArgs) Kind() string { return "library.scan" }
 // register workers).
 type BookDropEnqueuer interface {
 	EnqueueBookDrop(ctx context.Context, itemID string) error
+	EnqueueScanImport(ctx context.Context, args ScanImportArgs) error
 }
 
 // LibraryScanDeps groups the services LibraryScan needs, plus the
@@ -162,15 +163,46 @@ func LibraryScan(ctx context.Context, args LibraryScanArgs, deps LibraryScanDeps
 		}
 	}
 
-	// New: enqueue supported files through the bookdrop pipeline.
-	for _, w := range cs.New {
-		absPath := joinKey(root, w.Location)
-		// fileproc.IsSupported expects a slash-prefixed path.
-		if !fileproc.IsSupported("/" + absPath) {
+	// New: classify per ADR-0003 §3 to split root-depth flat files
+	// (legacy single-file Books — still go through bookdrop staging
+	// for back-compat) from LeafBook folder groupings (auto-imported
+	// directly via ScanImport, ADR-0004 §1).
+	cls := scan.Classify(cs.New, func(loc string) bool {
+		return fileproc.IsSupported("/" + joinKey(root, loc))
+	})
+
+	// LeafBooks: one ScanImport job per folder.
+	for _, lb := range cls.LeafBooks {
+		if deps.Queue == nil {
+			break
+		}
+		args := ScanImportArgs{
+			LibraryID: lib.ID,
+			Folder:    lb.Folder,
+			Mixed:     lb.Mixed,
+			Files:     make([]ScanImportFile, len(lb.Files)),
+		}
+		for i, f := range lb.Files {
+			args.Files[i] = ScanImportFile{
+				Location: f.Location,
+				Size:     f.Size,
+				Mtime:    f.Mtime,
+			}
+		}
+		if err := deps.Queue.EnqueueScanImport(ctx, args); err != nil {
+			slog.Warn("library scan: enqueue scan import",
+				"library_id", lib.ID, "folder", lb.Folder, "err", err)
 			continue
 		}
+		discovered += len(lb.Files)
+	}
+
+	// Flat files: legacy single-file Books, still routed through the
+	// bookdrop staging queue. Lazy-migration §5 picks them up into the
+	// new layout when their owners edit metadata.
+	for _, w := range cls.Flat {
+		absPath := joinKey(root, w.Location)
 		format := fileproc.FormatForExt(filepath.Ext(w.Location))
-		// Bookdrop still wants the absolute path with leading slash.
 		fullPath := "/" + absPath
 		item, created, err := deps.BookDrop.Enqueue(ctx, fullPath, format, w.Size)
 		if err != nil {

@@ -182,6 +182,11 @@ func (r *BookRepo) Create(ctx context.Context, b model.Book) (model.Book, error)
 
 	id := db.NewID()
 
+	var folderPathArg any
+	if b.FolderPath != nil {
+		folderPathArg = *b.FolderPath
+	}
+
 	args := []any{
 		id, b.LibraryID, b.Title, b.Subtitle, b.Author, b.Format, b.Year,
 		b.PublishDate, b.Language,
@@ -190,7 +195,7 @@ func (r *BookRepo) Create(ctx context.Context, b model.Book) (model.Book, error)
 		b.Series, b.SeriesIndex, b.SeriesTotal,
 		genresVal, moodsVal, tagsVal,
 		b.AgeRating, b.ContentRating, b.Pages, b.PublicReviews,
-		b.Path, b.HasCover, b.CoverMime,
+		b.Path, b.HasCover, b.CoverMime, folderPathArg,
 	}
 
 	const qPG = `
@@ -202,9 +207,9 @@ func (r *BookRepo) Create(ctx context.Context, b model.Book) (model.Book, error)
 			                   series, series_index, series_total,
 			                   genres, moods, tags,
 			                   age_rating, content_rating, pages, public_reviews,
-			                   path, has_cover, cover_mime)
+			                   path, has_cover, cover_mime, folder_path)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
-			        $19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+			        $19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
 			RETURNING *
 		)
 		SELECT b.id, b.library_id, b.title, b.subtitle, b.author, b.format, b.year,
@@ -236,9 +241,9 @@ func (r *BookRepo) Create(ctx context.Context, b model.Book) (model.Book, error)
 		                   series, series_index, series_total,
 		                   genres, moods, tags,
 		                   age_rating, content_rating, pages, public_reviews,
-		                   path, has_cover, cover_mime)
+		                   path, has_cover, cover_mime, folder_path)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-		        ?,?,?,?,?,?,?,?,?,?)
+		        ?,?,?,?,?,?,?,?,?,?,?)
 		RETURNING
 		    id, library_id, title, subtitle, author, format, year,
 		    publish_date, language,
@@ -370,6 +375,44 @@ func (r *BookRepo) Delete(ctx context.Context, id string) error {
 	const qPG = `DELETE FROM books WHERE id = $1`
 	const qSQLite = `DELETE FROM books WHERE id = ?`
 	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetFolderPath updates the books.folder_path + books.path for a book.
+// Used by MetadataWriter after a successful folder rename so the DB
+// reflects the new on-disk location. An empty folderPath is stored as
+// NULL (legacy flat-layout sentinel). Path is rewritten in tandem so
+// callers fetching the book see the new file location.
+func (r *BookRepo) SetFolderPath(ctx context.Context, bookID, folderPath, path string) error {
+	var folderArg any
+	if folderPath != "" {
+		folderArg = folderPath
+	}
+	const qPG = `
+		UPDATE books SET folder_path = $2, path = $3, updated_at = now()
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	const qSQLite = `
+		UPDATE books SET folder_path = ?, path = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND deleted_at IS NULL
+	`
+	var res sql.Result
+	var err error
+	if r.db.Dialect == db.DialectSQLite {
+		res, err = r.db.SQL.ExecContext(ctx, qSQLite, folderArg, path, bookID)
+	} else {
+		res, err = r.db.SQL.ExecContext(ctx, qPG, bookID, folderArg, path)
+	}
 	if err != nil {
 		return err
 	}

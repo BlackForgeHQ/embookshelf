@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -20,13 +21,25 @@ import (
 
 // fakeBookWriter records UpdateMetadata calls for the test.
 type fakeBookWriter struct {
-	called []model.Book
-	err    error
+	called          []model.Book
+	err             error
+	folderPathCalls []folderPathCall
+}
+
+type folderPathCall struct {
+	BookID     string
+	FolderPath string
+	Path       string
 }
 
 func (f *fakeBookWriter) UpdateMetadata(ctx context.Context, b model.Book) error {
 	f.called = append(f.called, b)
 	return f.err
+}
+
+func (f *fakeBookWriter) SetFolderPath(ctx context.Context, bookID, folderPath, path string) error {
+	f.folderPathCalls = append(f.folderPathCalls, folderPathCall{BookID: bookID, FolderPath: folderPath, Path: path})
+	return nil
 }
 
 // fakeLibStore returns a fixed handle for any libraryID.
@@ -122,8 +135,8 @@ func TestMetadataWriter_Write_ManualEdit_FiresSidecar(t *testing.T) {
 		t.Fatalf("Sidecar.Write called %d times; want 1", len(rec.calls))
 	}
 	got := rec.calls[0]
-	if got.Key != "books/dune.embookshelf.json" {
-		t.Errorf("Key=%q want books/dune.embookshelf.json", got.Key)
+	if got.Key != "books/metadata.embookshelf.json" {
+		t.Errorf("Key=%q want books/metadata.embookshelf.json", got.Key)
 	}
 	if got.Format != "PDF" {
 		t.Errorf("Format=%q want PDF", got.Format)
@@ -261,10 +274,11 @@ func TestMetadataWriter_Write_EPUBLocal_SpilloverMode(t *testing.T) {
 
 // fakeFileRepo records SetContentHash calls.
 type fakeFileRepo struct {
-	files    []model.File
-	listErr  error
-	stamped  []hashStamp
-	stampErr error
+	files     []model.File
+	listErr   error
+	stamped   []hashStamp
+	stampErr  error
+	relocated []relocateCall
 }
 
 type hashStamp struct {
@@ -273,12 +287,21 @@ type hashStamp struct {
 	Size   int64
 }
 
+type relocateCall struct {
+	FileID      string
+	NewLocation string
+}
+
 func (f *fakeFileRepo) ListByBook(ctx context.Context, bookID string) ([]model.File, error) {
 	return f.files, f.listErr
 }
 func (f *fakeFileRepo) SetContentHash(ctx context.Context, fileID string, hash []byte, size int64, mtime time.Time) error {
 	f.stamped = append(f.stamped, hashStamp{FileID: fileID, Hash: hash, Size: size})
 	return f.stampErr
+}
+func (f *fakeFileRepo) UpdateLocation(ctx context.Context, fileID, newLocation string) error {
+	f.relocated = append(f.relocated, relocateCall{FileID: fileID, NewLocation: newLocation})
+	return nil
 }
 
 // TestMetadataWriter_Write_UnsupportedFormat_FullMirror covers the
@@ -525,5 +548,178 @@ func TestMetadataWriter_HashStampAfterFileWrite(t *testing.T) {
 	}
 	if got.FileID != "f1" {
 		t.Errorf("file_id=%q want f1", got.FileID)
+	}
+}
+
+// TestMetadataWriter_FolderRename_NewLayout exercises ADR-0003 §6
+// rename-on-edit for a Book that already lives in a folder. Asserts:
+// the dir actually moves on disk, files.location is rewritten to the
+// new prefix, and books.folder_path + path are persisted.
+func TestMetadataWriter_FolderRename_NewLayout(t *testing.T) {
+	libRoot := t.TempDir()
+	fs, err := local.New(libRoot)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+
+	// Pre-populate the old folder with the Book file.
+	oldFolder := "Tolkien/Hobbit"
+	oldDir := libRoot + "/" + oldFolder
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatalf("mkdir old: %v", err)
+	}
+	bookFile := oldDir + "/hobbit.epub"
+	if err := os.WriteFile(bookFile, []byte("epub"), 0o644); err != nil {
+		t.Fatalf("write book: %v", err)
+	}
+
+	books := &fakeBookWriter{}
+	files := &fakeFileRepo{
+		files: []model.File{
+			{ID: "f1", Location: oldFolder + "/hobbit.epub", Format: "EPUB"},
+		},
+	}
+	handle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", Path: libRoot},
+		Storage: fs,
+	}
+	libStore := &fakeLibStore{handle: handle}
+
+	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+		Books:    books,
+		LibStore: libStore,
+		Files:    files,
+	})
+
+	folder := oldFolder
+	book := model.Book{
+		ID:         "b1",
+		LibraryID:  "lib1",
+		Author:     "Tolkien",
+		Title:      "The Hobbit", // changed; old folder was "Hobbit"
+		Format:     "EPUB",
+		Path:       oldFolder + "/hobbit.epub",
+		FolderPath: &folder,
+	}
+
+	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !out.FolderRenamed {
+		t.Fatalf("expected FolderRenamed=true; outcome=%+v", out)
+	}
+	wantFolder := "Tolkien/The Hobbit"
+	if out.NewFolderPath != wantFolder {
+		t.Errorf("NewFolderPath=%q want %q", out.NewFolderPath, wantFolder)
+	}
+
+	// Old dir gone, new dir with file present.
+	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
+		t.Errorf("old dir still exists: %v", err)
+	}
+	newFile := libRoot + "/" + wantFolder + "/hobbit.epub"
+	if _, err := os.Stat(newFile); err != nil {
+		t.Errorf("new file missing: %v", err)
+	}
+
+	// files.location updated.
+	if len(files.relocated) != 1 {
+		t.Fatalf("relocated=%d want 1", len(files.relocated))
+	}
+	if files.relocated[0].NewLocation != wantFolder+"/hobbit.epub" {
+		t.Errorf("new location=%q", files.relocated[0].NewLocation)
+	}
+	// books.folder_path persisted.
+	if len(books.folderPathCalls) != 1 {
+		t.Fatalf("SetFolderPath calls=%d want 1", len(books.folderPathCalls))
+	}
+	if books.folderPathCalls[0].FolderPath != wantFolder {
+		t.Errorf("persisted folder=%q", books.folderPathCalls[0].FolderPath)
+	}
+}
+
+// TestMetadataWriter_FolderRename_NoChange covers the no-op case:
+// edit doesn't touch Author or Title, so DecideEffects sees
+// folderChanged=false and the rename step is skipped.
+func TestMetadataWriter_FolderRename_NoChange(t *testing.T) {
+	libRoot := t.TempDir()
+	fs, err := local.New(libRoot)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	folder := "Tolkien/The Hobbit"
+	if err := os.MkdirAll(libRoot + "/" + folder, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	books := &fakeBookWriter{}
+	files := &fakeFileRepo{}
+	handle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", Path: libRoot},
+		Storage: fs,
+	}
+	libStore := &fakeLibStore{handle: handle}
+	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+		Books:    books,
+		LibStore: libStore,
+		Files:    files,
+	})
+
+	book := model.Book{
+		ID:         "b1",
+		LibraryID:  "lib1",
+		Author:     "Tolkien",
+		Title:      "The Hobbit", // unchanged
+		Format:     "EPUB",
+		Path:       folder + "/hobbit.epub",
+		FolderPath: &folder,
+	}
+	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if out.FolderRenamed {
+		t.Errorf("FolderRenamed=true on no-op edit")
+	}
+	if len(books.folderPathCalls) != 0 {
+		t.Errorf("SetFolderPath called %d times; want 0", len(books.folderPathCalls))
+	}
+}
+
+// TestMetadataWriter_FolderRename_S3SkipsRename covers the
+// S3-backend gate: even on author/title change the folder must not
+// be renamed (per ADR-0003 §7).
+func TestMetadataWriter_FolderRename_S3SkipsRename(t *testing.T) {
+	libRoot := t.TempDir()
+	fs, err := local.New(libRoot)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	backendID := "backend-s3"
+	folder := "Tolkien/Hobbit"
+	books := &fakeBookWriter{}
+	handle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", Path: libRoot, BackendID: &backendID},
+		Storage: fs,
+	}
+	libStore := &fakeLibStore{handle: handle}
+	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+		Books:    books,
+		LibStore: libStore,
+	})
+
+	book := model.Book{
+		ID: "b1", LibraryID: "lib1",
+		Author: "Tolkien", Title: "The Hobbit",
+		Format: "EPUB", Path: folder + "/hobbit.epub",
+		FolderPath: &folder,
+	}
+	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if out.FolderRenamed {
+		t.Error("FolderRenamed=true on S3-backed library; want false")
 	}
 }

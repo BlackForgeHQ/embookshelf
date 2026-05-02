@@ -44,7 +44,7 @@ const libCols = `
 		 WHERE b.library_id = l.id AND b.deleted_at IS NULL),
 		0
 	) AS book_count,
-	l.backend_id, l.root, l.org_mode
+	l.backend_id, l.root
 `
 
 // libColsReturning is the same projection for RETURNING clauses where
@@ -58,7 +58,7 @@ const libColsReturning = `
 		 WHERE b.library_id = libraries.id AND b.deleted_at IS NULL),
 		0
 	) AS book_count,
-	backend_id, root, org_mode
+	backend_id, root
 `
 
 // CreateLibrary inserts a new library row and returns the persisted
@@ -201,7 +201,7 @@ func (r *LibraryRepo) scanLibrary(s scanner) (model.Library, error) {
 		&l.ID, &l.Name, &l.Slug, &l.Path,
 		&lastScannedAny, &l.FileCount, &l.DiscoveredCount,
 		&createdAny, &l.BookCount,
-		&backendID, &root, &l.OrgMode,
+		&backendID, &root,
 	)
 	if err != nil {
 		return l, err

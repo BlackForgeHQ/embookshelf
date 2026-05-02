@@ -22,11 +22,6 @@ type Library struct {
 	// Root is the root path within the backend (e.g. "/books" for a
 	// local backend). nil when BackendID is nil.
 	Root *string
-	// OrgMode controls how the scanner groups files into books.
-	// "book_per_file" treats each file as its own book;
-	// "book_per_folder" groups all files in a folder into one book.
-	// The column is NOT NULL with DEFAULT 'book_per_folder'.
-	OrgMode string
 }
 
 type Book struct {

@@ -25,6 +25,7 @@ import (
 type Client interface {
 	EnqueueBookDrop(ctx context.Context, itemID string) error
 	EnqueueLibraryScan(ctx context.Context, libraryID string) error
+	EnqueueScanImport(ctx context.Context, args task.ScanImportArgs) error
 	Stop(ctx context.Context) error
 }
 
@@ -39,12 +40,13 @@ func New(
 	libStore service.LibraryStore,
 	fileRepo *repo.FileRepo,
 	bookRepo *repo.BookRepo,
+	scanDeps service.ScanImportLeafBookDeps,
 ) (Client, error) {
 	switch d.Dialect {
 	case db.DialectPostgres:
-		return newRiver(ctx, d, bdropSvc, libSvc, resolver, libStore, fileRepo, bookRepo)
+		return newRiver(ctx, d, bdropSvc, libSvc, resolver, libStore, fileRepo, bookRepo, scanDeps)
 	case db.DialectSQLite:
-		return newSQLiteQueue(ctx, d, bdropSvc, libSvc, resolver, libStore, fileRepo, bookRepo)
+		return newSQLiteQueue(ctx, d, bdropSvc, libSvc, resolver, libStore, fileRepo, bookRepo, scanDeps)
 	default:
 		return nil, fmt.Errorf("queue: unknown dialect %q", d.Dialect)
 	}
@@ -66,6 +68,7 @@ func newRiver(
 	libStore service.LibraryStore,
 	fileRepo *repo.FileRepo,
 	bookRepo *repo.BookRepo,
+	scanDeps service.ScanImportLeafBookDeps,
 ) (*RiverClient, error) {
 	if d.PG == nil {
 		return nil, errors.New("queue: db.PG is nil for postgres dialect")
@@ -83,6 +86,7 @@ func newRiver(
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &task.BookDropWorker{Deps: task.BookDropDeps{Svc: bdropSvc, Resolver: resolver}})
+	river.AddWorker(workers, &task.ScanImportWorker{Deps: task.ScanImportDeps{Svc: scanDeps}})
 
 	// The scan worker needs to enqueue bookdrop.ingest jobs; wire that up
 	// after the client is constructed (circular dep resolved via the
@@ -128,6 +132,14 @@ func (r *RiverClient) EnqueueBookDrop(ctx context.Context, itemID string) error 
 // EnqueueLibraryScan inserts a library.scan job for the given library.
 func (r *RiverClient) EnqueueLibraryScan(ctx context.Context, libraryID string) error {
 	_, err := r.c.Insert(ctx, task.LibraryScanArgs{LibraryID: libraryID}, nil)
+	return err
+}
+
+// EnqueueScanImport inserts a scan.import job for one classified
+// LeafBook. Called by the LibraryScan worker after it groups new
+// files via scan.Classify (ADR-0004 §1).
+func (r *RiverClient) EnqueueScanImport(ctx context.Context, args task.ScanImportArgs) error {
+	_, err := r.c.Insert(ctx, args, nil)
 	return err
 }
 

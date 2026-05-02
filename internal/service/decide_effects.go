@@ -4,9 +4,10 @@ package service
 // effects the edit-side write pipeline will attempt for one Write
 // call. Pure data; no I/O.
 //
-// The matrix encoded here is ADR-0001 §3 (trigger × backend). When
-// adding a new trigger or backend, update this function and the table
-// test in TestDecideEffects.
+// The matrix encoded here is ADR-0001 §3 (trigger × backend) plus
+// ADR-0003 §6 (folder rename on author/title edits). When adding a
+// new trigger or backend, update this function and the table test in
+// TestDecideEffects.
 type Effects struct {
 	// DB indicates the canonical books-row update will fire. Always
 	// true for in-scope triggers; the field is explicit so callers
@@ -20,6 +21,11 @@ type Effects struct {
 	// unsupported format collapses to InFileWritten=false at runtime
 	// without changing the plan.
 	InFile bool
+	// FolderRename indicates the on-disk folder for this Book will be
+	// moved to match the new sanitized {Author}/{Title} per ADR-0003.
+	// Only set for local-backed libraries on user-driven triggers
+	// when the sanitized folder name actually changed.
+	FolderRename bool
 }
 
 // DecideEffects returns the side-effect plan for a Write call. The
@@ -27,11 +33,17 @@ type Effects struct {
 // apply_enrichment, auto_enrichment); approve and scan-reingest
 // route around MetadataWriter and have their own (smaller) matrix.
 //
+// folderChanged is the caller-computed delta between the new
+// {Author}/{Title} folder and the Book's stored folder_path. When
+// false, no rename is scheduled even if the trigger and backend
+// would otherwise allow it.
+//
 // Degraded handles (nil, or with no Storage) collapse to DB-only:
-// without storage we cannot write a sidecar or open the source for
-// in-file embed. This mirrors the silent-skip behaviour the previous
-// scattered nil-checks produced, but lifts it into one place.
-func DecideEffects(trigger Trigger, handle *LibraryHandle) Effects {
+// without storage we cannot write a sidecar, open the source for
+// in-file embed, or rename a folder. This mirrors the silent-skip
+// behaviour the previous scattered nil-checks produced, but lifts
+// it into one place.
+func DecideEffects(trigger Trigger, handle *LibraryHandle, folderChanged bool) Effects {
 	if trigger == TriggerAutoEnrichment {
 		return Effects{DB: true}
 	}
@@ -41,6 +53,9 @@ func DecideEffects(trigger Trigger, handle *LibraryHandle) Effects {
 	e := Effects{DB: true, Sidecar: true}
 	if handle.Library.BackendID == nil {
 		e.InFile = true
+		if folderChanged {
+			e.FolderRename = true
+		}
 	}
 	return e
 }

@@ -34,10 +34,11 @@ func TestDecideEffects(t *testing.T) {
 	}
 
 	cases := []struct {
-		name    string
-		trigger service.Trigger
-		handle  *service.LibraryHandle
-		want    service.Effects
+		name          string
+		trigger       service.Trigger
+		handle        *service.LibraryHandle
+		folderChanged bool
+		want          service.Effects
 	}{
 		{
 			name:    "auto-enrichment with no handle is DB only",
@@ -50,6 +51,13 @@ func TestDecideEffects(t *testing.T) {
 			trigger: service.TriggerAutoEnrichment,
 			handle:  localHandle,
 			want:    service.Effects{DB: true},
+		},
+		{
+			name:          "auto-enrichment never renames even with folder change",
+			trigger:       service.TriggerAutoEnrichment,
+			handle:        localHandle,
+			folderChanged: true,
+			want:          service.Effects{DB: true},
 		},
 		{
 			name:    "manual edit with no handle degrades to DB only",
@@ -70,16 +78,37 @@ func TestDecideEffects(t *testing.T) {
 			want:    service.Effects{DB: true, Sidecar: true, InFile: false},
 		},
 		{
+			name:          "manual edit on S3 never renames folder even with change",
+			trigger:       service.TriggerManualEdit,
+			handle:        s3Handle,
+			folderChanged: true,
+			want:          service.Effects{DB: true, Sidecar: true, InFile: false},
+		},
+		{
 			name:    "manual edit on local library writes DB + sidecar + in-file",
 			trigger: service.TriggerManualEdit,
 			handle:  localHandle,
 			want:    service.Effects{DB: true, Sidecar: true, InFile: true},
 		},
 		{
+			name:          "manual edit on local with folder change adds rename",
+			trigger:       service.TriggerManualEdit,
+			handle:        localHandle,
+			folderChanged: true,
+			want:          service.Effects{DB: true, Sidecar: true, InFile: true, FolderRename: true},
+		},
+		{
 			name:    "apply-enrichment matches manual edit on local",
 			trigger: service.TriggerApplyEnrichment,
 			handle:  localHandle,
 			want:    service.Effects{DB: true, Sidecar: true, InFile: true},
+		},
+		{
+			name:          "apply-enrichment with folder change adds rename",
+			trigger:       service.TriggerApplyEnrichment,
+			handle:        localHandle,
+			folderChanged: true,
+			want:          service.Effects{DB: true, Sidecar: true, InFile: true, FolderRename: true},
 		},
 		{
 			name:    "apply-enrichment matches manual edit on S3",
@@ -91,7 +120,7 @@ func TestDecideEffects(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := service.DecideEffects(c.trigger, c.handle)
+			got := service.DecideEffects(c.trigger, c.handle, c.folderChanged)
 			if got != c.want {
 				t.Errorf("DecideEffects = %+v; want %+v", got, c.want)
 			}

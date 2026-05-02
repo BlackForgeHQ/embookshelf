@@ -24,9 +24,9 @@ Library deletion: `?purge=true` query param deletes the on-disk folder (local) o
 
 **Source** — `storage.Source`; the random-access byte view of a single object. `io.ReaderAt + io.Closer + Size() int64`. Returned by `Storage.Open(ctx, key)`. Distinct from `storage.Get` (sequential streaming via `io.ReadCloser`) — Source is for callers that need to seek (zip directories, PDF XREF, MP4 atoms).
 
-**Sidecar** — portable per-book metadata file next to the book on disk. Two flavors:
+**Sidecar** — portable per-book metadata file at the LeafBook folder root. Two flavors:
 - `metadata.opf` (Calibre) — XML, **read-only** for compat.
-- `<basename>.embookshelf.json` (native) — JSON, **read+write**. Paired filename next to the book file (e.g. `harry-potter.epub` → `harry-potter.embookshelf.json`). Same rule for both `org_mode=book_per_file` and `book_per_folder`.
+- `metadata.embookshelf.json` (native) — JSON, **read+write**. One file per Book, lives at `{library_root}/{Author}/{Title}/metadata.embookshelf.json` (per ADR-0003). Pre-existing per-file `<basename>.embookshelf.json` files are read once on re-scan but never written; new writes always emit the folder-root file.
 
 The earlier `.embookshelf.toml` sidecar (Plan D pre-cutover) is **dropped** — no read, no write, no migration. Users with TOML files at upgrade lose the overlay; manual re-edit through the UI re-emits the JSON sidecar.
 
@@ -91,11 +91,37 @@ Read path (ingest): file embedded → OPF (if present) → JSON, each layer over
 
 **Placer** — `service.Placer`; the seam Approve uses to materialize a bookdrop file at its final library location. Two adapters: `LocalPlacer` (filesystem rename + collision-suffix under the library root) and `BackendPlacer` (stream-upload to a `Storage` then drop the local source). Returns `PlaceResult{Location, Size, Mtime}` — the values the `files` row needs. The `PlacerBuilder` factory injected at boot picks the adapter from `Library.BackendID`. Approve never branches on local-vs-S3.
 
-**MetadataWriter** — `service.MetadataWriter`; the **edit-side write pipeline** module. Owns ADR-0001's `DB → JSON sidecar → file embedded` sequence for user-driven edits only. Three triggers in scope: `manual_edit`, `apply_enrichment`, `auto_enrichment`. The other ADR-0001 §3 rows (`bookdrop approve`, `library scan re-ingest`) deliberately route around this module — for those, the file *is* the source, so a writer that rewrites the file would loop. Single entry point: `Write(ctx, book, trigger) (Outcome, error)`. Decision lives in `decideEffects` (pure); execution is a flat orchestration of three private steps (DB, sidecar, in-file embed). Stamps `files.content_hash` after a successful in-file write so the next library scan recognises its own write and skips re-extract.
+**MetadataWriter** — `service.MetadataWriter`; the **edit-side write pipeline** module. Owns the `DB → JSON sidecar → file embedded → folder rename` sequence for user-driven edits only. Three triggers in scope: `manual_edit`, `apply_enrichment`, `auto_enrichment`. The other ADR-0001 §3 rows (`bookdrop approve`, `library scan re-ingest`) deliberately route around this module — for those, the file *is* the source, so a writer that rewrites the file would loop. Single entry point: `Write(ctx, book, trigger) (Outcome, error)`. Decision lives in `decideEffects` (pure); execution is a flat orchestration of four private steps (DB, sidecar, in-file embed, folder rename). Stamps `files.content_hash` after a successful in-file write so the next library scan recognises its own write and skips re-extract.
 
-**Effects** — `service.Effects{DB, InFileFormat, Sidecar}`; the plan returned by `decideEffects(trigger, handle, format)`. The single place where ADR-0001 §3's two-axis (backend × trigger) matrix is encoded as code. Pure function — no I/O — so trigger/backend combinations are scenario-tested without standing up storage or repos.
+**Effects** — `service.Effects{DB, InFileFormat, Sidecar, FolderRename}`; the plan returned by `decideEffects(trigger, handle, format, fieldChanges)`. Encodes the trigger × backend × field-changed matrix from ADR-0001 §3 + ADR-0003 §6. `FolderRename = true` iff trigger ∈ {manual_edit, apply_enrichment} AND backend == local AND `Author` or `Title` changed. Pure function — no I/O — so combinations are scenario-tested without standing up storage or repos.
 
-**Outcome** — `service.Outcome{InFileWritten, SidecarMode}`; what the executor returns alongside `error`. `SidecarMode` is decided post-hoc from `InFileWritten` per ADR-0001's `inFileWritten == false → sidecar = full mirror` rule. Outcome is consumed by tests, optionally by SSE telemetry/audit; callers that don't care can discard.
+**Outcome** — `service.Outcome{InFileWritten, SidecarMode, FolderRenamed}`; what the executor returns alongside `error`. `SidecarMode` is decided post-hoc from `InFileWritten` per ADR-0001's `inFileWritten == false → sidecar = full mirror` rule. `FolderRenamed` is set when ADR-0003 §6 fired. Outcome is consumed by tests, optionally by SSE telemetry/audit; callers that don't care can discard.
+
+---
+
+## Library layout (ADR-0003)
+
+**Folder layout** — every Book lives in its own folder named `{Author}/{Title}/{filename}` under the library root. Sentinels: empty Author → `Unknown Author`, empty Title → `Untitled`. Path segments sanitized by `internal/layout/sanitize.go` (replace `/ \ : * ? " < > |`, NFC-normalize, cap 200 bytes). Multi-author authors stay one string. Collisions resolved by `uniqueDestination` ` (2)`, ` (3)` suffix on the title segment.
+
+**LeafBook** — a directory under the library root that holds ≥1 supported file. Scanner treats it as one Book; all supported files inside (any depth, recursive when no nested LeafBook descendants) become `files` rows under one `book_id`. Sidecar at folder root.
+
+**Container** — a directory under the library root that holds only subdirectories (no supported files at this level). Scanner recurses into each subdir as a `LeafBook` candidate. Handles the `Author/` layer of `Author/Title/file.epub`.
+
+**Classify** — `scan.Classify(entries, isSupported)`; pure function partitioning a `[]WalkEntry` into `Flat` (root-depth files, legacy single-file Books) and `LeafBooks` (folder-as-Book groupings, including the `Mixed` flag for dirs with both direct files and subdir-LeafBooks). Building block for the scan rewrite (ADR-0004); not yet wired into `task.LibraryScan`.
+
+**PickCover** — `scan.PickCover(CoverInputs) CoverChoice`; pure function encoding ADR-0003 §9 cover precedence (`Locked > FolderImage > EmbeddedPrimary > EmbeddedCompanion > SidecarJSON > None`). Companion to `Classify`; the caller (eventual `ScanImportJob`) reads bytes from whichever source the result names. Not yet wired.
+
+**Primary file / primary format** — the highest-priority supported file inside a LeafBook (EPUB > PDF > CBZ > AZW3 > MOBI > FB2 > M4B > MP3). Drives `books.format` (single string, denormalized cache) and is the source for in-file metadata writes. UI derives the full format set from `files` rows when needed.
+
+**Sentinel folder** — `Unknown Author` and `Untitled` are reserved literal strings used when the corresponding Book fields are empty. Predictable depth: every Book sits at depth 2 under the library root.
+
+**Folder rename** — `os.Rename(oldDir, newDir)` invoked by `MetadataWriter` after the DB → sidecar → in-file pipeline succeeds, when `Author` or `Title` change via a `manual_edit` or `apply_enrichment` trigger on a local-backed library. S3 backends never rename. `auto_enrichment` and scan re-extract never rename — DB drifts from disk, accepted.
+
+**Lazy layout migration** — existing libraries keep their current shape. Place-time uses the new layout for new approves; edit-time rename lazily moves actively-curated Books into the new shape. No boot-time relocation. Inactive flat-layout Books stay flat indefinitely. Mirrors ADR-0002's "no automatic move" principle. Mixed-layout libraries are expected during the transition tail; all reads use `files.location` + `books.folder_path` from DB, not disk-walk inference.
+
+**Scan auto-import** (ADR-0004) — `service.ScanImport(ctx, deps, libraryID, lb)`; service-layer function that materializes one `scan.LeafBook` into a Book row + N files rows + cover + audio metadata. Idempotent via `Files.ExistsByLocation`; returns `service.ErrAlreadyImported` for noops. Performs content-hash reattach (ADR-0003 §10): on import, hashes the LeafBook's primary file and looks up `Files.GetByContentHash`; a same-library match folds into the existing `book_id`, inserts any new sibling files, and updates `books.folder_path` so externally-renamed folders don't duplicate. Wrapped by `task.ScanImportArgs` + `task.ScanImportWorker` (kind `scan.import`) and reachable via `queue.Client.EnqueueScanImport`. `task.LibraryScan` runs `scan.Classify` over its `New` set: LeafBooks dispatch through `ScanImport`; root-depth flat files keep the legacy bookdrop staging path until the lazy ADR-0003 §5 migration eventually moves them into folders.
+
+**Extract** — `extractor.Extract(ctx, store, src, format, key) ExtractResult`; shared extraction primitive returning format metadata + cover bytes + audio fields + sidecar overlay. Single contract between the bookdrop ingest path (already cut over) and the future `ScanImportJob`. Lives in `internal/extractor/` to avoid the import cycle with `internal/ingest/`'s bookdrop watcher (which imports `queue`, which imports `task`).
 
 ---
 

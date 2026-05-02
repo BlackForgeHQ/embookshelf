@@ -223,14 +223,26 @@ External edit semantics:
 
 ## 8. Sidecar location on disk
 
-Paired filename next to the book file: `<basename>.embookshelf.json`.
+Per ADR-0003 (book-per-folder library layout), the sidecar is a **single file at the LeafBook folder root**:
 
-- `library/folder/harry-potter.epub` → `library/folder/harry-potter.embookshelf.json`
-- `library/audiobooks/dune/disc-1.m4b` → `library/audiobooks/dune/disc-1.embookshelf.json`
+```
+{library_root}/{Author}/{Title}/metadata.embookshelf.json
+```
 
-Same rule for both `org_mode = book_per_file` and `org_mode = book_per_folder`. The sidecar's path is computed as `filepath.Join(filepath.Dir(book.Path), strings.TrimSuffix(filepath.Base(book.Path), filepath.Ext(book.Path)) + ".embookshelf.json")`.
+Examples:
 
-When a book file is **moved** (rename detection in scan, Plan C's `MaybeReattach`), the sidecar must be moved alongside it. Concrete: scan's reattach path moves the book file, then attempts to move the sidecar at the old paired path to the new paired path. Sidecar move failure is logged but non-fatal.
+- `library/Tolkien/The Hobbit/hobbit.epub` → `library/Tolkien/The Hobbit/metadata.embookshelf.json`
+- `library/Frank Herbert/Dune/disc-1.m4b` → `library/Frank Herbert/Dune/metadata.embookshelf.json`
+
+Computed as `filepath.Join(library.Path, *book.FolderPath, "metadata.embookshelf.json")`.
+
+One sidecar per Book regardless of how many files share the folder (epub + companion mp3 + cover.jpg → still one `metadata.embookshelf.json`).
+
+**Pre-existing per-file `<basename>.embookshelf.json` files** (from before the folder-root convention) are read once on next re-scan and overlaid like any other sidecar. Subsequent writes always emit the folder-root file; the per-file legacy sidecars are not rewritten and are left in place until the user removes them.
+
+**Folder rename** (per ADR-0003 §6 and `library-layout.spec.md` §6): when `Author` or `Title` changes via a `manual_edit` or `apply_enrichment` trigger, the entire folder is renamed via `os.Rename(oldDir, newDir)` after the DB → sidecar → in-file pipeline writes complete. The sidecar moves with the folder for free; no separate rename step is needed. `auto_enrichment` and scan re-extract do NOT rename — DB drifts from disk in those cases (acceptable, matches the existing in-file write trigger gate).
+
+S3 backends: keys reflect approve-time `{Author}/{Title}/{filename}` layout; edit-time renames are skipped (per ADR-0003 §7), so the sidecar key drifts after edits. Full-mirror sidecar already covers this drift.
 
 ---
 

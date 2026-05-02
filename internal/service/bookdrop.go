@@ -197,11 +197,20 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 		CoverMime:   item.CoverMime,
 	}
 
-	res, perr := handle.Placer.Place(ctx, PlaceSource{Path: item.Path, Format: item.Format})
+	res, perr := handle.Placer.Place(ctx, PlaceSource{
+		Path:   item.Path,
+		Format: item.Format,
+		Author: book.Author,
+		Title:  book.Title,
+	})
 	if perr != nil {
 		return model.Book{}, fmt.Errorf("approve: place: %w", perr)
 	}
 	book.Path = res.Location
+	if res.FolderPath != "" {
+		fp := res.FolderPath
+		book.FolderPath = &fp
+	}
 	fileLocation := res.Location
 	fileSize := res.Size
 	fileMtime := res.Mtime

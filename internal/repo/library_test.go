@@ -13,7 +13,7 @@ import (
 )
 
 // TestLibraryRepo_backendFields verifies that the new storage_v2 columns
-// (backend_id, root, org_mode) round-trip through the repo layer and that
+// (backend_id, root) round-trip through the repo layer and that
 // LibraryBackend joins through correctly.
 func TestLibraryRepo_backendFields(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "postgres"} {
@@ -24,7 +24,7 @@ func TestLibraryRepo_backendFields(t *testing.T) {
 			sbr := repo.NewStorageBackendRepo(d)
 			ctx := context.Background()
 
-			// 1. Fresh library has nil BackendID and nil Root; OrgMode defaults to 'book_per_folder'.
+			// 1. Fresh library has nil BackendID and Root equal to its path.
 			lib, err := lr.CreateLibrary(ctx, "Backend Test", "backend-test", "/tmp/bt", nil)
 			if err != nil {
 				t.Fatalf("CreateLibrary: %v", err)
@@ -36,9 +36,6 @@ func TestLibraryRepo_backendFields(t *testing.T) {
 			// libraries equals path").
 			if lib.Root == nil || *lib.Root != "/tmp/bt" {
 				t.Fatalf("Root should be /tmp/bt on fresh local library, got %v", lib.Root)
-			}
-			if lib.OrgMode != "book_per_folder" {
-				t.Fatalf("OrgMode=%q want book_per_folder", lib.OrgMode)
 			}
 
 			// 2. LibraryBackend returns ErrNotFound when no backend is set.
