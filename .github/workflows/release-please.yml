@@ -23,7 +23,11 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          # Falls back to GITHUB_TOKEN; no PAT needed for a single-repo
-          # setup because branch protection is satisfied by the
-          # release-please-action's contents: write scope.
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # PAT (or GitHub App token) is required so the tag push that
+          # release-please performs fires downstream workflows
+          # (image.yml). Tags pushed with the default GITHUB_TOKEN are
+          # silenced by GitHub's anti-recursion rule, so image builds
+          # for new versions never start. Falls back to GITHUB_TOKEN if
+          # the secret is unset, which keeps release-please functional
+          # but again skips the tag-triggered image build.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
