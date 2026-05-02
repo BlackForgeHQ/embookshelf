@@ -67,6 +67,27 @@ services:
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      # Shared S3 bucket (optional). When EMBOOKSHELF_S3_BUCKET is set,
+      # admins can create kind=s3 libraries backed by this bucket.
+      # Region defaults to us-east-1 if bucket is set without a region.
+      # Set ENDPOINT + FORCE_PATH_STYLE=true for S3-compatible providers
+      # (MinIO, Backblaze B2, Cloudflare R2, Wasabi, ...).
+      EMBOOKSHELF_S3_BUCKET: ${EMBOOKSHELF_S3_BUCKET:-}
+      EMBOOKSHELF_S3_REGION: ${EMBOOKSHELF_S3_REGION:-}
+      EMBOOKSHELF_S3_ENDPOINT: ${EMBOOKSHELF_S3_ENDPOINT:-}
+      EMBOOKSHELF_S3_ACCESS_KEY_ID: ${EMBOOKSHELF_S3_ACCESS_KEY_ID:-}
+      EMBOOKSHELF_S3_SECRET_ACCESS_KEY: ${EMBOOKSHELF_S3_SECRET_ACCESS_KEY:-}
+      EMBOOKSHELF_S3_FORCE_PATH_STYLE: ${EMBOOKSHELF_S3_FORCE_PATH_STYLE:-false}
+      # S3 event-driven scan (optional). Point at an SQS queue that
+      # receives ObjectCreated / ObjectRemoved notifications from the
+      # bucket to skip periodic re-scans.
+      EMBOOKSHELF_S3_EVENT_QUEUE: ${EMBOOKSHELF_S3_EVENT_QUEUE:-}
+      EMBOOKSHELF_S3_EVENT_REGION: ${EMBOOKSHELF_S3_EVENT_REGION:-us-east-1}
+      EMBOOKSHELF_S3_EVENT_POLL_INTERVAL: ${EMBOOKSHELF_S3_EVENT_POLL_INTERVAL:-30s}
+      # Presigned URL TTL for S3-backed downloads. Set PRESIGN_FALLBACK=stream
+      # to proxy bytes through the app instead of redirecting clients.
+      EMBOOKSHELF_PRESIGN_TTL: ${EMBOOKSHELF_PRESIGN_TTL:-10m}
+      EMBOOKSHELF_PRESIGN_FALLBACK: ${EMBOOKSHELF_PRESIGN_FALLBACK:-}
       # OpenTelemetry (optional). Point at your collector.
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
