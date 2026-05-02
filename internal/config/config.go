@@ -71,10 +71,12 @@ type Config struct {
 	// files. Default is 10 minutes. Configurable via EMBOOKSHELF_PRESIGN_TTL
 	// (any value parseable by time.ParseDuration, e.g. "15m", "1h").
 	PresignTTL time.Duration
-	// PresignFallback controls what happens when the storage backend
-	// supports presign. Set to "stream" to disable redirects and serve
-	// bytes through the app server instead (useful for clients that
-	// can't follow cross-origin redirects). Default: "" (redirect).
+	// PresignFallback selects the delivery mode for book files when
+	// the backend supports presign. Set to "presign" to opt into 302
+	// redirects to a pre-signed URL — requires the bucket to allow the
+	// SPA origin via CORS, otherwise epub.js / pdf.js XHRs fail on
+	// the cross-origin redirect. Default ("" or "stream") streams the
+	// bytes through the app server, which always works.
 	PresignFallback string
 
 	// OIDC seed values. These are applied to app_settings on first

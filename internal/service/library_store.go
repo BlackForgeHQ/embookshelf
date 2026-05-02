@@ -98,48 +98,66 @@ func (h *LibraryHandle) Open(ctx context.Context, location string) (storage.Sour
 }
 
 // BookSource returns the delivery decision for serving a book through
-// this library. Picks presign (when the backend advertises CapPresign
-// AND the deployment is not forcing stream) or falls back to local.
+// this library. Picks one of three modes based on storage capabilities
+// and config:
 //
-// Falls back to local on every failure mode along the chain — a
-// missing files row, a presign error, an unsupported cast — because
-// the legacy local-serve path always works for single-backend installs
-// (book.Path is still populated alongside files.location).
+//   - "presign" — 302 redirect to a pre-signed URL. Opt-in via
+//     EMBOOKSHELF_PRESIGN_FALLBACK="presign" (the env var name
+//     predates the inversion; treat it as the delivery mode). Requires
+//     the bucket to be configured with CORS rules that allow the SPA
+//     origin, otherwise browser XHR (epub.js, pdf.js) will fail on
+//     the cross-origin redirect.
+//   - "stream" — open the bytes via Storage.Get/Open and pipe them
+//     through the app server. Default for any backend that has Storage
+//     wired (LocalFS or S3). Avoids the CORS/redirect pitfalls of
+//     presign at the cost of routing bytes through the app.
+//   - "local" — legacy fallback for installs where Storage / files
+//     wiring is missing; the handler streams book.Path off disk.
 func (h *LibraryHandle) BookSource(ctx context.Context, book model.Book) (BookSource, error) {
-	if book.Path == "" {
+	if book.Path == "" && (h.Storage == nil || h.files == nil) {
 		return BookSource{}, errors.New("book has no path")
 	}
-	src := BookSource{Kind: "local", Path: book.Path}
 
 	if h.Storage == nil || h.files == nil {
-		return src, nil
+		return BookSource{Kind: "local", Path: book.Path}, nil
 	}
-	if h.Storage.Capabilities()&storage.CapPresign == 0 || h.presignFallback == "stream" {
-		return src, nil
+
+	f, ferr := primaryFile(ctx, h.files, book)
+
+	if h.presignFallback == "presign" && h.Storage.Capabilities()&storage.CapPresign != 0 {
+		if ps, ok := h.Storage.(Presigner); ok && ferr == nil {
+			if url, err := ps.PresignGet(ctx, f.Location, h.presignTTL); err == nil {
+				return BookSource{Kind: "presign", URL: url, TTL: h.presignTTL}, nil
+			}
+		}
 	}
-	ps, ok := h.Storage.(Presigner)
-	if !ok {
-		return src, nil
+
+	if ferr == nil {
+		return BookSource{
+			Kind:    "stream",
+			Storage: h.Storage,
+			Key:     f.Location,
+		}, nil
 	}
-	f, err := primaryFile(ctx, h.files, book)
-	if err != nil {
-		return src, nil
+
+	if book.Path != "" {
+		return BookSource{Kind: "local", Path: book.Path}, nil
 	}
-	url, err := ps.PresignGet(ctx, f.Location, h.presignTTL)
-	if err != nil {
-		return src, nil
-	}
-	return BookSource{Kind: "presign", URL: url, TTL: h.presignTTL}, nil
+	return BookSource{}, fmt.Errorf("book source: %w", ferr)
 }
 
-// BookSource describes how a book file should be delivered. Kind is
-// either "local" (stream Path through the app server) or "presign"
-// (302 redirect to URL valid for TTL).
+// BookSource describes how a book file should be delivered.
+//
+//   - Kind=="local"   → stream Path through the app server (filesystem path).
+//   - Kind=="presign" → 302 redirect to URL, valid for TTL.
+//   - Kind=="stream"  → open Key on Storage and pipe through the app.
 type BookSource struct {
-	Kind string
-	Path string
-	URL  string
-	TTL  time.Duration
+	Kind    string
+	Path    string
+	URL     string
+	TTL     time.Duration
+	Storage storage.Storage
+	Key     string
 }
 
 // Presigner is the capability-gated interface CapPresign-bearing
