@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.6](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.5...v0.4.6) (2026-05-02)
+
+
+### Features
+
+* **storage:** reconcile shared-S3 backends from env at boot ([45b82ec](https://github.com/BlackForgeHQ/embookshelf/commit/45b82ecad9d9e26df6e8298cc3b3f209fbccc553))
+
+
+### Bug Fixes
+
+* **s3:** auto-prepend https:// to scheme-less endpoint ([9734ddb](https://github.com/BlackForgeHQ/embookshelf/commit/9734ddb6e1a4911d98314e126ec59784dfeb06f2))
+* **s3:** downgrade missing bucket versioning to warning ([1b5de8b](https://github.com/BlackForgeHQ/embookshelf/commit/1b5de8b03e5427ee9fb20cfd1dd2c54db7684070))
+
 ## [0.4.5](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.4...v0.4.5) (2026-05-02)
 
 
