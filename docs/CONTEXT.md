@@ -14,7 +14,11 @@ This file complements `docs/architecture.md` (technical layout) and `docs/spec/`
 
 **Resolver** — `storage.Resolver`; maps a backend id (or library) to its `Storage`. Constructed at boot from `storage_backends` rows. See Plan F.
 
-**Library** — a logical collection of books pinned to one Backend via `libraries.backend_id` and `libraries.root`.
+**Library** — a logical collection of books pinned to one Backend via `libraries.backend_id` and `libraries.root`. Two creation flavors:
+- `kind=local` (default) — **managed**: filesystem path is auto-derived as `${DATA_PATH}/libraries/{slug}/`; the directory is created at library-create time (`os.MkdirAll`, idempotent — pre-staged folders are re-adopted). Operator does not pick the path. Existing libraries created before this convention keep their explicit paths; only new libraries are managed.
+- `kind=s3` — backend-managed: prefix `libraries/{slug}/` inside the shared S3 bucket; symmetric naming with the local layout.
+
+Library deletion: `?purge=true` query param deletes the on-disk folder (local) or the bucket prefix (s3). Default off — files preserved on row delete.
 
 **LibraryStore** — `service.LibraryStore`; the deep seam that turns a `libraryID` into a `LibraryHandle{Library, Storage, Placer}` plus delivery glue (`BookSource`, `Open`, `Relativize`). Composes `LibraryRepo` + `Resolver` + `PlacerBuilder` behind one `For(ctx, libraryID)` method. Stateless — each call does a fresh PK lookup. Used by `BookDropService.Approve`, the file-serve handler, library scan, and files backfill. Replaces the scattered `lib, _ := libs.GetByID(); resolver.Resolve(*lib.BackendID); ...` chain that appeared at every callsite. (Bookdrop ingest still calls `Resolver` directly because it has no library_id at ingest time.)
 
