@@ -356,9 +356,10 @@ func (r *BookRepo) ListMissingCoverHash(ctx context.Context, batchSize int) ([]m
 	const qSQLite = `SELECT ` + bookCols + ` ` + bookFromSQLite + `
 		WHERE b.has_cover = TRUE AND b.cover_hash IS NULL AND b.deleted_at IS NULL
 		LIMIT ?2`
-	// user_id = '' matches no rows in user_book_progress; that's intentional —
-	// the backfill only needs cover data, not per-user progress.
-	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), "", batchSize)
+	// user_id = NULL never matches user_book_progress; the backfill only needs
+	// cover data, not per-user progress. Empty string would 22P02 against the
+	// UUID column on Postgres.
+	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), nil, batchSize)
 	if err != nil {
 		return nil, err
 	}
