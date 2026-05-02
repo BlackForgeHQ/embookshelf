@@ -64,6 +64,12 @@ seed: ## Load dev seed data (runs psql inside the postgres container)
 build: ui-build ## Build the server binary (includes embedded SPA)
 	go build -o ./tmp/embookshelf ./cmd/embookshelf
 
+.PHONY: release
+release: ui-build ## Production build: stripped, version+commit baked in via ldflags
+	CGO_ENABLED=0 go build -trimpath \
+		-ldflags="-s -w -X main.version=$(IMAGE_VERSION) -X main.commit=$(IMAGE_COMMIT)" \
+		-o ./tmp/embookshelf ./cmd/embookshelf
+
 .PHONY: tag
 tag: ## Build and run embookshelf-tag (pass ARGS="-dry-run" for dry run)
 	go build -o ./tmp/embookshelf-tag ./cmd/embookshelf-tag
