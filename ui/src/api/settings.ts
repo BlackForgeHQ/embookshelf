@@ -43,19 +43,6 @@ export async function createLibrary(
   return library
 }
 
-export async function prescanLibraryPaths(
-  paths: Array<string>
-): Promise<number> {
-  const { count } = await api<{ count: number }>(
-    "/api/v1/settings/libraries/scan",
-    {
-      method: "POST",
-      body: JSON.stringify({ paths }),
-    }
-  )
-  return count
-}
-
 // deleteLibrary tears down a library and every book/annotation/etc
 // that depends on it. Source files on disk are left alone (they live
 // under the user-managed root); cover images and DB rows are removed.

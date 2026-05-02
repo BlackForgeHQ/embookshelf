@@ -2,17 +2,13 @@ package handler
 
 import (
 	"errors"
-	"io/fs"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 )
@@ -143,56 +139,6 @@ func (h *Handler) SettingsLibraryCreate(c *gin.Context) {
 			DiscoveredCount: lib.DiscoveredCount,
 		},
 	})
-}
-
-type scanLibraryReq struct {
-	Paths []string `json:"paths"`
-}
-
-// SettingsLibraryScan counts processable files under the provided
-// paths *without* creating a library. The UI calls this from the
-// "New library" dialog so it can warn the admin about very large
-// roots before submit.
-//
-// Missing/unreadable paths don't fail the response; they're logged and
-// skipped. The walk only inspects extensions (fileproc.IsSupported),
-// not file contents, so it's cheap enough to run synchronously.
-func (h *Handler) SettingsLibraryScan(c *gin.Context) {
-	var body scanLibraryReq
-	if !bindJSON(c, &body) {
-		return
-	}
-	ctx := c.Request.Context()
-	var total int64
-	seen := make(map[string]struct{}, len(body.Paths))
-	for _, raw := range body.Paths {
-		cleaned := strings.TrimRight(strings.TrimSpace(raw), "/")
-		if cleaned == "" {
-			continue
-		}
-		if _, dup := seen[cleaned]; dup {
-			continue
-		}
-		seen[cleaned] = struct{}{}
-		info, err := os.Stat(cleaned)
-		if err != nil || !info.IsDir() {
-			slog.Warn("prescan skip unreadable path", "path", cleaned, "err", err)
-			continue
-		}
-		_ = filepath.WalkDir(cleaned, func(p string, d fs.DirEntry, werr error) error {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if werr != nil || d.IsDir() {
-				return nil
-			}
-			if fileproc.IsSupported(p) {
-				total++
-			}
-			return nil
-		})
-	}
-	c.JSON(http.StatusOK, gin.H{"count": total})
 }
 
 // SettingsLibraryRescan enqueues a library.scan job for a library's
