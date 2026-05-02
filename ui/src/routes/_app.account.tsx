@@ -10,6 +10,11 @@ type SectionKey = "account" | "reading" | "devices"
 
 type AccountSearch = {
   section?: SectionKey
+  // Redirect-back signals from the OIDC link callback. The panel
+  // renders a toast and clears these via router.navigate so the URL
+  // doesn't keep firing the toast on refresh.
+  linked?: string
+  error?: string
 }
 
 const SECTIONS: ReadonlyArray<{ key: SectionKey; label: string }> = [
@@ -25,6 +30,8 @@ function isSectionKey(v: unknown): v is SectionKey {
 export const Route = createFileRoute("/_app/account")({
   validateSearch: (raw: Record<string, unknown>): AccountSearch => ({
     section: isSectionKey(raw.section) ? raw.section : undefined,
+    linked: typeof raw.linked === "string" ? raw.linked : undefined,
+    error: typeof raw.error === "string" ? raw.error : undefined,
   }),
   component: AccountPage,
 })
