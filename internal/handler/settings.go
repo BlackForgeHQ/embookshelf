@@ -85,9 +85,8 @@ func (h *Handler) SettingsLibraryDelete(c *gin.Context) {
 }
 
 type createLibraryReq struct {
-	Name string `json:"name"`
-	Kind string `json:"kind"` // "local" (default) | "s3"
-	Path string `json:"path"` // required for kind=local; ignored for kind=s3
+	Name string `json:"name" binding:"required"`
+	Kind string `json:"kind"`
 	Scan bool   `json:"scan"`
 }
 
@@ -106,18 +105,12 @@ func (h *Handler) SettingsLibraryCreate(c *gin.Context) {
 	}
 	name := strings.TrimSpace(body.Name)
 	kind := service.LibraryKind(strings.TrimSpace(body.Kind))
-	path := strings.TrimRight(strings.TrimSpace(body.Path), "/")
 	if name == "" {
 		writeError(c, http.StatusBadRequest, "name is required")
 		return
 	}
-	// path is required for local libraries but optional for s3 libraries.
-	if kind != service.LibraryKindS3 && path == "" {
-		writeError(c, http.StatusBadRequest, "path is required for local libraries")
-		return
-	}
 
-	lib, err := h.lib.Create(c.Request.Context(), name, kind, path)
+	lib, err := h.lib.Create(c.Request.Context(), name, kind)
 	if err != nil {
 		switch {
 		case errors.Is(err, repo.ErrLibraryNameTaken):
@@ -125,6 +118,8 @@ func (h *Handler) SettingsLibraryCreate(c *gin.Context) {
 		case errors.Is(err, repo.ErrLibraryPathTaken):
 			writeError(c, http.StatusConflict, "that filesystem path is already bound to another library")
 		case errors.Is(err, service.ErrS3NotConfigured):
+			writeError(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, service.ErrDataPathNotConfigured):
 			writeError(c, http.StatusBadRequest, err.Error())
 		default:
 			writeServerError(c, "settings library create", err)
