@@ -88,7 +88,7 @@ func newSQLiteQueue(
 			if err := json.Unmarshal([]byte(raw), &args); err != nil {
 				return fmt.Errorf("decode args: %w", err)
 			}
-			return task.ScanImport(ctx, args, task.ScanImportDeps{Svc: scanDeps})
+			return task.ScanImport(ctx, args, scanDeps)
 		},
 	}
 

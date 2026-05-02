@@ -38,12 +38,6 @@ type ScanImportFile struct {
 
 func (ScanImportArgs) Kind() string { return "scan.import" }
 
-// ScanImportDeps is the dependency surface the worker needs. Mirrors
-// the service.ScanImport signature so wiring is mechanical.
-type ScanImportDeps struct {
-	Svc service.ScanImportLeafBookDeps
-}
-
 // ScanImport runs the per-LeafBook import. Treats
 // service.ErrAlreadyImported as success so re-enqueueing a job that
 // already ran is a noop, not a failure. Other errors surface to
@@ -53,7 +47,7 @@ type ScanImportDeps struct {
 // supported files AND nested subdir-LeafBooks) log a warning so
 // admins can find ambiguous folder shapes; the import still proceeds
 // against the depth-1 sweep that Classify chose.
-func ScanImport(ctx context.Context, args ScanImportArgs, deps ScanImportDeps) error {
+func ScanImport(ctx context.Context, args ScanImportArgs, deps service.ScanImportLeafBookDeps) error {
 	if args.Mixed {
 		slog.Warn("scan import: mixed leaf book (depth-1 sweep)",
 			"library_id", args.LibraryID, "folder", args.Folder, "files", len(args.Files))
@@ -70,7 +64,7 @@ func ScanImport(ctx context.Context, args ScanImportArgs, deps ScanImportDeps) e
 			Mtime:    f.Mtime,
 		}
 	}
-	_, err := service.ScanImport(ctx, deps.Svc, args.LibraryID, lb)
+	_, err := service.ScanImport(ctx, deps, args.LibraryID, lb)
 	if err != nil {
 		if errors.Is(err, service.ErrAlreadyImported) {
 			slog.Debug("scan import: already imported (noop)",
@@ -85,7 +79,7 @@ func ScanImport(ctx context.Context, args ScanImportArgs, deps ScanImportDeps) e
 // ScanImportWorker is the River adapter for ScanImport.
 type ScanImportWorker struct {
 	river.WorkerDefaults[ScanImportArgs]
-	Deps ScanImportDeps
+	Deps service.ScanImportLeafBookDeps
 }
 
 func (w *ScanImportWorker) Work(ctx context.Context, job *river.Job[ScanImportArgs]) error {
