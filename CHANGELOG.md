@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.5](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.4...v0.4.5) (2026-05-02)
+
+
+### Features
+
+* **docker:** add S3 configuration options to production compose file ([4dde55e](https://github.com/BlackForgeHQ/embookshelf/commit/4dde55ee5c20c6be916c5131c081d3cf1b30e827))
+
+
+### Bug Fixes
+
+* **bookdrop:** improve error handling for missing placer in library approval ([e3f168f](https://github.com/BlackForgeHQ/embookshelf/commit/e3f168f4e6d9ef0eeaef8b2e87910f4ef5ab277b))
+* **book:** update user_id parameter in ListMissingCoverHash query ([3edafad](https://github.com/BlackForgeHQ/embookshelf/commit/3edafad7db29f5f243f14f629ce0b4543a7242a8))
+
 ## [0.4.4](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.3...v0.4.4) (2026-05-02)
 
 
