@@ -15,8 +15,9 @@ A Library is embookshelf's top-level container for books. Creating one points th
 
 Design choices worth flagging up front:
 
-- **One filesystem root per library**, fixed at creation. Multiple paths would race on scans and naming collisions, so the constraint is schema-enforced (`libraries.path` is `UNIQUE` where non-empty).
-- **No filesystem validation at creation**. The handler accepts any non-empty string; existence, readability, and contents are verified by the scan job.
+- **Managed local layout (per [ADR 0002](../adr/0002-managed-local-library-folders.md)):** the operator types only the library name. The service slugifies the name and derives `path = ${DATA_PATH}/libraries/{slug}/`. The directory is created at create-time via `os.MkdirAll` (idempotent — pre-staged folders are re-adopted). The operator does **not** supply a path; the library-create UI no longer exposes a path input. Existing libraries created before this convention keep their explicit paths. There is no automatic migration.
+- **One filesystem root per library**, fixed at creation. Multiple paths would race on scans and naming collisions, so the constraint is schema-enforced (`libraries.slug` is `UNIQUE`; `libraries.path` is also `UNIQUE` where non-empty).
+- **No filesystem validation beyond `MkdirAll`**. The handler creates the derived directory; existence, readability, and contents of any pre-staged content are verified by the scan job.
 - **Scan is always async**, whether triggered at creation or via rescan. The HTTP response returns immediately and the admin watches SSE events for progress.
 
 ---
@@ -42,24 +43,26 @@ Design choices worth flagging up front:
 
 ### 3.2 Dialog
 
-A single-step modal (shadcn `Dialog`) with three inputs. Submit is disabled until both `name` and `path` are non-empty after trim and the name isn't a case-insensitive duplicate of an existing library.
+A single-step modal (shadcn `Dialog`) with name + storage-kind + scan toggle. Submit is disabled until `name` is non-empty after trim and the name isn't a case-insensitive duplicate of an existing library. The path is **never** an input — for `kind=local` the server derives `${DATA_PATH}/libraries/{slug}/`; for `kind=s3` the server derives the prefix `libraries/{slug}/` in the configured bucket.
 
 | Field | Required | Default | Notes |
 |-------|----------|---------|-------|
-| Name | yes | `""` | Trimmed; case-insensitive client-side uniqueness check against the live list |
-| Path | yes | `""` | Trimmed, trailing slashes stripped. Absolute filesystem path |
+| Name | yes | `""` | Trimmed; case-insensitive client-side uniqueness check against the live list. Also the source of the derived `slug` and folder/prefix |
+| Storage kind | yes | `local` | `local` (managed filesystem under DATA_PATH) or `s3` (when configured) |
 | Scan on create | no | `true` | When on, an initial scan job is enqueued immediately after insert |
+
+For both kinds the dialog renders a read-only preview of the derived path / prefix derived from `slugify(name)` so the operator can sanity-check the slug before submission.
 
 ### 3.3 Pre-scan preview
 
-Before submission, the admin may click **Count files** to call `POST /api/v1/settings/libraries/scan` and see how many supported files the target path contains. The response is a count only — no library is created and no `bookdrop_items` are enqueued. Used to gut-check the path before committing.
+There is no pre-create file count for managed local libraries: the directory is created empty at create-time. (Operators who pre-stage content under `${DATA_PATH}/libraries/{slug}/` before creation can rely on the post-create scan to discover it.)
 
 ### 3.4 Submit sequence
 
-1. Client validates name + path (non-empty, unique name).
-2. Client calls `POST /api/v1/settings/libraries` with `{ name, path, scan }`.
+1. Client validates name (non-empty, unique).
+2. Client calls `POST /api/v1/settings/libraries` with `{ name, kind, scan }`.
 3. On 201, dialog closes, the libraries list refetches, and a sonner toast confirms. If `scan === true`, the library appears with `lastScannedAt = null` and starts receiving SSE scan progress events within seconds.
-4. On 409, a toast surfaces the conflict (name taken or path taken). The dialog stays open.
+4. On 409, a toast surfaces the conflict (name/slug taken). The dialog stays open.
 
 ---
 
@@ -85,7 +88,7 @@ POST /api/v1/settings/libraries
 Auth:     admin
 Body:     CreateLibraryRequest
 Response: 201 Created → { "library": SettingsLibraryDTO }
-Errors:   400 if name or path empty; 409 on ErrLibraryNameTaken / ErrLibraryPathTaken
+Errors:   400 if name empty; 409 on ErrLibraryNameTaken (slug collision)
 ```
 
 See [internal/handler/settings.go](internal/handler/settings.go) (`SettingsLibraryCreate`).
@@ -109,12 +112,12 @@ See [internal/handler/settings.go](internal/handler/settings.go) (`SettingsLibra
 ```go
 type createLibraryReq struct {
     Name string `json:"name"`
-    Path string `json:"path"`
+    Kind string `json:"kind"` // "local" | "s3"
     Scan bool   `json:"scan"`
 }
 ```
 
-Validation is hand-rolled (no `validator/v10` tags): both `Name` and `Path` are trimmed, and `Path` has trailing `/` stripped before the non-empty check. A missing or empty value returns `400 Bad Request`.
+Validation is hand-rolled (no `validator/v10` tags): `Name` is trimmed and required; a missing or empty value returns `400 Bad Request`. `Kind` defaults to `local` when omitted. The path is server-derived per [ADR 0002](../adr/0002-managed-local-library-folders.md) and is not a request field.
 
 **`SettingsLibraryDTO`** response shape:
 
@@ -144,9 +147,9 @@ Validation is hand-rolled (no `validator/v10` tags): both `Name` and `Path` are 
 `SettingsLibraryCreate` ([internal/handler/settings.go](internal/handler/settings.go)):
 
 1. Bind JSON body; reject malformed payloads with `400`.
-2. Validate `name` and `path` are non-empty after trim / slash-strip; `400` otherwise.
-3. Delegate to `lib.Create(ctx, name, path)` — the service layer.
-4. Map `ErrLibraryNameTaken` → `409`, `ErrLibraryPathTaken` → `409`, other errors → `500`.
+2. Validate `name` is non-empty after trim; `400` otherwise. `kind` defaults to `local`.
+3. Delegate to `lib.Create(ctx, name, kind)` — the service layer derives the slug, computes the managed path (`${DATA_PATH}/libraries/{slug}/` for local; `libraries/{slug}/` prefix for s3), and `MkdirAll`s the local case.
+4. Map `ErrLibraryNameTaken` → `409`, other errors → `500`.
 5. When `body.Scan == true` and a queue is available, enqueue a River `LibraryScan` job via `h.queue.EnqueueLibraryScan(ctx, lib.ID)`. Failures here are logged as warnings but do **not** fail the response — the library already exists and the admin can rescan manually.
 6. Respond `201 Created` with the `SettingsLibraryDTO`.
 
@@ -154,15 +157,12 @@ Validation is hand-rolled (no `validator/v10` tags): both `Name` and `Path` are 
 
 [internal/service/library.go](internal/service/library.go):
 
-```go
-func (s *LibraryService) Create(ctx context.Context, name, path string) (model.Library, error) {
-    name = strings.TrimSpace(name)
-    path = strings.TrimRight(strings.TrimSpace(path), "/")
-    return s.repo.CreateLibrary(ctx, name, slugify(name), path)
-}
-```
+The service trims the name, derives the slug via `slugify`, and constructs the managed path:
 
-The service is a thin pass-through: derive a URL-safe slug from the name, then hand off to the repo. No filesystem validation, no watcher registration (we don't run `fsnotify` — the scan job is manual-trigger or on-create).
+- **`kind=local`:** `path = filepath.Join(cfg.DataPath, "libraries", slug)`. The directory is created with `os.MkdirAll(path, 0o755)` (idempotent — pre-staged folders are re-adopted).
+- **`kind=s3`:** prefix `libraries/{slug}/` in the configured bucket; no `MkdirAll`.
+
+There is no filesystem validation beyond `MkdirAll`, no watcher registration (we don't run `fsnotify` — the scan job is manual-trigger or on-create), and no operator-supplied path. See [ADR 0002](../adr/0002-managed-local-library-folders.md) for the rationale.
 
 ### 5.3 Repository layer
 
@@ -310,13 +310,10 @@ type Library struct {
 | Case | Outcome |
 |---|---|
 | Empty `name` | `400 Bad Request`; dialog keeps state |
-| Empty `path` | `400 Bad Request`; dialog keeps state |
-| Path with trailing slashes (`/srv/books///`) | Stripped by the service layer before insert; normalized stored path is `/srv/books` |
 | Name collision (case-insensitive, in-memory) | UI blocks submission client-side |
-| Name collision (server-side, via slug) | `409 Conflict` with `ErrLibraryNameTaken`; possible when two admins race, or the client bypasses the UI check |
-| Path collision | `409 Conflict` with `ErrLibraryPathTaken` — two libraries cannot share one root |
-| Path that doesn't exist on disk | Library row is created. Scan job runs, `filepath.WalkDir` returns immediately, `file_count = 0`, `discovered = 0`. No error surfaced to the admin beyond the empty counts on the row |
-| Path becomes unreadable between create and scan | Walk errors are logged; row still gets stamped with whatever counts were reached |
+| Name collision (server-side, via slug) | `409 Conflict` with `ErrLibraryNameTaken`; possible when two admins race, or the client bypasses the UI check. The slug uniqueness index covers the path collision case as well — two libraries cannot share a managed folder because they would derive the same slug |
+| Operator pre-staged content under `${DATA_PATH}/libraries/{slug}/` before creation | `MkdirAll` is idempotent: the existing folder is re-adopted, and the post-create scan picks up its contents |
+| Managed folder unreadable between create and scan | Walk errors are logged; row still gets stamped with whatever counts were reached |
 | `scan = false` on create | Library row persisted; no River job enqueued. `last_scanned_at` stays `NULL` until a manual rescan |
 | Queue unavailable (River not up) | Library row still created; scan-enqueue logs a warning. No response error — `lastScannedAt` stays null and the admin sees "never scanned" in the list |
 | Concurrent scans on the same library | Not explicitly guarded at the service level. Each scan job calls `BookExistsByPath` per file, so a double-scan at worst re-examines files that are already imported — it won't produce duplicate `books` or `bookdrop_items` |
@@ -329,21 +326,21 @@ type Library struct {
 
 | Layer | Rule |
 |---|---|
-| UI | Both fields non-empty after trim; name not a case-insensitive duplicate in the live list |
-| Handler | Both fields non-empty after trim + path slash-strip; malformed JSON → 400 |
-| Service | Trims inputs and generates `slug` |
-| Repository | Two unique indexes (`slug`, `path`) enforce uniqueness at the DB level |
+| UI | Name non-empty after trim; name not a case-insensitive duplicate in the live list. No path field |
+| Handler | Name non-empty after trim; malformed JSON → 400. `kind` defaults to `local` |
+| Service | Trims name, generates `slug`, derives managed `path = ${DATA_PATH}/libraries/{slug}/` (local) or prefix `libraries/{slug}/` (s3), and `MkdirAll`s for local |
+| Repository | Unique index on `slug` enforces uniqueness at the DB level (the legacy `path` partial unique index still exists for libraries created before this convention) |
 | Auth | Admin-only; enforced by `auth.RequireRole(model.RoleAdmin)` on the `/settings` group |
 
 ---
 
 ## 9. Security Considerations
 
-- The admin supplies absolute filesystem paths; there is no sandbox. Deployments rely on the container / systemd unit's filesystem boundary to restrict reachable roots. Paths are trimmed but not normalized against a chroot.
-- Admin role is required to create libraries; non-admins cannot point embookshelf at arbitrary paths.
-- The pre-create count endpoint reads directory listings but does not open file bytes — the same walk function is shared with the real scan job.
-- Path traversal via `..` inside the stored path is not actively blocked; the walk would resolve it but still stay under whatever the process can read. Deployments that care should run the binary under a user with a narrow home / bind-mount.
-- No `fsnotify` watcher is registered, so a malicious library path can't be used to pin watchers on unrelated directories.
+- New libraries are confined to `${DATA_PATH}/libraries/{slug}/`; the admin no longer supplies absolute paths, eliminating arbitrary-path traversal at create-time. Deployments still rely on the container / systemd unit's filesystem boundary for the `DATA_PATH` itself.
+- Admin role is required to create libraries; non-admins cannot trigger `MkdirAll` under `DATA_PATH`.
+- Slugs are pure ASCII alphanumerics + `-` (see `slugify`), so the derived folder name cannot contain path-traversal characters.
+- Existing libraries created before [ADR 0002](../adr/0002-managed-local-library-folders.md) keep their explicit, possibly-external paths. Their security profile is unchanged from the prior design.
+- No `fsnotify` watcher is registered, so the managed library folder can't be used to pin watchers on unrelated directories.
 
 ---
 
