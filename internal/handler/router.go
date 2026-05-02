@@ -63,6 +63,14 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.GET("/instance", h.InstanceSummary)
 			authed.GET("/config", h.AppConfig)
 
+			// Account identity management — list links, start a link
+			// flow, unlink with the lockout guard, set initial
+			// password for OIDC-provisioned users.
+			authed.GET("/account/identities", h.AccountIdentities)
+			authed.GET("/account/oidc/link/:slug", h.AccountOIDCLink)
+			authed.DELETE("/account/oidc/:provider", h.AccountOIDCUnlink)
+			authed.POST("/account/password/set", h.AccountSetInitialPassword)
+
 			// Cross-entity search powering the global command palette
 			// and the library page combobox.
 			authed.GET("/search", h.Search)

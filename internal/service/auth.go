@@ -146,6 +146,32 @@ func (s *AuthService) PurgeExpiredSessions(ctx context.Context) (int64, error) {
 	return s.sessions.PurgeExpired(ctx)
 }
 
+// ErrPasswordAlreadySet is returned by SetInitialPassword when the
+// user already has a password — they should hit ChangePassword
+// (which proves possession of the current credential) instead.
+var ErrPasswordAlreadySet = errors.New("password already set; use change-password")
+
+// SetInitialPassword installs a password on a user that doesn't have
+// one yet — the OIDC-provisioned case where password_hash is NULL or
+// "". Refuses when a password is already on record so a stolen
+// session cookie can't silently overwrite the credential. The
+// account panel surfaces this only for users where hasPassword is
+// false (see CONTEXT.md → "Lockout guard").
+func (s *AuthService) SetInitialPassword(ctx context.Context, userID, next string) error {
+	u, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if u.PasswordHash != "" {
+		return ErrPasswordAlreadySet
+	}
+	hash, err := auth.HashPassword(next)
+	if err != nil {
+		return err
+	}
+	return s.users.UpdatePassword(ctx, userID, hash)
+}
+
 // ChangePassword verifies the current password and replaces the hash.
 // Returns ErrInvalidCredentials when `current` doesn't match so callers can
 // surface a generic message without leaking which half was wrong.

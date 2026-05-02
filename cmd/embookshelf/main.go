@@ -265,7 +265,8 @@ func main() {
 			}
 		}
 	}
-	oidcSvc := service.NewOIDCService(appSettingsRepo, userRepo, sessionRepo, cfg.AppURL)
+	identityRepo := repo.NewIdentityRepo(dbh)
+	oidcSvc := service.NewOIDCService(appSettingsRepo, userRepo, sessionRepo, identityRepo, cfg.AppURL)
 
 	if n, err := authSvc.PurgeExpiredSessions(ctx); err != nil {
 		slog.Warn("purge sessions", "err", err)
@@ -403,6 +404,7 @@ func main() {
 		ReadingStats: readingStatsSvc,
 		Devices:      deviceSvc,
 		OIDC:         oidcSvc,
+		Identities:   identityRepo,
 		Search:       searchSvc,
 		AppSettings:  appSettingsRepo,
 		Covers:       covers,

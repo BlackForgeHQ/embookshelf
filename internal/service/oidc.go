@@ -48,10 +48,11 @@ const (
 // Google, GitHub, and a custom OIDC provider each have their own
 // settings row and can be enabled in parallel.
 type OIDCService struct {
-	appURL   string
-	settings *repo.AppSettingsRepo
-	users    *repo.UserRepo
-	sessions *repo.SessionRepo
+	appURL     string
+	settings   *repo.AppSettingsRepo
+	users      *repo.UserRepo
+	sessions   *repo.SessionRepo
+	identities *repo.IdentityRepo
 
 	states *stateStore
 
@@ -69,13 +70,14 @@ type cachedDiscovery struct {
 	verifier *oidc.IDTokenVerifier
 }
 
-func NewOIDCService(settings *repo.AppSettingsRepo, users *repo.UserRepo, sessions *repo.SessionRepo, appURL string) *OIDCService {
+func NewOIDCService(settings *repo.AppSettingsRepo, users *repo.UserRepo, sessions *repo.SessionRepo, identities *repo.IdentityRepo, appURL string) *OIDCService {
 	return &OIDCService{
-		appURL:   strings.TrimRight(appURL, "/"),
-		settings: settings,
-		users:    users,
-		sessions: sessions,
-		states:   newStateStore(),
+		appURL:     strings.TrimRight(appURL, "/"),
+		settings:   settings,
+		users:      users,
+		sessions:   sessions,
+		identities: identities,
+		states:     newStateStore(),
 	}
 }
 
@@ -223,18 +225,39 @@ func (s *OIDCService) AuthURL(ctx context.Context, slug, baseURL string) (string
 	}
 }
 
-// Exchange completes the callback by inspecting the state (which
-// carries the provider slug + original redirect URI), dispatching to
-// the right backend, and issuing a BookLore session.
-func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent string) (model.Session, model.User, error) {
+// ExchangeOutcome is the discriminated result of completing an OIDC
+// callback. Intent reflects how the flow was started; login outcomes
+// populate Session+User, link outcomes populate Provider+UserID.
+type ExchangeOutcome struct {
+	Intent   string // IntentLogin | IntentLink
+	Session  model.Session
+	User     model.User
+	Provider string
+	UserID   string
+	Email    string
+}
+
+// ErrOIDCLinkUserMismatch is returned when a link callback fires with
+// a session whose user does not match the user that initiated the
+// link. The handler maps this to a redirect with ?error=session_expired.
+var ErrOIDCLinkUserMismatch = errors.New("oidc: link callback user mismatch")
+
+// Exchange completes the callback for either a login flow or a link
+// flow, dispatching on state.Intent. For link callbacks the caller
+// must pass the current session's user ID (empty for login); the
+// service verifies it matches the user that initiated the link.
+func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent, sessionUserID string) (ExchangeOutcome, error) {
 	entry, ok := s.states.take(state)
 	if !ok {
-		return model.Session{}, model.User{}, ErrOIDCStateMismatch
+		return ExchangeOutcome{}, ErrOIDCStateMismatch
 	}
 
-	provision, err := s.settings.GetOIDCAutoProvision(ctx)
-	if err != nil {
-		return model.Session{}, model.User{}, err
+	intent := entry.Intent
+	if intent == "" {
+		intent = IntentLogin
+	}
+	if intent == IntentLink && entry.LinkUserID != sessionUserID {
+		return ExchangeOutcome{}, ErrOIDCLinkUserMismatch
 	}
 
 	redirect := entry.RedirectURL
@@ -242,69 +265,127 @@ func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent strin
 		redirect = s.resolveRedirectURL("")
 	}
 
-	var (
-		claims resolvedClaims
-		issuer string
-	)
-	switch entry.ProviderSlug {
-	case repo.ProviderSlugGoogle:
-		cfg, err := s.settings.GetGoogle(ctx)
-		if err != nil {
-			return model.Session{}, model.User{}, err
-		}
-		if !googleUsable(cfg) {
-			return model.Session{}, model.User{}, ErrOIDCDisabled
-		}
-		claims, issuer, err = s.oidcCallback(ctx, code, entry, googleOIDCConfig(cfg), redirect)
-		if err != nil {
-			return model.Session{}, model.User{}, err
-		}
-	case repo.ProviderSlugGitHub:
-		cfg, err := s.settings.GetGitHub(ctx)
-		if err != nil {
-			return model.Session{}, model.User{}, err
-		}
-		if !githubUsable(cfg) {
-			return model.Session{}, model.User{}, ErrOIDCDisabled
-		}
-		claims, err = s.githubCallback(ctx, code, entry, cfg, redirect)
-		if err != nil {
-			return model.Session{}, model.User{}, err
-		}
-		issuer = "https://github.com"
-	case repo.ProviderSlugGeneric:
-		cfg, err := s.settings.GetGenericOIDC(ctx)
-		if err != nil {
-			return model.Session{}, model.User{}, err
-		}
-		if !genericUsable(cfg) {
-			return model.Session{}, model.User{}, ErrOIDCDisabled
-		}
-		claims, issuer, err = s.oidcCallback(ctx, code, entry, cfg, redirect)
-		if err != nil {
-			return model.Session{}, model.User{}, err
-		}
-	default:
-		return model.Session{}, model.User{}, ErrOIDCUnknownProvider
+	claims, issuer, err := s.resolveCallback(ctx, code, entry, redirect)
+	if err != nil {
+		return ExchangeOutcome{}, err
 	}
 
-	u, err := s.findOrProvisionUser(ctx, issuer, claims, provision)
+	if intent == IntentLink {
+		// Panel-driven link: bind the IdP-attested identity to the
+		// signed-in user. The callback already proved possession of
+		// the IdP account; we still sanity-check the (issuer, subject)
+		// pair isn't claimed by another user.
+		if existing, gerr := s.identities.GetByIssuerSubject(ctx, issuer, claims.Subject); gerr == nil {
+			if existing.UserID != sessionUserID {
+				return ExchangeOutcome{}, repo.ErrIdentityForeignUser
+			}
+			// Already linked to this user — idempotent success.
+			_ = s.identities.TouchLastLogin(ctx, existing.ID)
+			return ExchangeOutcome{
+				Intent: IntentLink, Provider: entry.ProviderSlug,
+				UserID: sessionUserID, Email: claims.Email,
+			}, nil
+		} else if !errors.Is(gerr, repo.ErrNotFound) {
+			return ExchangeOutcome{}, gerr
+		}
+		if _, err := s.identities.Insert(ctx, sessionUserID, entry.ProviderSlug, issuer, claims.Subject, claims.Email); err != nil {
+			return ExchangeOutcome{}, err
+		}
+		return ExchangeOutcome{
+			Intent: IntentLink, Provider: entry.ProviderSlug,
+			UserID: sessionUserID, Email: claims.Email,
+		}, nil
+	}
+
+	provision, err := s.settings.GetOIDCAutoProvision(ctx)
+	if err != nil {
+		return ExchangeOutcome{}, err
+	}
+	u, err := s.findOrProvisionUser(ctx, entry.ProviderSlug, issuer, claims, provision)
 	if err != nil {
 		if errors.Is(err, ErrOIDCPendingApproval) {
-			// Return the user so callers (handlers, tests) can see who is
-			// pending, but no session is issued.
-			return model.Session{}, u, ErrOIDCPendingApproval
+			return ExchangeOutcome{Intent: IntentLogin, User: u}, ErrOIDCPendingApproval
 		}
-		return model.Session{}, model.User{}, err
+		return ExchangeOutcome{}, err
 	}
 	_ = s.users.SyncOIDCProfile(ctx, u.ID, claims.Name, claims.Picture)
 
 	sess, err := s.sessions.Create(ctx, u.ID, userAgent, SessionTTL)
 	if err != nil {
-		return model.Session{}, model.User{}, err
+		return ExchangeOutcome{}, err
 	}
 	_ = s.users.TouchLastSeen(ctx, u.ID, time.Now())
-	return sess, u, nil
+	return ExchangeOutcome{Intent: IntentLogin, Session: sess, User: u}, nil
+}
+
+// resolveCallback runs the provider-specific OAuth/OIDC token exchange
+// and returns the resolved claims + canonical issuer for the request.
+func (s *OIDCService) resolveCallback(ctx context.Context, code string, entry stateEntry, redirect string) (resolvedClaims, string, error) {
+	switch entry.ProviderSlug {
+	case repo.ProviderSlugGoogle:
+		cfg, err := s.settings.GetGoogle(ctx)
+		if err != nil {
+			return resolvedClaims{}, "", err
+		}
+		if !googleUsable(cfg) {
+			return resolvedClaims{}, "", ErrOIDCDisabled
+		}
+		return s.oidcCallback(ctx, code, entry, googleOIDCConfig(cfg), redirect)
+	case repo.ProviderSlugGitHub:
+		cfg, err := s.settings.GetGitHub(ctx)
+		if err != nil {
+			return resolvedClaims{}, "", err
+		}
+		if !githubUsable(cfg) {
+			return resolvedClaims{}, "", ErrOIDCDisabled
+		}
+		claims, err := s.githubCallback(ctx, code, entry, cfg, redirect)
+		if err != nil {
+			return resolvedClaims{}, "", err
+		}
+		return claims, "https://github.com", nil
+	case repo.ProviderSlugGeneric:
+		cfg, err := s.settings.GetGenericOIDC(ctx)
+		if err != nil {
+			return resolvedClaims{}, "", err
+		}
+		if !genericUsable(cfg) {
+			return resolvedClaims{}, "", ErrOIDCDisabled
+		}
+		return s.oidcCallback(ctx, code, entry, cfg, redirect)
+	default:
+		return resolvedClaims{}, "", ErrOIDCUnknownProvider
+	}
+}
+
+// AuthURLForLink builds an authorize URL whose state carries
+// Intent=link and the initiating user's ID. The callback uses these
+// to bind the resulting identity to that user instead of issuing a
+// new session.
+func (s *OIDCService) AuthURLForLink(ctx context.Context, slug, baseURL, userID string) (string, error) {
+	if userID == "" {
+		return "", errors.New("oidc: link auth URL requires a user id")
+	}
+	redirect := s.resolveRedirectURL(baseURL)
+	if redirect == "" {
+		return "", ErrOIDCNotConfigured
+	}
+	return s.authURLForSlug(ctx, slug, redirect, IntentLink, userID)
+}
+
+// authURLForSlug is the shared dispatch used by both AuthURL and
+// AuthURLForLink — same builders, same state minting, same redirect.
+func (s *OIDCService) authURLForSlug(ctx context.Context, slug, redirect, intent, linkUserID string) (string, error) {
+	switch slug {
+	case repo.ProviderSlugGoogle:
+		return s.authURLGoogleWithIntent(ctx, redirect, intent, linkUserID)
+	case repo.ProviderSlugGitHub:
+		return s.authURLGitHubWithIntent(ctx, redirect, intent, linkUserID)
+	case repo.ProviderSlugGeneric:
+		return s.authURLGenericWithIntent(ctx, redirect, intent, linkUserID)
+	default:
+		return "", ErrOIDCUnknownProvider
+	}
 }
 
 // -----------------------------------------------------------------------------
@@ -312,6 +393,10 @@ func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent strin
 // -----------------------------------------------------------------------------
 
 func (s *OIDCService) authURLGoogle(ctx context.Context, redirect string) (string, error) {
+	return s.authURLGoogleWithIntent(ctx, redirect, IntentLogin, "")
+}
+
+func (s *OIDCService) authURLGoogleWithIntent(ctx context.Context, redirect, intent, linkUserID string) (string, error) {
 	cfg, err := s.settings.GetGoogle(ctx)
 	if err != nil {
 		return "", err
@@ -319,10 +404,14 @@ func (s *OIDCService) authURLGoogle(ctx context.Context, redirect string) (strin
 	if !googleUsable(cfg) {
 		return "", ErrOIDCDisabled
 	}
-	return s.authURLOIDC(ctx, repo.ProviderSlugGoogle, googleOIDCConfig(cfg), redirect)
+	return s.authURLOIDC(ctx, repo.ProviderSlugGoogle, googleOIDCConfig(cfg), redirect, intent, linkUserID)
 }
 
 func (s *OIDCService) authURLGeneric(ctx context.Context, redirect string) (string, error) {
+	return s.authURLGenericWithIntent(ctx, redirect, IntentLogin, "")
+}
+
+func (s *OIDCService) authURLGenericWithIntent(ctx context.Context, redirect, intent, linkUserID string) (string, error) {
 	cfg, err := s.settings.GetGenericOIDC(ctx)
 	if err != nil {
 		return "", err
@@ -330,15 +419,15 @@ func (s *OIDCService) authURLGeneric(ctx context.Context, redirect string) (stri
 	if !genericUsable(cfg) {
 		return "", ErrOIDCDisabled
 	}
-	return s.authURLOIDC(ctx, repo.ProviderSlugGeneric, cfg, redirect)
+	return s.authURLOIDC(ctx, repo.ProviderSlugGeneric, cfg, redirect, intent, linkUserID)
 }
 
-func (s *OIDCService) authURLOIDC(ctx context.Context, slug string, cfg repo.GenericOIDCConfig, redirect string) (string, error) {
+func (s *OIDCService) authURLOIDC(ctx context.Context, slug string, cfg repo.GenericOIDCConfig, redirect, intent, linkUserID string) (string, error) {
 	disc, err := s.getDiscovery(ctx, cfg)
 	if err != nil {
 		return "", err
 	}
-	state, nonce, verifier, err := s.issueState(slug, redirect)
+	state, nonce, verifier, err := s.issueStateWithIntent(slug, redirect, intent, linkUserID)
 	if err != nil {
 		return "", err
 	}
@@ -355,6 +444,10 @@ func (s *OIDCService) authURLOIDC(ctx context.Context, slug string, cfg repo.Gen
 // authURLGitHub builds the GitHub authorize URL by hand; GitHub is not
 // an OIDC provider so there's no discovery document.
 func (s *OIDCService) authURLGitHub(ctx context.Context, redirect string) (string, error) {
+	return s.authURLGitHubWithIntent(ctx, redirect, IntentLogin, "")
+}
+
+func (s *OIDCService) authURLGitHubWithIntent(ctx context.Context, redirect, intent, linkUserID string) (string, error) {
 	cfg, err := s.settings.GetGitHub(ctx)
 	if err != nil {
 		return "", err
@@ -362,7 +455,7 @@ func (s *OIDCService) authURLGitHub(ctx context.Context, redirect string) (strin
 	if !githubUsable(cfg) {
 		return "", ErrOIDCDisabled
 	}
-	state, _, verifier, err := s.issueState(repo.ProviderSlugGitHub, redirect)
+	state, _, verifier, err := s.issueStateWithIntent(repo.ProviderSlugGitHub, redirect, intent, linkUserID)
 	if err != nil {
 		return "", err
 	}
@@ -377,7 +470,7 @@ func (s *OIDCService) authURLGitHub(ctx context.Context, redirect string) (strin
 	return "https://github.com/login/oauth/authorize?" + v.Encode(), nil
 }
 
-func (s *OIDCService) issueState(slug, redirect string) (state, nonce, verifier string, err error) {
+func (s *OIDCService) issueStateWithIntent(slug, redirect, intent, linkUserID string) (state, nonce, verifier string, err error) {
 	state, err = randomString(32)
 	if err != nil {
 		return "", "", "", err
@@ -396,6 +489,8 @@ func (s *OIDCService) issueState(slug, redirect string) (state, nonce, verifier 
 		CreatedAt:    time.Now(),
 		ProviderSlug: slug,
 		RedirectURL:  redirect,
+		Intent:       intent,
+		LinkUserID:   linkUserID,
 	})
 	return state, nonce, verifier, nil
 }
@@ -608,15 +703,16 @@ func extractClaims(ctx context.Context, disc *cachedDiscovery, token *oauth2.Tok
 // User provisioning
 // -----------------------------------------------------------------------------
 
-func (s *OIDCService) findOrProvisionUser(ctx context.Context, issuer string, claims resolvedClaims, provision repo.OIDCAutoProvisionDetails) (model.User, error) {
+func (s *OIDCService) findOrProvisionUser(ctx context.Context, provider, issuer string, claims resolvedClaims, provision repo.OIDCAutoProvisionDetails) (model.User, error) {
 	// 1) Match by OIDC identity. Existing users still need to clear
 	//    the status gate — pending users have not been approved yet,
 	//    denied users have been explicitly refused.
-	u, err := s.users.GetByOIDC(ctx, issuer, claims.Subject)
-	if err != nil && !errors.Is(err, repo.ErrNotFound) {
-		return model.User{}, err
-	}
-	if err == nil {
+	if ident, err := s.identities.GetByIssuerSubject(ctx, issuer, claims.Subject); err == nil {
+		u, uerr := s.users.GetByID(ctx, ident.UserID)
+		if uerr != nil {
+			return model.User{}, uerr
+		}
+		_ = s.identities.TouchLastLogin(ctx, ident.ID)
 		switch u.Status {
 		case model.UserStatusActive:
 			return u, nil
@@ -627,19 +723,29 @@ func (s *OIDCService) findOrProvisionUser(ctx context.Context, issuer string, cl
 		default:
 			return u, nil
 		}
+	} else if !errors.Is(err, repo.ErrNotFound) {
+		return model.User{}, err
 	}
 
-	// 2) Match by email and link.
+	// 2) Match by email and auto-link. Gated by AllowLocalAccountLinking
+	//    when the matched user has no identities yet (a true cross-over
+	//    from local password to SSO). Once a user has at least one
+	//    identity, additional providers attach without the flag — they
+	//    came in via the same email-verified channel.
 	if claims.Email != "" {
 		existing, err := s.users.GetByEmail(ctx, claims.Email)
 		if err != nil && !errors.Is(err, repo.ErrNotFound) {
 			return model.User{}, err
 		}
 		if err == nil {
-			if !provision.AllowLocalAccountLinking && existing.OIDCSubject == nil {
+			count, cerr := s.identities.CountByUser(ctx, existing.ID)
+			if cerr != nil {
+				return model.User{}, cerr
+			}
+			if !provision.AllowLocalAccountLinking && count == 0 {
 				return model.User{}, ErrOIDCLoginNotAllowed
 			}
-			if err := s.users.LinkOIDC(ctx, existing.ID, issuer, claims.Subject); err != nil {
+			if _, err := s.identities.RelinkProvider(ctx, existing.ID, provider, issuer, claims.Subject, claims.Email); err != nil {
 				return model.User{}, err
 			}
 			return existing, nil
@@ -673,14 +779,28 @@ func (s *OIDCService) findOrProvisionUser(ctx context.Context, issuer string, cl
 		return model.User{}, errors.New("OIDC provider did not return an email claim and email is required")
 	}
 
-	if provision.RequireAdminApproval && !firstUser {
-		created, err := s.users.CreateOIDCPending(ctx, claims.Email, claims.Name, role, issuer, claims.Subject)
-		if err != nil {
-			return model.User{}, err
-		}
+	pending := provision.RequireAdminApproval && !firstUser
+
+	var created model.User
+	var err error
+	if pending {
+		created, err = s.users.CreateOIDCPending(ctx, claims.Email, claims.Name, role)
+	} else {
+		created, err = s.users.CreateOIDC(ctx, claims.Email, claims.Name, role)
+	}
+	if err != nil {
+		return model.User{}, err
+	}
+	if _, err := s.identities.Insert(ctx, created.ID, provider, issuer, claims.Subject, claims.Email); err != nil {
+		// Identity insert failed after user create. Clean up so the
+		// orphan user doesn't block a future login by the same email.
+		_ = s.users.Delete(ctx, created.ID)
+		return model.User{}, err
+	}
+	if pending {
 		return created, ErrOIDCPendingApproval
 	}
-	return s.users.CreateOIDC(ctx, claims.Email, claims.Name, role, issuer, claims.Subject)
+	return created, nil
 }
 
 // -----------------------------------------------------------------------------
@@ -987,7 +1107,20 @@ type stateEntry struct {
 	// the token endpoint (per OAuth2 spec) and our redirect URL depends
 	// on the request origin when APP_URL is unset, so we stash it here.
 	RedirectURL string
+	// Intent discriminates login vs link flows so the callback can
+	// branch without re-deriving the user's intent from cookies. Empty
+	// string defaults to "login".
+	Intent string
+	// LinkUserID is set only on link flows so the callback can verify
+	// the session-bound user matches the user that initiated the link.
+	LinkUserID string
 }
+
+// IntentLogin and IntentLink discriminate the two callback paths.
+const (
+	IntentLogin = "login"
+	IntentLink  = "link"
+)
 
 type stateStore struct {
 	mu sync.Mutex
