@@ -72,9 +72,10 @@ func New(ctx context.Context, cfg Config) (*Backend, error) {
 			cfg.AccessKeyID, cfg.SecretAccessKey, "")
 	}
 
+	endpoint := normalizeEndpoint(cfg.Endpoint)
 	cli := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		if cfg.Endpoint != "" {
-			o.BaseEndpoint = &cfg.Endpoint
+		if endpoint != "" {
+			o.BaseEndpoint = &endpoint
 		}
 		o.UsePathStyle = cfg.ForcePathStyle
 	})
@@ -131,6 +132,24 @@ func (b *Backend) validateBucket(ctx context.Context) error {
 		_ = err
 	}
 	return nil
+}
+
+// normalizeEndpoint accepts hostnames without a scheme (e.g.
+// `fsn1.your-objectstorage.com`) and prepends `https://`. The AWS SDK
+// requires a fully-qualified URI; without this users get an opaque
+// "Custom endpoint ... was not a valid URI" at first request. Empty
+// endpoint stays empty so AWS regional resolution kicks in. Plain
+// `host:port` (no scheme) also gets `https://`; users wanting plaintext
+// must spell out `http://`.
+func normalizeEndpoint(ep string) string {
+	ep = strings.TrimSpace(ep)
+	if ep == "" {
+		return ""
+	}
+	if strings.Contains(ep, "://") {
+		return ep
+	}
+	return "https://" + ep
 }
 
 // normalizePrefix strips leading/trailing slashes and appends a single
