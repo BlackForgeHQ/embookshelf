@@ -45,6 +45,12 @@ type LibraryHandle struct {
 	Storage storage.Storage
 	Placer  Placer
 
+	// PlacerErr holds the reason Placer is nil. Callers that require a
+	// Placer (Approve) surface this so admins see the real cause —
+	// missing backend, deleted backend_id, library with no path —
+	// instead of an opaque "no placer" message.
+	PlacerErr error
+
 	files           *repo.FileRepo
 	presignTTL      time.Duration
 	presignFallback string
@@ -189,17 +195,26 @@ func (s *defaultLibraryStore) For(ctx context.Context, libraryID string) (*Libra
 	}
 
 	var placer Placer
+	var placerErr error
 	if s.deps.NewPlacer != nil {
-		// Placer build failure is non-fatal for the same reason.
+		// Placer build failure is non-fatal at handle construction —
+		// metadata-only callers still get a usable handle. The error is
+		// captured so write-path callers (Approve) surface the real
+		// reason instead of "no placer".
 		if p, perr := s.deps.NewPlacer(lib); perr == nil {
 			placer = p
+		} else {
+			placerErr = perr
 		}
+	} else {
+		placerErr = errors.New("no placer builder configured")
 	}
 
 	return &LibraryHandle{
 		Library:         lib,
 		Storage:         store,
 		Placer:          placer,
+		PlacerErr:       placerErr,
 		files:           s.deps.Files,
 		presignTTL:      s.deps.PresignTTL,
 		presignFallback: s.deps.PresignFallback,

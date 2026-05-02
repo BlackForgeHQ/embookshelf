@@ -183,7 +183,10 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 		return model.Book{}, fmt.Errorf("approve: library lookup: %w", hErr)
 	}
 	if handle.Placer == nil {
-		return model.Book{}, errors.New("approve: no placer for library")
+		if handle.PlacerErr != nil {
+			return model.Book{}, fmt.Errorf("approve: no placer for library %s: %w", libraryID, handle.PlacerErr)
+		}
+		return model.Book{}, fmt.Errorf("approve: no placer for library %s", libraryID)
 	}
 
 	book := model.Book{
