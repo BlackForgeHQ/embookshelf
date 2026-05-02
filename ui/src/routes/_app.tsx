@@ -8,7 +8,6 @@ import { fetchInstanceSummary, instanceSummaryQueryKey } from "@/api/settings"
 import { CommandPalette } from "@/components/CommandPalette"
 import { AppSidebar } from "@/components/Sidebar"
 import { ShelfDraftProvider } from "@/components/ShelfDraftProvider"
-import { UserSettingsDialogProvider } from "@/components/UserSettingsDialog"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 
@@ -67,20 +66,18 @@ function AppLayout() {
 
   return (
     <TooltipProvider delayDuration={100}>
-      <UserSettingsDialogProvider>
-        <ShelfDraftProvider>
-          <SidebarProvider className="h-screen overflow-hidden">
-            <AppSidebar />
-            <SidebarInset className="min-h-0 overflow-hidden">
-              <div className="main-content">
-                <Outlet />
-              </div>
-              <StatusBar />
-            </SidebarInset>
-            <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
-          </SidebarProvider>
-        </ShelfDraftProvider>
-      </UserSettingsDialogProvider>
+      <ShelfDraftProvider>
+        <SidebarProvider className="h-screen overflow-hidden">
+          <AppSidebar />
+          <SidebarInset className="min-h-0 overflow-hidden">
+            <div className="main-content">
+              <Outlet />
+            </div>
+            <StatusBar />
+          </SidebarInset>
+          <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+        </SidebarProvider>
+      </ShelfDraftProvider>
     </TooltipProvider>
   )
 }

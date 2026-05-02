@@ -11,8 +11,8 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 
-// Shared primitives used across the /settings (per-user) and /admin
-// (global) pages. Extracted so the two routes can import them without
+// Shared primitives used across the /settings (admin) and /account
+// (per-user) pages. Extracted so the two routes can import them without
 // duplicating 100 lines each.
 
 export function Card({ children, className }: { children: ReactNode; className?: string }) {

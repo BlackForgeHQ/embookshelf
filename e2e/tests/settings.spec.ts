@@ -7,8 +7,8 @@ test.use({ storageState: ADMIN_STATE_PATH });
 
 // Admin-only panels live on the /settings route behind a side nav of
 // <button>s. User-scoped panels (Account, Reading preferences, Device
-// sync) were moved into a shadcn <Dialog> that opens from the sidebar's
-// "Account menu" dropdown. Each flow has its own helper.
+// sync) live on the /account route, with the active section driven by
+// the `?section=` search param. Each flow has its own helper.
 
 async function openAdminSettings(page: Page, panel: string): Promise<void> {
   await page.goto('/settings');
@@ -20,107 +20,108 @@ async function openAdminSettings(page: Page, panel: string): Promise<void> {
   ).toBeVisible();
 }
 
-async function openUserSettingsDialog(
+const ACCOUNT_SECTION_KEY = {
+  Account: 'account',
+  'Reading preferences': 'reading',
+  'Device sync': 'devices',
+} as const;
+
+async function openAccountPage(
   page: Page,
   section: 'Account' | 'Reading preferences' | 'Device sync',
 ): Promise<void> {
-  await page.goto('/');
-  await page
-    .locator('[data-sidebar="sidebar"]')
-    .getByRole('button', { name: 'Account menu' })
-    .click();
-  await page.getByRole('menuitem', { name: section }).click();
+  const key = ACCOUNT_SECTION_KEY[section];
+  // `account` is the default section so it has no search param; the
+  // other two pin via ?section=.
+  const url = key === 'account' ? '/account' : `/account?section=${key}`;
+  await page.goto(url);
 
-  const dialog = page.getByRole('dialog');
-  await expect(dialog).toBeVisible();
-  // The dialog nav uses <button>s labelled by section — click once to
-  // ensure the right pane is rendered (the menuitem already picks one,
-  // but settling on the label here is cheap and keeps the helper robust
-  // if the dropdown target ever drifts).
-  await dialog.getByRole('button', { name: section, exact: true }).click();
-  // exact:true — "Account" would otherwise collide with the dialog title
-  // "My account" that stays mounted at the top of the sheet.
+  const main = page.getByRole('main');
+  // exact:true — "Account" would otherwise collide with the page title
+  // "My account" rendered above the section nav.
   await expect(
-    dialog.getByRole('heading', { name: section, exact: true }),
+    main.getByRole('heading', { name: section, exact: true }),
   ).toBeVisible();
 }
 
 // ---------------------------------------------------------------------------
-// Account (moved to UserSettingsDialog)
+// Account (moved to /account route)
 // ---------------------------------------------------------------------------
 
 test.describe('settings · account', () => {
-  test('dialog renders the seeded admin identity', async ({ page }) => {
-    await openUserSettingsDialog(page, 'Account');
-    const dialog = page.getByRole('dialog');
+  test('renders the seeded admin identity', async ({ page }) => {
+    await openAccountPage(page, 'Account');
+    const main = page.getByRole('main');
 
-    await expect(dialog.getByRole('heading', { name: 'My account' })).toBeVisible();
-    await expect(dialog.getByText(ADMIN_EMAIL, { exact: false })).toBeVisible();
-    await expect(dialog.getByText(/·\s*Admin\s*·/)).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: 'My account' }),
+    ).toBeVisible();
+    await expect(main.getByText(ADMIN_EMAIL, { exact: false })).toBeVisible();
+    await expect(main.getByText(/·\s*Admin\s*·/)).toBeVisible();
   });
 
   test('Change password toggles the inline form', async ({ page }) => {
-    await openUserSettingsDialog(page, 'Account');
-    const dialog = page.getByRole('dialog');
+    await openAccountPage(page, 'Account');
+    const main = page.getByRole('main');
 
-    const currentPw = dialog.getByRole('textbox', { name: 'Current password' });
+    const currentPw = main.getByRole('textbox', { name: 'Current password' });
     await expect(currentPw).toBeHidden();
 
-    await dialog.getByRole('button', { name: 'Change password' }).click();
+    await main.getByRole('button', { name: 'Change password' }).click();
     await expect(currentPw).toBeVisible();
     await expect(
-      dialog.getByRole('textbox', { name: 'New password', exact: true }),
+      main.getByRole('textbox', { name: 'New password', exact: true }),
     ).toBeVisible();
     await expect(
-      dialog.getByRole('textbox', { name: 'Confirm new password' }),
+      main.getByRole('textbox', { name: 'Confirm new password' }),
     ).toBeVisible();
   });
 
   test('password mismatch surfaces a toast error', async ({ page }) => {
-    await openUserSettingsDialog(page, 'Account');
-    const dialog = page.getByRole('dialog');
+    await openAccountPage(page, 'Account');
+    const main = page.getByRole('main');
 
-    await dialog.getByRole('button', { name: 'Change password' }).click();
-    await dialog.getByRole('textbox', { name: 'Current password' }).fill('changeme');
-    await dialog
+    await main.getByRole('button', { name: 'Change password' }).click();
+    await main.getByRole('textbox', { name: 'Current password' }).fill('changeme');
+    await main
       .getByRole('textbox', { name: 'New password', exact: true })
       .fill('abcdefgh');
-    await dialog
+    await main
       .getByRole('textbox', { name: 'Confirm new password' })
       .fill('something-else');
-    await dialog.getByRole('button', { name: 'Update password' }).click();
+    await main.getByRole('button', { name: 'Update password' }).click();
 
     // Mismatch is shown via a sonner toast (not an inline error any more).
     await expect(page.getByText('New passwords do not match.')).toBeVisible();
   });
 
   test('wrong current password returns a server-side error', async ({ page }) => {
-    await openUserSettingsDialog(page, 'Account');
-    const dialog = page.getByRole('dialog');
+    await openAccountPage(page, 'Account');
+    const main = page.getByRole('main');
 
-    await dialog.getByRole('button', { name: 'Change password' }).click();
-    await dialog
+    await main.getByRole('button', { name: 'Change password' }).click();
+    await main
       .getByRole('textbox', { name: 'Current password' })
       .fill('definitely-not-the-password');
-    await dialog
+    await main
       .getByRole('textbox', { name: 'New password', exact: true })
       .fill('abcdefgh');
-    await dialog
+    await main
       .getByRole('textbox', { name: 'Confirm new password' })
       .fill('abcdefgh');
-    await dialog.getByRole('button', { name: 'Update password' }).click();
+    await main.getByRole('button', { name: 'Update password' }).click();
 
     await expect(page.getByText(/current password is incorrect/i)).toBeVisible();
   });
 
   test('Edit name inline flow opens the form', async ({ page }) => {
-    await openUserSettingsDialog(page, 'Account');
-    const dialog = page.getByRole('dialog');
+    await openAccountPage(page, 'Account');
+    const main = page.getByRole('main');
 
-    await dialog.getByRole('button', { name: 'Edit name' }).click();
-    await expect(dialog.getByPlaceholder('Display name')).toBeVisible();
-    await dialog.getByRole('button', { name: 'Cancel' }).click();
-    await expect(dialog.getByPlaceholder('Display name')).toBeHidden();
+    await main.getByRole('button', { name: 'Edit name' }).click();
+    await expect(main.getByPlaceholder('Display name')).toBeVisible();
+    await main.getByRole('button', { name: 'Cancel' }).click();
+    await expect(main.getByPlaceholder('Display name')).toBeHidden();
   });
 });
 
@@ -130,27 +131,27 @@ test.describe('settings · account', () => {
 
 test.describe('settings · reading preferences', () => {
   test('renders the preference controls', async ({ page }) => {
-    await openUserSettingsDialog(page, 'Reading preferences');
-    const dialog = page.getByRole('dialog');
+    await openAccountPage(page, 'Reading preferences');
+    const main = page.getByRole('main');
 
     await expect(
-      dialog.getByRole('heading', { name: 'Reading preferences' }),
+      main.getByRole('heading', { name: 'Reading preferences' }),
     ).toBeVisible();
-    await expect(dialog.getByText('Theme', { exact: true })).toBeVisible();
-    await expect(dialog.getByText('Font family', { exact: true })).toBeVisible();
-    await expect(dialog.getByText('Record reading sessions')).toBeVisible();
+    await expect(main.getByText('Theme', { exact: true })).toBeVisible();
+    await expect(main.getByText('Font family', { exact: true })).toBeVisible();
+    await expect(main.getByText('Record reading sessions')).toBeVisible();
     await expect(
-      dialog.getByText('Two-page layout on wide screens'),
+      main.getByText('Two-page layout on wide screens'),
     ).toBeVisible();
   });
 
   test('changing the theme persists to localStorage', async ({ page }) => {
-    await openUserSettingsDialog(page, 'Reading preferences');
-    const dialog = page.getByRole('dialog');
+    await openAccountPage(page, 'Reading preferences');
+    const main = page.getByRole('main');
 
     // Theme control is a shadcn Select (combobox). The Theme Field is
     // the first combobox in the panel.
-    await dialog.getByRole('combobox').first().click();
+    await main.getByRole('combobox').first().click();
     await page.getByRole('option', { name: 'Sepia' }).click();
 
     const raw = await page.evaluate(() =>
@@ -203,37 +204,37 @@ test.describe('settings · metadata providers', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Device sync (moved to UserSettingsDialog)
+// Device sync (moved to /account route)
 // ---------------------------------------------------------------------------
 
 test.describe('settings · device sync', () => {
   test('renders OPDS URL and the Add device action', async ({ page }) => {
-    await openUserSettingsDialog(page, 'Device sync');
-    const dialog = page.getByRole('dialog');
+    await openAccountPage(page, 'Device sync');
+    const main = page.getByRole('main');
 
     await expect(
-      dialog.getByRole('heading', { name: 'Device sync' }),
+      main.getByRole('heading', { name: 'Device sync' }),
     ).toBeVisible();
-    await expect(dialog.getByRole('button', { name: /Add device/ })).toBeVisible();
+    await expect(main.getByRole('button', { name: /Add device/ })).toBeVisible();
 
     // First textbox in the pane is the read-only OPDS URL field.
-    const opdsInput = dialog.getByRole('textbox').first();
+    const opdsInput = main.getByRole('textbox').first();
     await expect(opdsInput).toHaveValue(/\/opds$/);
   });
 
   test('Add device opens the reMarkable pairing form', async ({ page }) => {
-    await openUserSettingsDialog(page, 'Device sync');
-    const dialog = page.getByRole('dialog');
+    await openAccountPage(page, 'Device sync');
+    const main = page.getByRole('main');
 
-    await dialog.getByRole('button', { name: /Add device/ }).click();
+    await main.getByRole('button', { name: /Add device/ }).click();
 
-    await expect(dialog.getByText(/Add reMarkable Paper Pro/)).toBeVisible();
-    await expect(dialog.getByLabel('One-time code')).toBeVisible();
-    const pairBtn = dialog.getByRole('button', { name: 'Pair device' });
+    await expect(main.getByText(/Add reMarkable Paper Pro/)).toBeVisible();
+    await expect(main.getByLabel('One-time code')).toBeVisible();
+    const pairBtn = main.getByRole('button', { name: 'Pair device' });
     await expect(pairBtn).toBeDisabled();
 
-    await dialog.getByRole('button', { name: 'Cancel' }).click();
-    await expect(dialog.getByLabel('One-time code')).toBeHidden();
+    await main.getByRole('button', { name: 'Cancel' }).click();
+    await expect(main.getByLabel('One-time code')).toBeHidden();
   });
 });
 

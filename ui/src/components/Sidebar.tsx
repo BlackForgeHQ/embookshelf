@@ -4,7 +4,6 @@ import { Link, useRouterState } from "@tanstack/react-router"
 
 import { Icon } from "./Icon"
 import { RuleEditor } from "./RuleEditor"
-import { useUserSettingsDialog } from "./UserSettingsDialog"
 import type { ShelfAccent } from "./AccentPicker"
 import type { IconName } from "./Icon"
 import type { ReactNode } from "react"
@@ -24,14 +23,6 @@ import { fetchMe, meQueryKey } from "@/api/auth"
 import { useLogout } from "@/hooks/useLogout"
 import { useShelfDraftDialog } from "@/components/ShelfDraftProvider"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import {
   Sidebar,
   SidebarContent,
@@ -398,12 +389,11 @@ type UserBadgeProps = {
   loggingOut: boolean
 }
 
-// UserBadge is a single dropdown trigger wrapping the user row (avatar +
-// name/email) in the sidebar footer. The menu exposes "Account" (opens
-// the per-user settings dialog) and "Sign out". No separate /settings
-// route — preferences live entirely in the dialog now.
+// UserBadge renders two adjacent footer affordances: the user row
+// (avatar + name/email) is a Link to /account, and a separate icon
+// button signs the user out. Per-user preferences live on the /account
+// route; admin-wide settings remain at /settings.
 function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
-  const { open: openUserSettings } = useUserSettingsDialog()
   // Skip rendering until /me resolves — the beforeLoad guard in _app.tsx
   // ensures a session exists by the time this component mounts, so the
   // null window is brief and avoids flashing fake identity details.
@@ -411,79 +401,36 @@ function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
   const { display, email, role, initials } = user
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 hover:bg-(--color-paper-3) focus-visible:ring-2 focus-visible:ring-(--color-accent) focus-visible:outline-none"
-          aria-label="Account menu"
-        >
-          <Avatar size="sm">
-            <AvatarFallback className="bg-(--color-editorial-accent) font-serif font-medium text-(--color-paper-0)">
-              {initials}
-            </AvatarFallback>
-          </Avatar>
-          <div className="flex-1 overflow-hidden group-data-[collapsible=icon]:hidden">
-            <div className="truncate text-[13px] leading-tight font-medium">
-              {display}
-            </div>
-            <div className="t-micro truncate text-[10px]">{email || role}</div>
-          </div>
-          <Icon
-            name="more"
-            size={14}
-            aria-hidden
-            className="shrink-0 text-(--color-ink-3) group-data-[collapsible=icon]:hidden"
-          />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        side="right"
-        align="end"
-        sideOffset={8}
-        className="min-w-56"
+    <div className="flex w-full items-center gap-1 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:gap-1">
+      <Link
+        to="/account"
+        aria-label="My account"
+        title="My account"
+        className="flex flex-1 min-w-0 items-center gap-2.5 rounded-md px-2 py-1.5 text-left group-data-[collapsible=icon]:flex-none group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 hover:bg-(--color-paper-3) focus-visible:ring-2 focus-visible:ring-(--color-accent) focus-visible:outline-none"
       >
-        <DropdownMenuLabel>
-          <div className="flex items-center gap-2.5">
-            <Avatar size="sm">
-              <AvatarFallback className="bg-(--color-editorial-accent) font-serif font-medium text-(--color-paper-0)">
-                {initials}
-              </AvatarFallback>
-            </Avatar>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-[13px] leading-tight font-medium text-(--color-ink-1)">
-                {display}
-              </div>
-              <div className="t-micro truncate text-[10px]">
-                {email || role}
-              </div>
-            </div>
+        <Avatar size="sm">
+          <AvatarFallback className="bg-(--color-editorial-accent) font-serif font-medium text-(--color-paper-0)">
+            {initials}
+          </AvatarFallback>
+        </Avatar>
+        <div className="flex-1 overflow-hidden group-data-[collapsible=icon]:hidden">
+          <div className="truncate text-[13px] leading-tight font-medium">
+            {display}
           </div>
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => openUserSettings("account")}>
-          <Icon name="user" size={13} />
-          Account
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => openUserSettings("reading")}>
-          <Icon name="book-open" size={13} />
-          Reading preferences
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => openUserSettings("devices")}>
-          <Icon name="device" size={13} />
-          Device sync
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          variant="destructive"
-          disabled={loggingOut}
-          onSelect={() => onLogout()}
-        >
-          <Icon name="arrow-right" size={13} />
-          {loggingOut ? "Signing out…" : "Sign out"}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+          <div className="t-micro truncate text-[10px]">{email || role}</div>
+        </div>
+      </Link>
+      <button
+        type="button"
+        onClick={() => onLogout()}
+        disabled={loggingOut}
+        aria-label={loggingOut ? "Signing out" : "Sign out"}
+        title={loggingOut ? "Signing out…" : "Sign out"}
+        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-(--color-ink-3) hover:bg-(--color-paper-3) hover:text-(--color-ink-1) focus-visible:ring-2 focus-visible:ring-(--color-accent) focus-visible:outline-none disabled:opacity-50"
+      >
+        <Icon name="arrow-right" size={14} />
+      </button>
+    </div>
   )
 }
 

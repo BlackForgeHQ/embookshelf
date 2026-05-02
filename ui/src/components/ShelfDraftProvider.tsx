@@ -26,8 +26,8 @@ export function useShelfDraftDialog(): ShelfDraftDialogContextValue {
 
 /**
  * Hosts the "create a regular shelf" dialog and exposes `open()` via
- * context. Mirrors UserSettingsDialogProvider so the sidebar header
- * button and the command palette can both trigger it.
+ * context so the sidebar header button and the command palette can both
+ * trigger it without threading props through the tree.
  */
 export function ShelfDraftProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()

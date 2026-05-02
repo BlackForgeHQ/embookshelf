@@ -19,6 +19,7 @@ import { Route as AppSettingsRouteImport } from './routes/_app.settings'
 import { Route as AppNotebookRouteImport } from './routes/_app.notebook'
 import { Route as AppLibraryRouteImport } from './routes/_app.library'
 import { Route as AppBookdropRouteImport } from './routes/_app.bookdrop'
+import { Route as AppAccountRouteImport } from './routes/_app.account'
 import { Route as AppBookIdRouteImport } from './routes/_app.book.$id'
 import { Route as AppBookIdFindRouteImport } from './routes/_app.book.$id_.find'
 import { Route as AppBookIdEditRouteImport } from './routes/_app.book.$id_.edit'
@@ -72,6 +73,11 @@ const AppBookdropRoute = AppBookdropRouteImport.update({
   path: '/bookdrop',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAccountRoute = AppAccountRouteImport.update({
+  id: '/account',
+  path: '/account',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppBookIdRoute = AppBookIdRouteImport.update({
   id: '/book/$id',
   path: '/book/$id',
@@ -91,6 +97,7 @@ const AppBookIdEditRoute = AppBookIdEditRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof LoginRouteWithChildren
+  '/account': typeof AppAccountRoute
   '/bookdrop': typeof AppBookdropRoute
   '/library': typeof AppLibraryRoute
   '/notebook': typeof AppNotebookRoute
@@ -104,6 +111,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRouteWithChildren
+  '/account': typeof AppAccountRoute
   '/bookdrop': typeof AppBookdropRoute
   '/library': typeof AppLibraryRoute
   '/notebook': typeof AppNotebookRoute
@@ -120,6 +128,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRouteWithChildren
+  '/_app/account': typeof AppAccountRoute
   '/_app/bookdrop': typeof AppBookdropRoute
   '/_app/library': typeof AppLibraryRoute
   '/_app/notebook': typeof AppNotebookRoute
@@ -137,6 +146,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/login'
+    | '/account'
     | '/bookdrop'
     | '/library'
     | '/notebook'
@@ -150,6 +160,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
+    | '/account'
     | '/bookdrop'
     | '/library'
     | '/notebook'
@@ -165,6 +176,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_app'
     | '/login'
+    | '/_app/account'
     | '/_app/bookdrop'
     | '/_app/library'
     | '/_app/notebook'
@@ -256,6 +268,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppBookdropRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/account': {
+      id: '/_app/account'
+      path: '/account'
+      fullPath: '/account'
+      preLoaderRoute: typeof AppAccountRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/book/$id': {
       id: '/_app/book/$id'
       path: '/book/$id'
@@ -281,6 +300,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppRouteChildren {
+  AppAccountRoute: typeof AppAccountRoute
   AppBookdropRoute: typeof AppBookdropRoute
   AppLibraryRoute: typeof AppLibraryRoute
   AppNotebookRoute: typeof AppNotebookRoute
@@ -293,6 +313,7 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppAccountRoute: AppAccountRoute,
   AppBookdropRoute: AppBookdropRoute,
   AppLibraryRoute: AppLibraryRoute,
   AppNotebookRoute: AppNotebookRoute,
