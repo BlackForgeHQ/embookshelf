@@ -3,6 +3,8 @@ package service_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/config"
@@ -26,20 +28,25 @@ func newLibSvc(t *testing.T, dialect string, deps service.LibraryServiceDeps) *s
 }
 
 // TestLibraryService_Create_local verifies that creating a local library
-// sets path + nil BackendID, and that kind="" defaults to local.
+// derives its path under DataPath, mkdirs it, and sets a nil BackendID.
 func TestLibraryService_Create_local(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "postgres"} {
 		dialect := dialect
 		t.Run(dialect, func(t *testing.T) {
-			svc := newLibSvc(t, dialect, service.LibraryServiceDeps{})
+			dataPath := t.TempDir()
+			svc := newLibSvc(t, dialect, service.LibraryServiceDeps{DataPath: dataPath})
 			ctx := context.Background()
 
-			lib, err := svc.Create(ctx, "My Fiction", service.LibraryKindLocal, "/tmp/fiction")
+			lib, err := svc.Create(ctx, "My Fiction", service.LibraryKindLocal)
 			if err != nil {
 				t.Fatalf("Create local: %v", err)
 			}
-			if lib.Path != "/tmp/fiction" {
-				t.Errorf("Path=%q want /tmp/fiction", lib.Path)
+			want := filepath.Join(dataPath, "libraries", "my-fiction")
+			if lib.Path != want {
+				t.Errorf("Path=%q want %q", lib.Path, want)
+			}
+			if _, err := os.Stat(lib.Path); err != nil {
+				t.Errorf("library dir not created: %v", err)
 			}
 			if lib.BackendID != nil {
 				t.Errorf("BackendID should be nil for local library, got %v", lib.BackendID)
@@ -56,15 +63,38 @@ func TestLibraryService_Create_emptyKind(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "postgres"} {
 		dialect := dialect
 		t.Run(dialect, func(t *testing.T) {
-			svc := newLibSvc(t, dialect, service.LibraryServiceDeps{})
+			dataPath := t.TempDir()
+			svc := newLibSvc(t, dialect, service.LibraryServiceDeps{DataPath: dataPath})
 			ctx := context.Background()
 
-			lib, err := svc.Create(ctx, "Classics", "", "/tmp/classics")
+			lib, err := svc.Create(ctx, "Classics", "")
 			if err != nil {
 				t.Fatalf("Create empty kind: %v", err)
 			}
 			if lib.BackendID != nil {
 				t.Errorf("BackendID should be nil for default (local) library, got %v", lib.BackendID)
+			}
+			want := filepath.Join(dataPath, "libraries", "classics")
+			if lib.Path != want {
+				t.Errorf("Path=%q want %q", lib.Path, want)
+			}
+			if _, err := os.Stat(lib.Path); err != nil {
+				t.Errorf("library dir not created: %v", err)
+			}
+		})
+	}
+}
+
+// TestLibraryService_Create_LocalRequiresDataPath verifies that creating
+// a local library without DataPath configured returns
+// ErrDataPathNotConfigured.
+func TestLibraryService_Create_LocalRequiresDataPath(t *testing.T) {
+	for _, dialect := range []string{"sqlite"} {
+		t.Run(dialect, func(t *testing.T) {
+			svc := newLibSvc(t, dialect, service.LibraryServiceDeps{}) // DataPath empty
+			_, err := svc.Create(context.Background(), "Test", service.LibraryKindLocal)
+			if !errors.Is(err, service.ErrDataPathNotConfigured) {
+				t.Errorf("err=%v want ErrDataPathNotConfigured", err)
 			}
 		})
 	}
@@ -79,7 +109,7 @@ func TestLibraryService_Create_s3_notConfigured(t *testing.T) {
 	})
 	ctx := context.Background()
 
-	_, err := svc.Create(ctx, "S3 Lib", service.LibraryKindS3, "")
+	_, err := svc.Create(ctx, "S3 Lib", service.LibraryKindS3)
 	if !errors.Is(err, service.ErrS3NotConfigured) {
 		t.Fatalf("got err=%v, want ErrS3NotConfigured", err)
 	}
@@ -93,7 +123,7 @@ func TestLibraryService_Create_s3_sqliteGuard(t *testing.T) {
 	})
 	ctx := context.Background()
 
-	_, err := svc.Create(ctx, "S3 Lib", service.LibraryKindS3, "")
+	_, err := svc.Create(ctx, "S3 Lib", service.LibraryKindS3)
 	if err == nil {
 		t.Fatal("expected error creating s3 library on SQLite, got nil")
 	}
@@ -111,7 +141,7 @@ func TestLibraryService_Create_s3_configured(t *testing.T) {
 	})
 	ctx := context.Background()
 
-	lib, err := svc.Create(ctx, "Sci Fi", service.LibraryKindS3, "")
+	lib, err := svc.Create(ctx, "Sci Fi", service.LibraryKindS3)
 	if err != nil {
 		t.Fatalf("Create s3: %v", err)
 	}
@@ -133,7 +163,7 @@ func TestLibraryService_Create_unknownKind(t *testing.T) {
 	svc := newLibSvc(t, "sqlite", service.LibraryServiceDeps{})
 	ctx := context.Background()
 
-	_, err := svc.Create(ctx, "Bad Kind", "nfs", "/tmp/bad")
+	_, err := svc.Create(ctx, "Bad Kind", "nfs")
 	if err == nil {
 		t.Fatal("expected error for unknown kind, got nil")
 	}

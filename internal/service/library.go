@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/blackforge/embookshelf/internal/config"
@@ -26,6 +28,10 @@ const (
 // EMBOOKSHELF_S3_BUCKET is not set in the environment.
 var ErrS3NotConfigured = errors.New("s3 libraries require EMBOOKSHELF_S3_BUCKET to be set")
 
+// ErrDataPathNotConfigured is returned when the caller requests
+// kind=local but cfg.DataPath is empty in deps.
+var ErrDataPathNotConfigured = errors.New("local libraries require DATA_PATH to be set")
+
 // LibraryServiceDeps groups the optional deps the service needs beyond its
 // repo. Used to keep the constructor stable across callers.
 type LibraryServiceDeps struct {
@@ -38,6 +44,11 @@ type LibraryServiceDeps struct {
 	// library creation on SQLite installs where storageloader refuses to
 	// build s3 backends.
 	Dialect config.Dialect
+	// DataPath is the root under which managed local-library folders
+	// live. Per ADR 0002, kind=local libraries derive their filesystem
+	// path as `${DataPath}/libraries/{slug}/`. Required for local
+	// library creation; empty DataPath returns ErrDataPathNotConfigured.
+	DataPath string
 }
 
 type LibraryService struct {
@@ -66,19 +77,26 @@ func (s *LibraryService) List(ctx context.Context) ([]model.Library, error) {
 
 // Create inserts a new library. Kind selects the storage flavour:
 //
-//   - local (or ""): path is required, names a filesystem directory. No
-//     backend row is created; backend_id stays NULL and the loader falls
-//     back to the LocalFS-at-/ default.
-//   - s3: path is ignored; the service derives prefix = libraries/{slug}/,
-//     INSERTs a storage_backends row from cfg.SharedS3, and points the
-//     library at that backend.
-func (s *LibraryService) Create(ctx context.Context, name string, kind LibraryKind, path string) (model.Library, error) {
+//   - local (or ""): the service derives path = ${DataPath}/libraries/{slug}/
+//     and mkdirs it. No backend row is created; backend_id stays NULL and
+//     the loader falls back to the LocalFS-at-/ default. Returns
+//     ErrDataPathNotConfigured when DataPath is empty.
+//   - s3: the service derives prefix = libraries/{slug}/, INSERTs a
+//     storage_backends row from cfg.SharedS3, and points the library at
+//     that backend.
+func (s *LibraryService) Create(ctx context.Context, name string, kind LibraryKind) (model.Library, error) {
 	name = strings.TrimSpace(name)
 	slug := slugify(name)
 
 	switch kind {
 	case "", LibraryKindLocal:
-		path = strings.TrimRight(strings.TrimSpace(path), "/")
+		if s.deps.DataPath == "" {
+			return model.Library{}, ErrDataPathNotConfigured
+		}
+		path := filepath.Join(s.deps.DataPath, "libraries", slug)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			return model.Library{}, fmt.Errorf("create library directory: %w", err)
+		}
 		return s.repo.CreateLibrary(ctx, name, slug, path, nil)
 
 	case LibraryKindS3:
