@@ -19,15 +19,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # Mint a short-lived GitHub App installation token. release-please
+      # uses this token to push the release commit + tag; tags pushed
+      # with this token fire downstream workflows (image.yml) the way
+      # human pushes do. The default GITHUB_TOKEN is silenced by
+      # GitHub's anti-recursion rule, so image builds never start on
+      # new tags when release-please uses it. Skips silently when the
+      # vars/secrets are unset so the workflow keeps running on a fresh
+      # clone or fork.
+      - name: Mint GitHub App installation token
+        id: app-token
+        if: vars.RELEASE_PLEASE_APP_ID != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+
       - uses: googleapis/release-please-action@v5
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          # PAT (or GitHub App token) is required so the tag push that
-          # release-please performs fires downstream workflows
-          # (image.yml). Tags pushed with the default GITHUB_TOKEN are
-          # silenced by GitHub's anti-recursion rule, so image builds
-          # for new versions never start. Falls back to GITHUB_TOKEN if
-          # the secret is unset, which keeps release-please functional
-          # but again skips the tag-triggered image build.
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          # App-token first; falls back to GITHUB_TOKEN when the App
+          # isn't configured. Without the App, image.yml will not run
+          # on tag push (anti-recursion); use a manual
+          # `gh workflow run image.yml --ref vX.Y.Z` if needed.
+          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
