@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.4](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.3...v0.4.4) (2026-05-02)
+
+
+### Features
+
+* **account:** UI for multi-provider OIDC linking (PR-2) ([187d162](https://github.com/BlackForgeHQ/embookshelf/commit/187d162a6e0b5e4043c84ea7812a52cea284eada))
+* **account:** user_identities table, multi-provider OIDC linking (PR-1, backend) ([#78](https://github.com/BlackForgeHQ/embookshelf/issues/78)) ([eb3d722](https://github.com/BlackForgeHQ/embookshelf/commit/eb3d722f96b712ee8099c3ac84f65f91932572d5))
+
 ## [0.4.3](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.2...v0.4.3) (2026-05-02)
 
 
