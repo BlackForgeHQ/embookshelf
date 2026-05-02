@@ -1,14 +1,18 @@
 // Package s3 implements storage.Storage against an S3-compatible
 // object store (AWS S3, minio, Cloudflare R2, Backblaze B2, Wasabi).
-// Bucket versioning is required at construction time per spec §3.2.
-// Server-side encryption is checked as a best-effort (soft fail for
-// compat backends that don't expose GetBucketEncryption).
+// Bucket versioning is probed at construction time and surfaced as a
+// warning when disabled (spec §3 treats versioning as orthogonal — the
+// app never reads VersionID at runtime, so it's recovery hygiene, not
+// a correctness requirement). Server-side encryption is checked as a
+// best-effort (soft fail for compat backends that don't expose
+// GetBucketEncryption).
 package s3
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -109,8 +113,13 @@ func (b *Backend) Prefix() string { return b.prefix }
 // Client returns the underlying S3 client, e.g. for PutObjectTagging.
 func (b *Backend) Client() *s3.Client { return b.cli }
 
-// validateBucket calls GetBucketVersioning + GetBucketEncryption and
-// fails fast when the bucket is misconfigured.
+// validateBucket probes GetBucketVersioning + GetBucketEncryption.
+// Versioning-disabled is a warning (recovery hygiene, not correctness).
+// SSE probe failure is silently swallowed for compat backends.
+//
+// Hard failure is reserved for: probe RPC error (auth/endpoint/region
+// problem the admin needs to see) and bucket-not-found (caller
+// configured the wrong bucket).
 func (b *Backend) validateBucket(ctx context.Context) error {
 	vrsn, err := b.cli.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{
 		Bucket: &b.bucket,
@@ -119,7 +128,11 @@ func (b *Backend) validateBucket(ctx context.Context) error {
 		return fmt.Errorf("s3 versioning probe: %w", err)
 	}
 	if vrsn.Status != types.BucketVersioningStatusEnabled {
-		return fmt.Errorf("s3 bucket %q must have versioning enabled", b.bucket)
+		slog.Warn("s3 bucket versioning is not enabled — accidental "+
+			"overwrites and deletes will not be recoverable. Enable with "+
+			"`aws s3api put-bucket-versioning --bucket <name> "+
+			"--versioning-configuration Status=Enabled`.",
+			"bucket", b.bucket, "status", string(vrsn.Status))
 	}
 
 	// GetBucketEncryption is best-effort: some compat backends (minio
