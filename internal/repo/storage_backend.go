@@ -105,6 +105,37 @@ func (r *StorageBackendRepo) List(ctx context.Context) ([]model.StorageBackend, 
 	return out, rows.Err()
 }
 
+// UpdateConfig overwrites the config JSONB for a backend row. Used by
+// the boot-time shared-S3 reconciler to push current env-derived values
+// into pre-existing rows whose config drifted (e.g. endpoint changed).
+func (r *StorageBackendRepo) UpdateConfig(ctx context.Context, id string, config map[string]any) error {
+	cfgJSON, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+	const qPG = `UPDATE storage_backends SET config = $2::jsonb WHERE id = $1`
+	const qSQLite = `UPDATE storage_backends SET config = ? WHERE id = ?`
+	var args []any
+	switch r.db.Dialect {
+	case db.DialectSQLite:
+		args = []any{string(cfgJSON), id}
+	default:
+		args = []any{id, string(cfgJSON)}
+	}
+	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), args...)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // Delete removes the backend. Returns ErrStorageBackendInUse when any
 // library still references it (FK ON DELETE RESTRICT).
 func (r *StorageBackendRepo) Delete(ctx context.Context, id string) error {

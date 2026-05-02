@@ -109,6 +109,65 @@ func buildBackend(ctx context.Context, row model.StorageBackend) (storage.Storag
 	}
 }
 
+// ReconcileSharedS3 walks every kind=s3 storage_backends row and rewrites
+// the bucket-level connection fields (bucket, region, endpoint,
+// access_key_id, secret_access_key, force_path_style) from the
+// EMBOOKSHELF_S3_* env values. The per-library `prefix` is preserved so
+// each backend keeps pointing at its own slice of the bucket.
+//
+// Skips when SharedS3 isn't configured (no env values to push) so empty
+// env doesn't blow away a manually-edited row. A row whose config
+// already matches is left untouched to avoid pointless writes.
+//
+// Called once at boot, before LoadStorageBackends, so the loader sees
+// the fresh values.
+func ReconcileSharedS3(ctx context.Context, backendRepo *repo.StorageBackendRepo, shared config.SharedS3Config) (int, error) {
+	if !shared.Configured() {
+		return 0, nil
+	}
+	rows, err := backendRepo.List(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("list storage backends: %w", err)
+	}
+	updated := 0
+	for _, row := range rows {
+		if row.Kind != "s3" {
+			continue
+		}
+		prefix, _ := row.Config["prefix"].(string)
+		desired := map[string]any{
+			"bucket":            shared.Bucket,
+			"region":            shared.Region,
+			"endpoint":          shared.Endpoint,
+			"prefix":            prefix,
+			"access_key_id":     shared.AccessKeyID,
+			"secret_access_key": shared.SecretAccessKey,
+			"force_path_style":  shared.ForcePathStyle,
+		}
+		if configsEqual(row.Config, desired) {
+			continue
+		}
+		if err := backendRepo.UpdateConfig(ctx, row.ID, desired); err != nil {
+			return updated, fmt.Errorf("update backend %s: %w", row.ID, err)
+		}
+		updated++
+	}
+	return updated, nil
+}
+
+// configsEqual compares two backend config maps on the keys
+// ReconcileSharedS3 manages. Other keys are ignored — a future caller
+// that adds extra config (e.g. SSE algorithm) can extend this.
+func configsEqual(a, b map[string]any) bool {
+	keys := []string{"bucket", "region", "endpoint", "prefix", "access_key_id", "secret_access_key", "force_path_style"}
+	for _, k := range keys {
+		if a[k] != b[k] {
+			return false
+		}
+	}
+	return true
+}
+
 // s3ConfigFromRow extracts S3 connection parameters from the
 // storage_backends.config JSONB field (arrived as map[string]any).
 func s3ConfigFromRow(row model.StorageBackend) (s3backend.Config, error) {

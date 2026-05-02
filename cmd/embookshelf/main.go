@@ -117,9 +117,17 @@ func main() {
 		}
 	}
 
+	bootBackendRepo := repo.NewStorageBackendRepo(dbh)
+	if n, err := storageloader.ReconcileSharedS3(ctx, bootBackendRepo, cfg.SharedS3); err != nil {
+		slog.Error("reconcile shared s3 backends", "err", err)
+		os.Exit(1)
+	} else if n > 0 {
+		slog.Info("storage backends reconciled from env", "updated", n)
+	}
+
 	storageResolver, err := storageloader.LoadStorageBackends(
 		ctx,
-		repo.NewStorageBackendRepo(dbh),
+		bootBackendRepo,
 		config.Dialect(string(dbh.Dialect)),
 	)
 	if err != nil {

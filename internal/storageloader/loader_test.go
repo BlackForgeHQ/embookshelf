@@ -97,6 +97,106 @@ func TestLoadStorageBackends_LocalIgnoresConfigRoot(t *testing.T) {
 	}
 }
 
+// TestReconcileSharedS3 verifies env-derived S3 fields are pushed into
+// pre-existing rows while preserving per-library prefix.
+func TestReconcileSharedS3(t *testing.T) {
+	t.Setenv("REPOTEST_DIALECT", "sqlite")
+	d := repotest.New(t)
+	backendRepo := repo.NewStorageBackendRepo(d)
+	ctx := context.Background()
+
+	row, err := backendRepo.Create(ctx, "s3", map[string]any{
+		"bucket":            "old-bucket",
+		"region":            "us-east-1",
+		"endpoint":          "fsn1.your-objectstorage.com",
+		"prefix":            "libraries/main/",
+		"access_key_id":     "OLDKEY",
+		"secret_access_key": "OLDSECRET",
+		"force_path_style":  false,
+	})
+	if err != nil {
+		t.Fatalf("create row: %v", err)
+	}
+
+	shared := config.SharedS3Config{
+		Bucket:          "new-bucket",
+		Region:          "eu-central-1",
+		Endpoint:        "https://fsn1.your-objectstorage.com",
+		AccessKeyID:     "NEWKEY",
+		SecretAccessKey: "NEWSECRET",
+		ForcePathStyle:  true,
+	}
+	n, err := storageloader.ReconcileSharedS3(ctx, backendRepo, shared)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("updated=%d want 1", n)
+	}
+	got, err := backendRepo.Get(ctx, row.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Config["bucket"] != "new-bucket" {
+		t.Errorf("bucket=%v want new-bucket", got.Config["bucket"])
+	}
+	if got.Config["endpoint"] != "https://fsn1.your-objectstorage.com" {
+		t.Errorf("endpoint=%v want scheme-prefixed", got.Config["endpoint"])
+	}
+	if got.Config["prefix"] != "libraries/main/" {
+		t.Errorf("prefix=%v want libraries/main/ (must be preserved)", got.Config["prefix"])
+	}
+	if got.Config["access_key_id"] != "NEWKEY" {
+		t.Errorf("access_key_id=%v want NEWKEY", got.Config["access_key_id"])
+	}
+	if got.Config["force_path_style"] != true {
+		t.Errorf("force_path_style=%v want true", got.Config["force_path_style"])
+	}
+
+	// Second reconcile is a no-op when nothing changed.
+	n2, err := storageloader.ReconcileSharedS3(ctx, backendRepo, shared)
+	if err != nil {
+		t.Fatalf("reconcile-2: %v", err)
+	}
+	if n2 != 0 {
+		t.Errorf("second pass updated=%d want 0", n2)
+	}
+}
+
+// TestReconcileSharedS3_Unconfigured ensures empty env doesn't wipe rows.
+func TestReconcileSharedS3_Unconfigured(t *testing.T) {
+	t.Setenv("REPOTEST_DIALECT", "sqlite")
+	d := repotest.New(t)
+	backendRepo := repo.NewStorageBackendRepo(d)
+	ctx := context.Background()
+
+	row, err := backendRepo.Create(ctx, "s3", map[string]any{
+		"bucket":            "kept",
+		"endpoint":          "kept.example.com",
+		"prefix":            "libraries/x/",
+		"access_key_id":     "K",
+		"secret_access_key": "S",
+	})
+	if err != nil {
+		t.Fatalf("create row: %v", err)
+	}
+
+	n, err := storageloader.ReconcileSharedS3(ctx, backendRepo, config.SharedS3Config{})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("updated=%d want 0 when env unconfigured", n)
+	}
+	got, err := backendRepo.Get(ctx, row.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Config["bucket"] != "kept" {
+		t.Errorf("bucket=%v want kept (must not be wiped)", got.Config["bucket"])
+	}
+}
+
 // TestLoadStorageBackends_SQLiteWithS3Errors verifies that having an S3 row
 // with SQLite dialect returns an error (either "switch to Postgres" or a
 // connection error — both mean the combination is rejected).
