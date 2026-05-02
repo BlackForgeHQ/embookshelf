@@ -13,7 +13,6 @@ import {
   deleteLibrary,
   fetchAppConfig,
   fetchSettingsLibraries,
-  prescanLibraryPaths,
   rescanLibrary,
   settingsLibrariesQueryKey,
 } from "@/api/settings"
@@ -33,6 +32,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { slugify } from "@/lib/utils"
 
 export function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
   const queryClient = useQueryClient()
@@ -140,24 +140,6 @@ type LibraryCreatorDialogProps = {
   onCreated: () => void
 }
 
-// slugify mirrors the Go service implementation so the prefix preview is
-// consistent with what the server will derive.
-function slugify(name: string): string {
-  const lower = name.toLowerCase()
-  let slug = ""
-  let dash = true
-  for (const ch of lower) {
-    if (/[a-z0-9]/.test(ch)) {
-      slug += ch
-      dash = false
-    } else if (!dash) {
-      slug += "-"
-      dash = true
-    }
-  }
-  return slug.replace(/^-+|-+$/g, "")
-}
-
 // Modeled after spec/library-creation.spec.md §3 + §4. Embookshelf's library
 // model is simpler than BookLore's (no icon/watch/format policy yet), so the
 // form collapses to name + kind selector + paths + an opt-in "scan immediately"
@@ -171,12 +153,7 @@ function LibraryCreatorDialog({
 }: LibraryCreatorDialogProps) {
   const [name, setName] = useState("")
   const [kind, setKind] = useState<LibraryKind>("local")
-  const [path, setPath] = useState("")
   const [scanOnCreate, setScanOnCreate] = useState(true)
-  const [prescan, setPrescan] = useState<{
-    count: number
-    forPath: string
-  } | null>(null)
 
   // Reset local state whenever the dialog closes so re-opening is a blank slate.
   useEffect(() => {
@@ -185,36 +162,26 @@ function LibraryCreatorDialog({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setName("")
     setKind("local")
-    setPath("")
     setScanOnCreate(true)
-    setPrescan(null)
   }, [open])
 
   const trimmedName = name.trim()
-  const trimmedPath = path.trim().replace(/\/+$/, "")
   const nameCollision = existingNames.some(
     (existing) => existing.toLowerCase() === trimmedName.toLowerCase()
   )
   const nameValid = trimmedName !== "" && !nameCollision
-  // path is required only for local libraries
-  const pathValid = kind === "s3" || trimmedPath !== ""
 
+  // Path is server-derived for both kinds (per ADR 0002 for local; existing
+  // convention for s3). The UI just previews the slug.
+  const slug = trimmedName !== "" ? slugify(trimmedName) : ""
   const derivedPrefix =
-    kind === "s3" && trimmedName !== ""
-      ? `libraries/${slugify(trimmedName)}/`
-      : null
-
-  const prescanMut = useMutation({
-    mutationFn: (value: string) => prescanLibraryPaths([value]),
-    onSuccess: (count, value) => setPrescan({ count, forPath: value }),
-  })
+    kind === "s3" && slug !== "" ? `libraries/${slug}/` : null
 
   const createMut = useMutation({
     mutationFn: () =>
       createLibrary({
         name: trimmedName,
         kind,
-        path: kind === "s3" ? undefined : trimmedPath,
         scan: scanOnCreate,
       }),
     onSuccess: () => {
@@ -224,11 +191,7 @@ function LibraryCreatorDialog({
     onError: (e) => toast.error((e as unknown as ApiError).message),
   })
 
-  // Prescan is valid only for the exact path the user is looking at.
-  // Edits invalidate the count so they'll need to re-click "Count files".
-  const prescanFresh = prescan !== null && prescan.forPath === trimmedPath
-
-  const submitDisabled = !nameValid || !pathValid || createMut.isPending
+  const submitDisabled = !nameValid || createMut.isPending
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -326,66 +289,22 @@ function LibraryCreatorDialog({
           </div>
 
           {kind === "local" ? (
-            <>
-              <div>
-                <Label
-                  htmlFor="lib-path"
-                  style={{ display: "block", marginBottom: 6 }}
-                >
-                  Folder
-                </Label>
-                <Input
-                  id="lib-path"
-                  value={path}
-                  onChange={(e) => {
-                    setPath(e.target.value)
-                    setPrescan(null)
-                  }}
-                  placeholder="/absolute/path/to/books"
-                  className="mono text-[12.5px]"
-                />
-                <div
-                  className="text-[10px] uppercase tracking-wider text-muted-foreground"
-                  style={{ marginTop: 6, fontStyle: "italic" }}
-                >
-                  This folder is fixed once the library is created and cannot be
-                  changed later.
-                </div>
+            <div>
+              <Label style={{ display: "block", marginBottom: 6 }}>
+                Folder (auto-derived)
+              </Label>
+              <p className="t-small italic text-(--color-ink-3)">
+                Will be created at{" "}
+                <span className="mono">{`(data path)/libraries/${slug || "<slug>"}/`}</span>
+              </p>
+              <div
+                className="text-[10px] uppercase tracking-wider text-muted-foreground"
+                style={{ marginTop: 6, fontStyle: "italic" }}
+              >
+                The folder is created under the configured DATA_PATH and cannot
+                be changed later. See ADR 0002 (managed local library folders).
               </div>
-
-              {pathValid && trimmedPath !== "" && (
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 12,
-                    padding: "10px 12px",
-                    border: "1px dashed var(--color-rule-soft)",
-                    borderRadius: 2,
-                  }}
-                >
-                  <div className="grow">
-                    <div className="t-small" style={{ fontWeight: 500 }}>
-                      Pre-create scan
-                    </div>
-                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground" style={{ fontStyle: "italic" }}>
-                      {prescanFresh
-                        ? `${prescan.count.toLocaleString()} supported file${prescan.count === 1 ? "" : "s"} found`
-                        : "Counts files before creation so you can spot typos."}
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => prescanMut.mutate(trimmedPath)}
-                    disabled={prescanMut.isPending}
-                  >
-                    {prescanMut.isPending ? "Counting…" : "Count files"}
-                  </Button>
-                </div>
-              )}
-            </>
+            </div>
           ) : (
             <div>
               <Label style={{ display: "block", marginBottom: 6 }}>

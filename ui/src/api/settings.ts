@@ -25,19 +25,19 @@ export type LibraryKind = "local" | "s3"
 
 export type CreateLibraryInput = {
   name: string
-  kind: LibraryKind
-  path?: string // required for kind='local'; omitted for 's3'
+  kind: LibraryKind // 'local' | 's3'
   scan?: boolean
 }
 
 export async function createLibrary(
   input: CreateLibraryInput
 ): Promise<SettingsLibrary> {
+  const { name, kind, scan } = input
   const { library } = await api<{ library: SettingsLibrary }>(
     "/api/v1/settings/libraries",
     {
       method: "POST",
-      body: JSON.stringify(input),
+      body: JSON.stringify({ name, kind, scan }),
     }
   )
   return library
