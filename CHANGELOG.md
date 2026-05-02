@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.2...v0.4.3) (2026-05-02)
+
+
+### Features
+
+* **release:** add production build target to Makefile ([1ac1105](https://github.com/BlackForgeHQ/embookshelf/commit/1ac1105c8276ff5edd37b33d4a4fe9b9fcf838ad))
+
 ## [0.4.2](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.1...v0.4.2) (2026-05-02)
 
 
