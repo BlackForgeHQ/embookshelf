@@ -137,6 +137,7 @@ func main() {
 		SharedS3: cfg.SharedS3,
 		Resolver: storageResolver,
 		Dialect:  config.Dialect(string(dbh.Dialect)),
+		DataPath: cfg.DataPath,
 	})
 	shelfSvc := service.NewShelfService(shelfRepo)
 	searchSvc := service.NewSearchService(libRepo, bookRepo, shelfRepo)
