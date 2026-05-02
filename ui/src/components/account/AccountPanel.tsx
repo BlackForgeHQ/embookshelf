@@ -354,7 +354,7 @@ export function AccountPanel() {
         <SignInRow
           title="Local password"
           subtitle={hasPassword ? "Set" : "Not set"}
-          on={hasPassword}
+          enabled={hasPassword}
         />
         {data?.providers.map((p) => {
           // Lockout: user with no password and exactly one linked
@@ -366,7 +366,7 @@ export function AccountPanel() {
               key={p.provider}
               title={p.displayName}
               subtitle={p.linked ? (p.email ?? "Linked") : "Not connected"}
-              on={p.linked}
+              enabled={p.linked}
               action={
                 p.linked ? (
                   <Button
@@ -408,12 +408,12 @@ export function AccountPanel() {
 function SignInRow({
   title,
   subtitle,
-  on,
+  enabled,
   action,
 }: {
   title: string
   subtitle: string
-  on: boolean
+  enabled: boolean
   action?: React.ReactNode
 }) {
   return (
@@ -432,7 +432,7 @@ function SignInRow({
           width: 8,
           height: 8,
           borderRadius: "50%",
-          background: on ? "oklch(0.58 0.12 140)" : "var(--color-ink-4)",
+          background: enabled ? "oklch(0.58 0.12 140)" : "var(--color-ink-4)",
         }}
       />
       <div className="grow">
