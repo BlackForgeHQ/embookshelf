@@ -658,7 +658,7 @@ func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m p
 	}
 
 	if s.writer != nil {
-		if err := s.writer.Write(ctx, book, trigger); err != nil {
+		if _, err := s.writer.Write(ctx, book, trigger); err != nil {
 			return model.Book{}, err
 		}
 	} else {

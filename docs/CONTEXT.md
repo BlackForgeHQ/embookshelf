@@ -91,6 +91,12 @@ Read path (ingest): file embedded → OPF (if present) → JSON, each layer over
 
 **Placer** — `service.Placer`; the seam Approve uses to materialize a bookdrop file at its final library location. Two adapters: `LocalPlacer` (filesystem rename + collision-suffix under the library root) and `BackendPlacer` (stream-upload to a `Storage` then drop the local source). Returns `PlaceResult{Location, Size, Mtime}` — the values the `files` row needs. The `PlacerBuilder` factory injected at boot picks the adapter from `Library.BackendID`. Approve never branches on local-vs-S3.
 
+**MetadataWriter** — `service.MetadataWriter`; the **edit-side write pipeline** module. Owns ADR-0001's `DB → JSON sidecar → file embedded` sequence for user-driven edits only. Three triggers in scope: `manual_edit`, `apply_enrichment`, `auto_enrichment`. The other ADR-0001 §3 rows (`bookdrop approve`, `library scan re-ingest`) deliberately route around this module — for those, the file *is* the source, so a writer that rewrites the file would loop. Single entry point: `Write(ctx, book, trigger) (Outcome, error)`. Decision lives in `decideEffects` (pure); execution is a flat orchestration of three private steps (DB, sidecar, in-file embed). Stamps `files.content_hash` after a successful in-file write so the next library scan recognises its own write and skips re-extract.
+
+**Effects** — `service.Effects{DB, InFileFormat, Sidecar}`; the plan returned by `decideEffects(trigger, handle, format)`. The single place where ADR-0001 §3's two-axis (backend × trigger) matrix is encoded as code. Pure function — no I/O — so trigger/backend combinations are scenario-tested without standing up storage or repos.
+
+**Outcome** — `service.Outcome{InFileWritten, SidecarMode}`; what the executor returns alongside `error`. `SidecarMode` is decided post-hoc from `InFileWritten` per ADR-0001's `inFileWritten == false → sidecar = full mirror` rule. Outcome is consumed by tests, optionally by SSE telemetry/audit; callers that don't care can discard.
+
 ---
 
 ## Vocabulary discipline

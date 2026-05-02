@@ -242,7 +242,8 @@ func (s *LibraryService) GetBook(ctx context.Context, userID, id string) (model.
 
 func (s *LibraryService) UpdateBookMetadata(ctx context.Context, b model.Book) error {
 	if s.writer != nil {
-		return s.writer.Write(ctx, b, TriggerManualEdit)
+		_, err := s.writer.Write(ctx, b, TriggerManualEdit)
+		return err
 	}
 	return s.books.UpdateMetadata(ctx, b)
 }

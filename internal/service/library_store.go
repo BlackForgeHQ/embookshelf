@@ -57,14 +57,6 @@ func (h *LibraryHandle) SidecarKey(bookLocation string) string {
 	return sidecar.KeyFor(bookLocation)
 }
 
-// CanWriteInFile reports whether this handle's library accepts
-// in-file metadata writes. Phase 1: only local-backed libraries
-// (BackendID == nil) qualify; S3 backends skip in-file write to
-// avoid Get+Put bandwidth churn per edit.
-func (h *LibraryHandle) CanWriteInFile() bool {
-	return h.Library.BackendID == nil
-}
-
 // Relativize strips the library root from abs. Returns abs unchanged
 // when it doesn't sit under the root — defensive fallback for callers
 // that pass an already-relative location.

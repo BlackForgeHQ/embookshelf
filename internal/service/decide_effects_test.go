@@ -1,0 +1,100 @@
+package service_test
+
+import (
+	"testing"
+
+	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/storage"
+	"github.com/blackforge/embookshelf/internal/storage/local"
+)
+
+// TestDecideEffects pins ADR-0001 §3 (trigger × backend) matrix as a
+// pure function. No I/O; no fakes. The single source of truth for
+// "what fires when."
+func TestDecideEffects(t *testing.T) {
+	root := t.TempDir()
+	localFS, err := local.New(root)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+
+	backendID := "backend-s3"
+	localHandle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", BackendID: nil},
+		Storage: localFS,
+	}
+	s3Handle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib2", BackendID: &backendID},
+		Storage: localFS, // any non-nil Storage; the BackendID is what matters
+	}
+	degradedHandle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib3", BackendID: nil},
+		Storage: storage.Storage(nil),
+	}
+
+	cases := []struct {
+		name    string
+		trigger service.Trigger
+		handle  *service.LibraryHandle
+		want    service.Effects
+	}{
+		{
+			name:    "auto-enrichment with no handle is DB only",
+			trigger: service.TriggerAutoEnrichment,
+			handle:  nil,
+			want:    service.Effects{DB: true},
+		},
+		{
+			name:    "auto-enrichment ignores backend kind",
+			trigger: service.TriggerAutoEnrichment,
+			handle:  localHandle,
+			want:    service.Effects{DB: true},
+		},
+		{
+			name:    "manual edit with no handle degrades to DB only",
+			trigger: service.TriggerManualEdit,
+			handle:  nil,
+			want:    service.Effects{DB: true},
+		},
+		{
+			name:    "manual edit with degraded handle (no storage) is DB only",
+			trigger: service.TriggerManualEdit,
+			handle:  degradedHandle,
+			want:    service.Effects{DB: true},
+		},
+		{
+			name:    "manual edit on S3-backed library writes DB + sidecar (no in-file)",
+			trigger: service.TriggerManualEdit,
+			handle:  s3Handle,
+			want:    service.Effects{DB: true, Sidecar: true, InFile: false},
+		},
+		{
+			name:    "manual edit on local library writes DB + sidecar + in-file",
+			trigger: service.TriggerManualEdit,
+			handle:  localHandle,
+			want:    service.Effects{DB: true, Sidecar: true, InFile: true},
+		},
+		{
+			name:    "apply-enrichment matches manual edit on local",
+			trigger: service.TriggerApplyEnrichment,
+			handle:  localHandle,
+			want:    service.Effects{DB: true, Sidecar: true, InFile: true},
+		},
+		{
+			name:    "apply-enrichment matches manual edit on S3",
+			trigger: service.TriggerApplyEnrichment,
+			handle:  s3Handle,
+			want:    service.Effects{DB: true, Sidecar: true, InFile: false},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := service.DecideEffects(c.trigger, c.handle)
+			if got != c.want {
+				t.Errorf("DecideEffects = %+v; want %+v", got, c.want)
+			}
+		})
+	}
+}

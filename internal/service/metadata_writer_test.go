@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -70,7 +71,7 @@ func TestMetadataWriter_Write_AutoEnrichment_DBOnly(t *testing.T) {
 	books := &fakeBookWriter{}
 	mw := service.NewMetadataWriter(service.MetadataWriterDeps{Books: books})
 	book := model.Book{ID: "b1", Title: "Auto-applied"}
-	if err := mw.Write(context.Background(), book, service.TriggerAutoEnrichment); err != nil {
+	if _, err := mw.Write(context.Background(), book, service.TriggerAutoEnrichment); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	if len(books.called) != 1 {
@@ -84,7 +85,7 @@ func TestMetadataWriter_Write_AutoEnrichment_DBOnly(t *testing.T) {
 func TestMetadataWriter_Write_DBFails_ErrorReturned(t *testing.T) {
 	books := &fakeBookWriter{err: context.Canceled}
 	mw := service.NewMetadataWriter(service.MetadataWriterDeps{Books: books})
-	err := mw.Write(context.Background(), model.Book{ID: "b1"}, service.TriggerManualEdit)
+	_, err := mw.Write(context.Background(), model.Book{ID: "b1"}, service.TriggerManualEdit)
 	if err == nil {
 		t.Fatal("Write: want error, got nil")
 	}
@@ -93,8 +94,13 @@ func TestMetadataWriter_Write_DBFails_ErrorReturned(t *testing.T) {
 func TestMetadataWriter_Write_ManualEdit_FiresSidecar(t *testing.T) {
 	books := &fakeBookWriter{}
 	rec := &recordingSidecarWriter{}
+	fs, err := local.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
 	handle := &service.LibraryHandle{
 		Library: model.Library{ID: "lib1"},
+		Storage: fs,
 	}
 	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
 		Books:    books,
@@ -109,7 +115,7 @@ func TestMetadataWriter_Write_ManualEdit_FiresSidecar(t *testing.T) {
 		Format:    "PDF",
 		Tags:      []string{"sf"},
 	}
-	if err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
+	if _, err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	if len(rec.calls) != 1 {
@@ -136,33 +142,40 @@ func (f *fakeEmbedder) Embed(ctx context.Context, src storage.Source, in filepro
 	return f.out, f.err
 }
 
-func TestMetadataWriter_Write_EPUBLocal_FullPipeline(t *testing.T) {
+func TestMetadataWriter_Write_NoDispatch_FullModeSidecar(t *testing.T) {
 	books := &fakeBookWriter{}
 	rec := &recordingSidecarWriter{}
 	emb := &fakeEmbedder{out: []byte("rezipped-epub-bytes")}
+	fs, err := local.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
 	handle := &service.LibraryHandle{
 		Library: model.Library{ID: "lib1", BackendID: nil},
+		Storage: fs,
 	}
 	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
 		Books:    books,
 		LibStore: &fakeLibStore{handle: handle},
 		Sidecar:  rec,
+		// Dispatch deliberately omitted — embed step skipped, sidecar
+		// must fall back to ModeFull per ADR-0001.
 	})
 	book := model.Book{
 		ID: "b1", LibraryID: "lib1",
 		Path: "books/x.epub", Format: "EPUB", Title: "X",
 	}
-	if err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
+	if _, err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	if len(rec.calls) != 1 {
 		t.Fatalf("sidecar calls: %d want 1", len(rec.calls))
 	}
 	if rec.calls[0].Mode != sidecar.ModeFull {
-		t.Errorf("mode=%q want full (file step skipped: no Storage)", rec.calls[0].Mode)
+		t.Errorf("mode=%q want full (file step skipped: no Dispatch wired)", rec.calls[0].Mode)
 	}
 	if len(emb.embeddedFor) != 0 {
-		t.Errorf("embedder called %d times; want 0 (no Storage on handle)", len(emb.embeddedFor))
+		t.Errorf("embedder called %d times; want 0 (Dispatch nil)", len(emb.embeddedFor))
 	}
 }
 
@@ -174,7 +187,7 @@ func TestMetadataWriter_Write_AutoEnrichment_SkipsSidecar(t *testing.T) {
 		LibStore: &fakeLibStore{handle: &service.LibraryHandle{}},
 		Sidecar:  rec,
 	})
-	if err := mw.Write(context.Background(), model.Book{ID: "b1"}, service.TriggerAutoEnrichment); err != nil {
+	if _, err := mw.Write(context.Background(), model.Book{ID: "b1"}, service.TriggerAutoEnrichment); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	if len(rec.calls) != 0 {
@@ -218,7 +231,7 @@ func TestMetadataWriter_Write_EPUBLocal_SpilloverMode(t *testing.T) {
 		ID: "b1", LibraryID: "lib1",
 		Path: bookKey, Format: "EPUB", Title: "Curated",
 	}
-	if err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
+	if _, err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -268,6 +281,199 @@ func (f *fakeFileRepo) SetContentHash(ctx context.Context, fileID string, hash [
 	return f.stampErr
 }
 
+// TestMetadataWriter_Write_UnsupportedFormat_FullMirror covers the
+// "format has no in-file write target" row of ADR-0001 §3: when
+// Dispatch returns an error, in-file is skipped and the sidecar
+// must hold a full mirror.
+func TestMetadataWriter_Write_UnsupportedFormat_FullMirror(t *testing.T) {
+	books := &fakeBookWriter{}
+	rec := &recordingSidecarWriter{}
+	fs, err := local.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	handle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", BackendID: nil},
+		Storage: fs,
+	}
+	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+		Books:    books,
+		LibStore: &fakeLibStore{handle: handle},
+		Sidecar:  rec,
+		Dispatch: func(string) (fileproc.Embedder, error) { return nil, fileproc.ErrUnsupportedEmbed },
+	})
+	book := model.Book{
+		ID: "b1", LibraryID: "lib1",
+		Path: "books/x.cbz", Format: "CBZ", Title: "X",
+	}
+	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if out.InFileWritten {
+		t.Errorf("InFileWritten=true; want false (Dispatch refused)")
+	}
+	if out.SidecarMode != sidecar.ModeFull {
+		t.Errorf("SidecarMode=%q; want full (in-file skipped → full mirror)", out.SidecarMode)
+	}
+}
+
+// TestMetadataWriter_Write_EmbedFailure_FullMirror covers the
+// "in-file write attempted and failed" row of ADR-0001 §3: when
+// Embed returns an error, sidecar mode falls back to full so the
+// edit survives.
+func TestMetadataWriter_Write_EmbedFailure_FullMirror(t *testing.T) {
+	books := &fakeBookWriter{}
+	rec := &recordingSidecarWriter{}
+	fs, err := local.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	bookKey := "books/x.epub"
+	if _, err := fs.Put(context.Background(), bookKey, strings.NewReader("placeholder")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	handle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", BackendID: nil},
+		Storage: fs,
+	}
+	emb := &fakeEmbedder{err: errors.New("rezip exploded")}
+	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+		Books:    books,
+		LibStore: &fakeLibStore{handle: handle},
+		Sidecar:  rec,
+		Dispatch: func(string) (fileproc.Embedder, error) { return emb, nil },
+	})
+	book := model.Book{
+		ID: "b1", LibraryID: "lib1",
+		Path: bookKey, Format: "EPUB", Title: "X",
+	}
+	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if out.InFileWritten {
+		t.Errorf("InFileWritten=true; want false (Embed errored)")
+	}
+	if out.SidecarMode != sidecar.ModeFull {
+		t.Errorf("SidecarMode=%q; want full (embed failed → full mirror)", out.SidecarMode)
+	}
+}
+
+// TestMetadataWriter_HashStamp_MultiRow_NoFormatMatch_Skips pins
+// the deterministic rule: when a book has >1 files rows and none
+// match the just-written format, the stamp is skipped (rather than
+// silently stamping the wrong row). Schema permits N>1; today's
+// code never creates it; this test makes the future-safe behavior
+// explicit.
+func TestMetadataWriter_HashStamp_MultiRow_NoFormatMatch_Skips(t *testing.T) {
+	books := &fakeBookWriter{}
+	rec := &recordingSidecarWriter{}
+
+	root := t.TempDir()
+	fs, err := local.New(root)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	bookKey := "books/x.epub"
+	if _, err := fs.Put(context.Background(), bookKey, strings.NewReader("placeholder")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	handle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", BackendID: nil},
+	}
+	handle.Storage = fs
+
+	emb := &fakeEmbedder{out: []byte("rezipped")}
+	files := &fakeFileRepo{files: []model.File{
+		{ID: "f1", BookID: "b1", Format: "PDF"},
+		{ID: "f2", BookID: "b1", Format: "MOBI"},
+	}}
+
+	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+		Books:    books,
+		LibStore: &fakeLibStore{handle: handle},
+		Sidecar:  rec,
+		Files:    files,
+		Dispatch: func(format string) (fileproc.Embedder, error) { return emb, nil },
+	})
+
+	book := model.Book{
+		ID: "b1", LibraryID: "lib1",
+		Path: bookKey, Format: "EPUB", Title: "X",
+	}
+	if _, err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if len(files.stamped) != 0 {
+		t.Errorf("SetContentHash called %d times; want 0 (multi-row, no format match — must not guess)", len(files.stamped))
+	}
+}
+
+// TestMetadataWriter_Write_ReturnsOutcome pins the new (Outcome,
+// error) signature. Outcome carries the post-execution facts the
+// SidecarMode rule depends on (InFileWritten) and the format that
+// was actually embedded so the hash-stamp call can use it instead
+// of inferring from the book's recorded format.
+func TestMetadataWriter_Write_ReturnsOutcome_LocalEPUBSuccess(t *testing.T) {
+	books := &fakeBookWriter{}
+	rec := &recordingSidecarWriter{}
+
+	root := t.TempDir()
+	fs, err := local.New(root)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	bookKey := "books/x.epub"
+	if _, err := fs.Put(context.Background(), bookKey, strings.NewReader("placeholder")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	handle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", BackendID: nil},
+	}
+	handle.Storage = fs
+
+	emb := &fakeEmbedder{out: []byte("rezipped")}
+	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+		Books:    books,
+		LibStore: &fakeLibStore{handle: handle},
+		Sidecar:  rec,
+		Dispatch: func(format string) (fileproc.Embedder, error) { return emb, nil },
+	})
+
+	book := model.Book{
+		ID: "b1", LibraryID: "lib1",
+		Path: bookKey, Format: "EPUB", Title: "X",
+	}
+	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !out.InFileWritten {
+		t.Errorf("Outcome.InFileWritten=false; want true")
+	}
+	if out.SidecarMode != sidecar.ModeSpillover {
+		t.Errorf("Outcome.SidecarMode=%q; want spillover", out.SidecarMode)
+	}
+}
+
+func TestMetadataWriter_Write_ReturnsOutcome_AutoEnrichment(t *testing.T) {
+	books := &fakeBookWriter{}
+	mw := service.NewMetadataWriter(service.MetadataWriterDeps{Books: books})
+	out, err := mw.Write(context.Background(), model.Book{ID: "b1"}, service.TriggerAutoEnrichment)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if out.InFileWritten {
+		t.Errorf("Outcome.InFileWritten=true on auto-enrichment; want false")
+	}
+	if out.SidecarMode != "" {
+		t.Errorf("Outcome.SidecarMode=%q on auto-enrichment; want empty (sidecar skipped)", out.SidecarMode)
+	}
+}
+
 func TestMetadataWriter_HashStampAfterFileWrite(t *testing.T) {
 	books := &fakeBookWriter{}
 	rec := &recordingSidecarWriter{}
@@ -302,7 +508,7 @@ func TestMetadataWriter_HashStampAfterFileWrite(t *testing.T) {
 		ID: "b1", LibraryID: "lib1",
 		Path: bookKey, Format: "EPUB", Title: "X",
 	}
-	if err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
+	if _, err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 

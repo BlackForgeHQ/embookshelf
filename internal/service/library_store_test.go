@@ -24,22 +24,3 @@ func TestLibraryHandle_SidecarKey(t *testing.T) {
 		}
 	}
 }
-
-func TestLibraryHandle_CanWriteInFile_LocalBackend(t *testing.T) {
-	h := &service.LibraryHandle{
-		Library: model.Library{BackendID: nil},
-	}
-	if !h.CanWriteInFile() {
-		t.Error("local backend should allow in-file write")
-	}
-}
-
-func TestLibraryHandle_CanWriteInFile_S3Backend(t *testing.T) {
-	bid := "backend-1"
-	h := &service.LibraryHandle{
-		Library: model.Library{BackendID: &bid},
-	}
-	if h.CanWriteInFile() {
-		t.Error("S3-backed library must NOT allow in-file write in Phase 1")
-	}
-}
