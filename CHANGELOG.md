@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.1...v0.4.2) (2026-05-02)
+
+
+### Features
+
+* **account:** restructure user settings into dedicated account route ([73feebf](https://github.com/BlackForgeHQ/embookshelf/commit/73feebf10c3025272116c6805ce2c95456c72554))
+
 ## [0.4.1](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.0...v0.4.1) (2026-05-02)
 
 
