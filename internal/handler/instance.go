@@ -12,9 +12,15 @@ import (
 	"github.com/blackforge/embookshelf/internal/service"
 )
 
-// Version is the build-time app version. Bumped by hand; the status bar
-// and About panel both read this single source.
-const Version = "1.0.0"
+// version returns the build-time app version (set via -ldflags
+// -X main.version=...) wired through Deps. Empty falls back to "dev"
+// so local `go run` and tests stay readable.
+func (h *Handler) appVersion() string {
+	if h.version == "" {
+		return "dev"
+	}
+	return h.version
+}
 
 type instanceInfoDTO struct {
 	Version             string            `json:"version"`
@@ -144,7 +150,7 @@ func (h *Handler) AppConfig(c *gin.Context) {
 // status bar at the bottom of every page reads this.
 func (h *Handler) InstanceSummary(c *gin.Context) {
 	out := instanceSummaryDTO{
-		Version: Version,
+		Version: h.appVersion(),
 	}
 	// Counts are best-effort: a DB hiccup here shouldn't take down the
 	// status bar, so we log and render zeros rather than erroring.
@@ -186,7 +192,7 @@ func (h *Handler) InstanceInfo(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, instanceInfoDTO{
-		Version:             Version,
+		Version:             h.appVersion(),
 		GoVersion:           runtime.Version(),
 		AllowedOrigins:      h.cfg.AllowedOrigins,
 		BookDropPath:        h.cfg.BookDropPath,

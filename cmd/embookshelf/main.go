@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -38,11 +39,28 @@ import (
 	"github.com/blackforge/embookshelf/internal/telemetry"
 )
 
+// Build-time identity. Overridden via
+//
+//	-ldflags "-X main.version=$VERSION -X main.commit=$COMMIT"
+//
+// in the Dockerfile and goreleaser. Defaults keep `go run` readable.
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 func main() {
 	_ = godotenv.Load()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
+
+	// Tagged builds run gin in release mode (silences debug logs, skips
+	// trusted-proxy warnings). `go run` and dev images keep DebugMode for
+	// route logs. Explicit GIN_MODE env still wins via gin's own init.
+	if version != "dev" && os.Getenv("GIN_MODE") == "" {
+		gin.SetMode(gin.ReleaseMode)
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -372,6 +390,8 @@ func main() {
 	h := handler.New(handler.Deps{
 		Cfg:          cfg,
 		Static:       staticfs.FS,
+		Version:      version,
+		Commit:       commit,
 		Lib:          libSvc,
 		Shelf:        shelfSvc,
 		Auth:         authSvc,

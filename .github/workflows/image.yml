@@ -78,7 +78,7 @@ jobs:
           provenance: ${{ startsWith(github.ref, 'refs/tags/v') }}
           sbom: ${{ startsWith(github.ref, 'refs/tags/v') }}
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ steps.meta.outputs.version }}
             COMMIT=${{ github.sha }}
 
       # docker/metadata-action strips the leading "v" from semver tags

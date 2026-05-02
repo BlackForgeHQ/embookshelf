@@ -16,6 +16,8 @@ import (
 type Handler struct {
 	cfg          config.Config
 	static       embed.FS
+	version      string
+	commit       string
 	lib          *service.LibraryService
 	shelf        *service.ShelfService
 	auth         *service.AuthService
@@ -42,6 +44,8 @@ type Handler struct {
 type Deps struct {
 	Cfg          config.Config
 	Static       embed.FS
+	Version      string
+	Commit       string
 	Lib          *service.LibraryService
 	Shelf        *service.ShelfService
 	Auth         *service.AuthService
@@ -67,6 +71,7 @@ type Deps struct {
 func New(d Deps) *Handler {
 	return &Handler{
 		cfg: d.Cfg, static: d.Static,
+		version: d.Version, commit: d.Commit,
 		lib: d.Lib, shelf: d.Shelf, auth: d.Auth,
 		bookdrop: d.BookDrop, progress: d.Progress, enrich: d.Enrich,
 		annotations: d.Annotations, stats: d.Stats,
