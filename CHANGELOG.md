@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.3.1](https://github.com/BlackForgeHQ/embookshelf/compare/v0.3.0...v0.3.1) (2026-05-02)
+
+
+### Features
+
+* **fileproc:** buildIncrementalUpdate appends new /Info + xref + trailer ([a524fe0](https://github.com/BlackForgeHQ/embookshelf/commit/a524fe0d47af7f2e353251ea42b466d79a17bf95))
+* **fileproc:** buildInfoBody renders /Info dict; never writes /CreationDate ([bd5b8ea](https://github.com/BlackForgeHQ/embookshelf/commit/bd5b8ea5cb1f7bc91167287b37bf6e9812d5e18f))
+* **fileproc:** Embedder interface + DispatchEmbedder (EPUB only stub) ([db6a6a5](https://github.com/BlackForgeHQ/embookshelf/commit/db6a6a554bf909db9951d4ce644f018943e5fef9))
+* **fileproc:** emit Calibre-compatible series meta alongside OPF 3 belongs-to-collection ([ad53cfe](https://github.com/BlackForgeHQ/embookshelf/commit/ad53cfee1a002d5e61b163116d02ceada5ca45ed))
+* **fileproc:** encodePDFString emits UTF-16BE hex w/ BOM ([6f710a4](https://github.com/BlackForgeHQ/embookshelf/commit/6f710a459343b2017d8ee4a995cf87374576d2c8))
+* **fileproc:** EPUBEmbedder.Embed wires mutate + rezip end-to-end ([7533204](https://github.com/BlackForgeHQ/embookshelf/commit/75332042f0ce21fe6c05602d1d20ee4b99930a15))
+* **fileproc:** findInfoRef extracts existing /Info reference ([faa99a4](https://github.com/BlackForgeHQ/embookshelf/commit/faa99a4900af672e19133d54cfeacb4c09b03e6b))
+* **fileproc:** findStartxref locates trailer offset ([9b34254](https://github.com/BlackForgeHQ/embookshelf/commit/9b34254364b949b80c58d129dbe8d9fd7827810c))
+* **fileproc:** mutateOPF writes scalar metadata fields ([f8a989a](https://github.com/BlackForgeHQ/embookshelf/commit/f8a989adbd9537dfe33035d437d7fe3005b653ad))
+* **fileproc:** nextObjectNumber returns next free object slot ([985edf1](https://github.com/BlackForgeHQ/embookshelf/commit/985edf148f132ccbafe80020e6bea48a1d8e6523))
+* **fileproc:** PDFEmbedder.Embed via incremental update; register in DispatchEmbedder ([efb1590](https://github.com/BlackForgeHQ/embookshelf/commit/efb1590d11c982f40e46e57fc9487582a1826abb))
+* **fileproc:** rezipEPUB copies entries verbatim, swaps OPF + cover ([e5daebc](https://github.com/BlackForgeHQ/embookshelf/commit/e5daebc9a6ef4f332ecec99f7dccfe6db687b6d5))
+* **fileproc:** Tags/Genres dual write (embookshelf:* + dc:subject) ([1e8bc64](https://github.com/BlackForgeHQ/embookshelf/commit/1e8bc646ac952703cd1196e37f7ce2f66ba70c75))
+* **main:** wire BookRepo + MergeLocked into LibraryScanDeps ([432a29f](https://github.com/BlackForgeHQ/embookshelf/commit/432a29f4a72d8b2baa01a84898ba7e033ca2b9bc))
+* **main:** wire DataPath into LibraryServiceDeps ([339d352](https://github.com/BlackForgeHQ/embookshelf/commit/339d352fb6ecd74b7d9606437e9c5a6b01fe1298))
+* **main:** wire FileRepo into MetadataWriter for hash-stamping ([1658d8e](https://github.com/BlackForgeHQ/embookshelf/commit/1658d8e06758da7adb374ff83dbed0e14e5bc869))
+* **main:** wire MetadataWriter; inject into LibraryService + EnrichmentService ([c1c4984](https://github.com/BlackForgeHQ/embookshelf/commit/c1c4984c65a2cf904a5372752b9a88894f380a51))
+* **metadata:** implement EditableMetadata struct and related methods ([bbd859d](https://github.com/BlackForgeHQ/embookshelf/commit/bbd859da63eb72d5fd460b8b24024f4a60fc16f9))
+* **model:** EditableMetadata + Book.Editable/ApplyEditable helpers ([61dd2fa](https://github.com/BlackForgeHQ/embookshelf/commit/61dd2fac4b3766cc15ee5876f0e245d365d0ec4e))
+* **repo:** introduce BookRepo for book management ([028619a](https://github.com/BlackForgeHQ/embookshelf/commit/028619a1385fda17f7c7652bf04939ce50b261e5))
+* **service+handler:** ApplyMatch threads Trigger; AutoEnrich passes auto_enrichment ([0d0e691](https://github.com/BlackForgeHQ/embookshelf/commit/0d0e691225b811715b40777839cf943e71093d7e))
+* **service:** implement LibraryStore for library management ([adb6f47](https://github.com/BlackForgeHQ/embookshelf/commit/adb6f47442ef11ba578cde0a8272d3a9b399fe8f))
+* **service:** introduce Placer interface for bookdrop file placement ([39ebbd5](https://github.com/BlackForgeHQ/embookshelf/commit/39ebbd5efc177d9eeca8ac6a7cc407c8b70c6c41))
+* **service:** LibraryHandle.SidecarKey + CanWriteInFile helpers ([311b4be](https://github.com/BlackForgeHQ/embookshelf/commit/311b4bebe79fe940f2bdc15d754f72e1565f62ee))
+* **service:** LibraryService.UpdateBookMetadata routes via MetadataWriter when wired ([40e518b](https://github.com/BlackForgeHQ/embookshelf/commit/40e518b160668d1dbdc6ee5b2afcf3ec2e9ac0fa))
+* **service:** managed local library folders under DATA_PATH ([c40d6e2](https://github.com/BlackForgeHQ/embookshelf/commit/c40d6e259cd7300e483fe0609e5a56c3c8f268f0))
+* **service:** MergeLocked applies per-field lock-aware merge ([249ac05](https://github.com/BlackForgeHQ/embookshelf/commit/249ac0540aefb304b2f2c245c21f65b402062e90))
+* **service:** MetadataWriter file embed step + spillover-mode resolution ([0f97ea2](https://github.com/BlackForgeHQ/embookshelf/commit/0f97ea2bbbc0c701f94b4bcb1049882833d2f76a))
+* **service:** MetadataWriter hash-stamps files.content_hash after file write ([691f19b](https://github.com/BlackForgeHQ/embookshelf/commit/691f19bcade3c5909f612846052dfa3676d5d638))
+* **service:** MetadataWriter sidecar step (manual_edit + apply_enrichment) ([3b33a3a](https://github.com/BlackForgeHQ/embookshelf/commit/3b33a3aaf8eb1215d23d9052b21fa80b665e0afe))
+* **service:** MetadataWriter w/ Trigger enum; DB-only step wired ([d4a377a](https://github.com/BlackForgeHQ/embookshelf/commit/d4a377a72be4a81cf9106eb919aa97b447ae4bc2))
+* **sidecar:** add JSON envelope encoder + WriteMode constants ([f18cdfd](https://github.com/BlackForgeHQ/embookshelf/commit/f18cdfd9cff75e3d1dee6cacc4225b349dd1bab7))
+* **sidecar:** add KeyFor helper for paired sidecar filename ([3f237dc](https://github.com/BlackForgeHQ/embookshelf/commit/3f237dce24449c300e3ea494485110e35174d0a3))
+* **sidecar:** hard-cutover TOML support; drop pelletier/go-toml dep ([6c90ca9](https://github.com/BlackForgeHQ/embookshelf/commit/6c90ca9342ba29060fd6eafbb32c7ef97f9c450a))
+* **sidecar:** implement JSON sidecar cutover and embedder integration ([414ecb8](https://github.com/BlackForgeHQ/embookshelf/commit/414ecb8db5c8bd5a05d6a4fe4cf5444cb6889438))
+* **sidecar:** Read takes bookKey, derives paired JSON sidecar ([1ed85f9](https://github.com/BlackForgeHQ/embookshelf/commit/1ed85f9d0d0474a0a2be2b52ee713df597d9bc0c))
+* **sidecar:** switch Sidecar struct tags from toml to json ([7e4934a](https://github.com/BlackForgeHQ/embookshelf/commit/7e4934aa75fe212e02002ca9915bdbf153fc77b4))
+* **sidecar:** Writer.Write emits JSON envelope (mode + format args) ([7b937ef](https://github.com/BlackForgeHQ/embookshelf/commit/7b937efdd8f942def47d25bc8598bc262a2221dd))
+* **task:** library scan re-extracts + lock-aware merges on file change ([8d33989](https://github.com/BlackForgeHQ/embookshelf/commit/8d3398935c9703d4f0276f7276089f90afadb2cd))
+* **ui:** implement BookDrop redesign and enhance settings panels ([47294d7](https://github.com/BlackForgeHQ/embookshelf/commit/47294d72ed00d87c0929c0904b713beb854535cb))
+* **ui:** library create form drops path input; shows derived preview ([cb36f7c](https://github.com/BlackForgeHQ/embookshelf/commit/cb36f7cf33f2ea9c44bbb8caa78e0340c522964e))
+
+
+### Bug Fixes
+
+* **sidecar:** log malformed sidecar payloads instead of silently dropping ([f6913d8](https://github.com/BlackForgeHQ/embookshelf/commit/f6913d84eac254179ff937636b797211ad82f51b))
+* **sidecar:** wire writerVersion via debug.BuildInfo; document DecodeJSON contract ([64d5014](https://github.com/BlackForgeHQ/embookshelf/commit/64d5014130bcecdd2e27c13dff7afe4b75e98c45))
+
+
+### Documentation
+
+* document managed local-library folders (ADR 0002) ([724b0e0](https://github.com/BlackForgeHQ/embookshelf/commit/724b0e0e0aaa5d1590de60447a5b04d5d5f025dd))
+* **sidecar:** tighten readAndParse + bookdrop comments; rename test keys to .json ([aa983d2](https://github.com/BlackForgeHQ/embookshelf/commit/aa983d20234be5817d2f35dd05c8ca7d9c4d9afa))
+* **spec:** update library-creation for managed-local-folder convention ([f7b222a](https://github.com/BlackForgeHQ/embookshelf/commit/f7b222a3c13ade94980dd00ed590a24704a246c9))
+
 ## [0.3.0](https://github.com/BlackForgeHQ/embookshelf/compare/v0.2.8...v0.3.0) (2026-04-30)
 
 
