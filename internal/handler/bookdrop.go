@@ -337,6 +337,9 @@ func saveUniqueUpload(dir, originalName string, fh *multipart.FileHeader) (strin
 // ('imported' or 'rejected') so the "Recently processed" list clears.
 // In-flight rows (discovered / processing / ready / failed) are left
 // alone. Returns the count actually deleted for the UI toast.
+//
+// Mounted under /api/v1/settings/bookdrop/processed (admin-only) — see
+// ADR-0014.
 func (h *Handler) BookDropClearProcessed(c *gin.Context) {
 	userID := requireUserID(c)
 	if userID == "" {
@@ -348,6 +351,38 @@ func (h *Handler) BookDropClearProcessed(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"cleared": n})
+}
+
+// BookDropFilesPreview returns a snapshot of what the wipe op would
+// delete — count, bytes, and the count of in-flight files it would skip.
+// Mounted under /api/v1/settings/bookdrop/files (admin-only).
+func (h *Handler) BookDropFilesPreview(c *gin.Context) {
+	userID := requireUserID(c)
+	if userID == "" {
+		return
+	}
+	preview, err := h.bookdrop.PreviewFiles(c.Request.Context())
+	if err != nil {
+		writeServerError(c, "bookdrop preview files", err)
+		return
+	}
+	c.JSON(http.StatusOK, preview)
+}
+
+// BookDropWipeFiles recursively deletes every file under BOOKDROP_PATH
+// (skipping files referenced by 'processing' rows) and drops orphan
+// rows. Cross-user blast radius — admin-only. See ADR-0014.
+func (h *Handler) BookDropWipeFiles(c *gin.Context) {
+	userID := requireUserID(c)
+	if userID == "" {
+		return
+	}
+	res, err := h.bookdrop.WipeFiles(c.Request.Context())
+	if err != nil {
+		writeServerError(c, "bookdrop wipe files", err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
 }
 
 // BookDropReject marks an item as dismissed and cleans up the pre-approval

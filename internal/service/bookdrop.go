@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/coverstore"
@@ -32,6 +36,16 @@ type BookDropService struct {
 	// fetching the Library row, building the Placer, opening Sources for
 	// audio re-extract. nil disables Approve (it cannot place without it).
 	libStore LibraryStore
+
+	// bookdropPath is the staging directory the watcher polls and Wipe
+	// targets. Empty disables Wipe (no path configured = nothing to wipe).
+	bookdropPath string
+
+	// wipeMu serialises Wipe against the watcher's enqueue path so a tick
+	// fired mid-wipe can't insert a 'processing' row pointing at bytes
+	// about to vanish. Wipe takes the write-lock, watcher takes the
+	// read-lock around its scan iteration.
+	wipeMu sync.RWMutex
 }
 
 func NewBookDropService(
@@ -60,6 +74,20 @@ func NewBookDropService(
 func (s *BookDropService) WithLibraryStore(ls LibraryStore) *BookDropService {
 	s.libStore = ls
 	return s
+}
+
+// WithBookDropPath wires the staging directory used by Wipe. main.go
+// passes cfg.BookDropPath at boot.
+func (s *BookDropService) WithBookDropPath(path string) *BookDropService {
+	s.bookdropPath = path
+	return s
+}
+
+// IngestLock returns the read-side of the wipe mutex. The watcher holds
+// it while iterating + enqueueing so a wipe in progress can't race a
+// fresh 'processing' row against a delete.
+func (s *BookDropService) IngestLock() sync.Locker {
+	return s.wipeMu.RLocker()
 }
 
 func (s *BookDropService) List(ctx context.Context) ([]model.BookDropItem, error) {
@@ -337,6 +365,216 @@ func (s *BookDropService) ClearProcessed(ctx context.Context) (int, error) {
 		s.hub.Broadcast(sse.Event{Name: "bookdrop.cleared", Data: "{}"})
 	}
 	return len(ids), nil
+}
+
+// BookDropFilesPreview is the staging-directory snapshot the wipe
+// dialog renders before the user confirms.
+type BookDropFilesPreview struct {
+	// Count is the number of regular files under BOOKDROP_PATH that
+	// would be deleted (i.e. excluding files referenced by 'processing'
+	// rows).
+	Count int `json:"count"`
+	// Bytes is the total size in bytes of the files that would be deleted.
+	Bytes int64 `json:"bytes"`
+	// SkippedInFlight is the number of files left alone because a row
+	// in 'processing' state currently references them.
+	SkippedInFlight int `json:"skippedInFlight"`
+}
+
+// PreviewFiles walks BOOKDROP_PATH and returns the count + bytes that
+// Wipe would remove, plus the count of in-flight files it would skip.
+// The walk holds the wipe RLock so it stays consistent with the watcher.
+func (s *BookDropService) PreviewFiles(ctx context.Context) (BookDropFilesPreview, error) {
+	out := BookDropFilesPreview{}
+	if s.bookdropPath == "" {
+		return out, nil
+	}
+	skip, err := s.processingPathSet(ctx)
+	if err != nil {
+		return out, err
+	}
+	s.wipeMu.RLock()
+	defer s.wipeMu.RUnlock()
+	walkErr := filepath.WalkDir(s.bookdropPath, func(path string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			if errors.Is(werr, fs.ErrNotExist) {
+				return nil
+			}
+			return werr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		if pathInSet(path, skip) {
+			out.SkippedInFlight++
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr != nil {
+			return nil
+		}
+		out.Count++
+		out.Bytes += info.Size()
+		return nil
+	})
+	if walkErr != nil && !errors.Is(walkErr, fs.ErrNotExist) {
+		return out, walkErr
+	}
+	return out, nil
+}
+
+func pathInSet(path string, set map[string]struct{}) bool {
+	if _, ok := set[path]; ok {
+		return true
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		if _, ok := set[abs]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// BookDropWipeResult reports what Wipe actually did.
+type BookDropWipeResult struct {
+	Deleted         int   `json:"deleted"`
+	Freed           int64 `json:"freed"`
+	SkippedInFlight int   `json:"skippedInFlight"`
+	OrphanRows      int   `json:"orphanRows"`
+}
+
+// WipeFiles recursively removes every regular file under BOOKDROP_PATH,
+// skipping any file whose path is referenced by a 'processing' bookdrop
+// row. After the file sweep it drops every non-'processing' bookdrop row
+// whose path no longer exists on disk and broadcasts bookdrop.cleared.
+//
+// Empty subdirectories left behind are removed too — the staging area is
+// expected to be (mostly) flat. The root BOOKDROP_PATH itself is never
+// removed.
+//
+// Wipe holds the write-lock for the duration so the watcher's enqueue
+// path can't race a fresh 'processing' row against a delete.
+func (s *BookDropService) WipeFiles(ctx context.Context) (BookDropWipeResult, error) {
+	res := BookDropWipeResult{}
+	if s.bookdropPath == "" {
+		return res, errors.New("bookdrop path not configured")
+	}
+
+	s.wipeMu.Lock()
+	defer s.wipeMu.Unlock()
+
+	skip, err := s.processingPathSet(ctx)
+	if err != nil {
+		return res, err
+	}
+
+	root := s.bookdropPath
+
+	// First pass: delete files. In-flight files (those referenced by a
+	// 'processing' row) and unreadable files are left alone — the DB
+	// sweep below relies on os.Stat to find genuine orphans, so the
+	// survival decision is made implicitly by what's still on disk.
+	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			if errors.Is(werr, fs.ErrNotExist) {
+				return nil
+			}
+			return werr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		if pathInSet(path, skip) {
+			res.SkippedInFlight++
+			return nil
+		}
+		info, ierr := d.Info()
+		var size int64
+		if ierr == nil {
+			size = info.Size()
+		}
+		if rmErr := os.Remove(path); rmErr != nil {
+			slog.Warn("wipe bookdrop file", "path", path, "err", rmErr)
+			return nil
+		}
+		res.Deleted++
+		res.Freed += size
+		return nil
+	})
+	if walkErr != nil && !errors.Is(walkErr, fs.ErrNotExist) {
+		return res, walkErr
+	}
+
+	// Second pass: remove now-empty subdirectories under root. Skip the
+	// root itself. Walks bottom-up.
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, werr error) error {
+		if werr != nil || !d.IsDir() || path == root {
+			return nil
+		}
+		// os.Remove on a dir succeeds only if empty.
+		if rmErr := os.Remove(path); rmErr != nil {
+			// Best-effort — if it has surviving in-flight files inside,
+			// it stays.
+			_ = rmErr
+		}
+		return nil
+	})
+
+	// DB sweep: drop every non-'processing' row whose path no longer
+	// exists on disk. Stat'ing each path is robust against path-format
+	// mismatches between the watcher's relative paths and the wipe's
+	// absolute walk results — survived membership alone wasn't enough.
+	rows, lerr := s.bdrop.ListNonProcessing(ctx)
+	if lerr != nil {
+		return res, lerr
+	}
+	for _, row := range rows {
+		if _, statErr := os.Stat(row.Path); statErr == nil {
+			// File still there (e.g. surviving in-flight or unreadable
+			// during walk) — leave the row alone.
+			continue
+		}
+		if derr := s.bdrop.DeleteByID(ctx, row.ID); derr != nil {
+			slog.Warn("wipe bookdrop row", "id", row.ID, "err", derr)
+			continue
+		}
+		res.OrphanRows++
+		if s.covers != nil {
+			if err := s.covers.DeleteBookDrop(row.ID); err != nil {
+				slog.Warn("wipe bookdrop cover", "id", row.ID, "err", err)
+			}
+		}
+	}
+
+	if s.hub != nil {
+		s.hub.Broadcast(sse.Event{Name: "bookdrop.cleared", Data: "{}"})
+	}
+
+	return res, nil
+}
+
+func (s *BookDropService) processingPathSet(ctx context.Context) (map[string]struct{}, error) {
+	paths, err := s.bdrop.ProcessingPaths(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		// Normalise to absolute so set membership matches the absolute
+		// paths returned by filepath.WalkDir.
+		if abs, aerr := filepath.Abs(p); aerr == nil {
+			out[abs] = struct{}{}
+			continue
+		}
+		out[p] = struct{}{}
+	}
+	return out, nil
 }
 
 func (s *BookDropService) Reject(ctx context.Context, id string) error {

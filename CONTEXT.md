@@ -72,3 +72,21 @@ backends do not produce pending orphans — `os.Rename` is atomic.
 Admin toggle `oidc_force_only_mode` that hides the local-password
 form on the login page when exactly one OIDC provider is enabled.
 Does not affect API auth or existing local users.
+
+## Clear processed
+
+Housekeeping op that deletes every `bookdrop_items` row in a
+terminal state (`imported`, `rejected`) and best-effort sweeps any
+pre-approval cover bytes still on disk. The source files under
+`BOOKDROP_PATH` are NOT touched — the watcher will re-discover any
+file still on disk on its next tick. Distinct from Wipe BookDrop.
+
+## Wipe BookDrop
+
+Admin-only housekeeping op that recursively removes every file
+under `BOOKDROP_PATH` and drops orphaned `bookdrop_items` rows
+whose path no longer exists. Files referenced by rows in
+`processing` state are skipped to avoid killing live extraction.
+Cross-user blast radius: erases other users' pending uploads,
+hence the admin gate and the type-to-confirm dialog. Distinct
+from Clear processed (DB-only).

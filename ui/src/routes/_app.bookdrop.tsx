@@ -14,7 +14,6 @@ import {
   approveBookDrop,
   bookdropCoverUrl,
   bookdropQueryKey,
-  clearProcessedBookDrop,
   fetchBookDrop,
   rejectBookDrop,
   uploadBookDrop,
@@ -23,14 +22,6 @@ import { booksQueryKey, fetchLibraries, librariesQueryKey } from "@/api/books"
 import { Icon } from "@/components/Icon"
 import { TopBar } from "@/components/TopBar"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import {
   Select,
   SelectContent,
@@ -78,7 +69,6 @@ function BookDrop() {
   }, [queue.data])
 
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
-  const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
   const current =
     queue.data?.find((i) => i.id === selectedId) ?? active[0] ?? finished[0]
   if (current && current.id !== selectedId) {
@@ -103,16 +93,9 @@ function BookDrop() {
     },
   })
 
-  const clearMut = useMutation({
-    mutationFn: () => clearProcessedBookDrop(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: bookdropQueryKey })
-    },
-  })
-
-  const error = (approveMut.error ??
-    rejectMut.error ??
-    clearMut.error) as unknown as ApiError | null
+  const error = (approveMut.error ?? rejectMut.error) as unknown as
+    | ApiError
+    | null
 
   const readyCount = active.filter((i) => i.state === "ready").length
 
@@ -190,18 +173,6 @@ function BookDrop() {
                 <RailSectionHeader
                   label="Recently processed"
                   count={finished.length}
-                  action={
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled={clearMut.isPending}
-                      onClick={() => setClearConfirmOpen(true)}
-                    >
-                      <Icon name="close" size={11} />
-                      {clearMut.isPending ? "Clearing…" : "Clear"}
-                    </Button>
-                  }
                 />
                 <div>
                   {finished.map((f, i) => (
@@ -240,40 +211,6 @@ function BookDrop() {
         </main>
       </div>
 
-      <Dialog open={clearConfirmOpen} onOpenChange={setClearConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Clear processed history?</DialogTitle>
-            <DialogDescription>
-              Remove {finished.length} processed{" "}
-              {finished.length === 1 ? "item" : "items"} from the BookDrop queue
-              history. Imported books and any files still on disk are not
-              affected.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setClearConfirmOpen(false)}
-              disabled={clearMut.isPending}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              onClick={() =>
-                clearMut.mutate(undefined, {
-                  onSuccess: () => setClearConfirmOpen(false),
-                })
-              }
-              disabled={clearMut.isPending}
-            >
-              {clearMut.isPending ? "Clearing…" : "Clear"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

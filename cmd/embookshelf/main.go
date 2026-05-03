@@ -172,7 +172,8 @@ func main() {
 		PresignFallback: cfg.PresignFallback,
 	})
 	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, bookRepo, appSettingsRepo, covers, hub, fileRepo).
-		WithLibraryStore(libStore)
+		WithLibraryStore(libStore).
+		WithBookDropPath(cfg.BookDropPath)
 	progressSvc := service.NewProgressService(progressRepo, readingSessionRepo)
 	annotationSvc := service.NewAnnotationService(annotationRepo)
 	statsSvc := service.NewStatsService(statsRepo)

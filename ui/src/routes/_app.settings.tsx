@@ -5,6 +5,7 @@ import type { ReactNode } from "react"
 
 import { AboutPanel } from "@/components/settings/AboutPanel"
 import { BackupsPanel } from "@/components/settings/BackupsPanel"
+import { BookDropPanel } from "@/components/settings/BookDropPanel"
 import { OidcPanel } from "@/components/settings/OidcPanel"
 import { UsersPanel } from "@/components/settings/UsersPanel"
 import { EmailPanel } from "@/components/settings/EmailPanel"
@@ -26,6 +27,7 @@ export const Route = createFileRoute("/_app/settings")({
 
 type SectionKey =
   | "libraries"
+  | "bookdrop"
   | "providers"
   | "email"
   | "users"
@@ -42,6 +44,7 @@ type SectionSpec = {
 
 const SECTIONS: Array<SectionSpec> = [
   { key: "libraries", label: "Libraries", adminOnly: true },
+  { key: "bookdrop", label: "BookDrop", adminOnly: true },
   { key: "providers", label: "Metadata providers", adminOnly: true },
   { key: "email", label: "Email delivery", adminOnly: true },
   { key: "users", label: "Users & roles", adminOnly: true },
@@ -94,6 +97,7 @@ function Admin() {
         isAdmin={isAdmin}
       >
         {active === "libraries" && <LibrariesPanel isAdmin={isAdmin} />}
+        {active === "bookdrop" && <BookDropPanel isAdmin={isAdmin} />}
         {active === "providers" && <ProvidersPanel isAdmin={isAdmin} />}
         {active === "email" && <EmailPanel isAdmin={isAdmin} />}
         {active === "users" && (

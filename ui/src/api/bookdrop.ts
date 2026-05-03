@@ -57,12 +57,41 @@ export async function rejectBookDrop(id: string): Promise<void> {
 
 // clearProcessedBookDrop drops every imported/rejected row from the queue
 // so "Recently processed" empties out. In-flight rows are left alone.
+// Admin-only — see ADR-0014.
 export async function clearProcessedBookDrop(): Promise<number> {
   const { cleared } = await api<{ cleared: number }>(
-    "/api/v1/bookdrop/processed",
+    "/api/v1/settings/bookdrop/processed",
     { method: "DELETE" }
   )
   return cleared
+}
+
+export type BookDropFilesPreview = {
+  count: number
+  bytes: number
+  skippedInFlight: number
+}
+
+// previewBookDropFiles returns a snapshot of what wipeBookDropFiles would
+// remove. Admin-only.
+export async function previewBookDropFiles(): Promise<BookDropFilesPreview> {
+  return api<BookDropFilesPreview>("/api/v1/settings/bookdrop/files")
+}
+
+export type BookDropWipeResult = {
+  deleted: number
+  freed: number
+  skippedInFlight: number
+  orphanRows: number
+}
+
+// wipeBookDropFiles recursively removes every file under BOOKDROP_PATH,
+// skipping files referenced by 'processing' rows, and drops orphan
+// queue rows. Admin-only — cross-user blast radius.
+export async function wipeBookDropFiles(): Promise<BookDropWipeResult> {
+  return api<BookDropWipeResult>("/api/v1/settings/bookdrop/files", {
+    method: "DELETE",
+  })
 }
 
 export type BookDropUploadResult = {

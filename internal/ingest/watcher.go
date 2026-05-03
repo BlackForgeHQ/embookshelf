@@ -60,6 +60,14 @@ func (w *Watcher) Run(ctx context.Context) {
 }
 
 func (w *Watcher) scan(ctx context.Context) {
+	// Hold the wipe RLock for the duration of the scan so a wipe can't
+	// race a fresh enqueue against an in-progress delete. Wipe holds the
+	// write-lock; this RLock blocks until wipe finishes (seconds at most).
+	if w.Svc != nil {
+		l := w.Svc.IngestLock()
+		l.Lock()
+		defer l.Unlock()
+	}
 	err := filepath.WalkDir(w.Path, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// Skip unreadable entries — don't abort the whole scan.

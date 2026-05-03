@@ -82,7 +82,7 @@ type bookDTO struct {
 	// new upload invalidates the browser cache without dropping the
 	// long max-age on the underlying response.
 	CoverVersion string `json:"coverVersion,omitempty"`
-	AddedAt       string   `json:"addedAt"`
+	AddedAt      string `json:"addedAt"`
 	// DurationSeconds is populated only for audio formats (MP3, M4B);
 	// nil otherwise (omitted from the JSON via *int + omitempty).
 	DurationSeconds *int         `json:"durationSeconds,omitempty"`

@@ -99,7 +99,6 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.GET("/bookdrop", h.BookDropList)
 			authed.GET("/bookdrop/:id/cover", h.BookDropCover)
 			authed.POST("/bookdrop/upload", h.BookDropUpload)
-			authed.DELETE("/bookdrop/processed", h.BookDropClearProcessed)
 			authed.POST("/bookdrop/:id/approve", h.BookDropApprove)
 			authed.POST("/bookdrop/:id/reject", h.BookDropReject)
 
@@ -158,6 +157,12 @@ func (h *Handler) Engine() *gin.Engine {
 				admin.POST("/users/:id/approve", h.SettingsUsersApprove)
 				admin.POST("/users/:id/deny", h.SettingsUsersDeny)
 				admin.DELETE("/users/:id", h.SettingsUsersDelete)
+
+				// BookDrop housekeeping (admin-only — wipe has cross-user
+				// blast radius). See ADR-0014.
+				admin.DELETE("/bookdrop/processed", h.BookDropClearProcessed)
+				admin.GET("/bookdrop/files", h.BookDropFilesPreview)
+				admin.DELETE("/bookdrop/files", h.BookDropWipeFiles)
 			}
 		}
 	}

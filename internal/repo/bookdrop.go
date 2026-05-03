@@ -154,6 +154,69 @@ func (r *BookDropRepo) DeleteProcessed(ctx context.Context) ([]string, error) {
 	return ids, rows.Err()
 }
 
+// ProcessingPaths returns the file paths of every row currently in 'processing'
+// state. The wipe op needs this set to skip files an extractor is actively
+// reading — deleting them mid-extract leaves a row stuck in 'processing'
+// pointing at vanished bytes.
+func (r *BookDropRepo) ProcessingPaths(ctx context.Context) ([]string, error) {
+	rows, err := r.db.SQL.QueryContext(ctx, `
+		SELECT path FROM bookdrop_items WHERE state = 'processing'
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// ListNonProcessing returns id+path for every bookdrop row not in
+// 'processing' state. Used by Wipe so the service layer can stat each
+// path and decide which rows are now orphaned.
+func (r *BookDropRepo) ListNonProcessing(ctx context.Context) ([]struct {
+	ID   string
+	Path string
+}, error) {
+	rows, err := r.db.SQL.QueryContext(ctx, `
+		SELECT id, path FROM bookdrop_items WHERE state <> 'processing'
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []struct {
+		ID   string
+		Path string
+	}
+	for rows.Next() {
+		var r struct {
+			ID   string
+			Path string
+		}
+		if err := rows.Scan(&r.ID, &r.Path); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// DeleteByID removes a single bookdrop row by id. Used by Wipe's orphan
+// sweep — the service layer decides who to delete after stat'ing paths.
+func (r *BookDropRepo) DeleteByID(ctx context.Context, id string) error {
+	const qPG = `DELETE FROM bookdrop_items WHERE id = $1`
+	const qSQLite = `DELETE FROM bookdrop_items WHERE id = ?`
+	_, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), id)
+	return err
+}
+
 // MarkImported links the bookdrop item to the newly-created book row.
 func (r *BookDropRepo) MarkImported(ctx context.Context, id, bookID string) error {
 	const qPG = `
