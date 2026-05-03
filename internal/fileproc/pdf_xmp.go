@@ -3,8 +3,24 @@ package fileproc
 import (
 	"bytes"
 	"encoding/xml"
+	"regexp"
 	"strings"
 )
+
+var nonISBNChar = regexp.MustCompile(`[^0-9Xx]`)
+
+// cleanAndValidateISBN strips separators (including `urn:isbn:` prefixes
+// implicitly — non-`[0-9Xx]` chars), uppercases the trailing X, and
+// returns the value only when it is exactly 10 or 13 chars after
+// cleaning. Anything else returns "".
+func cleanAndValidateISBN(s string) string {
+	cleaned := nonISBNChar.ReplaceAllString(s, "")
+	cleaned = strings.ToUpper(cleaned)
+	if len(cleaned) != 10 && len(cleaned) != 13 {
+		return ""
+	}
+	return cleaned
+}
 
 // XMPMetadata is the subset of XMP fields the PDF processor consumes.
 // Title, Creators (in Seq order), Description, Language come from
@@ -107,7 +123,15 @@ func parseXMP(payload []byte) (XMPMetadata, error) {
 		}
 		if out.ISBN == "" {
 			for _, ident := range d.Identifier.Items {
+				// Explicit scheme match wins regardless of value shape.
 				if strings.Contains(strings.ToLower(ident.Scheme), "isbn") {
+					out.ISBN = strings.TrimSpace(ident.Value)
+					break
+				}
+				// No scheme attribute: Calibre + ADE often emit
+				// `urn:isbn:9780…` with the scheme implied. Accept the
+				// value only when it cleans to a valid 10/13-char ISBN.
+				if ident.Scheme == "" && cleanAndValidateISBN(ident.Value) != "" {
 					out.ISBN = strings.TrimSpace(ident.Value)
 					break
 				}

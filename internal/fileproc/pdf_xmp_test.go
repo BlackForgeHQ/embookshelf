@@ -81,3 +81,80 @@ func TestParseXMP_IdentifierBagISBN(t *testing.T) {
 		t.Fatalf("ISBN=%q", x.ISBN)
 	}
 }
+
+func TestCleanAndValidateISBN_13Digit(t *testing.T) {
+	got := cleanAndValidateISBN("978-0-441-17271-9")
+	if got != "9780441172719" {
+		t.Fatalf("got %q want %q", got, "9780441172719")
+	}
+}
+
+func TestCleanAndValidateISBN_10WithX(t *testing.T) {
+	got := cleanAndValidateISBN("0-441-17271-X")
+	if got != "044117271X" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestCleanAndValidateISBN_StripsURNPrefix(t *testing.T) {
+	got := cleanAndValidateISBN("urn:isbn:9780441172719")
+	if got != "9780441172719" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestCleanAndValidateISBN_RejectsShort(t *testing.T) {
+	if got := cleanAndValidateISBN("12345"); got != "" {
+		t.Fatalf("got %q want empty", got)
+	}
+}
+
+func TestCleanAndValidateISBN_RejectsLong(t *testing.T) {
+	if got := cleanAndValidateISBN("12345678901234"); got != "" {
+		t.Fatalf("got %q want empty", got)
+	}
+}
+
+func TestParseXMP_IdentifierBagURNNoSchemeISBN(t *testing.T) {
+	pkt := `<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+      <xmp:Identifier>
+        <rdf:Bag>
+          <rdf:li>urn:isbn:9780441172719</rdf:li>
+          <rdf:li>not-an-isbn</rdf:li>
+        </rdf:Bag>
+      </xmp:Identifier>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>`
+	x, err := parseXMP([]byte(pkt))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if x.ISBN != "urn:isbn:9780441172719" {
+		t.Fatalf("ISBN=%q", x.ISBN)
+	}
+}
+
+func TestParseXMP_IdentifierBagSkipsNonISBNNoScheme(t *testing.T) {
+	pkt := `<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+      <xmp:Identifier>
+        <rdf:Bag>
+          <rdf:li>not-an-isbn</rdf:li>
+          <rdf:li>also-not</rdf:li>
+        </rdf:Bag>
+      </xmp:Identifier>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>`
+	x, err := parseXMP([]byte(pkt))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if x.ISBN != "" {
+		t.Fatalf("ISBN=%q want empty", x.ISBN)
+	}
+}
