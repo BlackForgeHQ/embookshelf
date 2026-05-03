@@ -170,7 +170,12 @@ func (h *Handler) BookDropPutCover(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
 	raw, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "image too large"})
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "image too large"})
+			return
+		}
+		writeServerError(c, "bookdrop read cover body", err)
 		return
 	}
 	mime, ok := sniffCoverMime(raw)
