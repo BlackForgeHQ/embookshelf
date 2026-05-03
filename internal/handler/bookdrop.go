@@ -131,6 +131,46 @@ func (h *Handler) BookDropCover(c *gin.Context) {
 	}
 }
 
+// BookDropFile streams the staged BookDrop file bytes for client-side
+// rendering of a pre-approval cover (e.g. PDF page-1 rasterization in
+// the BookDrop preview). Mirrors BookDropCover's auth shape but reads
+// the original file from the staging directory.
+func (h *Handler) BookDropFile(c *gin.Context) {
+	userID := requireUserID(c)
+	if userID == "" {
+		return
+	}
+	id := c.Param("id")
+	item, err := h.bookdrop.Get(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		writeServerError(c, "bookdrop file lookup", err)
+		return
+	}
+	f, err := os.Open(item.Path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		writeServerError(c, "bookdrop file open", err)
+		return
+	}
+	defer func() { _ = f.Close() }()
+	mime := mimeForFormat(item.Format)
+	if mime == "" {
+		mime = "application/octet-stream"
+	}
+	c.Header("Content-Type", mime)
+	c.Header("Cache-Control", "private, max-age=3600")
+	if _, err := io.Copy(c.Writer, f); err != nil {
+		writeServerError(c, "bookdrop file stream", err)
+	}
+}
+
 // BookDropPutCover accepts a raw image (PNG or JPEG) for a BookDrop
 // item that doesn't yet have a pre-approval cover. Idempotent on
 // absence: first successful PUT wins; subsequent PUTs return 409.

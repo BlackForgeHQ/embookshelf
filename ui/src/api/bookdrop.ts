@@ -157,3 +157,29 @@ export function uploadBookDrop(
 export const bookdropQueryKey = ["bookdrop"] as const
 
 export const bookdropCoverUrl = (id: string) => `/api/v1/bookdrop/${id}/cover`
+
+// bookdropFileUrl returns the URL serving the staged file bytes for a
+// BookDrop item before approval. Used by the preview pane to render a
+// client-side cover (e.g. PDF page-1) when the extractor didn't find one.
+export const bookdropFileUrl = (id: string) =>
+  `/api/v1/bookdrop/${encodeURIComponent(id)}/file`
+
+// putBookDropCover uploads a client-rendered cover image (PNG/JPEG raw
+// bytes, <= 5 MB) for a BookDrop item that doesn't yet have a cover.
+// 409 (already-present) is treated as success — caller doesn't need to
+// distinguish "we wrote it" from "someone else already did".
+export async function putBookDropCover(
+  id: string,
+  blob: Blob
+): Promise<void> {
+  const res = await fetch(`/api/v1/bookdrop/${encodeURIComponent(id)}/cover`, {
+    method: "PUT",
+    body: blob,
+    headers: { "content-type": blob.type || "image/jpeg" },
+    credentials: "include",
+  })
+  if (res.status === 409) return
+  if (!res.ok) {
+    throw new Error(`putBookDropCover ${res.status}`)
+  }
+}

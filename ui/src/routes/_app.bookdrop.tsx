@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import type { ReactNode } from "react"
@@ -13,11 +13,14 @@ import type { Library } from "@/api/books"
 import {
   approveBookDrop,
   bookdropCoverUrl,
+  bookdropFileUrl,
   bookdropQueryKey,
   fetchBookDrop,
+  putBookDropCover,
   rejectBookDrop,
   uploadBookDrop,
 } from "@/api/bookdrop"
+import { renderPdfPageOneJpeg } from "@/lib/pdfCover"
 import { booksQueryKey, fetchLibraries, librariesQueryKey } from "@/api/books"
 import { Icon } from "@/components/Icon"
 import { TopBar } from "@/components/TopBar"
@@ -570,6 +573,40 @@ function EmptyDetail() {
 }
 
 function CoverPanel({ item }: { item: BookDropItem }) {
+  const queryClient = useQueryClient()
+  // Set guards against duplicate uploads on re-render / StrictMode
+  // double-effect. Survives across renders for the lifetime of the
+  // component instance.
+  const uploadedRef = useRef<Set<string>>(new Set())
+  const isPreapprovalState =
+    item.state === "discovered" ||
+    item.state === "processing" ||
+    item.state === "ready"
+
+  useEffect(() => {
+    if (item.format !== "PDF") return
+    if (item.hasCover) return
+    if (!isPreapprovalState) return
+    if (uploadedRef.current.has(item.id)) return
+    uploadedRef.current.add(item.id)
+    // Explicit `: boolean` widens the type so the lint rule doesn't
+    // narrow to literal-false — the cleanup closure mutates it.
+    let cancelled = false as boolean
+    void (async () => {
+      const blob = await renderPdfPageOneJpeg(bookdropFileUrl(item.id))
+      if (cancelled || !blob) return
+      try {
+        await putBookDropCover(item.id, blob)
+        queryClient.invalidateQueries({ queryKey: bookdropQueryKey })
+      } catch (err) {
+        console.warn("auto cover upload failed", err)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [item.id, item.format, item.hasCover, isPreapprovalState, queryClient])
+
   return (
     <div className="bdrop-cover-frame">
       {item.hasCover ? (
@@ -581,7 +618,11 @@ function CoverPanel({ item }: { item: BookDropItem }) {
             size={28}
             className="mb-2 text-(--color-ink-3)"
           />
-          <span className="bdrop-cover-blank-label">no cover detected</span>
+          <span className="bdrop-cover-blank-label">
+            {item.format === "PDF" && isPreapprovalState
+              ? "rendering cover…"
+              : "no cover detected"}
+          </span>
         </div>
       )}
     </div>
