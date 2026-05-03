@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -241,10 +242,19 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 		Author:      item.Author,
 		Format:      item.Format,
 		Description: item.Description,
-		ISBN:        item.ISBN,
 		Path:        item.Path,
 		HasCover:    item.HasCover,
 		CoverMime:   item.CoverMime,
+	}
+	// Route the extractor-supplied ISBN by length: book.ISBN is the
+	// ISBN-13 slot, book.ISBN10 is the 10-digit slot. Mirrors the
+	// length-based routing in enrichment.go so a Calibre PDF whose XMP
+	// only carries an ISBN-10 doesn't pollute the ISBN-13 column.
+	switch len(strings.TrimSpace(item.ISBN)) {
+	case 13:
+		book.ISBN = strings.TrimSpace(item.ISBN)
+	case 10:
+		book.ISBN10 = strings.TrimSpace(item.ISBN)
 	}
 
 	res, perr := handle.Placer.Place(ctx, PlaceSource{
