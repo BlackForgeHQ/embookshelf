@@ -172,14 +172,7 @@ stores per-driver config as JSONB.
 - Minimum 512MB RAM (recommended 1GB+)
 - Port 6060 (configurable)
 
-### 6.3 Storage Modes
-
-| Mode | Behavior |
-|------|----------|
-| `LOCAL` | Full read/write — metadata writing, file renaming, file organization |
-| `NETWORK` | Read-only — metadata stored in DB only, files never modified. For NAS/NFS/SMB mounts |
-
-### 6.4 Volume Mounts
+### 6.3 Volume Mounts
 
 | Path | Purpose |
 |------|---------|
@@ -189,18 +182,7 @@ stores per-driver config as JSONB.
 
 ---
 
-## 7. Internationalization
-
-- Full i18n support planned via Weblate
-- Community-driven translations
-- Strings live in the React SPA; plan is to adopt a lightweight
-  runtime (e.g. `@formatjs/intl` or `lingui`) once the string catalog
-  stabilizes. Backend JSON responses stay locale-neutral — any
-  user-facing copy is rendered on the client.
-
----
-
-## 8. Supported File Formats
+## 7. Supported File Formats
 
 | Category | Formats |
 |----------|---------|
@@ -210,7 +192,7 @@ stores per-driver config as JSONB.
 
 ---
 
-## 9. Non-Functional Requirements
+## 8. Non-Functional Requirements
 
 - **Self-contained** — No external service dependencies for core functionality (metadata providers are optional enrichment)
 - **Privacy-first** — All data stays on the user's server; optional telemetry is opt-out
@@ -221,7 +203,7 @@ stores per-driver config as JSONB.
 
 ---
 
-## 10. Out of Scope
+## 9. Out of Scope
 
 - Cloud-hosted SaaS offering
 - DRM management or enforcement
@@ -231,11 +213,11 @@ stores per-driver config as JSONB.
 
 ---
 
-## 11. Current Delivery Status
+## 10. Current Delivery Status
 
 This PRD describes the full product intent. The roadmap below tracks
 what is live vs. what's still planned. See
-[Architecture.md](architecture.md) for the technical shape.
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the technical shape.
 
 > The mid-project refactor from Go + Templ/HTMX to Go + React SPA
 > (TanStack Start) is complete. Every core feature that used to live on
