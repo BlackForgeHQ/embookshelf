@@ -74,26 +74,6 @@ func (f *fakeScanFileRepo) Insert(ctx context.Context, m model.File) (model.File
 	return m, nil
 }
 
-// fakeCoverPromoter captures SaveBookHashed calls.
-type fakeCoverPromoter struct {
-	saves   []coverSave
-	saveErr error
-}
-
-type coverSave struct {
-	Hash []byte
-	MIME string
-	Data []byte
-}
-
-func (f *fakeCoverPromoter) SaveBookHashed(hash []byte, mime string, data []byte) error {
-	if f.saveErr != nil {
-		return f.saveErr
-	}
-	f.saves = append(f.saves, coverSave{Hash: append([]byte{}, hash...), MIME: mime, Data: append([]byte{}, data...)})
-	return nil
-}
-
 func TestScanImport_NoLibStore(t *testing.T) {
 	_, err := service.ScanImport(context.Background(), service.ScanImportLeafBookDeps{}, "lib1", scan.LeafBook{})
 	if err == nil {

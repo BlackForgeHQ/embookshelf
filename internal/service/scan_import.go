@@ -331,13 +331,6 @@ func reattachLeafBook(
 	}, nil
 }
 
-// readCoverBytes is exposed for tests that want to verify the cover
-// promotion path without standing up a full coverstore. Production
-// uses io.ReadAll directly.
-var readCoverBytes = func(r io.Reader) ([]byte, error) {
-	return io.ReadAll(r)
-}
-
 // Compile-time check that *coverstore.Store satisfies CoverPromoter.
 var _ CoverPromoter = (*coverstore.Store)(nil)
 
