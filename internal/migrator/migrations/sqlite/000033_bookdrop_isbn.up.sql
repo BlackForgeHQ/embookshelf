@@ -1,0 +1,1 @@
+ALTER TABLE bookdrop_items ADD COLUMN isbn TEXT NOT NULL DEFAULT '';
