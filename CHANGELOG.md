@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.7](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.6...v0.4.7) (2026-05-02)
+
+
+### Features
+
+* **files:** enhance book file delivery options with streaming support ([e439198](https://github.com/BlackForgeHQ/embookshelf/commit/e439198a1c8d507455f3e861f9806ab0117aefb7))
+
 ## [0.4.6](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.5...v0.4.6) (2026-05-02)
 
 
