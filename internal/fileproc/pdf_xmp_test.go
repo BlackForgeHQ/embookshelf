@@ -2,6 +2,7 @@ package fileproc
 
 import (
 	"bytes"
+	"context"
 	"testing"
 )
 
@@ -156,5 +157,70 @@ func TestParseXMP_IdentifierBagSkipsNonISBNNoScheme(t *testing.T) {
 	}
 	if x.ISBN != "" {
 		t.Fatalf("ISBN=%q want empty", x.ISBN)
+	}
+}
+
+func TestPDFProcessor_XMPOverridesDocInfoAndExtractsISBN(t *testing.T) {
+	body := []byte("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n" +
+		"1 0 obj\n<< /Title (DocInfo Title) /Author (DocInfo Author) >>\nendobj\n")
+	body = append(body, []byte(xmpPacket)...)
+	body = append(body, []byte("\ntrailer << /Info 1 0 R >>\n%%EOF\n")...)
+	src := memSourceFromBytes(body)
+
+	m, err := (PDFProcessor{}).Extract(context.Background(), src)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if m.Title != "XMP Title" {
+		t.Fatalf("Title=%q (XMP must override DocInfo)", m.Title)
+	}
+	if m.Author != "Alice, Bob" {
+		t.Fatalf("Author=%q want %q", m.Author, "Alice, Bob")
+	}
+	if m.Description != "desc here" {
+		t.Fatalf("Description=%q", m.Description)
+	}
+	if m.Language != "en" {
+		t.Fatalf("Language=%q", m.Language)
+	}
+}
+
+func TestPDFProcessor_AuthorSplitFromDocInfo(t *testing.T) {
+	raw := []byte("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n" +
+		"1 0 obj\n<< /Author (Smith, J. & Doe, A.) >>\nendobj\n" +
+		"trailer << /Info 1 0 R >>\n%%EOF\n")
+	src := memSourceFromBytes(raw)
+	m, err := (PDFProcessor{}).Extract(context.Background(), src)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if m.Author != "Smith, J., Doe, A." {
+		t.Fatalf("Author=%q (split [,&], trim, rejoin with ', ')", m.Author)
+	}
+}
+
+func TestPDFProcessor_XMPISBNFromIdentifierBag(t *testing.T) {
+	wrappedBody := []byte("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n1 0 obj\n<< >>\nendobj\n")
+	wrappedBody = append(wrappedBody, []byte(`<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>`+"\n")...)
+	wrappedBody = append(wrappedBody, []byte(`<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+      <xmp:Identifier>
+        <rdf:Bag>
+          <rdf:li scheme="isbn">978-0-441-17271-9</rdf:li>
+        </rdf:Bag>
+      </xmp:Identifier>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>`)...)
+	wrappedBody = append(wrappedBody, []byte("\n<?xpacket end=\"r\"?>\ntrailer << /Info 1 0 R >>\n%%EOF\n")...)
+
+	src := memSourceFromBytes(wrappedBody)
+	m, err := (PDFProcessor{}).Extract(context.Background(), src)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if m.ISBN != "9780441172719" {
+		t.Fatalf("ISBN=%q want %q (must be cleanAndValidate'd)", m.ISBN, "9780441172719")
 	}
 }

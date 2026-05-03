@@ -29,6 +29,25 @@ type PDFProcessor struct{}
 var pdfInfoLiteralRe = regexp.MustCompile(`/([A-Za-z][A-Za-z0-9]*)\s*\(((?:\\.|[^)])*)\)`)
 var pdfInfoHexRe = regexp.MustCompile(`/([A-Za-z][A-Za-z0-9]*)\s*<([0-9A-Fa-f\s]*)>`)
 
+var pdfAuthorSep = regexp.MustCompile(`[,&]`)
+
+// splitAndJoinAuthors normalises a DocInfo Author string by splitting on
+// `,` or `&`, trimming each chunk, and rejoining with `, `. A single
+// name (no separators) round-trips unchanged. Empty input returns "".
+func splitAndJoinAuthors(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	parts := pdfAuthorSep.Split(raw, -1)
+	out := parts[:0]
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
 func (PDFProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, error) {
 	_ = ctx
 
@@ -73,9 +92,35 @@ func (PDFProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, 
 
 	m := Metadata{Format: "PDF"}
 	m.Title = pdfInfoField(scan, "Title")
-	m.Author = pdfInfoField(scan, "Author")
+	m.Author = splitAndJoinAuthors(pdfInfoField(scan, "Author"))
 	if subject := pdfInfoField(scan, "Subject"); subject != "" {
 		m.Description = subject
+	}
+
+	// XMP overrides DocInfo when present. Calibre, Acrobat, MS Word, and
+	// other modern writers store rich metadata in an uncompressed XMP
+	// packet wrapped in <?xpacket begin ... ?> markers; that data is more
+	// trustworthy than DocInfo (which often goes stale after edits).
+	if packet, ok := extractXMPPacket(scan); ok {
+		if x, err := parseXMP(packet); err == nil {
+			if x.Title != "" {
+				m.Title = x.Title
+			}
+			if len(x.Creators) > 0 {
+				m.Author = strings.Join(x.Creators, ", ")
+			}
+			if x.Description != "" {
+				m.Description = x.Description
+			}
+			if x.Language != "" {
+				m.Language = x.Language
+			}
+			if x.ISBN != "" {
+				if v := cleanAndValidateISBN(x.ISBN); v != "" {
+					m.ISBN = v
+				}
+			}
+		}
 	}
 	// No filename fallback — callers supply a Source, not a path.
 	return m, nil
