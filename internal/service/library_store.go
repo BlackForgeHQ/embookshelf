@@ -13,6 +13,15 @@ import (
 	"github.com/blackforge/embookshelf/internal/storage"
 )
 
+// Delivery modes for BookSource.Kind and the EMBOOKSHELF_PRESIGN_FALLBACK
+// env var. The env var name predates the inversion; the string values
+// here are the canonical delivery-mode identifiers.
+const (
+	BookDeliveryPresign = "presign"
+	BookDeliveryStream  = "stream"
+	BookDeliveryLocal   = "local"
+)
+
 // LibraryStore turns a libraryID into a ready-to-use view of that
 // Library: the row, the Storage it lives in, the Placer that knows how
 // to write into it, and the delivery decision for serving its bytes to
@@ -115,33 +124,33 @@ func (h *LibraryHandle) Open(ctx context.Context, location string) (storage.Sour
 //     wiring is missing; the handler streams book.Path off disk.
 func (h *LibraryHandle) BookSource(ctx context.Context, book model.Book) (BookSource, error) {
 	if book.Path == "" && (h.Storage == nil || h.files == nil) {
-		return BookSource{}, errors.New("book has no path")
+		return BookSource{}, errors.New("book has no path and storage/files are unavailable")
 	}
 
 	if h.Storage == nil || h.files == nil {
-		return BookSource{Kind: "local", Path: book.Path}, nil
+		return BookSource{Kind: BookDeliveryLocal, Path: book.Path}, nil
 	}
 
 	f, ferr := primaryFile(ctx, h.files, book)
 
-	if h.presignFallback == "presign" && h.Storage.Capabilities()&storage.CapPresign != 0 {
+	if h.presignFallback == BookDeliveryPresign && h.Storage.Capabilities()&storage.CapPresign != 0 {
 		if ps, ok := h.Storage.(Presigner); ok && ferr == nil {
 			if url, err := ps.PresignGet(ctx, f.Location, h.presignTTL); err == nil {
-				return BookSource{Kind: "presign", URL: url, TTL: h.presignTTL}, nil
+				return BookSource{Kind: BookDeliveryPresign, URL: url, TTL: h.presignTTL}, nil
 			}
 		}
 	}
 
 	if ferr == nil {
 		return BookSource{
-			Kind:    "stream",
+			Kind:    BookDeliveryStream,
 			Storage: h.Storage,
 			Key:     f.Location,
 		}, nil
 	}
 
 	if book.Path != "" {
-		return BookSource{Kind: "local", Path: book.Path}, nil
+		return BookSource{Kind: BookDeliveryLocal, Path: book.Path}, nil
 	}
 	return BookSource{}, fmt.Errorf("book source: %w", ferr)
 }

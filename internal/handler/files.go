@@ -56,10 +56,10 @@ func (h *Handler) serveBookFile(c *gin.Context, book model.Book, mime string) er
 		return err
 	}
 	switch src.Kind {
-	case "presign":
+	case service.BookDeliveryPresign:
 		c.Redirect(http.StatusFound, src.URL)
 		return nil
-	case "stream":
+	case service.BookDeliveryStream:
 		return h.serveStreamedBookFile(c, src, mime)
 	}
 	return h.serveLocalBookFile(c, src.Path, mime)

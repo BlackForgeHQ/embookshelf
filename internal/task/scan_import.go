@@ -12,14 +12,22 @@ import (
 	"github.com/blackforge/embookshelf/internal/service"
 )
 
-// ScanImportArgs is the payload for a per-LeafBook import (ADR-0004 §1).
+// ScanImportArgs is the River job payload for importing one discovered
 // One job materializes one folder-as-Book grouping into the canonical
+// leaf-folder book grouping into canonical {books + files + cover +
 // {books + files + cover + sidecar} state without going through the
+// sidecar} state (see ADR-0004 §1), without going through the bookdrop
 // bookdrop staging pipeline.
+// staging pipeline.
+//
 //
 // Files carries the LeafBook's supported files exactly as Classify
+// LibraryID identifies the destination library, Folder is the source
 // emitted them; Mixed propagates Classify's warning flag for admin
+// leaf folder, Files is the supported-file set emitted by Classify, and
 // surfacing later.
+// Mixed carries Classify's "mixed leaf" warning flag for later admin
+// surfacing.
 type ScanImportArgs struct {
 	LibraryID string           `json:"library_id"`
 	Folder    string           `json:"folder"`

@@ -106,7 +106,7 @@ func main() {
 	// Apply app schema migrations before any repo runs queries. River's own
 	// migrations are applied separately inside queue.New().
 	if cfg.MigrateOnStart {
-		if err := runAppMigrations(ctx, dbh); err != nil {
+		if err := runAppMigrations(dbh); err != nil {
 			slog.Error("migrate", "err", err)
 			os.Exit(1)
 		}
@@ -480,7 +480,7 @@ func main() {
 // It opens a dedicated *sql.DB for migrations and closes it at the end via
 // m.Close() (the golang-migrate postgres driver closes the sql.DB it owns).
 // This keeps the shared dbh.SQL alive for the rest of the application.
-func runAppMigrations(ctx context.Context, d *db.DB) error {
+func runAppMigrations(d *db.DB) error {
 	// Open a short-lived, dedicated connection for the migrator so that
 	// m.Close() (which golang-migrate's Postgres driver calls sql.DB.Close on)
 	// does not close the shared application pool.
@@ -512,6 +512,5 @@ func runAppMigrations(ctx context.Context, d *db.DB) error {
 	if newV != v {
 		slog.Info("migrations applied", "from", v, "to", newV, "dirty", dirty)
 	}
-	_ = ctx
 	return nil
 }

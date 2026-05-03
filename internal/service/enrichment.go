@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -191,7 +192,7 @@ func (s *EnrichmentService) decryptConfigFields(cfg []byte, p provider.Provider)
 func (s *EnrichmentService) transformConfigFields(
 	cfg []byte, p provider.Provider, op func(string) (string, error),
 ) ([]byte, error) {
-	if len(cfg) == 0 || len(cfg) == 2 { // "{}"
+	if len(cfg) == 0 || bytes.Equal(bytes.TrimSpace(cfg), []byte("{}")) {
 		return cfg, nil
 	}
 	pw := passwordFields(p)
@@ -628,18 +629,19 @@ func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m p
 	if !locks.Language && m.Language != "" {
 		book.Language = m.Language
 	}
-	if !locks.ISBN && m.ISBN != "" {
+	if m.ISBN != "" {
 		// Providers hand back a single "ISBN" slot; route 13-digit
-		// values to ISBN-13, shorter to ISBN-10 so we don't smash the
-		// wrong column when both lock flags are off.
+		// values to ISBN-13, shorter to ISBN-10. Each destination
+		// column is gated by its own lock so that locking one form
+		// does not block updates to the other.
 		trimmed := strings.TrimSpace(m.ISBN)
 		digits := countDigits(trimmed)
 		switch {
-		case digits == 13:
+		case digits == 13 && !locks.ISBN:
 			book.ISBN = trimmed
 		case digits == 10 && !locks.ISBN10:
 			book.ISBN10 = trimmed
-		default:
+		case digits != 13 && digits != 10 && !locks.ISBN:
 			book.ISBN = trimmed
 		}
 	}

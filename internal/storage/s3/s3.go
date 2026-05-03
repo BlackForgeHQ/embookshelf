@@ -128,7 +128,7 @@ func (b *Backend) validateBucket(ctx context.Context) error {
 		return fmt.Errorf("s3 versioning probe: %w", err)
 	}
 	if vrsn.Status != types.BucketVersioningStatusEnabled {
-		slog.Warn("s3 bucket versioning is not enabled — accidental "+
+		slog.Warn("s3 bucket versioning is not enabled —— accidental "+
 			"overwrites and deletes will not be recoverable. Enable with "+
 			"`aws s3api put-bucket-versioning --bucket <name> "+
 			"--versioning-configuration Status=Enabled`.",
