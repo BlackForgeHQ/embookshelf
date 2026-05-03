@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -921,11 +922,20 @@ func (s *EnrichmentService) ImportCoverFromURL(ctx context.Context, bookID, rawU
 		return "", errors.New("cover too large")
 	}
 
-	if err := s.covers.SaveBook(bookID, body); err != nil {
+	sum := sha256.Sum256(body)
+	if err := s.covers.SaveBookHashed(sum[:], mime, body); err != nil {
 		return "", err
 	}
 	if err := s.books.SetCover(ctx, bookID, true, mime); err != nil {
 		return "", err
+	}
+	if err := s.books.SetCoverHash(ctx, bookID, sum[:]); err != nil {
+		return "", err
+	}
+	// Remove legacy id-keyed file so the BookCover handler's fallback
+	// path doesn't serve a stale image if the hashed read ever errors.
+	if err := s.covers.DeleteBook(bookID); err != nil {
+		slog.Warn("cover import: delete legacy", "book", bookID, "err", err)
 	}
 	return mime, nil
 }
