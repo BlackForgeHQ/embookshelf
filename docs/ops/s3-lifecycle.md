@@ -59,27 +59,6 @@ For production cron (example with crontab):
 0 2 * * * /usr/local/bin/embookshelf-tag >> /var/log/embookshelf-tag.log 2>&1
 ```
 
-## Step 3: Enable SQS event notifications (optional)
-
-Rather than relying solely on the periodic library scan to reconcile file additions and deletions, you can route S3 event notifications through SNS → SQS so the app learns of changes near-instantly.
-
-### IAM permissions required
-
-The app's IAM role/user needs:
-
-```json
-{
-  "Effect": "Allow",
-  "Action": [
-    "sqs:ReceiveMessage",
-    "sqs:DeleteMessage",
-    "sqs:DeleteMessageBatch",
-    "sqs:GetQueueAttributes"
-  ],
-  "Resource": "arn:aws:sqs:<region>:<account>:<queue-name>"
-}
-```
-
 The tagger additionally needs:
 
 ```json
@@ -90,25 +69,8 @@ The tagger additionally needs:
 }
 ```
 
-### Configure S3 → SNS → SQS
-
-1. Create an SQS queue in the same region as your bucket.
-2. Create an SNS topic and subscribe the SQS queue to it.
-3. Configure your S3 bucket to send `s3:ObjectCreated:*` and `s3:ObjectRemoved:*` events to the SNS topic.
-4. Set the environment variable:
-
-```env
-EMBOOKSHELF_S3_EVENT_QUEUE=https://sqs.<region>.amazonaws.com/<account>/<queue-name>
-EMBOOKSHELF_S3_EVENT_REGION=<region>
-# Optional — how long to sleep between empty polls (default 30s)
-EMBOOKSHELF_S3_EVENT_POLL_INTERVAL=30s
-```
-
-When `EMBOOKSHELF_S3_EVENT_QUEUE` is set, the server logs a startup message confirming the queue URL and the bucket-to-library mapping so you can verify wiring before going live.
-
 ## Notes
 
 - Lifecycle transitions happen after `Days: 1` — S3 evaluates lifecycle rules once per day, so the effective minimum transition time is 1–2 days after the tag is applied.
 - Retrieving a Glacier Instant Retrieval object adds latency (~milliseconds) and per-GB retrieval cost. Consider keeping `hot` books in Standard and only transitioning confirmed cold books.
 - The tagger re-tags every book on every run. For very large libraries (>100k files) consider running it off-peak.
-- The SQS loop is additive — the periodic full-walk scan continues to run alongside it as a safety net.

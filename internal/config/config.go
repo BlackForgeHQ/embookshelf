@@ -55,18 +55,6 @@ type Config struct {
 	// empty, s3-kind library creation is disabled.
 	SharedS3 SharedS3Config
 
-	// S3EventQueueURL is the SQS queue URL from which S3 event notifications
-	// are polled. When empty (default) the SQS poll loop is disabled and the
-	// existing periodic full-walk handles reconciliation.
-	S3EventQueueURL string
-	// S3EventQueueRegion is the AWS region used when creating the SQS client.
-	// Defaults to "us-east-1" when unset.
-	S3EventQueueRegion string
-	// S3EventPollInterval is the sleep duration between empty SQS polls.
-	// Defaults to 30s. Non-positive values are clamped to 30s inside
-	// task.RunS3EventLoop.
-	S3EventPollInterval time.Duration
-
 	// PresignTTL is the lifetime of presigned URLs issued for S3-backed book
 	// files. Default is 10 minutes. Configurable via EMBOOKSHELF_PRESIGN_TTL
 	// (any value parseable by time.ParseDuration, e.g. "15m", "1h").
@@ -84,13 +72,6 @@ type Config struct {
 	// the cross-origin redirect. Default ("" or "stream") streams the
 	// bytes through the app server, which always works.
 	PresignFallback string
-
-	// OIDC seed values. These are applied to app_settings on first
-	// boot only — the DB is authoritative after that so admins can
-	// edit config in the UI without redeploying.
-	OIDCIssuerURL    string
-	OIDCClientID     string
-	OIDCClientSecret string
 
 	// OpenTelemetry / OTLP. When OTELEnabled is true the server exports
 	// traces, metrics, and logs via OTLP to OTELEndpoint. The SDK also
@@ -138,17 +119,9 @@ func Load() (Config, error) {
 			ForcePathStyle:  envBool("EMBOOKSHELF_S3_FORCE_PATH_STYLE", false),
 		},
 
-		S3EventQueueURL:     envStr("EMBOOKSHELF_S3_EVENT_QUEUE", ""),
-		S3EventQueueRegion:  envStr("EMBOOKSHELF_S3_EVENT_REGION", "us-east-1"),
-		S3EventPollInterval: envDuration("EMBOOKSHELF_S3_EVENT_POLL_INTERVAL", 30*time.Second),
-
 		PresignTTL:      envDuration("EMBOOKSHELF_PRESIGN_TTL", 10*time.Minute),
 		PresignFallback: envStr("EMBOOKSHELF_PRESIGN_FALLBACK", ""),
 		S3RenameGrace:   envDuration("EMBOOKSHELF_S3_RENAME_GRACE", 0),
-
-		OIDCIssuerURL:    envStr("OIDC_ISSUER_URL", ""),
-		OIDCClientID:     envStr("OIDC_CLIENT_ID", ""),
-		OIDCClientSecret: envStr("OIDC_CLIENT_SECRET", ""),
 
 		OTELEnabled:     envBool("OTEL_ENABLED", false),
 		OTELServiceName: envStr("OTEL_SERVICE_NAME", "embookshelf"),
@@ -156,11 +129,6 @@ func Load() (Config, error) {
 		OTELProtocol:    strings.ToLower(envStr("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")),
 		OTELInsecure:    envBool("OTEL_EXPORTER_OTLP_INSECURE", true),
 		OTELSampleRatio: envFloat("OTEL_TRACES_SAMPLER_ARG", 1.0),
-	}
-
-	// Validate OIDC: if issuer is set, client ID is required.
-	if cfg.OIDCIssuerURL != "" && cfg.OIDCClientID == "" {
-		return cfg, errors.New("OIDC_CLIENT_ID is required when OIDC_ISSUER_URL is set")
 	}
 
 	if cfg.OTELEnabled {
@@ -172,12 +140,6 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
-}
-
-// HasOIDCEnvSeed reports whether the legacy env vars carry enough to
-// pre-populate app_settings on first boot.
-func (c Config) HasOIDCEnvSeed() bool {
-	return c.OIDCIssuerURL != "" && c.OIDCClientID != ""
 }
 
 func envStr(key, def string) string {

@@ -75,8 +75,6 @@ Read path (ingest): file embedded → OPF (if present) → JSON, each layer over
 
 **Missing purge** — `task.LoopMissingPurge`; hourly sweeper that deletes `files` rows whose `missing_since` is older than 24h. Plan C.
 
-**S3 event loop** — `task.RunS3EventLoop`; opt-in SQS-poll worker that reconciles S3 `ObjectCreated`/`ObjectRemoved` events into the `files` table without waiting for the periodic walk. Plan H.
-
 ---
 
 ## Service layer
