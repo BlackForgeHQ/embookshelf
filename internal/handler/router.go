@@ -109,6 +109,7 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.PUT("/books/:id/metadata/locks", h.EnrichToggleFieldLocks)
 			authed.POST("/books/metadata/isbn-lookup", h.EnrichISBNLookup)
 			authed.POST("/books/:id/cover-from-url", h.EnrichApplyCover)
+			authed.DELETE("/books/:id/cover", h.EnrichRemoveCover)
 
 			// Library statistics dashboard
 			authed.GET("/stats", h.Stats)

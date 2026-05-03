@@ -79,6 +79,10 @@ export async function applyCoverFromUrl(
   })
 }
 
+export async function removeCover(bookId: string): Promise<void> {
+  await api<void>(`/api/v1/books/${bookId}/cover`, { method: "DELETE" })
+}
+
 export const enrichQueryKey = (bookId: string, q: EnrichQuery) =>
   ["enrich", bookId, q] as const
 

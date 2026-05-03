@@ -942,6 +942,23 @@ func (s *EnrichmentService) ImportCoverFromURL(ctx context.Context, bookID, rawU
 	return mime, nil
 }
 
+// ClearCover removes the cover for a book: flips has_cover off, clears
+// cover_mime + cover_hash, and best-effort deletes the legacy id-keyed
+// cover file. Hashed cover bytes are content-addressed and may be shared
+// with other books, so we intentionally don't touch the hashed file.
+func (s *EnrichmentService) ClearCover(ctx context.Context, bookID string) error {
+	if err := s.books.SetCover(ctx, bookID, false, ""); err != nil {
+		return err
+	}
+	if err := s.books.SetCoverHash(ctx, bookID, nil); err != nil {
+		return err
+	}
+	if err := s.covers.DeleteBook(bookID); err != nil {
+		slog.Warn("cover clear: delete legacy", "book", bookID, "err", err)
+	}
+	return nil
+}
+
 // enrichCacheKey normalizes a query into a stable cache key. Whitespace
 // is trimmed and the case folded so "bash cookbook" and "Bash Cookbook"
 // share a cache entry. ISBN wins if present (it's the unique signal).

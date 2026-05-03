@@ -489,3 +489,28 @@ func (h *Handler) EnrichApplyCover(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, coverFromURLResp{CoverMime: mime})
 }
+
+// EnrichRemoveCover clears the cover for a book: flips has_cover off,
+// nulls cover_mime + cover_hash, and best-effort deletes the legacy
+// id-keyed file. Hashed cover bytes are kept (content-addressed; may be
+// shared with other books). Idempotent — removing again is a no-op.
+func (h *Handler) EnrichRemoveCover(c *gin.Context) {
+	userID := requireUserID(c)
+	if userID == "" {
+		return
+	}
+	id := c.Param("id")
+	if _, err := h.lib.GetBook(c.Request.Context(), userID, id); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			writeError(c, http.StatusNotFound, "book not found")
+			return
+		}
+		writeServerError(c, "remove cover get book", err)
+		return
+	}
+	if err := h.enrich.ClearCover(c.Request.Context(), id); err != nil {
+		writeServerError(c, "remove cover", err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}

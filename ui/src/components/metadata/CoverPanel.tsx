@@ -7,7 +7,7 @@ import { FieldLockButton } from "./FieldLockButton"
 import type { ApiError } from "@/api/client"
 import type { BookDetail } from "@/api/books"
 import { bookQueryKey } from "@/api/books"
-import { applyCoverFromUrl } from "@/api/enrich"
+import { removeCover } from "@/api/enrich"
 import { Cover } from "@/components/Cover"
 import { Icon } from "@/components/Icon"
 import { Button } from "@/components/ui/button"
@@ -19,8 +19,7 @@ export function CoverPanel({ book }: { book: BookDetail }) {
   const navigate = useNavigate()
 
   const removeCoverMut = useMutation({
-    // Empty URL clears the cover server-side.
-    mutationFn: () => applyCoverFromUrl(book.id, ""),
+    mutationFn: () => removeCover(book.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: bookQueryKey(book.id) })
       queryClient.invalidateQueries({ queryKey: ["books"] })
