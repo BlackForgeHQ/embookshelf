@@ -18,14 +18,16 @@ import (
 // feed BookDrop and the book row; not a full PDF library.
 type PDFProcessor struct{}
 
-// pdfInfoFieldRe matches `/Name (value)` entries in the Info dict. Handles
-// escaped parens inside the string. Misses:
-//   - hex-literal strings (/Title <FEFF...>)
-//   - UTF-16BE BOM-prefixed strings (rare in seed/fixture files)
-//   - PDFs whose Info dict lives past the first ~1 MB or trailer tail
+// pdfInfoLiteralRe matches `/Name (value)` entries in the Info dict.
+// Handles escaped parens inside the string.
 //
-// For those, we fall back to the filename.
-var pdfInfoFieldRe = regexp.MustCompile(`/([A-Za-z][A-Za-z0-9]*)\s*\(((?:\\.|[^)])*)\)`)
+// pdfInfoHexRe matches `/Name <hex>` entries — Acrobat / MS Word write
+// non-ASCII titles as hex-encoded UTF-16BE strings.
+//
+// Together they cover the two PDF string-literal forms; the helpers in
+// pdf_strings.go decode the contents (Latin-1 vs UTF-16BE-BOM).
+var pdfInfoLiteralRe = regexp.MustCompile(`/([A-Za-z][A-Za-z0-9]*)\s*\(((?:\\.|[^)])*)\)`)
+var pdfInfoHexRe = regexp.MustCompile(`/([A-Za-z][A-Za-z0-9]*)\s*<([0-9A-Fa-f\s]*)>`)
 
 func (PDFProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, error) {
 	_ = ctx
@@ -55,7 +57,7 @@ func (PDFProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, 
 
 	var tail []byte
 	if size > int64(hn) {
-		const tailSize = 8 << 10 // 8 KB
+		const tailSize = 256 << 10 // 256 KB — catches Calibre-tail XMP packets
 		pos := size - tailSize
 		if pos < int64(hn) {
 			pos = int64(hn)
@@ -79,14 +81,27 @@ func (PDFProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, 
 	return m, nil
 }
 
-// pdfInfoField pulls a named literal string from the PDF Info dict. Empty
-// when the key isn't present in string form.
+// pdfInfoField pulls a named string from the PDF Info dict. Tries the
+// literal form `(...)` first, then the hex form `<...>`. Returns the
+// first non-empty hit decoded via the helpers in pdf_strings.go (which
+// handle UTF-16BE-BOM payloads). Empty when the key isn't present.
 func pdfInfoField(data []byte, key string) string {
-	for _, match := range pdfInfoFieldRe.FindAllSubmatch(data, -1) {
+	for _, match := range pdfInfoLiteralRe.FindAllSubmatch(data, -1) {
 		if string(match[1]) != key {
 			continue
 		}
-		return unescapePDFLiteral(string(match[2]))
+		body := unescapePDFLiteral(string(match[2]))
+		if v := decodePDFLiteral([]byte(body)); v != "" {
+			return v
+		}
+	}
+	for _, match := range pdfInfoHexRe.FindAllSubmatch(data, -1) {
+		if string(match[1]) != key {
+			continue
+		}
+		if v := decodePDFHexString(string(match[2])); v != "" {
+			return v
+		}
 	}
 	return ""
 }
@@ -94,6 +109,11 @@ func pdfInfoField(data []byte, key string) string {
 // unescapePDFLiteral handles the escapes PDF string literals use. Covers
 // \\ \( \) and newline escapes — the common ones. Other sequences fall
 // through unchanged.
+//
+// Does NOT trim whitespace: the result may begin with a UTF-16BE BOM
+// (0xFE 0xFF) that decodePDFLiteral keys on, and trimming would
+// corrupt those leading bytes. Trim semantics are deferred to
+// decodePDFLiteral once the encoding is known.
 func unescapePDFLiteral(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -118,5 +138,5 @@ func unescapePDFLiteral(s string) string {
 		}
 		i++
 	}
-	return strings.TrimSpace(b.String())
+	return b.String()
 }

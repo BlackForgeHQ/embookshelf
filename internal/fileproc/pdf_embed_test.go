@@ -274,6 +274,24 @@ func TestPDFEmbedder_Embed_PreservesCreationDate(t *testing.T) {
 	}
 }
 
+// TestPDFProcessor_HexUTF16BEDocInfoTitle verifies that a /Title written
+// as a hex-encoded UTF-16BE string (the form Acrobat / MS Word use for
+// non-ASCII titles) round-trips through Extract intact. Embedded
+// whitespace inside <…> must also be tolerated per the PDF spec.
+func TestPDFProcessor_HexUTF16BEDocInfoTitle(t *testing.T) {
+	raw := []byte("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n" +
+		"1 0 obj\n<< /Title <FEFF00540069007400 6C0065> >>\nendobj\n" +
+		"trailer << /Info 1 0 R >>\n%%EOF\n")
+	src := memSourceFromBytes(raw)
+	m, err := (PDFProcessor{}).Extract(context.Background(), src)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if m.Title != "Title" {
+		t.Fatalf("Title=%q want %q", m.Title, "Title")
+	}
+}
+
 func TestDispatchEmbedder_PDF(t *testing.T) {
 	emb, err := DispatchEmbedder("PDF")
 	if err != nil {
