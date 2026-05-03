@@ -6,10 +6,10 @@ import "testing"
 // to gate user-supplied cover bytes.
 func TestSniffCoverMime(t *testing.T) {
 	cases := []struct {
-		name    string
-		input   []byte
-		want    string
-		wantOK  bool
+		name   string
+		input  []byte
+		want   string
+		wantOK bool
 	}{
 		{"png", []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}, "image/png", true},
 		{"jpeg", []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F'}, "image/jpeg", true},
