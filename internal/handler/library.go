@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -75,6 +76,12 @@ type bookDTO struct {
 	PublicReviews *bool    `json:"publicReviews,omitempty"`
 	HasCover      bool     `json:"hasCover"`
 	CoverMime     string   `json:"coverMime,omitempty"`
+	// CoverVersion is a short cache-buster derived from the cover bytes
+	// hash. Empty when the book has no cover or the hash hasn't been
+	// backfilled yet. Clients append it to the cover URL as ?v=… so a
+	// new upload invalidates the browser cache without dropping the
+	// long max-age on the underlying response.
+	CoverVersion string `json:"coverVersion,omitempty"`
 	AddedAt       string   `json:"addedAt"`
 	// DurationSeconds is populated only for audio formats (MP3, M4B);
 	// nil otherwise (omitted from the JSON via *int + omitempty).
@@ -141,12 +148,27 @@ func toBookDTO(b model.Book) bookDTO {
 		PublicReviews:   b.PublicReviews,
 		HasCover:        b.HasCover,
 		CoverMime:       b.CoverMime,
+		CoverVersion:    coverVersion(b.CoverHash),
 		AddedAt:         b.CreatedAt.UTC().Format(time.RFC3339),
 		DurationSeconds: b.DurationSeconds,
 		Narrator:        b.Narrator,
 		Chapters:        chaptersToDTO(b.Chapters),
 		Locks:           serializeLocks(b.Locks),
 	}
+}
+
+// coverVersion truncates the sha256 cover hash to a short hex prefix
+// suitable for a ?v= cache-buster. 12 hex chars = 48 bits, plenty of
+// uniqueness per-book without bloating every URL.
+func coverVersion(hash []byte) string {
+	if len(hash) == 0 {
+		return ""
+	}
+	enc := hex.EncodeToString(hash)
+	if len(enc) > 12 {
+		enc = enc[:12]
+	}
+	return enc
 }
 
 func chaptersToDTO(in []model.Chapter) []chapterDTO {

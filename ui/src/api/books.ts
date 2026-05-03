@@ -89,6 +89,10 @@ export type Book = {
   publicReviews?: boolean | null
   hasCover: boolean
   coverMime?: string
+  // Short cache-buster derived from the cover bytes hash. Append as
+  // ?v=… on the cover URL so a re-uploaded cover invalidates the
+  // browser cache without forcing the API to drop its long max-age.
+  coverVersion?: string
   addedAt: string
   // Audiobook fields. durationSeconds is undefined for non-audio formats
   // and may also be undefined for audio when the processor couldn't
@@ -336,4 +340,7 @@ export const bookQueryKey = (id: string) => ["book", id] as const
 
 // Cover URL helper — the <img> tag fetches directly from this path; no
 // TanStack Query wrapper needed.
-export const bookCoverUrl = (id: string) => `/api/v1/books/${id}/cover`
+export const bookCoverUrl = (id: string, version?: string) =>
+  version
+    ? `/api/v1/books/${id}/cover?v=${encodeURIComponent(version)}`
+    : `/api/v1/books/${id}/cover`

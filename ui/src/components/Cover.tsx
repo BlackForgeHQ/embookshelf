@@ -44,6 +44,9 @@ export type CoverBook = {
   // fall back to the typographic tile.
   id?: string
   hasCover?: boolean
+  // Optional cache-buster appended to the cover URL. Prevents the
+  // browser from serving a stale image after a re-upload.
+  coverVersion?: string
 }
 
 type CoverSize = "xs" | "sm" | "md" | "lg" | "hero"
@@ -234,7 +237,7 @@ export function Cover({ book, size = "md", onClick, style }: CoverProps) {
     >
       {showImage ? (
         <img
-          src={bookCoverUrl(book.id as string)}
+          src={bookCoverUrl(book.id as string, book.coverVersion)}
           alt={book.title}
           loading="lazy"
           onError={() => setImgFailed(true)}
