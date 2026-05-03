@@ -109,7 +109,13 @@ export function uploadBookDrop(
 ): Promise<Array<BookDropUploadResult>> {
   return new Promise((resolve, reject) => {
     const form = new FormData()
-    for (const f of files) form.append("files", f, f.name)
+    for (const f of files) {
+      const safeName = f.name
+        .normalize("NFKD")
+        .replace(/[^\x20-\x7E]/g, "_")
+        .replace(/["\r\n\\]/g, "_")
+      form.append("files", f, safeName)
+    }
 
     const xhr = new XMLHttpRequest()
     xhr.open("POST", "/api/v1/bookdrop/upload")
