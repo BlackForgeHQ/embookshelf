@@ -71,6 +71,12 @@ type Config struct {
 	// files. Default is 10 minutes. Configurable via EMBOOKSHELF_PRESIGN_TTL
 	// (any value parseable by time.ParseDuration, e.g. "15m", "1h").
 	PresignTTL time.Duration
+	// S3RenameGrace is the grace window before the orphaned-keys
+	// sweeper deletes old keys left behind by an S3 folder rename
+	// (ADR-0005). Zero means "compute at boot as max(2 × PresignTTL,
+	// 1h)". Override via EMBOOKSHELF_S3_RENAME_GRACE.
+	S3RenameGrace time.Duration
+
 	// PresignFallback selects the delivery mode for book files when
 	// the backend supports presign. Set to "presign" to opt into 302
 	// redirects to a pre-signed URL — requires the bucket to allow the
@@ -138,6 +144,7 @@ func Load() (Config, error) {
 
 		PresignTTL:      envDuration("EMBOOKSHELF_PRESIGN_TTL", 10*time.Minute),
 		PresignFallback: envStr("EMBOOKSHELF_PRESIGN_FALLBACK", ""),
+		S3RenameGrace:   envDuration("EMBOOKSHELF_S3_RENAME_GRACE", 0),
 
 		OIDCIssuerURL:    envStr("OIDC_ISSUER_URL", ""),
 		OIDCClientID:     envStr("OIDC_CLIENT_ID", ""),

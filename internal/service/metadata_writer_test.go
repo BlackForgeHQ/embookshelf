@@ -13,6 +13,7 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sidecar"
 	"github.com/blackforge/embookshelf/internal/storage"
@@ -24,6 +25,8 @@ type fakeBookWriter struct {
 	called          []model.Book
 	err             error
 	folderPathCalls []folderPathCall
+	renameTxCalls   []repo.RenameFolderTxArgs
+	renameTxErr     error
 }
 
 type folderPathCall struct {
@@ -40,6 +43,22 @@ func (f *fakeBookWriter) UpdateMetadata(ctx context.Context, b model.Book) error
 func (f *fakeBookWriter) SetFolderPath(ctx context.Context, bookID, folderPath, path string) error {
 	f.folderPathCalls = append(f.folderPathCalls, folderPathCall{BookID: bookID, FolderPath: folderPath, Path: path})
 	return nil
+}
+
+func (f *fakeBookWriter) RenameFolderTx(ctx context.Context, args repo.RenameFolderTxArgs) error {
+	f.renameTxCalls = append(f.renameTxCalls, args)
+	return f.renameTxErr
+}
+
+// fakeOrphans records orphan inserts for the rollback path.
+type fakeOrphans struct {
+	calls [][]repo.PendingOrphanInsert
+	err   error
+}
+
+func (f *fakeOrphans) Insert(ctx context.Context, rows []repo.PendingOrphanInsert) error {
+	f.calls = append(f.calls, rows)
+	return f.err
 }
 
 // fakeLibStore returns a fixed handle for any libraryID.
@@ -649,7 +668,7 @@ func TestMetadataWriter_FolderRename_NoChange(t *testing.T) {
 		t.Fatalf("local.New: %v", err)
 	}
 	folder := "Tolkien/The Hobbit"
-	if err := os.MkdirAll(libRoot + "/" + folder, 0o755); err != nil {
+	if err := os.MkdirAll(libRoot+"/"+folder, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 
@@ -687,10 +706,182 @@ func TestMetadataWriter_FolderRename_NoChange(t *testing.T) {
 	}
 }
 
-// TestMetadataWriter_FolderRename_S3SkipsRename covers the
-// S3-backend gate: even on author/title change the folder must not
-// be renamed (per ADR-0003 §7).
-func TestMetadataWriter_FolderRename_S3SkipsRename(t *testing.T) {
+// TestMetadataWriter_FolderRename_S3Renames covers ADR-0005: an
+// S3-backed library now performs an edit-time folder rename via
+// list-prefix + server-side copy + sweeper-deferred delete. Uses
+// local.Storage as a stand-in backend (the rename pipeline is
+// agnostic to the concrete Storage impl).
+func TestMetadataWriter_FolderRename_S3Renames(t *testing.T) {
+	libRoot := t.TempDir()
+	fs, err := local.New(libRoot)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	backendID := "backend-s3"
+	oldFolder := "Tolkien/Hobbit"
+	oldDir := libRoot + "/" + oldFolder
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatalf("mkdir old: %v", err)
+	}
+	if err := os.WriteFile(oldDir+"/hobbit.epub", []byte("epub"), 0o644); err != nil {
+		t.Fatalf("write book: %v", err)
+	}
+	if err := os.WriteFile(oldDir+"/metadata.embookshelf.json", []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write sidecar: %v", err)
+	}
+
+	books := &fakeBookWriter{}
+	files := &fakeFileRepo{
+		files: []model.File{
+			{ID: "f1", Location: oldFolder + "/hobbit.epub", Format: "EPUB"},
+		},
+	}
+	orphans := &fakeOrphans{}
+	handle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", Path: libRoot, BackendID: &backendID},
+		Storage: fs,
+	}
+	libStore := &fakeLibStore{handle: handle}
+	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+		Books:       books,
+		LibStore:    libStore,
+		Files:       files,
+		Orphans:     orphans,
+		RenameGrace: time.Hour,
+	})
+
+	folder := oldFolder
+	book := model.Book{
+		ID: "b1", LibraryID: "lib1",
+		Author: "Tolkien", Title: "The Hobbit",
+		Format: "EPUB", Path: oldFolder + "/hobbit.epub",
+		FolderPath: &folder,
+	}
+	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !out.FolderRenamed {
+		t.Fatalf("FolderRenamed=false; outcome=%+v", out)
+	}
+	wantFolder := "Tolkien/The Hobbit"
+	if out.NewFolderPath != wantFolder {
+		t.Errorf("NewFolderPath=%q want %q", out.NewFolderPath, wantFolder)
+	}
+
+	// New keys exist; old keys still exist (sweeper hasn't run).
+	if _, err := os.Stat(libRoot + "/" + wantFolder + "/hobbit.epub"); err != nil {
+		t.Errorf("new key missing: %v", err)
+	}
+	if _, err := os.Stat(libRoot + "/" + wantFolder + "/metadata.embookshelf.json"); err != nil {
+		t.Errorf("new sidecar missing: %v", err)
+	}
+	if _, err := os.Stat(oldDir + "/hobbit.epub"); err != nil {
+		t.Errorf("old key deleted prematurely; want sweeper-deferred: %v", err)
+	}
+
+	// Single RenameFolderTx call carries the orphan inserts for old keys.
+	if len(books.renameTxCalls) != 1 {
+		t.Fatalf("RenameFolderTx calls=%d want 1", len(books.renameTxCalls))
+	}
+	tx := books.renameTxCalls[0]
+	if tx.NewFolder != wantFolder {
+		t.Errorf("tx.NewFolder=%q want %q", tx.NewFolder, wantFolder)
+	}
+	if len(tx.Files) != 1 || tx.Files[0].Location != wantFolder+"/hobbit.epub" {
+		t.Errorf("tx.Files=%+v", tx.Files)
+	}
+	if len(tx.Orphans) != 2 {
+		t.Errorf("tx.Orphans=%d want 2 (epub + sidecar)", len(tx.Orphans))
+	}
+	for _, o := range tx.Orphans {
+		if !strings.HasPrefix(o.Key, oldFolder+"/") {
+			t.Errorf("orphan key=%q not under old prefix", o.Key)
+		}
+		if o.Reason != repo.ReasonOrphanRename {
+			t.Errorf("orphan reason=%q", o.Reason)
+		}
+	}
+
+	// Rollback path not taken.
+	if len(orphans.calls) != 0 {
+		t.Errorf("rollback orphans called=%d want 0", len(orphans.calls))
+	}
+}
+
+// TestMetadataWriter_FolderRename_BackendTxFailRollback covers the
+// rollback path: phase-1 copy succeeds but the DB tx fails. The
+// half-rename new keys must be enqueued with the short rollback
+// grace via the standalone Orphans queue.
+func TestMetadataWriter_FolderRename_BackendTxFailRollback(t *testing.T) {
+	libRoot := t.TempDir()
+	fs, err := local.New(libRoot)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	backendID := "backend-s3"
+	oldFolder := "Tolkien/Hobbit"
+	oldDir := libRoot + "/" + oldFolder
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(oldDir+"/hobbit.epub", []byte("epub"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	books := &fakeBookWriter{renameTxErr: errors.New("simulated tx failure")}
+	files := &fakeFileRepo{
+		files: []model.File{
+			{ID: "f1", Location: oldFolder + "/hobbit.epub", Format: "EPUB"},
+		},
+	}
+	orphans := &fakeOrphans{}
+	handle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", Path: libRoot, BackendID: &backendID},
+		Storage: fs,
+	}
+	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+		Books:    books,
+		LibStore: &fakeLibStore{handle: handle},
+		Files:    files,
+		Orphans:  orphans,
+	})
+
+	folder := oldFolder
+	book := model.Book{
+		ID: "b1", LibraryID: "lib1",
+		Author: "Tolkien", Title: "The Hobbit",
+		Format: "EPUB", Path: oldFolder + "/hobbit.epub",
+		FolderPath: &folder,
+	}
+	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if out.FolderRenamed {
+		t.Error("FolderRenamed=true; want false on tx failure")
+	}
+
+	// One Orphans.Insert call carrying the new-prefix keys with
+	// short-grace eligibility.
+	if len(orphans.calls) != 1 {
+		t.Fatalf("Orphans.Insert calls=%d want 1", len(orphans.calls))
+	}
+	rows := orphans.calls[0]
+	if len(rows) != 1 {
+		t.Fatalf("rollback rows=%d want 1", len(rows))
+	}
+	wantKey := "Tolkien/The Hobbit/hobbit.epub"
+	if rows[0].Key != wantKey {
+		t.Errorf("rollback key=%q want %q", rows[0].Key, wantKey)
+	}
+}
+
+// TestMetadataWriter_FolderRename_BackendNoOrphansRepo verifies
+// MetadataWriter fails closed when constructed without an Orphans
+// queue: the backend rename arm cannot defer the source delete
+// safely, so it must not attempt the copy + tx at all.
+func TestMetadataWriter_FolderRename_BackendNoOrphansRepo(t *testing.T) {
 	libRoot := t.TempDir()
 	fs, err := local.New(libRoot)
 	if err != nil {
@@ -698,15 +889,18 @@ func TestMetadataWriter_FolderRename_S3SkipsRename(t *testing.T) {
 	}
 	backendID := "backend-s3"
 	folder := "Tolkien/Hobbit"
+	if err := os.MkdirAll(libRoot+"/"+folder, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
 	books := &fakeBookWriter{}
 	handle := &service.LibraryHandle{
 		Library: model.Library{ID: "lib1", Path: libRoot, BackendID: &backendID},
 		Storage: fs,
 	}
-	libStore := &fakeLibStore{handle: handle}
 	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
 		Books:    books,
-		LibStore: libStore,
+		LibStore: &fakeLibStore{handle: handle},
 	})
 
 	book := model.Book{
@@ -720,6 +914,9 @@ func TestMetadataWriter_FolderRename_S3SkipsRename(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 	if out.FolderRenamed {
-		t.Error("FolderRenamed=true on S3-backed library; want false")
+		t.Error("FolderRenamed=true with nil Orphans; want false")
+	}
+	if len(books.renameTxCalls) != 0 {
+		t.Errorf("RenameFolderTx called %d times; want 0", len(books.renameTxCalls))
 	}
 }

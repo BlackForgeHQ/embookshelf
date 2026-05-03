@@ -236,12 +236,22 @@ func main() {
 	// auto-enrich background path passes TriggerAutoEnrichment to skip
 	// the side-effect steps and only persist the DB row.
 	sidecarWriter := sidecar.NewWriter()
+	pendingOrphansRepo := repo.NewPendingOrphanRepo(dbh)
+	renameGrace := cfg.S3RenameGrace
+	if renameGrace <= 0 {
+		// ADR-0005: 2× PresignTTL covers any URL the client could
+		// still hold. Floor at 1h so very short PresignTTL (manual
+		// override) doesn't make the sweeper too aggressive.
+		renameGrace = max(2*cfg.PresignTTL, time.Hour)
+	}
 	metadataWriter := service.NewMetadataWriter(service.MetadataWriterDeps{
-		Books:    bookRepo,
-		LibStore: libStore,
-		Sidecar:  sidecarWriter,
-		Dispatch: fileproc.DispatchEmbedder,
-		Files:    fileRepo,
+		Books:       bookRepo,
+		LibStore:    libStore,
+		Sidecar:     sidecarWriter,
+		Dispatch:    fileproc.DispatchEmbedder,
+		Files:       fileRepo,
+		Orphans:     pendingOrphansRepo,
+		RenameGrace: renameGrace,
 	})
 	libSvc.WithMetadataWriter(metadataWriter)
 	enrichSvc.WithMetadataWriter(metadataWriter)
@@ -337,6 +347,16 @@ func main() {
 	// Missing-files purge sweeper: deletes files rows whose missing_since
 	// is older than 24h. Runs hourly until the application shuts down.
 	go task.LoopMissingPurge(ctx, fileRepo, time.Hour)
+
+	// Orphaned-keys sweeper: drains pending_orphans rows whose grace
+	// window has passed, deleting the underlying storage keys. Sources:
+	// post-rename old keys (full RenameGrace) and rollback half-rename
+	// new keys (RenameRollbackGrace). ADR-0005.
+	go task.LoopOrphanedKeys(ctx, task.OrphanedKeysDeps{
+		Orphans:  pendingOrphansRepo,
+		Libs:     libRepo,
+		Resolver: storageResolver,
+	}, time.Hour)
 
 	// S3 event loop: poll an SQS queue for S3 event notifications and
 	// reconcile them into the files table without waiting for the next

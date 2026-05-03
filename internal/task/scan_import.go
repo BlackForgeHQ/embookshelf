@@ -21,10 +21,10 @@ import (
 // emitted them; Mixed propagates Classify's warning flag for admin
 // surfacing later.
 type ScanImportArgs struct {
-	LibraryID string             `json:"library_id"`
-	Folder    string             `json:"folder"`
-	Files     []ScanImportFile   `json:"files"`
-	Mixed     bool               `json:"mixed,omitempty"`
+	LibraryID string           `json:"library_id"`
+	Folder    string           `json:"folder"`
+	Files     []ScanImportFile `json:"files"`
+	Mixed     bool             `json:"mixed,omitempty"`
 }
 
 // ScanImportFile is a JSON-friendly slice of scan.WalkEntry. Carries
