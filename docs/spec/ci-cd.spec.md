@@ -493,7 +493,7 @@ CI for CI is a real problem — a broken workflow file can't stop itself from br
 - E2E package: [e2e/package.json](e2e/package.json), [e2e/playwright.config.ts](e2e/playwright.config.ts), [e2e/global-setup.ts](e2e/global-setup.ts), [e2e/fixtures/constants.ts](e2e/fixtures/constants.ts)
 - Env contract: [.env.example](.env.example)
 - Seed: [.github/seed.sql](.github/seed.sql)
-- Docs: [docs/architecture.md](docs/architecture.md), [docs/testing-playwright.md](docs/testing-playwright.md), [README.md](README.md)
+- Docs: [docs/architecture.md](docs/architecture.md), [docs/adr/0006-playwright-e2e-against-built-binary.md](docs/adr/0006-playwright-e2e-against-built-binary.md), [README.md](README.md)
 - GitHub Actions docs: <https://docs.github.com/actions> (branch protection: Settings → Branches; Actions permissions: Settings → Actions → General)
 - Related specs: [spec/library-creation.spec.md](spec/library-creation.spec.md), [spec/s3-storage.spec.md](spec/s3-storage.spec.md)
 

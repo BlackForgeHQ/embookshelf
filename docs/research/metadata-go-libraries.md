@@ -1,5 +1,7 @@
 # Go Libraries for Book Metadata Enrichment: A Production-Ready Guide
 
+> **Reference doc.** Landscape survey informing embookshelf's adapter choices in `internal/provider/`. Cited by ADR-0008. Not authoritative for what's actually wired up — see `docs/CONTEXT.md` (Metadata enrichment section) and the ADRs for the live architecture.
+
 This report surveys Go (Golang) libraries and SDKs for building a personal library catalog that enriches records from multiple book-metadata sources. It covers ISBN utilities, Open Library, Google Books, WorldCat/OCLC, Wikidata SPARQL, MARC/SRU, Amazon PA-API 5.0, Hardcover.app GraphQL, ISBNdb, cover-image tooling, supporting infrastructure (rate limits, retries, caches, queues), ebook-file metadata extraction, barcode scanning, and reference architectures in Go. For each library I note the GitHub URL, a rough popularity signal, license where available, coverage, and gaps, and I flag where Go has **no** mature library and you should fall back to `net/http` + `encoding/json`/`encoding/xml`.
 
 > Caveat on star counts and "last commit": GitHub star totals change constantly and the research tool surfaces cached or historical snapshots. Treat numbers below as order-of-magnitude signals as of the 2025–2026 timeframe, not as audited figures. Where the repositories themselves state a status (e.g., "maintenance mode"), I quote that directly.

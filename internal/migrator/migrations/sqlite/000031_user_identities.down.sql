@@ -1,6 +1,6 @@
 -- Reverse of 000031_user_identities.up.sql. Restores only the
 -- earliest-linked identity per user; multi-linked accounts lose data
--- (see ADR-0001).
+-- (see ADR-0007).
 
 ALTER TABLE users ADD COLUMN oidc_subject TEXT;
 ALTER TABLE users ADD COLUMN oidc_issuer  TEXT;

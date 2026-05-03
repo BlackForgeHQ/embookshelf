@@ -1,4 +1,4 @@
-# ADR-0001: Move OIDC identities into `user_identities`
+# ADR-0007: Move OIDC identities into `user_identities`
 
 - Status: Accepted (2026-05-02)
 - Deciders: Bohdan Shaparenko (@shbodya)

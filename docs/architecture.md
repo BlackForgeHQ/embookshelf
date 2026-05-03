@@ -99,7 +99,7 @@ so the session cookie the Go server issues rides along.
 
 Testing stacks: Go `testing` + `testify` for the backend; Playwright
 for end-to-end browser coverage under [e2e/](../e2e/) — see
-[docs/testing-playwright.md](./testing-playwright.md). UI unit tests
+[ADR-0006](./adr/0006-playwright-e2e-against-built-binary.md). UI unit tests
 are wired with **Vitest** + **@testing-library/react** (`bun run test`
 inside `ui/`).
 

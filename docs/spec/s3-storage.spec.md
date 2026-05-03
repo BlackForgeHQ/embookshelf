@@ -576,7 +576,7 @@ No migration needed; only a migration comment bump.
 | Integration | BookDrop approval matrix (§5.8) — fs→fs, fs→s3, s3→fs, s3→s3 | `go test` (tagged `integration`) |
 | HTTP | `GET /api/v1/books/:id/file` serves bytes identically between `fs` and `s3` (same checksum) | `go test` |
 | HTTP | `S3_PRESIGN_DOWNLOADS=true` yields a 302 with a presigned URL | `go test` |
-| UI | Settings → New library dialog: backend radio toggles field set; submit posts the right body | Playwright, see [docs/testing-playwright.md](docs/testing-playwright.md) |
+| UI | Settings → New library dialog: backend radio toggles field set; submit posts the right body | Playwright, see [docs/adr/0006-playwright-e2e-against-built-binary.md](../adr/0006-playwright-e2e-against-built-binary.md) |
 | UI | Pre-scan file count against `s3` | Playwright |
 
 CI runs MinIO via the existing [compose.dev.yml](compose.dev.yml) (add a `minio` service); unit tests keep running without it via a `-short` gate that skips the integration build tag.

@@ -123,6 +123,40 @@ Read path (ingest): file embedded → OPF (if present) → JSON, each layer over
 
 ---
 
+## Metadata enrichment (ADRs 0008–0013)
+
+**Provider** — `provider.Provider`; strategy adapter for one external metadata source (Google Books, Open Library, Hardcover, Goodreads, Amazon, DuckDuckGo). Single method: `Search(ctx, Query) ([]Match, error)`. ID is a `provider.Source` constant declared in the Catalog.
+
+**Catalog** — `provider.Catalog`; literal `[]Info` in `internal/provider/catalog.go`. Single source of truth for which provider IDs the binary knows + their default rate limits + `DefaultEnabled` flags. Walked by `Build()`, the settings handler DTO, and the `provider_settings` seed. New provider = code + rebuild (ADR-0008).
+
+**Match** — `provider.Match`; normalized hit from any provider. Includes Title, Authors, ISBN, Description, Cover URL, Series, Year, Categories, Language, plus a provider-scored `Confidence` (0–100 heuristic; higher = better guess). Consumers merge by Confidence.
+
+**Query** — `provider.Query{Title, Author, ISBN}`; search input. Empty fields ignored. ISBN-only is the identity-match shape used by `LookupByISBN`.
+
+**Resilient client** — `provider.NewResilientClient(name, rps, burst)`; the shared `*http.Client` decorator stack used by every provider adapter. Three layers, outermost first: token-bucket rate limiter (`x/time/rate`) → circuit breaker (`sony/gobreaker/v2`, trips at 60% failure over ≥5 requests, 30s recovery) → retryable transport (`hashicorp/go-retryablehttp`, 3 retries with backoff, treats 429/5xx as breaker failures). One client per provider, named for breaker telemetry.
+
+**EnrichmentService** — `service.EnrichmentService`; the fan-out coordinator. Owns `providers []provider.Provider`, the in-process result cache (5min TTL, 512-entry cap), the cover store + book repo handles, and the `Cipher` for password-field secrets. Three external entry points: `Search` (batch fan-out + merge by Confidence), `SearchStream` (SSE-friendly per-provider channel), `LookupByISBN` (priority chain, first non-empty wins).
+
+**Prospective metadata** — candidate matches presented to the user for review before persisting. Streamed over SSE via `EnrichStream` so fast providers render in <1s while slow scrapers fill in (ADR-0009). Distinct from auto-enrich's headless gap-fill (ADR-0012) and from `LookupByISBN`'s short-circuit chain (ADR-0011).
+
+**ISBN chain** — `LookupByISBN`'s ordered walk through enabled providers by `provider_settings.priority` ASC (ranked first, unranked fall back to catalog order). First provider returning ≥1 match terminates the walk; within that batch, max-Confidence match wins. Used by `POST /api/books/metadata/isbn-lookup` and by `AutoEnrich` when the book has an ISBN. ADR-0011.
+
+**Auto-enrich** — `EnrichmentService.AutoEnrich(ctx, book)`; headless background gap-fill triggered by bookdrop approve. Empty-only policy: clones `book.Locks` in-memory and sets every non-empty field as locked for the duration of the apply, leaving DB locks unchanged (ADR-0012). Prefers ISBN chain; falls back to `Search` with Confidence ≥ 70 threshold. Triggers `TriggerAutoEnrichment` — ADR-0001 §3 keeps this off the in-file embedded write path.
+
+**Provider settings row** — `provider_settings(id, enabled, config, priority, last_success_at, last_error_at, last_error)`. One row per Catalog entry. `config` is JSONB; `password`-kind fields (Hardcover token, Amazon cookie) are AES-256-GCM encrypted in place; non-secret fields (region, language, enabled flags) stay plaintext for `psql` legibility (ADR-0010). `priority` is a single nullable int; ranked-first then unranked-in-catalog-order.
+
+**Cipher** — `crypto.Cipher` interface with two implementations: `AESGCM` (prod, KEK from `EMBOOKSHELF_SECRET_KEY` base64-decoded 32 bytes) and `Noop` (dev fallback when env unset). Boot semantics are asymmetric: invalid key refuses startup; unset key warns and falls back to Noop. ADR-0010.
+
+**Configurable** / **SchemaProvider** — optional interfaces a `Provider` may implement. `Configurable.Configure(rawJSON)` accepts plaintext config from the settings UI; `SchemaProvider.ConfigSchema()` returns `[]ConfigField` describing inputs the admin UI should render (text / password / select / textarea). Password-kind fields drive the per-field encryption walk in `EnrichmentService.transformConfigFields`.
+
+**Graceful degrade** — fan-out policy: per-provider error → log + write to health table + return nil from goroutine; siblings unaffected. `errgroup` is used purely for ctx propagation (client disconnect cancels all in-flight HTTP calls), **not** for error short-circuit. `_ = g.Wait()` is deliberate. ADR-0013. Don't "fix" it.
+
+**Provider health** — `provider_settings.last_success_at` / `last_error_at` / `last_error`; updated fire-and-forget via detached goroutines with their own 3s ctx so request-side cancellation doesn't lose the write. Surfaced in admin Settings as the universal "is this provider working" signal — the only place per-provider failure is visible regardless of which entry point triggered the call.
+
+**Apply match** — `EnrichmentService.ApplyMatch(ctx, book, match, opts, trigger)`; the lock-honoring merge. For each unlocked field, overwrite from match if non-empty; categories union when `opts.MergeCategories`; cover imported when `opts.ApplyCover` and unlocked. Routes through `MetadataWriter` if wired (so DB → sidecar → file pipeline runs per ADR-0001), else direct to repo. Single codepath shared by manual UI apply and auto-enrich.
+
+---
+
 ## Vocabulary discipline
 
 Avoid these substitutes — they drift the meaning:

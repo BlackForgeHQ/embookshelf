@@ -1,4 +1,4 @@
--- ADR-0001: replace users.oidc_subject/oidc_issuer with a dedicated
+-- ADR-0007: replace users.oidc_subject/oidc_issuer with a dedicated
 -- user_identities table so a user can link multiple providers
 -- (Google + GitHub + generic). Forward-only migration: existing rows
 -- are copied across in the same statement and the old columns are

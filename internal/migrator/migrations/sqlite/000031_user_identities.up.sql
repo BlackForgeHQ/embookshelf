@@ -1,4 +1,4 @@
--- ADR-0001: replace users.oidc_subject/oidc_issuer with a dedicated
+-- ADR-0007: replace users.oidc_subject/oidc_issuer with a dedicated
 -- user_identities table. SQLite mirror of postgres/000031.
 --
 -- Type translations:

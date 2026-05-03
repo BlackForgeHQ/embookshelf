@@ -1,8 +1,10 @@
-# Metadata Providers — Feature Specification
+# Metadata Providers — Feature Specification (BookLore reference)
+
+> **Reference doc, not embookshelf's spec.** This is BookLore's shipped feature spec, kept here for cross-comparison. embookshelf adopted parts of this design and deliberately diverged elsewhere — see ADRs 0008–0013 in `docs/adr/` for what we built and why. Citations from those ADRs that mention "BookLore" point here.
 
 > Fetch, compare, and apply book metadata (title, authors, description, covers, ratings, ISBN, etc.) from multiple external services. BookLore supports nine providers, pluggable via a strategy pattern, with per-provider configuration, per-field locking, and streaming search results.
 
-- **Status:** Shipped
+- **Status:** Shipped (in BookLore)
 - **Scope:** `booklore-api` (Go) + `booklore-ui` (Angular)
 - **Permission required:**
   - Settings: `ADMIN` or `MANAGE_METADATA_CONFIG`

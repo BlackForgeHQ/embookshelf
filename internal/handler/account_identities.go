@@ -13,7 +13,7 @@ import (
 )
 
 // accountIdentitiesDTO is the composite response shape that powers
-// the account-panel auth section. See ADR-0001 + CONTEXT.md.
+// the account-panel auth section. See ADR-0007 + CONTEXT.md.
 type accountIdentitiesDTO struct {
 	HasPassword bool                         `json:"hasPassword"`
 	Providers   []accountIdentityProviderDTO `json:"providers"`
