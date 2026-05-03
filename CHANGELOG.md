@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.8](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.7...v0.4.8) (2026-05-03)
+
+
+### Features
+
+* **enrichment:** implement SHA-256 hashing for book cover storage ([ab8e25b](https://github.com/BlackForgeHQ/embookshelf/commit/ab8e25b9b2a140ea469d442414691b6e119de769))
+* **orphan-management:** implement pending orphans for S3 folder renames ([#86](https://github.com/BlackForgeHQ/embookshelf/issues/86)) ([3ef55a0](https://github.com/BlackForgeHQ/embookshelf/commit/3ef55a09224445d586f498c99865b4ed6f67e6a2))
+
 ## [0.4.7](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.6...v0.4.7) (2026-05-02)
 
 
