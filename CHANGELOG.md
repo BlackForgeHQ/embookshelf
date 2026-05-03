@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.9](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.8...v0.4.9) (2026-05-03)
+
+
+### Features
+
+* **auth:** add comprehensive tests for basic authentication and user context handling ([3c35b9a](https://github.com/BlackForgeHQ/embookshelf/commit/3c35b9a274b20c8bb43651dc92160c2ed0c4ddac))
+
 ## [0.4.8](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.7...v0.4.8) (2026-05-03)
 
 
