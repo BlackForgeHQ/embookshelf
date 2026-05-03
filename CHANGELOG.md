@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.10](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.9...v0.4.10) (2026-05-03)
+
+
+### Features
+
+* **bookdrop:** implement admin-only housekeeping operations for BookDrop ([c685fe1](https://github.com/BlackForgeHQ/embookshelf/commit/c685fe1bcabc72938250c9819a85b882229d0101))
+* **cover:** add coverVersion for cache-busting on cover URLs ([6342a1f](https://github.com/BlackForgeHQ/embookshelf/commit/6342a1fa868dce5ae9a33a4427fc7a3f306d73c5))
+
+
+### Documentation
+
+* reorganize sections in PRD for clarity and consistency ([ab2ff73](https://github.com/BlackForgeHQ/embookshelf/commit/ab2ff73fada94ac6d8544334556b5d26819825cc))
+* update architecture and context documentation; remove obsolete testing plan ([1610824](https://github.com/BlackForgeHQ/embookshelf/commit/1610824b832726a01169e367ef6b54f09523705f))
+* update project overview and architecture details ([8474f5c](https://github.com/BlackForgeHQ/embookshelf/commit/8474f5ca001e5f8a68b5f1575cbd848e169da859))
+
 ## [0.4.9](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.8...v0.4.9) (2026-05-03)
 
 
