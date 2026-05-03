@@ -118,7 +118,7 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 
 	if err := deps.Svc.RecordMetadata(
 		ctx, itemID,
-		res.Title, res.Author, res.Description, res.Language,
+		res.Title, res.Author, res.Description, res.Language, res.ISBN,
 		res.CoverBytes, res.CoverMime,
 	); err != nil {
 		return err

@@ -124,7 +124,7 @@ func (s *BookDropService) BeginProcessing(ctx context.Context, id string) error 
 func (s *BookDropService) RecordMetadata(
 	ctx context.Context,
 	id string,
-	title, author, description, language string,
+	title, author, description, language, isbn string,
 	coverBytes []byte,
 	coverMime string,
 ) error {
@@ -139,7 +139,7 @@ func (s *BookDropService) RecordMetadata(
 		coverMime = ""
 	}
 
-	if err := s.bdrop.SetMetadata(ctx, id, title, author, description, language, hasCover, coverMime); err != nil {
+	if err := s.bdrop.SetMetadata(ctx, id, title, author, description, language, isbn, hasCover, coverMime); err != nil {
 		return err
 	}
 	s.broadcast(id)
@@ -223,6 +223,7 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 		Author:      item.Author,
 		Format:      item.Format,
 		Description: item.Description,
+		ISBN:        item.ISBN,
 		Path:        item.Path,
 		HasCover:    item.HasCover,
 		CoverMime:   item.CoverMime,
