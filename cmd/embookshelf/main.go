@@ -55,10 +55,9 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	// Tagged builds run gin in release mode (silences debug logs, skips
-	// trusted-proxy warnings). `go run` and dev images keep DebugMode for
-	// route logs. Explicit GIN_MODE env still wins via gin's own init.
-	if version != "dev" && os.Getenv("GIN_MODE") == "" {
+	// Default to release mode (silences debug logs, skips trusted-proxy
+	// warnings). Set GIN_MODE=debug to opt back into route logs.
+	if os.Getenv("GIN_MODE") == "" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
