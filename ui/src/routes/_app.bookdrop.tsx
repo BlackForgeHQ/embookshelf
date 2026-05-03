@@ -576,7 +576,8 @@ function CoverPanel({ item }: { item: BookDropItem }) {
   const queryClient = useQueryClient()
   // Set guards against duplicate uploads on re-render / StrictMode
   // double-effect. Survives across renders for the lifetime of the
-  // component instance.
+  // component instance. Relies on backend 409 idempotency for
+  // cross-mount duplicate suppression.
   const uploadedRef = useRef<Set<string>>(new Set())
   const isPreapprovalState =
     item.state === "discovered" ||
@@ -589,12 +590,11 @@ function CoverPanel({ item }: { item: BookDropItem }) {
     if (!isPreapprovalState) return
     if (uploadedRef.current.has(item.id)) return
     uploadedRef.current.add(item.id)
-    // Explicit `: boolean` widens the type so the lint rule doesn't
-    // narrow to literal-false — the cleanup closure mutates it.
-    let cancelled = false as boolean
+    const ctrl = new AbortController()
     void (async () => {
-      const blob = await renderPdfPageOneJpeg(bookdropFileUrl(item.id))
-      if (cancelled || !blob) return
+      const url = bookdropFileUrl(item.id)
+      const blob = await renderPdfPageOneJpeg(url, { signal: ctrl.signal })
+      if (ctrl.signal.aborted || !blob) return
       try {
         await putBookDropCover(item.id, blob)
         queryClient.invalidateQueries({ queryKey: bookdropQueryKey })
@@ -603,7 +603,7 @@ function CoverPanel({ item }: { item: BookDropItem }) {
       }
     })()
     return () => {
-      cancelled = true
+      ctrl.abort()
     }
   }, [item.id, item.format, item.hasCover, isPreapprovalState, queryClient])
 

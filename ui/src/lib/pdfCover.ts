@@ -19,16 +19,25 @@ export type RenderCoverOpts = {
 // JPEG blob. Returns null when the document is unreadable or the
 // canvas can't allocate. The caller is expected to upload the blob via
 // putBookDropCover and discard it afterwards.
+//
+// When `signal` aborts, the in-flight pdfjs `loadingTask` is destroyed,
+// which cancels both the network fetch and the worker-side parsing.
 export async function renderPdfPageOneJpeg(
   url: string,
-  opts?: RenderCoverOpts
+  opts?: RenderCoverOpts & { signal?: AbortSignal }
 ): Promise<Blob | null> {
   const targetWidth = opts?.width ?? 1200
   const quality = opts?.quality ?? 0.85
   const loadingTask = pdfjsLib.getDocument({ url, withCredentials: true })
+  const signal = opts?.signal
+  const onAbort = () => {
+    void loadingTask.destroy()
+  }
+  signal?.addEventListener("abort", onAbort, { once: true })
   let doc: PDFDocumentProxy | null = null
   try {
     doc = await loadingTask.promise
+    if (signal?.aborted) return null
     const page = await doc.getPage(1)
     const baseViewport = page.getViewport({ scale: 1 })
     const scale = targetWidth / baseViewport.width
@@ -39,12 +48,14 @@ export async function renderPdfPageOneJpeg(
     const ctx = canvas.getContext("2d")
     if (!ctx) return null
     await page.render({ canvasContext: ctx, viewport, canvas }).promise
+    if (signal?.aborted) return null
     return await new Promise<Blob | null>((resolve) =>
       canvas.toBlob((b) => resolve(b), "image/jpeg", quality)
     )
   } catch {
     return null
   } finally {
+    signal?.removeEventListener("abort", onAbort)
     if (doc) {
       try {
         await doc.destroy()
