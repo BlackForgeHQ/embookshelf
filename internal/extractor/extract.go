@@ -17,14 +17,14 @@ import (
 // overlay. It is the single contract shared by the bookdrop ingest
 // path and the (future) scan-direct ScanImportJob, per ADR-0004 §2.
 type ExtractResult struct {
-	Format          string
-	Title           string
-	Author          string
-	Description     string
-	Language        string
-	HasCover        bool
-	CoverBytes      []byte
-	CoverMime       string
+	Format      string
+	Title       string
+	Author      string
+	Description string
+	Language    string
+	HasCover    bool
+	CoverBytes  []byte
+	CoverMime   string
 	// DurationSeconds is non-nil only for audio formats with a
 	// readable header.
 	DurationSeconds *int

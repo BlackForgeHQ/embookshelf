@@ -5,9 +5,9 @@ package service
 // call. Pure data; no I/O.
 //
 // The matrix encoded here is ADR-0001 §3 (trigger × backend) plus
-// ADR-0003 §6 (folder rename on author/title edits). When adding a
-// new trigger or backend, update this function and the table test in
-// TestDecideEffects.
+// ADR-0003 §6 + ADR-0005 (folder rename on author/title edits, both
+// backends). When adding a new trigger or backend, update this
+// function and the table test in TestDecideEffects.
 type Effects struct {
 	// DB indicates the canonical books-row update will fire. Always
 	// true for in-scope triggers; the field is explicit so callers
@@ -21,10 +21,10 @@ type Effects struct {
 	// unsupported format collapses to InFileWritten=false at runtime
 	// without changing the plan.
 	InFile bool
-	// FolderRename indicates the on-disk folder for this Book will be
-	// moved to match the new sanitized {Author}/{Title} per ADR-0003.
-	// Only set for local-backed libraries on user-driven triggers
-	// when the sanitized folder name actually changed.
+	// FolderRename indicates the on-disk folder (or S3 prefix) for this
+	// Book will be moved to match the new sanitized {Author}/{Title}
+	// per ADR-0003 §6 + ADR-0005. Set on user-driven triggers when the
+	// sanitized folder name actually changed; backend-agnostic.
 	FolderRename bool
 }
 
@@ -51,11 +51,18 @@ func DecideEffects(trigger Trigger, handle *LibraryHandle, folderChanged bool) E
 		return Effects{DB: true}
 	}
 	e := Effects{DB: true, Sidecar: true}
+	if folderChanged {
+		// Both backends rename on user-driven Author/Title edits.
+		// Local: atomic os.Rename. S3: copy + sweeper-deferred delete
+		// per ADR-0005. Trigger gate is the same (TriggerAutoEnrichment
+		// short-circuited above; only manual_edit + apply_enrichment
+		// reach here).
+		e.FolderRename = true
+	}
 	if handle.Library.BackendID == nil {
+		// In-file embed remains local-only — S3 still skips it per
+		// ADR-0001. Sidecar full-mirror carries the metadata on S3.
 		e.InFile = true
-		if folderChanged {
-			e.FolderRename = true
-		}
 	}
 	return e
 }

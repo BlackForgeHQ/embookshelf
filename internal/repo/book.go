@@ -427,6 +427,93 @@ func (r *BookRepo) SetFolderPath(ctx context.Context, bookID, folderPath, path s
 	return nil
 }
 
+// FileLocationUpdate is one row mutation for RenameFolderTx: the
+// files.id whose location should be rewritten and the new
+// library-relative location to store.
+type FileLocationUpdate struct {
+	FileID   string
+	Location string
+}
+
+// RenameFolderTxArgs bundles the inputs for RenameFolderTx — the
+// single-transaction DB swap that finalises an S3 folder rename per
+// ADR-0005. Files are updated row-by-row inside the tx; orphans are
+// inserted in the same tx so the sweeper either sees the post-rename
+// state or none of it.
+type RenameFolderTxArgs struct {
+	BookID    string
+	NewFolder string
+	NewPath   string
+	Files     []FileLocationUpdate
+	Orphans   []PendingOrphanInsert
+}
+
+// RenameFolderTx applies the post-copy DB swap atomically:
+//   - rewrites every files.location supplied,
+//   - sets books.folder_path + books.path,
+//   - enqueues old keys into pending_orphans for the sweeper.
+//
+// All three happen in one COMMIT so the sweeper either sees the
+// post-rename state or never sees the orphan rows at all. On any
+// step error the tx rolls back; the caller is responsible for
+// scheduling cleanup of half-rename garbage on the storage side
+// via a separate short-grace orphan insert.
+func (r *BookRepo) RenameFolderTx(ctx context.Context, args RenameFolderTxArgs) error {
+	tx, err := r.db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const qFilePG = `UPDATE files SET location = $1 WHERE id = $2`
+	const qFileSQLite = `UPDATE files SET location = ? WHERE id = ?`
+	for _, f := range args.Files {
+		if _, err := tx.ExecContext(ctx,
+			db.SelectQ(r.db.Dialect, qFilePG, qFileSQLite),
+			f.Location, f.FileID,
+		); err != nil {
+			return fmt.Errorf("update files.location for %s: %w", f.FileID, err)
+		}
+	}
+
+	var folderArg any
+	if args.NewFolder != "" {
+		folderArg = args.NewFolder
+	}
+	const qBookPG = `
+		UPDATE books SET folder_path = $2, path = $3, updated_at = now()
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	const qBookSQLite = `
+		UPDATE books SET folder_path = ?, path = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND deleted_at IS NULL
+	`
+	var res sql.Result
+	if r.db.Dialect == db.DialectSQLite {
+		res, err = tx.ExecContext(ctx, qBookSQLite, folderArg, args.NewPath, args.BookID)
+	} else {
+		res, err = tx.ExecContext(ctx, qBookPG, args.BookID, folderArg, args.NewPath)
+	}
+	if err != nil {
+		return fmt.Errorf("update books folder_path: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+
+	if len(args.Orphans) > 0 {
+		if err := insertPendingOrphansInTx(ctx, tx, r.db.Dialect, args.Orphans); err != nil {
+			return fmt.Errorf("enqueue pending_orphans: %w", err)
+		}
+	}
+
+	return tx.Commit()
+}
+
 // UpdateMetadata applies the user-editable metadata fields for a book,
 // including the per-field lock flags. Manual edits (PATCH /books/:id)
 // flow through here; the apply-metadata path (PUT /books/:id/metadata)

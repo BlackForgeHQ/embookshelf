@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path"
@@ -16,9 +17,27 @@ import (
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/layout"
 	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/sidecar"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
+
+// RenameRollbackGrace is the grace window applied to half-rename
+// new keys that need to be reaped after a phase-1 copy or DB-tx
+// failure. Short by design: no client ever held a presigned URL for
+// these keys (DB never referenced them), so there's nothing to wait
+// for. ADR-0005 §3.4.
+const RenameRollbackGrace = 5 * time.Minute
+
+// CopyRetryAttempts is the bounded retry budget for a single
+// CopyObject during phase-1. Three attempts with exponential backoff
+// rides out transient 5xx / throttle responses without spinning on a
+// genuinely-broken backend.
+const CopyRetryAttempts = 3
+
+// CopyRetryBaseDelay is the first backoff delay between copy retries.
+// Doubles each attempt: 200ms, 400ms, 800ms.
+const CopyRetryBaseDelay = 200 * time.Millisecond
 
 // Trigger identifies the upstream action that drove a metadata
 // write. Different triggers cause different steps to fire in the
@@ -43,6 +62,18 @@ const (
 type BookMetadataWriter interface {
 	UpdateMetadata(ctx context.Context, b model.Book) error
 	SetFolderPath(ctx context.Context, bookID, folderPath, path string) error
+	// RenameFolderTx is the single-transaction DB swap that finalises
+	// an S3 folder rename per ADR-0005: rewrites every files.location
+	// supplied, sets books.folder_path + books.path, and enqueues the
+	// supplied orphan rows.
+	RenameFolderTx(ctx context.Context, args repo.RenameFolderTxArgs) error
+}
+
+// PendingOrphansEnqueuer is the slice of *repo.PendingOrphanRepo
+// MetadataWriter needs for the rollback path: a phase-1 copy or DB
+// tx failure schedules the half-rename garbage with a short grace.
+type PendingOrphansEnqueuer interface {
+	Insert(ctx context.Context, rows []repo.PendingOrphanInsert) error
 }
 
 // LibraryStoreFor is the slice of LibraryStore we depend on.
@@ -79,6 +110,14 @@ type MetadataWriterDeps struct {
 	Sidecar  SidecarWriterFor
 	Dispatch EmbedderDispatcher
 	Files    FileMetadataRepo
+	// Orphans is the queue used by the S3 folder-rename rollback
+	// path (ADR-0005). Nil disables backend rename — a degraded
+	// MetadataWriter behaves like the pre-ADR-0005 build.
+	Orphans PendingOrphansEnqueuer
+	// RenameGrace is the eligible_at delta applied to the *old*
+	// keys enqueued after a successful S3 rename. Defaults to 1h
+	// when zero. Operators set this to ≥ 2 × PresignTTL.
+	RenameGrace time.Duration
 }
 
 // Outcome reports the post-execution facts of a Write call. Tests
@@ -183,12 +222,27 @@ func (w *MetadataWriter) folderDelta(b model.Book) (changed bool, oldFolder, new
 	return oldFolder != newFolder, oldFolder, newFolder
 }
 
-// renameFolder executes ADR-0003 §6.5 step 5: move the on-disk Book
-// folder to its new {Author}/{Title} location and update every
-// files.location + books.folder_path + books.path to match. Local
-// backends only — DecideEffects gates S3 out of this step.
+// renameFolder dispatches the post-DB rename step by backend kind.
+// Local: atomic os.Rename on the same FS (ADR-0003 §6.5). Backend
+// (S3): list-prefix + server-side copy-loop + single-tx DB swap +
+// sweeper-deferred delete (ADR-0005).
 //
-// Two cases:
+// On any failure the on-disk / backend state is left consistent
+// with the pre-rename world; the DB metadata is already committed
+// (sidecar carries it on S3) and the caller can retry.
+func (w *MetadataWriter) renameFolder(
+	ctx context.Context,
+	b model.Book,
+	handle *LibraryHandle,
+	oldFolder, newFolder string,
+) (bool, string) {
+	if handle.Library.BackendID != nil {
+		return w.renameFolderBackend(ctx, b, handle, oldFolder, newFolder)
+	}
+	return w.renameFolderLocal(ctx, b, handle, oldFolder, newFolder)
+}
+
+// renameFolderLocal is the local-fs arm of renameFolder. Two cases:
 //   - Legacy flat-layout (oldFolder == ""): files sit at library
 //     root. We move only this Book's files (per files.location),
 //     preserving siblings that belong to other flat-layout Books.
@@ -196,11 +250,7 @@ func (w *MetadataWriter) folderDelta(b model.Book) (changed bool, oldFolder, new
 //     rename the directory wholesale via os.Rename — atomic on
 //     same FS, carries the sidecar and any companion files for
 //     free.
-//
-// On any failure the on-disk + DB state is left consistent with the
-// pre-rename world (the DB metadata is already committed; the file
-// is correct at the old path). The caller / scan can retry.
-func (w *MetadataWriter) renameFolder(
+func (w *MetadataWriter) renameFolderLocal(
 	ctx context.Context,
 	b model.Book,
 	handle *LibraryHandle,
@@ -353,6 +403,248 @@ func (w *MetadataWriter) persistRename(
 		return false
 	}
 	return true
+}
+
+// renameFolderBackend is the S3 (any non-local Storage) arm of
+// renameFolder per ADR-0005. Pipeline:
+//
+//  1. List-prefix the old folder to enumerate every key (files +
+//     sidecar + cover + any user artifacts).
+//  2. Resolve a non-colliding new prefix via uniqueBackendFolder.
+//  3. Copy each old key to the new prefix, with bounded retry. On
+//     mid-loop failure, schedule the new keys we already wrote with
+//     RenameRollbackGrace and bail.
+//  4. Compute the per-files location updates for the rows DB knows
+//     about (others ride along under the new prefix without a row).
+//  5. RenameFolderTx: single transaction wraps files updates +
+//     books folder_path/path + INSERT pending_orphans (old keys,
+//     RenameGrace).
+//
+// Inline phase-2 deletes do not happen here — the sweeper drains
+// pending_orphans after the grace window. This keeps already-issued
+// presigned URLs valid for at least 2× PresignTTL.
+func (w *MetadataWriter) renameFolderBackend(
+	ctx context.Context,
+	b model.Book,
+	handle *LibraryHandle,
+	oldFolder, newFolder string,
+) (bool, string) {
+	if handle.Storage == nil {
+		slog.Warn("metadata writer: backend rename skipped (no storage)", "book_id", b.ID)
+		return false, ""
+	}
+	if w.deps.Orphans == nil {
+		// Without an orphan queue we cannot defer the source delete
+		// safely. Fail closed — sidecar full-mirror still carries the
+		// edit per ADR-0001's S3 fallback.
+		slog.Warn("metadata writer: backend rename skipped (no orphan queue)",
+			"book_id", b.ID)
+		return false, ""
+	}
+	if oldFolder == "" {
+		// S3 BackendPlacer has always written {Author}/{Title} prefixes
+		// (ADR-0003 §7) so a folder_path of "" on an S3-backed Book is
+		// either a pre-storage_v2 row or data corruption. Either way
+		// we cannot list the source — bail without a copy attempt.
+		slog.Warn("metadata writer: backend rename skipped (no source folder)",
+			"book_id", b.ID)
+		return false, ""
+	}
+
+	finalFolder := uniqueBackendFolder(ctx, handle.Storage, newFolder)
+	oldPrefix := oldFolder + "/"
+	newPrefix := finalFolder + "/"
+
+	srcKeys, err := listBackendPrefix(ctx, handle.Storage, oldPrefix)
+	if err != nil {
+		slog.Warn("metadata writer: backend rename list source",
+			"book_id", b.ID, "prefix", oldPrefix, "err", err)
+		return false, ""
+	}
+	if len(srcKeys) == 0 {
+		slog.Warn("metadata writer: backend rename source is empty",
+			"book_id", b.ID, "prefix", oldPrefix)
+		return false, ""
+	}
+
+	copied := make([]string, 0, len(srcKeys))
+	for _, src := range srcKeys {
+		dst := newPrefix + strings.TrimPrefix(src, oldPrefix)
+		if err := copyWithRetry(ctx, handle.Storage, src, dst); err != nil {
+			slog.Warn("metadata writer: backend rename copy",
+				"book_id", b.ID, "src", src, "dst", dst, "err", err)
+			w.scheduleOrphans(ctx, handle.Library.ID, copied, RenameRollbackGrace, b.ID)
+			return false, ""
+		}
+		copied = append(copied, dst)
+	}
+
+	fileUpdates, err := w.collectFileLocationUpdates(ctx, b, oldPrefix, newPrefix)
+	if err != nil {
+		slog.Warn("metadata writer: backend rename file enumeration",
+			"book_id", b.ID, "err", err)
+		w.scheduleOrphans(ctx, handle.Library.ID, copied, RenameRollbackGrace, b.ID)
+		return false, ""
+	}
+
+	newBookPath := newPrefix + filepath.Base(b.Path)
+	orphanInserts := buildOrphanInserts(handle.Library.ID, srcKeys, w.renameGrace(), b.ID)
+
+	if err := w.deps.Books.RenameFolderTx(ctx, repo.RenameFolderTxArgs{
+		BookID:    b.ID,
+		NewFolder: finalFolder,
+		NewPath:   newBookPath,
+		Files:     fileUpdates,
+		Orphans:   orphanInserts,
+	}); err != nil {
+		slog.Warn("metadata writer: backend rename db tx",
+			"book_id", b.ID, "err", err)
+		w.scheduleOrphans(ctx, handle.Library.ID, copied, RenameRollbackGrace, b.ID)
+		return false, ""
+	}
+
+	return true, finalFolder
+}
+
+// renameGrace returns the configured grace duration for old keys
+// after a successful rename. Defaults to 1h when unset, matching
+// the ADR-0005 fallback used in cmd/embookshelf wiring.
+func (w *MetadataWriter) renameGrace() time.Duration {
+	if w.deps.RenameGrace > 0 {
+		return w.deps.RenameGrace
+	}
+	return time.Hour
+}
+
+// collectFileLocationUpdates lists the Book's files rows and builds
+// per-row UPDATE inputs for any row whose location lives under the
+// old prefix. Rows that don't (legacy data drift) are skipped — they
+// will not survive the post-tx state but the rename should not fail
+// over a misaligned row.
+func (w *MetadataWriter) collectFileLocationUpdates(
+	ctx context.Context,
+	b model.Book,
+	oldPrefix, newPrefix string,
+) ([]repo.FileLocationUpdate, error) {
+	if w.deps.Files == nil {
+		return nil, nil
+	}
+	files, err := w.deps.Files.ListByBook(ctx, b.ID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]repo.FileLocationUpdate, 0, len(files))
+	for _, f := range files {
+		if !strings.HasPrefix(f.Location, oldPrefix) {
+			slog.Warn("metadata writer: backend rename skipping mis-prefixed file",
+				"book_id", b.ID, "file_id", f.ID, "location", f.Location)
+			continue
+		}
+		out = append(out, repo.FileLocationUpdate{
+			FileID:   f.ID,
+			Location: newPrefix + strings.TrimPrefix(f.Location, oldPrefix),
+		})
+	}
+	return out, nil
+}
+
+// scheduleOrphans is the rollback escape hatch: enqueue the supplied
+// (presumably new-prefix) keys with RenameRollbackGrace so the
+// sweeper deletes the half-rename garbage on its next pass. Best
+// effort — failure to enqueue is logged but does not change the
+// caller's error path.
+func (w *MetadataWriter) scheduleOrphans(
+	ctx context.Context,
+	libraryID string,
+	keys []string,
+	grace time.Duration,
+	bookID string,
+) {
+	if len(keys) == 0 || w.deps.Orphans == nil {
+		return
+	}
+	rows := buildOrphanInserts(libraryID, keys, grace, bookID)
+	if err := w.deps.Orphans.Insert(ctx, rows); err != nil {
+		slog.Warn("metadata writer: schedule rollback orphans",
+			"library_id", libraryID, "count", len(keys), "err", err)
+	}
+}
+
+// buildOrphanInserts converts a slice of keys into the typed insert
+// rows for the pending_orphans table. eligible_at is now+grace.
+func buildOrphanInserts(libraryID string, keys []string, grace time.Duration, bookID string) []repo.PendingOrphanInsert {
+	if len(keys) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	out := make([]repo.PendingOrphanInsert, 0, len(keys))
+	bid := bookID
+	for _, k := range keys {
+		out = append(out, repo.PendingOrphanInsert{
+			LibraryID:  libraryID,
+			Key:        k,
+			EligibleAt: now.Add(grace),
+			Reason:     repo.ReasonOrphanRename,
+			BookID:     &bid,
+		})
+	}
+	return out
+}
+
+// listBackendPrefix walks store under prefix and returns every key
+// found (paginated iterators handled by storage.Iterator). Returned
+// keys preserve the prefix so callers can compute new keys via
+// strings.TrimPrefix without re-joining.
+func listBackendPrefix(ctx context.Context, store storage.Storage, prefix string) ([]string, error) {
+	it, err := store.List(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = it.Close() }()
+	var keys []string
+	for {
+		obj, err := it.Next(ctx)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, err
+		}
+		keys = append(keys, obj.Key)
+	}
+	return keys, nil
+}
+
+// copyWithRetry runs Storage.Copy with bounded exponential backoff.
+// Context cancellation aborts immediately; other errors are retried
+// up to CopyRetryAttempts times. Returns the final error on
+// exhaustion. Backends that surface ErrNotFound are treated as
+// terminal — there is nothing to retry on a missing source.
+func copyWithRetry(ctx context.Context, store storage.Storage, src, dst string) error {
+	delay := CopyRetryBaseDelay
+	var lastErr error
+	for attempt := 0; attempt < CopyRetryAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		_, err := store.Copy(ctx, src, dst)
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, storage.ErrNotFound) {
+			return err
+		}
+		lastErr = err
+		if attempt+1 < CopyRetryAttempts {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+			delay *= 2
+		}
+	}
+	return lastErr
 }
 
 // uniqueDirectoryUnless is a variant of uniqueDirectory that returns

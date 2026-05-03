@@ -78,11 +78,18 @@ func TestDecideEffects(t *testing.T) {
 			want:    service.Effects{DB: true, Sidecar: true, InFile: false},
 		},
 		{
-			name:          "manual edit on S3 never renames folder even with change",
+			name:          "manual edit on S3 with folder change adds rename (ADR-0005)",
 			trigger:       service.TriggerManualEdit,
 			handle:        s3Handle,
 			folderChanged: true,
-			want:          service.Effects{DB: true, Sidecar: true, InFile: false},
+			want:          service.Effects{DB: true, Sidecar: true, InFile: false, FolderRename: true},
+		},
+		{
+			name:          "apply-enrichment on S3 with folder change adds rename (ADR-0005)",
+			trigger:       service.TriggerApplyEnrichment,
+			handle:        s3Handle,
+			folderChanged: true,
+			want:          service.Effects{DB: true, Sidecar: true, InFile: false, FolderRename: true},
 		},
 		{
 			name:    "manual edit on local library writes DB + sidecar + in-file",

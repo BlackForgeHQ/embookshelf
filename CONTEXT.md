@@ -56,6 +56,17 @@ Off by default after the first user; the first OIDC login on an
 empty instance is always admitted as admin to avoid an unrecoverable
 state.
 
+## Pending orphan
+
+A storage key whose Book is no longer referenced by `files.location`
+(or sidecar/cover at `{folder_path}/`) and which is queued for
+deletion after a grace window. Materialised as a row in
+`pending_orphans` (library_id, key, eligible_at, reason, book_id).
+Created on every S3 edit-time folder rename: old keys go in with
+full grace; new keys from a half-failed rename go in with a short
+grace. A background sweeper deletes keys past `eligible_at`. Local
+backends do not produce pending orphans — `os.Rename` is atomic.
+
 ## Force-only mode
 
 Admin toggle `oidc_force_only_mode` that hides the local-password
