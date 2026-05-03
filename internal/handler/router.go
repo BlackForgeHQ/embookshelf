@@ -98,6 +98,7 @@ func (h *Handler) Engine() *gin.Engine {
 			// BookDrop ingest queue
 			authed.GET("/bookdrop", h.BookDropList)
 			authed.GET("/bookdrop/:id/cover", h.BookDropCover)
+			authed.PUT("/bookdrop/:id/cover", h.BookDropPutCover)
 			authed.POST("/bookdrop/upload", h.BookDropUpload)
 			authed.POST("/bookdrop/:id/approve", h.BookDropApprove)
 			authed.POST("/bookdrop/:id/reject", h.BookDropReject)

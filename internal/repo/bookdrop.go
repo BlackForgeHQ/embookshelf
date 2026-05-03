@@ -128,6 +128,29 @@ func (r *BookDropRepo) SetMetadata(ctx context.Context, id, title, author, descr
 	return err
 }
 
+// SetCoverPresence flips has_cover + cover_mime for a row without
+// otherwise touching state/progress. Used by the user-driven cover
+// upload path (BookDropPutCover); ingest's SetMetadata already covers
+// the worker-side path.
+func (r *BookDropRepo) SetCoverPresence(ctx context.Context, id string, hasCover bool, coverMime string) error {
+	const qPG = `
+		UPDATE bookdrop_items
+		SET has_cover = $2, cover_mime = $3, updated_at = now()
+		WHERE id = $1
+	`
+	const qSQLite = `
+		UPDATE bookdrop_items
+		SET has_cover = ?, cover_mime = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		WHERE id = ?
+	`
+	if r.db.Dialect == db.DialectSQLite {
+		_, err := r.db.SQL.ExecContext(ctx, qSQLite, hasCover, coverMime, id)
+		return err
+	}
+	_, err := r.db.SQL.ExecContext(ctx, qPG, id, hasCover, coverMime)
+	return err
+}
+
 // DeleteProcessed removes every bookdrop row in a terminal state
 // ('imported' or 'rejected'). Returns the ids of the deleted rows so the
 // caller can clean up any lingering cover files off-DB. Active-state rows

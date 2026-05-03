@@ -146,6 +146,24 @@ func (s *BookDropService) RecordMetadata(
 	return nil
 }
 
+// PutPreapprovalCover writes raw cover bytes for a BookDrop item that
+// doesn't yet carry a cover. Used by the BookDrop preview UI to push
+// a client-rendered PDF page-1 raster (see ADR-0015). Caller must
+// ensure item.HasCover is false; this method does not re-check.
+func (s *BookDropService) PutPreapprovalCover(ctx context.Context, id string, raw []byte, mime string) error {
+	if s.covers == nil {
+		return errors.New("cover store not configured")
+	}
+	if err := s.covers.SaveBookDrop(id, raw); err != nil {
+		return fmt.Errorf("save cover bytes: %w", err)
+	}
+	if err := s.bdrop.SetCoverPresence(ctx, id, true, mime); err != nil {
+		return fmt.Errorf("mark has_cover: %w", err)
+	}
+	s.broadcast(id)
+	return nil
+}
+
 // SetAudio persists the audiobook fields extracted by the ingest worker.
 // Used after RecordMetadata for MP3/M4B; non-audio formats skip this call.
 // Failures bubble up to the worker which retries the whole job.

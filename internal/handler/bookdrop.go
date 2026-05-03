@@ -131,6 +131,74 @@ func (h *Handler) BookDropCover(c *gin.Context) {
 	}
 }
 
+// BookDropPutCover accepts a raw image (PNG or JPEG) for a BookDrop
+// item that doesn't yet have a pre-approval cover. Idempotent on
+// absence: first successful PUT wins; subsequent PUTs return 409.
+//
+// Cap: 5 MB. Magic-sniff: PNG `89 50 4E 47` or JPEG `FF D8 FF`.
+// State gate: item must be in 'discovered', 'processing', or 'ready'.
+// Refuses 'imported' / 'rejected' / 'failed'.
+func (h *Handler) BookDropPutCover(c *gin.Context) {
+	userID := requireUserID(c)
+	if userID == "" {
+		return
+	}
+	id := c.Param("id")
+
+	item, err := h.bookdrop.Get(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		writeServerError(c, "bookdrop lookup", err)
+		return
+	}
+	if item.HasCover {
+		c.JSON(http.StatusConflict, gin.H{"error": "cover already present"})
+		return
+	}
+	switch item.State {
+	case model.BookDropDiscovered, model.BookDropProcessing, model.BookDropReady:
+		// accept
+	default:
+		c.JSON(http.StatusConflict, gin.H{"error": "item state does not accept cover upload"})
+		return
+	}
+
+	const maxBytes = 5 << 20
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
+	raw, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "image too large"})
+		return
+	}
+	mime, ok := sniffCoverMime(raw)
+	if !ok {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "expected PNG or JPEG"})
+		return
+	}
+
+	if err := h.bookdrop.PutPreapprovalCover(c.Request.Context(), id, raw, mime); err != nil {
+		writeServerError(c, "bookdrop put cover", err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// sniffCoverMime returns ("image/png", true) for a PNG magic header,
+// ("image/jpeg", true) for a JPEG SOI, and ("", false) for anything else.
+// Used by BookDropPutCover to gate user-supplied bytes.
+func sniffCoverMime(b []byte) (string, bool) {
+	switch {
+	case len(b) >= 4 && b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47:
+		return "image/png", true
+	case len(b) >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF:
+		return "image/jpeg", true
+	}
+	return "", false
+}
+
 type approveBookDropReq struct {
 	LibraryID string `json:"libraryId,omitempty"`
 }
