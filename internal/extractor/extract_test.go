@@ -49,6 +49,26 @@ func TestLayerSidecar_Overlays(t *testing.T) {
 	}
 }
 
+func TestLayerSidecar_ISBNOverlay(t *testing.T) {
+	m := fileproc.Metadata{Title: "Original", ISBN: "0000000000"}
+	s := sidecar.Sidecar{ISBN: "978-0-441-17271-9"}
+	out := layerSidecar(m, s)
+	if out.ISBN != "978-0-441-17271-9" {
+		t.Errorf("ISBN=%q want 978-0-441-17271-9", out.ISBN)
+	}
+	if out.Title != "Original" {
+		t.Errorf("Title=%q want preserved", out.Title)
+	}
+}
+
+func TestLayerSidecar_EmptyISBNDoesNotOverwrite(t *testing.T) {
+	m := fileproc.Metadata{ISBN: "978-0-7432-7356-5"}
+	out := layerSidecar(m, sidecar.Sidecar{})
+	if out.ISBN != "978-0-7432-7356-5" {
+		t.Errorf("ISBN=%q want preserved", out.ISBN)
+	}
+}
+
 func TestLayerSidecar_EmptySidecarLeavesFieldsAlone(t *testing.T) {
 	m := fileproc.Metadata{Title: "Keep", Language: "en"}
 	out := layerSidecar(m, sidecar.Sidecar{})

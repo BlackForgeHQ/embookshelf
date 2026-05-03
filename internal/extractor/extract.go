@@ -22,6 +22,7 @@ type ExtractResult struct {
 	Author      string
 	Description string
 	Language    string
+	ISBN        string
 	HasCover    bool
 	CoverBytes  []byte
 	CoverMime   string
@@ -82,6 +83,7 @@ func Extract(
 		Author:      meta.Author,
 		Description: meta.Description,
 		Language:    meta.Language,
+		ISBN:        meta.ISBN,
 		HasCover:    meta.HasCover,
 		CoverBytes:  meta.CoverBytes,
 		CoverMime:   meta.CoverMime,
@@ -139,6 +141,9 @@ func layerSidecar(m fileproc.Metadata, s sidecar.Sidecar) fileproc.Metadata {
 	}
 	if s.Language != "" {
 		m.Language = s.Language
+	}
+	if s.ISBN != "" {
+		m.ISBN = s.ISBN
 	}
 	return m
 }
