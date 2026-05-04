@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -124,7 +125,7 @@ func (s *BookDropService) BeginProcessing(ctx context.Context, id string) error 
 func (s *BookDropService) RecordMetadata(
 	ctx context.Context,
 	id string,
-	title, author, description, language string,
+	title, author, description, language, isbn string,
 	coverBytes []byte,
 	coverMime string,
 ) error {
@@ -139,8 +140,26 @@ func (s *BookDropService) RecordMetadata(
 		coverMime = ""
 	}
 
-	if err := s.bdrop.SetMetadata(ctx, id, title, author, description, language, hasCover, coverMime); err != nil {
+	if err := s.bdrop.SetMetadata(ctx, id, title, author, description, language, isbn, hasCover, coverMime); err != nil {
 		return err
+	}
+	s.broadcast(id)
+	return nil
+}
+
+// PutPreapprovalCover writes raw cover bytes for a BookDrop item that
+// doesn't yet carry a cover. Used by the BookDrop preview UI to push
+// a client-rendered PDF page-1 raster (see ADR-0015). Caller must
+// ensure item.HasCover is false; this method does not re-check.
+func (s *BookDropService) PutPreapprovalCover(ctx context.Context, id string, raw []byte, mime string) error {
+	if s.covers == nil {
+		return errors.New("cover store not configured")
+	}
+	if err := s.covers.SaveBookDrop(id, raw); err != nil {
+		return fmt.Errorf("save cover bytes: %w", err)
+	}
+	if err := s.bdrop.SetCoverPresence(ctx, id, true, mime); err != nil {
+		return fmt.Errorf("mark has_cover: %w", err)
 	}
 	s.broadcast(id)
 	return nil
@@ -226,6 +245,16 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 		Path:        item.Path,
 		HasCover:    item.HasCover,
 		CoverMime:   item.CoverMime,
+	}
+	// Route the extractor-supplied ISBN by length: book.ISBN is the
+	// ISBN-13 slot, book.ISBN10 is the 10-digit slot. Mirrors the
+	// length-based routing in enrichment.go so a Calibre PDF whose XMP
+	// only carries an ISBN-10 doesn't pollute the ISBN-13 column.
+	switch len(strings.TrimSpace(item.ISBN)) {
+	case 13:
+		book.ISBN = strings.TrimSpace(item.ISBN)
+	case 10:
+		book.ISBN10 = strings.TrimSpace(item.ISBN)
 	}
 
 	res, perr := handle.Placer.Place(ctx, PlaceSource{

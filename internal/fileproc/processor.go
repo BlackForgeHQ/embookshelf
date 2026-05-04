@@ -19,6 +19,12 @@ type Metadata struct {
 	Author      string
 	Description string
 	Language    string
+	// ISBN is the canonical identifier extracted from format-embedded
+	// metadata (PDF XMP Identifier Bag, EPUB OPF identifier). Empty when
+	// the file carries no ISBN. Format-specific extractors clean to digits
+	// + 'X', then validate length 10 or 13 before populating; anything
+	// else is dropped silently.
+	ISBN string
 	// HasCover reports whether the processor saw a cover image.
 	HasCover bool
 	// CoverBytes are the raw image bytes extracted from the file. nil when

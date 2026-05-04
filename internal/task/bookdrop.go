@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/riverqueue/river"
@@ -116,9 +117,18 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 		return nil
 	}
 
+	// Filename fallback: extractors that can't surface a Title (e.g. PDFs
+	// without /Info Title, or sparse OPF metadata) would otherwise leave
+	// the BookDrop list with a blank row. Use the basename without the
+	// extension so the user has something selectable to triage.
+	if strings.TrimSpace(res.Title) == "" {
+		base := filepath.Base(item.Path)
+		res.Title = strings.TrimSuffix(base, filepath.Ext(base))
+	}
+
 	if err := deps.Svc.RecordMetadata(
 		ctx, itemID,
-		res.Title, res.Author, res.Description, res.Language,
+		res.Title, res.Author, res.Description, res.Language, res.ISBN,
 		res.CoverBytes, res.CoverMime,
 	); err != nil {
 		return err

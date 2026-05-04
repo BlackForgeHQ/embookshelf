@@ -1,0 +1,1 @@
+ALTER TABLE bookdrop_items DROP COLUMN IF EXISTS isbn;

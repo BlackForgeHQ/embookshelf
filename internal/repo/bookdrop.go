@@ -21,7 +21,7 @@ func NewBookDropRepo(d *db.DB) *BookDropRepo {
 }
 
 const bdCols = `id, path, file_size, format, state, progress, error_msg,
-                title, author, description, language, has_cover, cover_mime, book_id,
+                title, author, description, language, isbn, has_cover, cover_mime, book_id,
                 discovered_at, updated_at, content_hash,
                 duration_seconds, narrator, chapters`
 
@@ -103,11 +103,11 @@ func (r *BookDropRepo) SetState(ctx context.Context, id string, state model.Book
 
 // SetMetadata records metadata extracted by the fileproc worker and flips the
 // item into 'ready' state. cover_mime is empty when no cover was extracted.
-func (r *BookDropRepo) SetMetadata(ctx context.Context, id, title, author, description, language string, hasCover bool, coverMime string) error {
+func (r *BookDropRepo) SetMetadata(ctx context.Context, id, title, author, description, language, isbn string, hasCover bool, coverMime string) error {
 	const qPG = `
 		UPDATE bookdrop_items
 		SET title = $2, author = $3, description = $4, language = $5,
-		    has_cover = $6, cover_mime = $7,
+		    isbn = $6, has_cover = $7, cover_mime = $8,
 		    state = 'ready', progress = 100, error_msg = '',
 		    updated_at = now()
 		WHERE id = $1
@@ -115,16 +115,39 @@ func (r *BookDropRepo) SetMetadata(ctx context.Context, id, title, author, descr
 	const qSQLite = `
 		UPDATE bookdrop_items
 		SET title = ?, author = ?, description = ?, language = ?,
-		    has_cover = ?, cover_mime = ?,
+		    isbn = ?, has_cover = ?, cover_mime = ?,
 		    state = 'ready', progress = 100, error_msg = '',
 		    updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		WHERE id = ?
 	`
 	if r.db.Dialect == db.DialectSQLite {
-		_, err := r.db.SQL.ExecContext(ctx, qSQLite, title, author, description, language, hasCover, coverMime, id)
+		_, err := r.db.SQL.ExecContext(ctx, qSQLite, title, author, description, language, isbn, hasCover, coverMime, id)
 		return err
 	}
-	_, err := r.db.SQL.ExecContext(ctx, qPG, id, title, author, description, language, hasCover, coverMime)
+	_, err := r.db.SQL.ExecContext(ctx, qPG, id, title, author, description, language, isbn, hasCover, coverMime)
+	return err
+}
+
+// SetCoverPresence flips has_cover + cover_mime for a row without
+// otherwise touching state/progress. Used by the user-driven cover
+// upload path (BookDropPutCover); ingest's SetMetadata already covers
+// the worker-side path.
+func (r *BookDropRepo) SetCoverPresence(ctx context.Context, id string, hasCover bool, coverMime string) error {
+	const qPG = `
+		UPDATE bookdrop_items
+		SET has_cover = $2, cover_mime = $3, updated_at = now()
+		WHERE id = $1
+	`
+	const qSQLite = `
+		UPDATE bookdrop_items
+		SET has_cover = ?, cover_mime = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		WHERE id = ?
+	`
+	if r.db.Dialect == db.DialectSQLite {
+		_, err := r.db.SQL.ExecContext(ctx, qSQLite, hasCover, coverMime, id)
+		return err
+	}
+	_, err := r.db.SQL.ExecContext(ctx, qPG, id, hasCover, coverMime)
 	return err
 }
 
@@ -248,7 +271,7 @@ func (r *BookDropRepo) scanBookDrop(s scanner) (model.BookDropItem, error) {
 	)
 	err := s.Scan(
 		&item.ID, &item.Path, &item.FileSize, &item.Format, &state, &item.Progress, &item.ErrorMsg,
-		&item.Title, &item.Author, &item.Description, &item.Language, &item.HasCover, &item.CoverMime, &item.BookID,
+		&item.Title, &item.Author, &item.Description, &item.Language, &item.ISBN, &item.HasCover, &item.CoverMime, &item.BookID,
 		&discoveredAny, &updatedAny, &item.ContentHash,
 		&durationAny, &item.Narrator, &chaptersAny,
 	)

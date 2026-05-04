@@ -27,6 +27,7 @@ type BookDropItem struct {
 	Author       string
 	Description  string
 	Language     string
+	ISBN         string
 	HasCover     bool
 	CoverMime    string
 	BookID       *string

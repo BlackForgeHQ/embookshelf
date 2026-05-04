@@ -131,6 +131,119 @@ func (h *Handler) BookDropCover(c *gin.Context) {
 	}
 }
 
+// BookDropFile streams the staged BookDrop file bytes for client-side
+// rendering of a pre-approval cover (e.g. PDF page-1 rasterization in
+// the BookDrop preview). Mirrors BookDropCover's auth shape but reads
+// the original file from the staging directory.
+func (h *Handler) BookDropFile(c *gin.Context) {
+	userID := requireUserID(c)
+	if userID == "" {
+		return
+	}
+	id := c.Param("id")
+	item, err := h.bookdrop.Get(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		writeServerError(c, "bookdrop file lookup", err)
+		return
+	}
+	f, err := os.Open(item.Path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		writeServerError(c, "bookdrop file open", err)
+		return
+	}
+	defer func() { _ = f.Close() }()
+	mime := mimeForFormat(item.Format)
+	if mime == "" {
+		mime = "application/octet-stream"
+	}
+	c.Header("Content-Type", mime)
+	c.Header("Cache-Control", "private, max-age=3600")
+	if _, err := io.Copy(c.Writer, f); err != nil {
+		writeServerError(c, "bookdrop file stream", err)
+	}
+}
+
+// BookDropPutCover accepts a raw image (PNG or JPEG) for a BookDrop
+// item that doesn't yet have a pre-approval cover. Idempotent on
+// absence: first successful PUT wins; subsequent PUTs return 409.
+//
+// Cap: 5 MB. Magic-sniff: PNG `89 50 4E 47` or JPEG `FF D8 FF`.
+// State gate: item must be in 'discovered', 'processing', or 'ready'.
+// Refuses 'imported' / 'rejected' / 'failed'.
+func (h *Handler) BookDropPutCover(c *gin.Context) {
+	userID := requireUserID(c)
+	if userID == "" {
+		return
+	}
+	id := c.Param("id")
+
+	item, err := h.bookdrop.Get(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		writeServerError(c, "bookdrop lookup", err)
+		return
+	}
+	if item.HasCover {
+		c.JSON(http.StatusConflict, gin.H{"error": "cover already present"})
+		return
+	}
+	switch item.State {
+	case model.BookDropDiscovered, model.BookDropProcessing, model.BookDropReady:
+		// accept
+	default:
+		c.JSON(http.StatusConflict, gin.H{"error": "item state does not accept cover upload"})
+		return
+	}
+
+	const maxBytes = 5 << 20
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
+	raw, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "image too large"})
+			return
+		}
+		writeServerError(c, "bookdrop read cover body", err)
+		return
+	}
+	mime, ok := sniffCoverMime(raw)
+	if !ok {
+		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "expected PNG or JPEG"})
+		return
+	}
+
+	if err := h.bookdrop.PutPreapprovalCover(c.Request.Context(), id, raw, mime); err != nil {
+		writeServerError(c, "bookdrop put cover", err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// sniffCoverMime returns ("image/png", true) for a PNG magic header,
+// ("image/jpeg", true) for a JPEG SOI, and ("", false) for anything else.
+// Used by BookDropPutCover to gate user-supplied bytes.
+func sniffCoverMime(b []byte) (string, bool) {
+	switch {
+	case len(b) >= 4 && b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47:
+		return "image/png", true
+	case len(b) >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF:
+		return "image/jpeg", true
+	}
+	return "", false
+}
+
 type approveBookDropReq struct {
 	LibraryID string `json:"libraryId,omitempty"`
 }
