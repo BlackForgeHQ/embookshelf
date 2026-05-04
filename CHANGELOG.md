@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.11](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.10...v0.4.11) (2026-05-04)
+
+
+### Features
+
+* **cover:** add endpoint and service method to remove book covers ([17aba7a](https://github.com/BlackForgeHQ/embookshelf/commit/17aba7a70597090600ad0ace4299d5cc9b06ed5e))
+* **pdf-discovery:** XMP, hex strings, ISBN, client-rendered cover ([#96](https://github.com/BlackForgeHQ/embookshelf/issues/96)) ([38c9f38](https://github.com/BlackForgeHQ/embookshelf/commit/38c9f3868c4f775d3380217c76e9ee03000f5a5c))
+* **pdf:** implement client-side cover rendering and enhance PDF metadata extraction ([af6005c](https://github.com/BlackForgeHQ/embookshelf/commit/af6005cfd5c6e339fdd25d47ad632522d4e7470c))
+
+
+### Bug Fixes
+
+* **bookdrop:** sanitize file names during upload to prevent issues with special characters ([bb69417](https://github.com/BlackForgeHQ/embookshelf/commit/bb69417b388a9fbe292be96d53ffcf862396b922))
+
 ## [0.4.10](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.9...v0.4.10) (2026-05-03)
 
 
