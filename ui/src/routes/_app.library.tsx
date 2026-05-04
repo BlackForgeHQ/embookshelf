@@ -30,6 +30,7 @@ type LibrarySearch = {
   shelf?: string
   library?: string
   layout?: Layout
+  unshelved?: "1"
 }
 
 export const Route = createFileRoute("/_app/library")({
@@ -40,6 +41,9 @@ export const Route = createFileRoute("/_app/library")({
       raw.layout === "shelf" || raw.layout === "grid" || raw.layout === "list"
         ? raw.layout
         : undefined,
+    // `?unshelved=1` is the canonical truthy form. Anything else drops to
+    // undefined so the URL stays clean when the filter is off.
+    unshelved: raw.unshelved === "1" ? "1" : undefined,
   }),
   component: LibraryView,
 })
@@ -56,21 +60,27 @@ function LibraryView() {
     shelf: activeShelf,
     library: activeLibrary,
     layout: layoutSearch,
+    unshelved: unshelvedSearch,
   } = Route.useSearch()
   const layout: Layout = layoutSearch ?? "grid"
+  const isUnshelved = unshelvedSearch === "1"
 
   const [search, setSearch] = useState("")
   const [sortBy, setSortBy] = useState<SortKey>("added")
   const [filterFormat, setFilterFormat] = useState<string | null>(null)
 
   // Shelf filter takes precedence on the server; library + q + format are
-  // merged as additional filters otherwise.
+  // merged as additional filters otherwise. `unshelved` is orthogonal:
+  // it stacks with library/q/format. When `shelf` is also set, the
+  // server lets `shelf` win — the sidebar already clears the conflicting
+  // one client-side, so we don't need to defend against it here.
   const queryParams = {
     shelf: activeShelf || undefined,
     library: activeLibrary || undefined,
     q: search || undefined,
     format: filterFormat ? [filterFormat] : undefined,
     sort: sortKeyToApi(sortBy),
+    unshelved: isUnshelved || undefined,
   }
 
   const books = useQuery({
@@ -88,8 +98,18 @@ function LibraryView() {
   const rows = books.data?.books ?? []
 
   const { shelfTitle, subtitle } = useMemo(() => {
+    if (isUnshelved) {
+      const n = shelves.data?.unshelvedCount ?? 0
+      return {
+        shelfTitle: "Unshelved",
+        subtitle:
+          n === 0
+            ? "All books are shelved."
+            : `${n} ${n === 1 ? "book" : "books"} waiting to be shelved.`,
+      }
+    }
     if (activeShelf) {
-      const s = shelves.data?.find((x) => x.slug === activeShelf)
+      const s = shelves.data?.shelves.find((x) => x.slug === activeShelf)
       if (s) {
         return {
           shelfTitle: s.name,
@@ -116,7 +136,13 @@ function LibraryView() {
       shelfTitle: "All Books",
       subtitle: "Your complete collection across every library.",
     }
-  }, [activeShelf, activeLibrary, shelves.data, libraries.data])
+  }, [
+    activeShelf,
+    activeLibrary,
+    isUnshelved,
+    shelves.data,
+    libraries.data,
+  ])
 
   const setLayout = (next: Layout) => {
     void navigate({
@@ -204,7 +230,7 @@ function LibraryView() {
         {books.isError ? (
           <ErrorPanel message="Failed to load books." />
         ) : rows.length === 0 && !books.isLoading ? (
-          <EmptyPanel />
+          <EmptyPanel unshelved={isUnshelved} />
         ) : layout === "shelf" ? (
           <ShelfLayout books={rows} onOpen={openBook} />
         ) : layout === "grid" ? (
@@ -372,7 +398,19 @@ function BookCard({
   )
 }
 
-function EmptyPanel() {
+function EmptyPanel({ unshelved = false }: { unshelved?: boolean }) {
+  if (unshelved) {
+    return (
+      <div className="p-12 text-center border-2 border-dashed border-border rounded-lg bg-card text-muted-foreground">
+        <div
+          className="text-lg font-serif font-medium text-foreground"
+          style={{ marginBottom: 8 }}
+        >
+          All books are shelved.
+        </div>
+      </div>
+    )
+  }
   return (
     <div
       className="p-12 text-center border-2 border-dashed border-border rounded-lg bg-card text-muted-foreground"

@@ -503,12 +503,12 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
   // rule, so a book is either matched or it isn't. The backend rejects
   // direct adds with 409, but hiding them in the picker avoids the
   // user having to discover that the hard way.
-  const availableToAdd = (shelves.data ?? []).filter(
+  const availableToAdd = (shelves.data?.shelves ?? []).filter(
     (s) => !currentSlugs.has(s.slug) && !s.isSmart
   )
 
   const shelfLabel = (slug: string): string =>
-    shelves.data?.find((s) => s.slug === slug)?.name ?? slug
+    shelves.data?.shelves.find((s) => s.slug === slug)?.name ?? slug
 
   return (
     <div

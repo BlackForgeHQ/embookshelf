@@ -53,7 +53,11 @@ const BUILTIN_SHELF_ICONS: Record<string, IconName> = {
 export function AppSidebar() {
   const state = useRouterState()
   const pathname = state.location.pathname
-  const search = state.location.search as { shelf?: string; library?: string }
+  const search = state.location.search as {
+    shelf?: string
+    library?: string
+    unshelved?: string
+  }
 
   const queryClient = useQueryClient()
   const me = useQuery({
@@ -115,7 +119,8 @@ export function AppSidebar() {
   >(null)
 
   const libs = libraries.data ?? []
-  const allShelves = shelves.data ?? []
+  const allShelves = shelves.data?.shelves ?? []
+  const unshelvedCount = shelves.data?.unshelvedCount ?? 0
   // "reading" is promoted into the Browse section as a first-class nav item,
   // so drop it from the Shelves list to avoid rendering two links to the
   // same filtered view.
@@ -129,6 +134,7 @@ export function AppSidebar() {
   const isLibrary = pathname.startsWith("/library")
   const activeShelf = isLibrary ? (search.shelf ?? null) : null
   const activeLibrary = isLibrary ? (search.library ?? null) : null
+  const isUnshelved = isLibrary && search.unshelved === "1"
 
   return (
     <Sidebar collapsible="icon">
@@ -161,7 +167,17 @@ export function AppSidebar() {
                 icon="library"
                 label="All Books"
                 count={totalBooks || undefined}
-                active={isLibrary && !activeShelf && !activeLibrary}
+                active={
+                  isLibrary && !activeShelf && !activeLibrary && !isUnshelved
+                }
+              />
+              <NavItem
+                to="/library"
+                search={{ unshelved: "1" }}
+                icon="inbox"
+                label="Unshelved"
+                count={unshelvedCount || undefined}
+                active={isUnshelved}
               />
               <NavItem
                 to="/notebook"

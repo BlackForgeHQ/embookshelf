@@ -64,7 +64,7 @@ export function ShelfDraftProvider({ children }: { children: ReactNode }) {
           if (!open) createShelfMut.reset()
           setOpen(open)
         }}
-        existingNames={(shelves.data ?? []).map((s) => s.name)}
+        existingNames={(shelves.data?.shelves ?? []).map((s) => s.name)}
         busy={createShelfMut.isPending}
         error={(createShelfMut.error as ApiError | null)?.message ?? null}
         onSubmit={(draft) => createShelfMut.mutate(draft)}

@@ -81,3 +81,11 @@ func (s *ShelfService) RemoveBook(ctx context.Context, userID, slug, bookID stri
 func (s *ShelfService) SlugsForBook(ctx context.Context, userID, bookID string) ([]string, error) {
 	return s.repo.ShelfSlugsForBook(ctx, userID, bookID)
 }
+
+// CountUnshelved returns the size of the user's "Unshelved" virtual view —
+// books not on any of their regular non-system shelves. Surfaced in the
+// /shelves response so the sidebar can show a live count alongside
+// All Books without a second roundtrip.
+func (s *ShelfService) CountUnshelved(ctx context.Context, userID string) (int, error) {
+	return s.repo.CountUnshelvedForUser(ctx, userID)
+}

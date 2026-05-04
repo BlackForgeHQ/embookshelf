@@ -176,6 +176,20 @@ export function CommandPalette({ open, onOpenChange }: Props) {
             Library
           </CommandItem>
           <CommandItem
+            value="unshelved books no shelf inbox"
+            onSelect={() =>
+              run(() => {
+                void navigate({
+                  to: "/library",
+                  search: { unshelved: "1" },
+                })
+              })
+            }
+          >
+            <Icon name="inbox" size={14} />
+            Unshelved
+          </CommandItem>
+          <CommandItem
             value="bookdrop"
             onSelect={() => run(() => { void navigate({ to: "/bookdrop" }) })}
           >

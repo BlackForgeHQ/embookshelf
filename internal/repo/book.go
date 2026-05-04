@@ -100,6 +100,17 @@ func (r *BookRepo) Search(ctx context.Context, userID, librarySlug string, p mod
 			}
 			where = append(where, "b.format IN ("+strings.Join(placeholders, ",")+")")
 		}
+		if p.Unshelved {
+			args = append(args, userID)
+			where = append(where, fmt.Sprintf(`NOT EXISTS (
+				SELECT 1 FROM shelf_books sb
+				JOIN shelves s ON s.id = sb.shelf_id
+				WHERE sb.book_id = b.id
+				  AND s.user_id = ?%d
+				  AND s.is_smart = 0
+				  AND s.slug NOT IN ('reading','finished')
+			)`, len(args)))
+		}
 	} else {
 		if librarySlug != "" {
 			args = append(args, librarySlug)
@@ -113,9 +124,25 @@ func (r *BookRepo) Search(ctx context.Context, userID, librarySlug string, p mod
 			args = append(args, p.Format)
 			where = append(where, fmt.Sprintf("b.format = ANY($%d::text[])", len(args)))
 		}
+		if p.Unshelved {
+			args = append(args, userID)
+			where = append(where, fmt.Sprintf(`NOT EXISTS (
+				SELECT 1 FROM shelf_books sb
+				JOIN shelves s ON s.id = sb.shelf_id
+				WHERE sb.book_id = b.id
+				  AND s.user_id = $%d
+				  AND s.is_smart = false
+				  AND s.slug NOT IN ('reading','finished')
+			)`, len(args)))
+		}
 	}
 
+	// Unshelved is a triage view — newest imports float to the top by
+	// default so the user shelves them first. Explicit p.Sort overrides.
 	orderBy := "b.title ASC"
+	if p.Unshelved {
+		orderBy = "b.created_at DESC"
+	}
 	switch p.Sort {
 	case "author":
 		orderBy = "b.author ASC, b.title ASC"

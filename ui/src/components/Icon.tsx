@@ -51,6 +51,7 @@ export type IconName =
   | "check-circle"
   | "alert"
   | "library"
+  | "inbox"
   | "lock"
   | "unlock"
   | "play"
@@ -352,6 +353,13 @@ function renderPath(name: IconName) {
       )
     case "library":
       return <path d="M4 4v16M8 4v16M12 4v16M16 4v16M20 4v16M4 20h16" />
+    case "inbox":
+      return (
+        <>
+          <path d="M4 13h4l1.5 2.5h5L16 13h4" />
+          <path d="M5 5h14l1 8v5a1 1 0 01-1 1H5a1 1 0 01-1-1v-5l1-8z" />
+        </>
+      )
     case "lock":
       return (
         <>

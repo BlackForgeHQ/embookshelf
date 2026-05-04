@@ -633,6 +633,47 @@ func sqlOp(op model.RuleOp) (string, error) {
 	return "", fmt.Errorf("%w: op %q not a comparison operator", model.ErrInvalidRule, op)
 }
 
+// CountUnshelvedForUser counts the user's books not on any of their
+// regular non-system shelves. Smart shelves are ignored (membership is
+// query-time, not stored), and `reading`/`finished` are excluded — they
+// auto-populate from progress, not curation. Hits idx_shelf_books_book
+// via the NOT EXISTS subquery.
+func (r *ShelfRepo) CountUnshelvedForUser(ctx context.Context, userID string) (int, error) {
+	const qPG = `
+		SELECT COUNT(*)
+		FROM books b
+		JOIN libraries l ON l.id = b.library_id
+		WHERE b.deleted_at IS NULL
+		  AND NOT EXISTS (
+		    SELECT 1 FROM shelf_books sb
+		    JOIN shelves s ON s.id = sb.shelf_id
+		    WHERE sb.book_id = b.id
+		      AND s.user_id = $1
+		      AND s.is_smart = false
+		      AND s.slug NOT IN ('reading','finished')
+		  )
+	`
+	const qSQLite = `
+		SELECT COUNT(*)
+		FROM books b
+		JOIN libraries l ON l.id = b.library_id
+		WHERE b.deleted_at IS NULL
+		  AND NOT EXISTS (
+		    SELECT 1 FROM shelf_books sb
+		    JOIN shelves s ON s.id = sb.shelf_id
+		    WHERE sb.book_id = b.id
+		      AND s.user_id = ?
+		      AND s.is_smart = 0
+		      AND s.slug NOT IN ('reading','finished')
+		  )
+	`
+	var n int
+	if err := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // SuggestShelf is the slim shape returned by SearchSuggest for the
 // autocomplete surfaces.
 type SuggestShelf struct {

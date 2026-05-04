@@ -173,9 +173,10 @@ var ShelfAccents = []string{"accent", "teal", "olive", "rust", "plum", "ochre", 
 
 // SearchParams controls the Library search/filter/sort surface.
 type SearchParams struct {
-	Query  string   // free-text search over title/author/series/description
-	Format []string // filter by format (empty = all)
-	Sort   string   // one of: title, author, recent, year, rating
+	Query     string   // free-text search over title/author/series/description
+	Format    []string // filter by format (empty = all)
+	Sort      string   // one of: title, author, recent, year, rating
+	Unshelved bool     // restrict to books not on any of the user's regular non-system shelves
 }
 
 // Formats exposes the formats supported in the UI filter chips.

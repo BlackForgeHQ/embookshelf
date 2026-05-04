@@ -2,7 +2,7 @@ import { useEffect } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 
 import { bookdropQueryKey } from "./bookdrop"
-import { booksQueryKey, librariesQueryKey } from "./books"
+import { booksQueryKey, librariesQueryKey, shelvesQueryKey } from "./books"
 import { settingsUsersQueryKey } from "./settings"
 
 // Event names the server publishes. Keep the union narrow so the dispatch
@@ -27,6 +27,10 @@ export function useRealtime() {
         queryClient.invalidateQueries({ queryKey: bookdropQueryKey })
         queryClient.invalidateQueries({ queryKey: booksQueryKey() })
         queryClient.invalidateQueries({ queryKey: librariesQueryKey })
+        // A fresh import lands as an unshelved book — bump the count
+        // alongside the books / libraries lists so the sidebar's
+        // Unshelved entry reflects the new arrival without a refresh.
+        queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
       },
       // Bulk clear of imported/rejected rows — only the queue list needs
       // to refetch; books/libraries are unaffected by history deletion.

@@ -293,9 +293,10 @@ func (h *Handler) Books(c *gin.Context) {
 	}
 
 	params := model.SearchParams{
-		Query:  strings.TrimSpace(c.Query("q")),
-		Sort:   strings.TrimSpace(c.Query("sort")),
-		Format: splitCSV(c.Query("format")),
+		Query:     strings.TrimSpace(c.Query("q")),
+		Sort:      strings.TrimSpace(c.Query("sort")),
+		Format:    splitCSV(c.Query("format")),
+		Unshelved: c.Query("unshelved") == "1",
 	}
 	library := strings.TrimSpace(c.Query("library"))
 

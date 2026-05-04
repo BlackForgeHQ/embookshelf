@@ -52,7 +52,15 @@ func (h *Handler) Shelves(c *gin.Context) {
 	for _, s := range list {
 		out = append(out, toShelfDTO(s))
 	}
-	c.JSON(http.StatusOK, gin.H{"shelves": out})
+	// Live count for the "Unshelved" virtual view. Cheap NOT EXISTS that
+	// hits idx_shelf_books_book; piggybacked here to save the sidebar a
+	// second roundtrip.
+	unshelvedCount, err := h.shelf.CountUnshelved(c.Request.Context(), userID)
+	if err != nil {
+		writeServerError(c, "shelves unshelved count", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"shelves": out, "unshelvedCount": unshelvedCount})
 }
 
 type createShelfReq struct {

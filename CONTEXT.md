@@ -81,6 +81,19 @@ pre-approval cover bytes still on disk. The source files under
 `BOOKDROP_PATH` are NOT touched — the watcher will re-discover any
 file still on disk on its next tick. Distinct from Wipe BookDrop.
 
+## Unshelved
+
+A virtual view of books a user has not manually placed on any
+**regular** shelf. System shelves `reading` and `finished` are
+excluded from the test (they auto-populate from progress, not
+curation), and smart shelves are ignored (their membership is
+query-time, not stored). Per-user: a book can be unshelved for
+one user and shelved for another. Surfaced as a fixed sidebar
+entry under "All Books" and as the `?unshelved=1` library
+filter — never a row in `shelves`. Implemented with a single
+`NOT EXISTS` subquery over `shelf_books`. Distinct from "All
+Books" (every book) and from a smart shelf (rule-driven).
+
 ## Wipe BookDrop
 
 Admin-only housekeeping op that recursively removes every file

@@ -152,6 +152,7 @@ export type BooksQuery = {
   q?: string
   format?: Array<string> // joined with commas on the wire
   sort?: "title" | "author" | "recent" | "year" | "rating"
+  unshelved?: boolean
 }
 
 function buildBooksPath(params: BooksQuery): string {
@@ -163,6 +164,7 @@ function buildBooksPath(params: BooksQuery): string {
     qs.set("format", params.format.join(","))
   }
   if (params.sort) qs.set("sort", params.sort)
+  if (params.unshelved) qs.set("unshelved", "1")
   const query = qs.toString()
   return query ? `/api/v1/books?${query}` : "/api/v1/books"
 }
@@ -174,9 +176,16 @@ export async function fetchLibraries(): Promise<Array<Library>> {
   return libraries
 }
 
-export async function fetchShelves(): Promise<Array<Shelf>> {
-  const { shelves } = await api<{ shelves: Array<Shelf> }>("/api/v1/shelves")
-  return shelves
+// ShelvesPayload is the wire shape of /api/v1/shelves: the shelf list
+// plus a live count for the "Unshelved" virtual view (books not on any
+// of the user's regular non-system shelves). The sidebar reads both.
+export type ShelvesPayload = {
+  shelves: Array<Shelf>
+  unshelvedCount: number
+}
+
+export async function fetchShelves(): Promise<ShelvesPayload> {
+  return api<ShelvesPayload>("/api/v1/shelves")
 }
 
 export async function fetchBooks(params: BooksQuery = {}): Promise<{
