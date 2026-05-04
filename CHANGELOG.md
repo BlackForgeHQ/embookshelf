@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.12](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.11...v0.4.12) (2026-05-04)
+
+
+### Features
+
+* add "Unshelved" virtual view for books not on user shelves ([e97469b](https://github.com/BlackForgeHQ/embookshelf/commit/e97469b7e9e097a6b1fb85e294aa51035505943e))
+
 ## [0.4.11](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.10...v0.4.11) (2026-05-04)
 
 
