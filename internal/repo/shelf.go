@@ -94,32 +94,35 @@ func (r *ShelfRepo) GetBySlugForUser(ctx context.Context, userID, slug string) (
 // BooksInShelfForUser returns the books on a user shelf. If the shelf is
 // smart, the rule is compiled to SQL and joined against books directly;
 // otherwise we hit the shelf_books join table as before.
-func (r *ShelfRepo) BooksInShelfForUser(ctx context.Context, userID, shelfSlug string) ([]model.Book, error) {
+//
+// sort accepts the same vocabulary as library search (title|author|recent|
+// year|rating). Empty/unknown falls back to shelf-membership recency
+// (sb.added_at DESC) for regular shelves and book recency for smart shelves.
+func (r *ShelfRepo) BooksInShelfForUser(ctx context.Context, userID, shelfSlug, sort string) ([]model.Book, error) {
 	sh, err := r.GetBySlugForUser(ctx, userID, shelfSlug)
 	if err != nil {
 		return nil, err
 	}
 
 	if sh.IsSmart {
-		return r.booksMatchingRule(ctx, userID, sh.Rule)
+		return r.booksMatchingRule(ctx, userID, sh.Rule, sort)
 	}
 
-	const qPG = `
+	orderBy := shelfBooksOrderBy(sort)
+	qPG := `
 		SELECT ` + bookCols + `
 		` + bookFromPG + `
 		JOIN shelf_books sb ON sb.book_id = b.id
 		JOIN shelves     s  ON s.id = sb.shelf_id
 		WHERE s.user_id = $1 AND s.slug = $2 AND b.deleted_at IS NULL
-		ORDER BY sb.added_at DESC
-	`
-	const qSQLite = `
+		ORDER BY ` + orderBy
+	qSQLite := `
 		SELECT ` + bookCols + `
 		` + bookFromSQLite + `
 		JOIN shelf_books sb ON sb.book_id = b.id
 		JOIN shelves     s  ON s.id = sb.shelf_id
 		WHERE s.user_id = ?1 AND s.slug = ?2 AND b.deleted_at IS NULL
-		ORDER BY sb.added_at DESC
-	`
+		ORDER BY ` + orderBy
 	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID, shelfSlug)
 	if err != nil {
 		return nil, err
@@ -151,7 +154,7 @@ func (r *ShelfRepo) CountForSmartShelf(ctx context.Context, userID string, rule 
 	return n, nil
 }
 
-func (r *ShelfRepo) booksMatchingRule(ctx context.Context, userID string, rule *model.ShelfRule) ([]model.Book, error) {
+func (r *ShelfRepo) booksMatchingRule(ctx context.Context, userID string, rule *model.ShelfRule, sort string) ([]model.Book, error) {
 	compiled, err := compileRule(rule, 2)
 	if err != nil {
 		return nil, err
@@ -165,7 +168,7 @@ func (r *ShelfRepo) booksMatchingRule(ctx context.Context, userID string, rule *
 	if compiled.where != "" {
 		query += " AND (" + compiled.where + ")"
 	}
-	query += " ORDER BY b.created_at DESC LIMIT 500"
+	query += " ORDER BY " + smartShelfOrderBy(sort) + " LIMIT 500"
 
 	rows, err := r.db.SQL.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -173,6 +176,46 @@ func (r *ShelfRepo) booksMatchingRule(ctx context.Context, userID string, rule *
 	}
 	defer func() { _ = rows.Close() }()
 	return collectBooks(r.db.Dialect, rows)
+}
+
+// shelfBooksOrderBy maps the API sort vocabulary to ORDER BY for regular
+// shelves (which can sort by sb.added_at via the join). Default keeps
+// shelf-membership recency so existing callers and "added" UI sort behave
+// as before.
+func shelfBooksOrderBy(sort string) string {
+	switch sort {
+	case "title":
+		return "b.title ASC"
+	case "author":
+		return "b.author ASC, b.title ASC"
+	case "year":
+		return "b.year DESC, b.title ASC"
+	case "rating":
+		return "b.rating DESC, b.title ASC"
+	case "recent":
+		return "sb.added_at DESC"
+	default:
+		return "sb.added_at DESC"
+	}
+}
+
+// smartShelfOrderBy is the same mapping for smart shelves, which have no
+// shelf_books join — "recent" falls back to b.created_at.
+func smartShelfOrderBy(sort string) string {
+	switch sort {
+	case "title":
+		return "b.title ASC"
+	case "author":
+		return "b.author ASC, b.title ASC"
+	case "year":
+		return "b.year DESC, b.title ASC"
+	case "rating":
+		return "b.rating DESC, b.title ASC"
+	case "recent":
+		return "b.created_at DESC"
+	default:
+		return "b.created_at DESC"
+	}
 }
 
 // Create inserts a new shelf. For regular shelves, rule must be nil; for

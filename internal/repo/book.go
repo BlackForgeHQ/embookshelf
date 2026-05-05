@@ -139,11 +139,10 @@ func (r *BookRepo) Search(ctx context.Context, userID, librarySlug string, p mod
 
 	// Unshelved is a triage view — newest imports float to the top by
 	// default so the user shelves them first. Explicit p.Sort overrides.
-	orderBy := "b.title ASC"
-	if p.Unshelved {
-		orderBy = "b.created_at DESC"
-	}
+	var orderBy string
 	switch p.Sort {
+	case "title":
+		orderBy = "b.title ASC"
 	case "author":
 		orderBy = "b.author ASC, b.title ASC"
 	case "recent":
@@ -152,6 +151,12 @@ func (r *BookRepo) Search(ctx context.Context, userID, librarySlug string, p mod
 		orderBy = "b.year DESC, b.title ASC"
 	case "rating":
 		orderBy = "b.rating DESC, b.title ASC"
+	default:
+		if p.Unshelved {
+			orderBy = "b.created_at DESC"
+		} else {
+			orderBy = "b.title ASC"
+		}
 	}
 
 	query := `

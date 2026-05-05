@@ -276,7 +276,7 @@ func (h *Handler) Books(c *gin.Context) {
 	// Shelf filter short-circuits the library search — shelf membership is
 	// a per-user concept that lives in its own join table.
 	if shelfSlug := strings.TrimSpace(c.Query("shelf")); shelfSlug != "" {
-		books, err := h.shelf.Books(c.Request.Context(), userID, shelfSlug)
+		books, err := h.shelf.Books(c.Request.Context(), userID, shelfSlug, strings.TrimSpace(c.Query("sort")))
 		if err != nil {
 			if errors.Is(err, repo.ErrNotFound) {
 				// Unknown shelf slug → treat as empty rather than 500.
