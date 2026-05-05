@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.13](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.12...v0.4.13) (2026-05-05)
+
+
+### Features
+
+* enhance ShelfCard with inline searchable picker and loading animation ([5372530](https://github.com/BlackForgeHQ/embookshelf/commit/537253092aba12d945da876d70f862b5639ff902))
+
+
+### Bug Fixes
+
+* honor sort parameter on shelf book listings ([c272958](https://github.com/BlackForgeHQ/embookshelf/commit/c2729581d86317af1f672f68d8ed64f36b595d21))
+
 ## [0.4.12](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.11...v0.4.12) (2026-05-04)
 
 
