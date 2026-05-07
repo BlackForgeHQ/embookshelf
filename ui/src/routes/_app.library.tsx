@@ -31,6 +31,7 @@ type LibrarySearch = {
   library?: string
   layout?: Layout
   unshelved?: "1"
+  sort?: SortKey
 }
 
 export const Route = createFileRoute("/_app/library")({
@@ -44,6 +45,13 @@ export const Route = createFileRoute("/_app/library")({
     // `?unshelved=1` is the canonical truthy form. Anything else drops to
     // undefined so the URL stays clean when the filter is off.
     unshelved: raw.unshelved === "1" ? "1" : undefined,
+    sort:
+      raw.sort === "added" ||
+      raw.sort === "title" ||
+      raw.sort === "author" ||
+      raw.sort === "rating"
+        ? raw.sort
+        : undefined,
   }),
   component: LibraryView,
 })
@@ -61,13 +69,25 @@ function LibraryView() {
     library: activeLibrary,
     layout: layoutSearch,
     unshelved: unshelvedSearch,
+    sort: sortSearch,
   } = Route.useSearch()
   const layout: Layout = layoutSearch ?? "grid"
   const isUnshelved = unshelvedSearch === "1"
+  const sortBy: SortKey = sortSearch ?? "added"
 
   const [search, setSearch] = useState("")
-  const [sortBy, setSortBy] = useState<SortKey>("added")
   const [filterFormat, setFilterFormat] = useState<string | null>(null)
+
+  const setSortBy = (next: SortKey) => {
+    void navigate({
+      to: "/library",
+      search: (prev) => ({
+        ...prev,
+        // Drop the param when the user picks the default — keeps URLs clean.
+        sort: next === "added" ? undefined : next,
+      }),
+    })
+  }
 
   // Shelf filter takes precedence on the server; library + q + format are
   // merged as additional filters otherwise. `unshelved` is orthogonal:
@@ -206,7 +226,10 @@ function LibraryView() {
         ))}
         <div className="grow" />
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Sort</span>
-        <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
+        <Select
+          value={sortBy}
+          onValueChange={(v) => setSortBy(v as SortKey)}
+        >
           <SelectTrigger size="sm" className="w-auto">
             <SelectValue />
           </SelectTrigger>
