@@ -419,7 +419,7 @@ function RegularShelfRow({
       {canShare && (
         <SidebarMenuAction
           showOnHover
-          className="group-data-[collapsible=icon]:!hidden"
+          className="!group-data-[collapsible=icon]:hidden"
           title="Share with all users"
           aria-label={`Share ${shelf.name} with all users`}
           onClick={(e) => {
