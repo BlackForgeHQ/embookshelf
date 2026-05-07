@@ -363,7 +363,6 @@ function BookCard({
         onClick={() => onOpen(book.id)}
         className="group grid grid-cols-[46px_2fr_1.2fr_80px_80px_60px] items-center gap-4 px-4 py-3 text-left border-b border-border hover:bg-muted/30 transition-colors w-full last:border-0"
         aria-label={`Open ${book.title}`}
-        
       >
         <Cover book={book} size="xs" />
         <div>
