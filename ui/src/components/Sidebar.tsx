@@ -245,7 +245,7 @@ export function AppSidebar() {
 
         <SidebarGroup>
           <SidebarGroupLabel>Shelves</SidebarGroupLabel>
-          <SidebarGroupAction className="group-data-[collapsible=icon]:!hidden"
+          <SidebarGroupAction className="!group-data-[collapsible=icon]:hidden"
             title="New shelf"
             aria-label="New shelf"
             onClick={() => shelfDraft.open()}
@@ -295,7 +295,7 @@ export function AppSidebar() {
 
         <SidebarGroup>
           <SidebarGroupLabel>Magic Shelves</SidebarGroupLabel>
-          <SidebarGroupAction className="group-data-[collapsible=icon]:!hidden"
+          <SidebarGroupAction className="!group-data-[collapsible=icon]:hidden"
             title="New smart shelf"
             aria-label="New smart shelf"
             onClick={() => setSmartDraft({ mode: "create" })}
