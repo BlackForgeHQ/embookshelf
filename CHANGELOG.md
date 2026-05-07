@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.14](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.13...v0.4.14) (2026-05-07)
+
+
+### Features
+
+* enhance documentation and introduce new agent skills ([7ec8d90](https://github.com/BlackForgeHQ/embookshelf/commit/7ec8d90a3ac833d44c765ae4d4166d31873baa4b))
+* introduce shared shelves feature for public curation ([7d5b001](https://github.com/BlackForgeHQ/embookshelf/commit/7d5b0018080593b5c596031a7cf825f43c2d6ee9))
+
 ## [0.4.13](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.12...v0.4.13) (2026-05-05)
 
 
