@@ -413,7 +413,7 @@ function RegularShelfRow({
           <span>{shelf.name}</span>
         </Link>
       </SidebarMenuButton>
-      <SidebarMenuBadge className="group-focus-within/menu-item:hidden group-hover/menu-item:hidden group-data-[collapsible=icon]:!hidden">
+      <SidebarMenuBadge className="group-focus-within/menu-item:hidden group-hover/menu-item:hidden !group-data-[collapsible=icon]:hidden">
         {shelf.bookCount}
       </SidebarMenuBadge>
       {canShare && (
