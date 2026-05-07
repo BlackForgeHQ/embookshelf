@@ -17,7 +17,7 @@ Library deletion stays soft by default. With `?purge=true`, after `repo.DeleteLi
 
 **Tech stack:** Reuses Plan F's `aws-sdk-go-v2/service/s3` (DeleteObjects already on `s3.Client`). No new third-party deps.
 
-**Companion reference:** `docs/spec/storage.spec.md` §3.2 (S3 layout, "one bucket per environment, libraries are prefixes"). `docs/CONTEXT.md` (terms).
+**Companion reference:** `docs/spec/storage.spec.md` §3.2 (S3 layout, "one bucket per environment, libraries are prefixes"). `CONTEXT.md` (terms).
 
 **Locked decisions:**
 - Shared S3 config via env, never DB-editable. Rotating creds = rotating env vars.

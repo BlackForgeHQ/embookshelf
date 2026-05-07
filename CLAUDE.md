@@ -25,3 +25,7 @@ make e2e              # Playwright (needs `make up`)
 - **Pluggable storage**: book bytes always flow through `storage.Storage`. SQLite + S3 is refused at boot.
 - **Encrypted secrets (ADR-0010)**: provider API keys, cookies, OIDC client secrets use AES-256-GCM when `EMBOOKSHELF_SECRET_KEY` is set.
 - **SPA embed**: Vite → `ui/dist/` → `sync-dist.ts` copies to `internal/staticfs/dist/` → `//go:embed all:dist`. Both `internal/staticfs/dist/` and `ui/src/routeTree.gen.ts` are generated — don't edit by hand.
+
+## Agent skills
+
+Issue tracker, triage labels, domain docs configured per `docs/agents/{issue-tracker,triage-labels,domain}.md`. GitHub Issues via `gh`; default canonical triage labels; single-context `CONTEXT.md` + `docs/adr/`.

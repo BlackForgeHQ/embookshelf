@@ -48,5 +48,5 @@ When the in-file step is skipped — for any reason (S3 backend, format with no 
 
 ## Companion artifacts
 
-- `docs/CONTEXT.md` — Sidecar entry updated with format/role/scope.
+- `CONTEXT.md` — Sidecar entry updated with format/role/scope.
 - `docs/spec/sidecar-write.spec.md` (TBD) — full implementation contract: per-format mapping (Q4), Tags/Genres encoding (Q12), trigger contract (Q13), failure semantics (Q9).

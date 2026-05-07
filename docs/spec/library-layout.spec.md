@@ -19,7 +19,7 @@ This spec defines the user-visible behavior of that layout: where files land, ho
 
 ## 2. Domain
 
-See `docs/CONTEXT.md` for the canonical glossary. Key terms this spec uses:
+See `CONTEXT.md` for the canonical glossary. Key terms this spec uses:
 
 - **LeafBook** — a directory under the library root that contains ≥1 supported file. Scanner treats it as a single Book.
 - **Container** — a directory under the library root that contains only subdirectories (no supported files at this level). Scanner recurses into each subdir as a `LeafBook` candidate.

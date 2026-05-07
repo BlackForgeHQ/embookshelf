@@ -10,7 +10,7 @@
 
 **Companion docs:**
 - `docs/adr/0002-managed-local-library-folders.md` — decision rationale.
-- `docs/CONTEXT.md` — Library glossary entry updated.
+- `CONTEXT.md` — Library glossary entry updated.
 - `docs/spec/library-creation.spec.md` — needs spec update for the new local-kind flow.
 
 **Out of scope:**

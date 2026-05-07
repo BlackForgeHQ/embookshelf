@@ -28,6 +28,17 @@ Do not introduce competing libraries (no Mantine/Chakra/MUI, no Framer Motion un
 
 Tokens live in `ui/src/styles.css` under `@theme`. Never hardcode raw color or spacing values in components — extend `@theme` instead. Categories: colors (semantic, with dark mode), spacing, radius, shadows, typography, breakpoints, transitions, z-index.
 
+## Naming
+
+- Component files: `PascalCase.tsx` (`AccentPicker.tsx`). Hooks: `useThing.ts`. Utilities: `kebab-case.ts`.
+- Booleans: `is` / `has` / `should` / `can` prefix. Functions: verb-first (`getUser`). Handlers: `handle*` internal, `on*` as props.
+- Acronyms as words in TS: `userId`, not `userID` (TS convention; differs from Go in `cmd/`/`internal/`).
+- Constants: `SCREAMING_SNAKE`.
+
+## Imports
+
+Builtins, external, internal (`@/...`), relative, types. Blank line between groups.
+
 ## Components
 
 - shadcn primitives go under `ui/src/components/ui/`. App components live directly in `ui/src/components/` as `PascalCase.tsx`.

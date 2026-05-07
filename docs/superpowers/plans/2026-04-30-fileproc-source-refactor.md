@@ -8,7 +8,7 @@
 
 **Tech stack:** Go 1.25 stdlib. Reuses Plan F's `aws-sdk-go-v2/service/s3` for the S3 range-fetcher. No new third-party deps.
 
-**Companion reference:** `docs/CONTEXT.md` (Source vocabulary), spec storage.spec.md §2.1.
+**Companion reference:** `CONTEXT.md` (Source vocabulary), spec storage.spec.md §2.1.
 
 **Locked decisions:**
 - `Source = io.ReaderAt + io.Closer + Size() int64`. Lives in `internal/storage`.

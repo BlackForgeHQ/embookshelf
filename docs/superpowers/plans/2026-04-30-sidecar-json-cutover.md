@@ -9,7 +9,7 @@
 **Tech Stack:** Go 1.25, stdlib `encoding/json`, existing `internal/storage` interface, existing `pelletier/go-toml/v2` dependency removed at the end.
 
 **Companion docs:**
-- `docs/CONTEXT.md` — Sidecar entry already updated.
+- `CONTEXT.md` — Sidecar entry already updated.
 - `docs/adr/0001-edit-side-metadata-write-back.md` — TOML-cutover decision recorded.
 - `docs/spec/sidecar-write.spec.md` §4 (envelope), §8 (paired filename), §9 (cutover policy).
 
@@ -847,7 +847,7 @@ Expected: silent success.
 
 - [ ] **Step 4: Confirm CONTEXT.md still matches landed code**
 
-Read `docs/CONTEXT.md` Sidecar entry. It should describe the JSON paired-filename behavior (already updated during the grill). If anything contradicts the landed code, update inline.
+Read `CONTEXT.md` Sidecar entry. It should describe the JSON paired-filename behavior (already updated during the grill). If anything contradicts the landed code, update inline.
 
 - [ ] **Step 5: Tag the cutover in commit log**
 

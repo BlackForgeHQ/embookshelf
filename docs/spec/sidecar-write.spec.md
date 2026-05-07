@@ -8,7 +8,7 @@
 - **Entry points:**
   - `PATCH /api/books/:id` (manual edit) → triggers full pipeline.
   - `POST /api/books/:id/enrich/apply` (apply match) → triggers full pipeline.
-- **Companion artifacts:** `docs/CONTEXT.md` (Sidecar entry), `docs/adr/0001-edit-side-metadata-write-back.md` (decisions + reasons).
+- **Companion artifacts:** `CONTEXT.md` (Sidecar entry), `docs/adr/0001-edit-side-metadata-write-back.md` (decisions + reasons).
 
 ---
 
@@ -42,7 +42,7 @@ This spec adds the missing direction: **DB → file → sidecar on every explici
 
 ## 3. Domain
 
-See `docs/CONTEXT.md` for the canonical glossary. The terms this spec relies on:
+See `CONTEXT.md` for the canonical glossary. The terms this spec relies on:
 
 - **Sidecar** — `<basename>.embookshelf.json`. Paired filename next to the book file. Spillover-only when the in-file write succeeds; full mirror otherwise.
 - **In-file write** — direct modification of the book file's embedded metadata. EPUB: rezip with new OPF + cover bytes. PDF: in-place patch of `/Info` dict.

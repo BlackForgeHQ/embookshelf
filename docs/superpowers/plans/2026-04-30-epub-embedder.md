@@ -1098,7 +1098,7 @@ Expected: silent.
 
 - [ ] **Step 4: Confirm CONTEXT.md still matches landed code**
 
-The Sidecar entry in `docs/CONTEXT.md` describes the EPUB target as "OPF + cover bytes." The Embedder lands that capability. No CONTEXT update needed for this plan.
+The Sidecar entry in `CONTEXT.md` describes the EPUB target as "OPF + cover bytes." The Embedder lands that capability. No CONTEXT update needed for this plan.
 
 - [ ] **Step 5: Tag the plan completion in commit log**
 
