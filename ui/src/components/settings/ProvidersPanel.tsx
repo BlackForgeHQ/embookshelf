@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import type { CSSProperties } from "react"
 
 import type { ApiError } from "@/api/client"
 import type {
@@ -20,12 +19,11 @@ import {
   updateProviderSetting,
 } from "@/api/settings"
 import { Icon } from "@/components/Icon"
-import {
-  AdminGate,
-} from "@/components/SettingsShared"
+import { AdminGate } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
+import { cn } from "@/lib/utils"
 
 export function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
   const queryClient = useQueryClient()
@@ -70,6 +68,8 @@ export function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
 
   const providers = providersQuery.data ?? []
   const enabledCount = providers.filter((p) => p.enabled).length
+  const rankedCount = providers.filter((p) => p.priority != null).length
+  const isLoading = providersQuery.isLoading
 
   // Sorted view for chain-order display. Ranked providers sit on top,
   // unranked fall back to catalog order. Up/Down arrows swap priorities
@@ -88,8 +88,6 @@ export function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
     if (target < 0 || target >= ordered.length) return
     const a = ordered[idx]
     const b = ordered[target]
-    // The bounds check above guarantees both are defined; the guard
-    // keeps noUncheckedIndexedAccess happy without duplicating logic.
     if (!a || !b) return
     const aPrio = a.priority ?? idx
     const bPrio = b.priority ?? target
@@ -99,74 +97,163 @@ export function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <>
-      <h2 className="t-h2" style={{ marginBottom: 8 }}>
-        Metadata providers
-      </h2>
-      <p className="t-small" style={{ marginBottom: 24, fontStyle: "italic" }}>
-        Enrichment queries fan out across enabled providers — toggle any row to
-        include or skip it. Priority drives ISBN-lookup chain order; the
-        parallel fan-out on the book editor still sorts by match confidence.
-      </p>
+      <header className="mb-8 border-b border-(--color-rule-soft) pb-5">
+        <div className="t-label mb-3">Settings · Enrichment</div>
+        <div className="flex items-end justify-between gap-8 flex-wrap">
+          <div className="min-w-0">
+            <h2 className="t-h2">Metadata providers</h2>
+            <p className="t-small mt-2 italic max-w-[58ch]">
+              Enrichment queries fan out across enabled providers — toggle any
+              row to include or skip it. Priority drives ISBN-lookup chain
+              order; the parallel fan-out on the book editor still sorts by
+              match confidence.
+            </p>
+          </div>
+          <StatStrip
+            enabled={enabledCount}
+            total={providers.length}
+            ranked={rankedCount}
+            loading={isLoading}
+          />
+        </div>
+      </header>
 
-      <div className="t-label" style={{ marginBottom: 10 }}>
-        {providersQuery.isLoading
-          ? "Loading providers…"
-          : `${enabledCount} of ${providers.length} enabled`}
+      <section
+        className="mb-10 border border-(--color-rule-soft) bg-(--color-paper-0)"
+        aria-label="Auto-enrich"
+      >
+        <label className="flex items-center gap-5 px-5 py-4 cursor-pointer">
+          <span className="t-micro shrink-0 text-(--color-accent-ink)">
+            Auto
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="t-item-title">
+              Auto-enrich on bookdrop approve
+            </div>
+            <div className="t-small mt-1 max-w-[58ch]">
+              When enabled, approving a bookdrop item triggers a provider
+              fan-out and writes the top match — empty fields only, respecting
+              locks.
+            </div>
+          </div>
+          <Switch
+            checked={!!metaQuery.data?.autoEnrich}
+            disabled={metaQuery.isLoading || metaMut.isPending}
+            onCheckedChange={(v) => metaMut.mutate({ autoEnrich: v })}
+            aria-label="Toggle auto-enrich on bookdrop approve"
+          />
+        </label>
+      </section>
+
+      <div className="mb-3 flex items-baseline justify-between gap-3">
+        <div className="t-label">The provider chain</div>
+        <div className="font-mono text-[10.5px] tracking-widest uppercase text-(--color-ink-3) tabular-nums">
+          {isLoading
+            ? "Loading…"
+            : `${rankedCount.toString().padStart(2, "0")} ranked · ${enabledCount.toString().padStart(2, "0")} on`}
+        </div>
       </div>
 
-      <label
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 14,
-          padding: "12px 14px",
-          marginBottom: 14,
-          border: "1px solid var(--color-rule-soft)",
-          background: "var(--color-paper-0)",
-          borderRadius: 2,
-          cursor: "pointer",
-        }}
-      >
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="t-item-title">Auto-enrich on bookdrop approve</div>
-          <div className="t-item-sub">
-            When enabled, approving a bookdrop item triggers a provider fan-out
-            and writes the top match (empty fields only, respecting locks).
-          </div>
-        </div>
-        <Switch
-          checked={!!metaQuery.data?.autoEnrich}
-          disabled={metaQuery.isLoading || metaMut.isPending}
-          onCheckedChange={(v) => metaMut.mutate({ autoEnrich: v })}
-          aria-label="Toggle auto-enrich on bookdrop approve"
-        />
-      </label>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {ordered.map((p, idx) => (
-          <ProviderRow
-            key={p.id}
-            provider={p}
-            position={idx}
-            total={ordered.length}
-            busy={patchMut.isPending}
-            onToggle={(enabled) =>
-              patchMut.mutate({ id: p.id, patch: { enabled } })
-            }
-            onSaveConfig={(config) =>
-              patchMut.mutate(
-                { id: p.id, patch: { config } },
-                {
-                  onSuccess: () => toast.success(`${p.name} config saved.`),
-                }
-              )
-            }
-            onMoveUp={() => swapPriority(idx, -1)}
-            onMoveDown={() => swapPriority(idx, 1)}
-          />
-        ))}
+      <div className="border border-(--color-rule-soft) bg-(--color-paper-0) divide-y divide-(--color-rule-soft)">
+        {isLoading && <SkeletonRows count={3} />}
+        {!isLoading && ordered.length === 0 && <EmptyState />}
+        {!isLoading &&
+          ordered.map((p, idx) => (
+            <ProviderRow
+              key={p.id}
+              provider={p}
+              position={idx}
+              total={ordered.length}
+              busy={patchMut.isPending}
+              onToggle={(enabled) =>
+                patchMut.mutate({ id: p.id, patch: { enabled } })
+              }
+              onSaveConfig={(config) =>
+                patchMut.mutate(
+                  { id: p.id, patch: { config } },
+                  {
+                    onSuccess: () => toast.success(`${p.name} config saved.`),
+                  }
+                )
+              }
+              onMoveUp={() => swapPriority(idx, -1)}
+              onMoveDown={() => swapPriority(idx, 1)}
+            />
+          ))}
       </div>
     </>
+  )
+}
+
+function StatStrip({
+  enabled,
+  total,
+  ranked,
+  loading,
+}: {
+  enabled: number
+  total: number
+  ranked: number
+  loading: boolean
+}) {
+  return (
+    <dl
+      className="flex items-stretch border border-(--color-rule-soft) bg-(--color-paper-0) divide-x divide-(--color-rule-soft) text-right"
+      aria-busy={loading}
+    >
+      <Stat label="Enabled" value={loading ? "—" : `${enabled}/${total}`} />
+      <Stat label="Ranked" value={loading ? "—" : ranked} />
+    </dl>
+  )
+}
+
+function Stat({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="px-4 py-2.5 min-w-[88px]">
+      <dt className="t-label">{label}</dt>
+      <dd className="font-mono text-[18px] leading-tight tabular-nums text-(--color-ink-1) mt-0.5">
+        {value}
+      </dd>
+    </div>
+  )
+}
+
+function SkeletonRows({ count }: { count: number }) {
+  return (
+    <>
+      {Array.from({ length: count }).map((_, i) => (
+        <div
+          key={i}
+          className="flex items-center gap-4 px-5 py-4 animate-pulse"
+        >
+          <div className="w-9 shrink-0">
+            <div className="h-2.5 w-6 bg-(--color-paper-3) mb-2" />
+            <div className="h-4 w-4 bg-(--color-paper-2)" />
+          </div>
+          <div className="h-2 w-2 rounded-full bg-(--color-paper-3)" />
+          <div className="flex-1 min-w-0">
+            <div className="h-3.5 w-40 bg-(--color-paper-3) mb-2" />
+            <div className="h-3 w-56 bg-(--color-paper-2)" />
+          </div>
+          <div className="h-5 w-9 rounded-full bg-(--color-paper-2)" />
+        </div>
+      ))}
+    </>
+  )
+}
+
+function EmptyState() {
+  return (
+    <div className="flex flex-col items-center text-center gap-3 px-6 py-12">
+      <div className="size-10 rounded-full border border-dashed border-(--color-rule) flex items-center justify-center text-(--color-ink-3)">
+        <Icon name="sparkle" size={18} />
+      </div>
+      <div className="t-item-title">No metadata providers detected</div>
+      <div className="t-small max-w-[44ch]">
+        Build flags or runtime configuration removed every catalog entry. Check
+        the binary build tags or restart with the default provider set.
+      </div>
+    </div>
   )
 }
 
@@ -193,9 +280,9 @@ function ProviderRow({
   const [values, setValues] = useState<Record<string, string>>(() =>
     schemaToForm(schema, provider.config ?? {})
   )
+  const [expanded, setExpanded] = useState(false)
   // Rehydrate when the server payload shifts (e.g. another admin saved).
-  // useRef ensures we don't nuke in-flight edits; sync only if the stored
-  // config hash changes.
+  // Hash compare avoids nuking in-flight edits that match the stored state.
   const configHash = JSON.stringify(provider.config ?? {})
   useEffect(() => {
     // Prop→state rehydration when another admin saves; not a cascading render.
@@ -207,56 +294,77 @@ function ProviderRow({
   const dirty = schema.some(
     (f) => (values[f.key] ?? "") !== valueToString(provider.config?.[f.key])
   )
+  const hasConfig = schema.length > 0
+  const ranked = provider.priority != null
 
   return (
-    <div
-      style={{
-        padding: "14px 16px",
-        border: "1px solid var(--color-rule-soft)",
-        background: "var(--color-paper-0)",
-        borderRadius: 2,
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <button
-            type="button"
-            className="btn-icon"
-            aria-label="Move up"
-            disabled={position === 0 || busy}
-            onClick={onMoveUp}
-            style={iconBtnStyle(position === 0)}
+    <div className="px-5 py-4">
+      <div className="flex items-start gap-4">
+        <div className="flex flex-col items-center gap-1.5 w-9 shrink-0 pt-0.5">
+          <span
+            className={cn(
+              "font-mono text-[10.5px] tracking-widest tabular-nums",
+              ranked
+                ? "text-(--color-ink-2)"
+                : "text-(--color-ink-4) line-through"
+            )}
+            aria-label={ranked ? `Position ${position + 1}` : "Unranked"}
+            title={ranked ? `Position ${position + 1}` : "Unranked"}
           >
-            <Icon name="chevron-up" size={12} />
-          </button>
-          <button
-            type="button"
-            className="btn-icon"
-            aria-label="Move down"
-            disabled={position === total - 1 || busy}
-            onClick={onMoveDown}
-            style={iconBtnStyle(position === total - 1)}
-          >
-            <Icon name="chevron-down" size={12} />
-          </button>
+            {String(position + 1).padStart(2, "0")}
+          </span>
+          <div className="flex flex-col gap-0.5">
+            <button
+              type="button"
+              aria-label="Move up"
+              disabled={position === 0 || busy}
+              onClick={onMoveUp}
+              className={cn(
+                "p-0.5 border border-(--color-rule-soft) bg-(--color-paper-0) text-(--color-ink-2) leading-none transition-colors",
+                position === 0 || busy
+                  ? "opacity-30 cursor-default"
+                  : "hover:bg-(--color-paper-2) hover:text-(--color-ink-1)"
+              )}
+            >
+              <Icon name="chevron-up" size={12} />
+            </button>
+            <button
+              type="button"
+              aria-label="Move down"
+              disabled={position === total - 1 || busy}
+              onClick={onMoveDown}
+              className={cn(
+                "p-0.5 border border-(--color-rule-soft) bg-(--color-paper-0) text-(--color-ink-2) leading-none transition-colors",
+                position === total - 1 || busy
+                  ? "opacity-30 cursor-default"
+                  : "hover:bg-(--color-paper-2) hover:text-(--color-ink-1)"
+              )}
+            >
+              <Icon name="chevron-down" size={12} />
+            </button>
+          </div>
         </div>
-        <span
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: "50%",
-            background: provider.enabled
-              ? "oklch(0.58 0.12 140)"
-              : "var(--color-ink-4)",
-            transition: "background 160ms ease",
-          }}
+
+        <StatusDot
+          enabled={provider.enabled}
+          successAt={provider.lastSuccessAt}
+          errorAt={provider.lastErrorAt}
         />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="t-item-title">{provider.name}</div>
-          <div className="t-item-sub">
-            <span className="mono">{provider.id}</span>
-            {provider.external && " · external API"}
-            {provider.priority != null && ` · priority ${provider.priority}`}
+
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <div className="t-item-title">{provider.name}</div>
+            <span className="font-mono text-[11px] tracking-wide text-(--color-ink-3)">
+              {provider.id}
+            </span>
+            {provider.external && (
+              <span className="t-micro text-(--color-ink-3)">External</span>
+            )}
+            {ranked && (
+              <span className="font-mono text-[10.5px] tracking-widest uppercase text-(--color-accent-ink) tabular-nums">
+                P{provider.priority}
+              </span>
+            )}
           </div>
           <ProviderHealth
             successAt={provider.lastSuccessAt}
@@ -264,25 +372,37 @@ function ProviderRow({
             lastError={provider.lastError}
           />
         </div>
-        <Switch
-          id={`provider-${provider.id}`}
-          checked={provider.enabled}
-          disabled={busy}
-          onCheckedChange={onToggle}
-          aria-label={`${provider.enabled ? "Disable" : "Enable"} ${provider.name}`}
-        />
+
+        <div className="flex items-center gap-2 shrink-0">
+          {hasConfig && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              aria-controls={`provider-config-${provider.id}`}
+              className="t-micro flex items-center gap-1 px-2 py-1 border border-(--color-rule-soft) text-(--color-ink-2) hover:bg-(--color-paper-2) hover:text-(--color-ink-1) transition-colors"
+            >
+              Config
+              <Icon
+                name={expanded ? "chevron-up" : "chevron-down"}
+                size={11}
+              />
+            </button>
+          )}
+          <Switch
+            id={`provider-${provider.id}`}
+            checked={provider.enabled}
+            disabled={busy}
+            onCheckedChange={onToggle}
+            aria-label={`${provider.enabled ? "Disable" : "Enable"} ${provider.name}`}
+          />
+        </div>
       </div>
 
-      {schema.length > 0 && (
+      {hasConfig && expanded && (
         <div
-          style={{
-            marginTop: 14,
-            paddingTop: 14,
-            borderTop: "1px dashed var(--color-rule-soft)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
-          }}
+          id={`provider-config-${provider.id}`}
+          className="mt-4 pt-4 pl-13 border-t border-dashed border-(--color-rule-soft) flex flex-col gap-3"
         >
           {schema.map((field) => (
             <ConfigFieldRow
@@ -294,7 +414,12 @@ function ProviderRow({
               }
             />
           ))}
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <div className="flex items-center justify-end gap-2 pt-1">
+            {dirty && (
+              <span className="t-micro text-(--color-accent-ink) mr-auto">
+                Unsaved changes
+              </span>
+            )}
             <Button
               type="button"
               variant="outline"
@@ -321,6 +446,50 @@ function ProviderRow({
   )
 }
 
+function StatusDot({
+  enabled,
+  successAt,
+  errorAt,
+}: {
+  enabled: boolean
+  successAt?: string
+  errorAt?: string
+}) {
+  const sAt = successAt ? Date.parse(successAt) : 0
+  const eAt = errorAt ? Date.parse(errorAt) : 0
+  const errorWins = eAt > 0 && eAt > sAt
+  const tone = !enabled
+    ? "bg-(--color-ink-4)"
+    : errorWins
+      ? "bg-(--color-accent-ink)"
+      : "bg-(--color-cov-forest)"
+  const ringTone = errorWins
+    ? "bg-(--color-accent-ink)"
+    : "bg-(--color-cov-forest)"
+  const label = !enabled
+    ? "Disabled"
+    : errorWins
+      ? "Last call failed"
+      : "Healthy"
+  return (
+    <span
+      className="relative inline-flex h-2 w-2 mt-2 shrink-0"
+      aria-label={label}
+      title={label}
+    >
+      {enabled && (
+        <span
+          className={cn(
+            "absolute inset-0 rounded-full opacity-30 animate-ping",
+            ringTone
+          )}
+        />
+      )}
+      <span className={cn("relative h-2 w-2 rounded-full", tone)} />
+    </span>
+  )
+}
+
 function ConfigFieldRow({
   field,
   value,
@@ -333,31 +502,13 @@ function ConfigFieldRow({
   const [reveal, setReveal] = useState(false)
   return (
     <div>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          fontSize: 12,
-          color: "var(--color-ink-3)",
-          marginBottom: 4,
-          fontFamily: "var(--font-mono)",
-          letterSpacing: "0.04em",
-        }}
-      >
-        <span>{field.label}</span>
+      <div className="flex items-center gap-2 mb-1">
+        <span className="t-label">{field.label}</span>
         {field.kind === "password" && value && (
           <button
             type="button"
             onClick={() => setReveal((r) => !r)}
-            style={{
-              padding: 0,
-              border: "none",
-              background: "transparent",
-              cursor: "pointer",
-              fontSize: 10,
-              color: "var(--color-accent-ink)",
-            }}
+            className="t-micro text-(--color-accent-ink) hover:underline"
           >
             {reveal ? "Hide" : "Reveal"}
           </button>
@@ -394,9 +545,7 @@ function ConfigFieldRow({
         />
       )}
       {field.help && (
-        <div className="t-small" style={{ marginTop: 4, fontSize: 11.5 }}>
-          {field.help}
-        </div>
+        <div className="t-small mt-1 text-[11.5px]">{field.help}</div>
       )}
     </div>
   )
@@ -421,16 +570,17 @@ function ProviderHealth({
   const errorWins = eAt > sAt
   const ts = errorWins ? eAt : sAt
   const rel = relativeTime(ts)
-  const color = errorWins ? "var(--color-accent-ink)" : "oklch(0.48 0.11 140)"
   return (
     <div
-      className="t-small"
-      style={{ fontSize: 11, marginTop: 4, color }}
+      className={cn(
+        "mt-1 text-[11.5px] leading-tight font-mono tabular-nums",
+        errorWins ? "text-(--color-accent-ink)" : "text-(--color-cov-forest)"
+      )}
       title={errorWins ? lastError : "Last successful fetch"}
     >
       {errorWins
         ? `failed ${rel}${lastError ? ` — ${truncate(lastError, 80)}` : ""}`
-        : `ok ${rel}`}
+        : `ok · ${rel}`}
     </div>
   )
 }
@@ -451,17 +601,6 @@ function relativeTime(ms: number): string {
 
 function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + "…" : s
-}
-
-function iconBtnStyle(disabled: boolean): CSSProperties {
-  return {
-    padding: 2,
-    border: "1px solid var(--color-rule-soft)",
-    background: "transparent",
-    cursor: disabled ? "default" : "pointer",
-    opacity: disabled ? 0.3 : 1,
-    lineHeight: 0,
-  }
 }
 
 function valueToString(v: unknown): string {
@@ -490,7 +629,3 @@ function formToConfig(
   }
   return out
 }
-
-// ---------------------------------------------------------------------------
-// Email delivery (informational)
-// ---------------------------------------------------------------------------

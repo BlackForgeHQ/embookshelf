@@ -309,7 +309,7 @@ function GridLayout({
 }) {
   return (
     <div
-      className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] md:grid-cols-[repeat(auto-fill,minmax(110px,1fr))] md:grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-x-6 gap-y-8"
+      className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] md:grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-x-6 gap-y-8"
     >
       {books.map((b) => (
         <BookCard key={b.id} book={b} onOpen={onOpen} layout="grid" />

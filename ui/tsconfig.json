@@ -25,12 +25,6 @@
     "allowJs": true,
     "paths": {
       "@/*": ["./src/*"]
-    },
-
-    /* `baseUrl` was deprecated in TS 6 but the vite-tsconfig-paths
-       resolver still relies on it; keep the setting and silence the
-       deprecation until the resolver drops the dependency. */
-    "baseUrl": ".",
-    "ignoreDeprecations": "6.0"
+    }
   }
 }

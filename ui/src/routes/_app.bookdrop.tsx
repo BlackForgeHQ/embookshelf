@@ -59,21 +59,16 @@ function BookDrop() {
     queryFn: fetchLibraries,
   })
 
-  const { active, finished } = useMemo(() => {
-    const all = queue.data ?? []
-    return {
-      active: all.filter(
+  const active = useMemo(
+    () =>
+      (queue.data ?? []).filter(
         (i) => i.state !== "imported" && i.state !== "rejected"
       ),
-      finished: all.filter(
-        (i) => i.state === "imported" || i.state === "rejected"
-      ),
-    }
-  }, [queue.data])
+    [queue.data]
+  )
 
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
-  const current =
-    queue.data?.find((i) => i.id === selectedId) ?? active[0] ?? finished[0]
+  const current = active.find((i) => i.id === selectedId) ?? active[0]
   if (current && current.id !== selectedId) {
     queueMicrotask(() => setSelectedId(current.id))
   }
@@ -170,26 +165,6 @@ function BookDrop() {
                 />
               ))}
             </div>
-
-            {finished.length > 0 && (
-              <div className="bdrop-finished">
-                <RailSectionHeader
-                  label="Recently processed"
-                  count={finished.length}
-                />
-                <div>
-                  {finished.map((f, i) => (
-                    <QueueRow
-                      key={f.id}
-                      item={f}
-                      index={i}
-                      selected={selectedId === f.id}
-                      onSelect={() => setSelectedId(f.id)}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         </aside>
 
@@ -204,9 +179,6 @@ function BookDrop() {
                 approveMut.mutate({ id: current.id, libraryId })
               }
               onReject={() => rejectMut.mutate(current.id)}
-              onOpenBook={(id) =>
-                void navigate({ to: "/book/$id", params: { id } })
-              }
             />
           ) : (
             <EmptyDetail />
@@ -449,7 +421,6 @@ function DetailPane({
   busy,
   onApprove,
   onReject,
-  onOpenBook,
 }: {
   item: BookDropItem
   libraries: Array<Library>
@@ -457,20 +428,15 @@ function DetailPane({
   busy: boolean
   onApprove: (libraryId?: string) => void
   onReject: () => void
-  onOpenBook: (id: string) => void
 }) {
   const eyebrow =
-    item.state === "imported"
-      ? "Imported"
-      : item.state === "rejected"
-        ? "Discarded"
-        : item.state === "failed"
-          ? "Needs attention"
-          : item.state === "ready"
-            ? "Review import"
-            : item.state === "processing"
-              ? "Extracting metadata"
-              : "Discovered"
+    item.state === "failed"
+      ? "Needs attention"
+      : item.state === "ready"
+        ? "Review import"
+        : item.state === "processing"
+          ? "Extracting metadata"
+          : "Discovered"
 
   return (
     <div className="bdrop-detail-inner">
@@ -528,23 +494,13 @@ function DetailPane({
           )}
 
           <div className="bdrop-actions">
-            {item.state === "imported" && item.bookId ? (
-              <Button onClick={() => onOpenBook(item.bookId!)}>
-                <Icon name="book-open" size={13} /> Open imported book
-              </Button>
-            ) : item.state === "rejected" ? (
-              <p className="t-small italic text-(--color-ink-3)">
-                This item was discarded.
-              </p>
-            ) : (
-              <ApprovalBar
-                item={item}
-                libraries={libraries}
-                disabled={busy}
-                onApprove={onApprove}
-                onReject={onReject}
-              />
-            )}
+            <ApprovalBar
+              item={item}
+              libraries={libraries}
+              disabled={busy}
+              onApprove={onApprove}
+              onReject={onReject}
+            />
           </div>
         </div>
       </div>

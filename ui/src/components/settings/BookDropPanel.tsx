@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
 import { toast } from "sonner"
 
 import type { ApiError } from "@/api/client"
+import type { BookDropItem } from "@/api/bookdrop"
 import {
   bookdropQueryKey,
   clearProcessedBookDrop,
@@ -40,13 +42,14 @@ export function BookDropPanel({ isAdmin }: { isAdmin: boolean }) {
     enabled: isAdmin,
   })
 
-  const processedCount = useMemo(
+  const processed = useMemo(
     () =>
-      (queue.data ?? []).filter(
-        (i) => i.state === "imported" || i.state === "rejected"
-      ).length,
+      (queue.data ?? [])
+        .filter((i) => i.state === "imported" || i.state === "rejected")
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     [queue.data]
   )
+  const processedCount = processed.length
 
   const [clearOpen, setClearOpen] = useState(false)
   const [wipeOpen, setWipeOpen] = useState(false)
@@ -147,6 +150,29 @@ export function BookDropPanel({ isAdmin }: { isAdmin: boolean }) {
         </Button>
       </div>
 
+      <h3 className="t-h3" style={{ marginTop: 32, marginBottom: 8 }}>
+        Recently processed
+      </h3>
+      <p className="t-small" style={{ marginBottom: 12, fontStyle: "italic" }}>
+        Imported and discarded items. Use <em>Clear processed history</em>{" "}
+        above to empty this list.
+      </p>
+      <Card>
+        {queue.isLoading ? (
+          <p className="t-small italic text-muted-foreground">Loading…</p>
+        ) : processed.length === 0 ? (
+          <p className="t-small italic text-muted-foreground">
+            No processed items yet.
+          </p>
+        ) : (
+          <ul className="flex flex-col">
+            {processed.map((item) => (
+              <ProcessedRow key={item.id} item={item} />
+            ))}
+          </ul>
+        )}
+      </Card>
+
       <ClearProcessedDialog
         open={clearOpen}
         onOpenChange={setClearOpen}
@@ -165,6 +191,55 @@ export function BookDropPanel({ isAdmin }: { isAdmin: boolean }) {
         onConfirm={() => wipeMut.mutate()}
       />
     </>
+  )
+}
+
+function ProcessedRow({ item }: { item: BookDropItem }) {
+  const date = new Date(item.updatedAt)
+  const dateLabel = Number.isNaN(date.getTime())
+    ? "—"
+    : date.toLocaleString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+  const title = item.title?.trim() || item.filename
+  const isImported = item.state === "imported"
+  return (
+    <li className="flex items-center gap-3 py-2 border-t border-dashed border-border first:border-0">
+      <span
+        className="mono text-[10.5px] uppercase tracking-wide text-muted-foreground shrink-0 w-12"
+        title={item.format}
+      >
+        {item.format}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="text-[13.5px] truncate">{title}</div>
+        <div className="t-small text-muted-foreground">
+          <span
+            className={
+              isImported
+                ? "text-(--color-editorial-accent)"
+                : "text-(--color-accent-ink)"
+            }
+          >
+            {isImported ? "Imported" : "Discarded"}
+          </span>
+          {item.author ? <> · {item.author}</> : null} · {dateLabel}
+        </div>
+      </div>
+      {isImported && item.bookId ? (
+        <Link
+          to="/book/$id"
+          params={{ id: item.bookId }}
+          className="t-small underline text-muted-foreground hover:text-foreground shrink-0"
+        >
+          Open
+        </Link>
+      ) : null}
+    </li>
   )
 }
 
