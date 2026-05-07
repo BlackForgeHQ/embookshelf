@@ -1,20 +1,13 @@
 import { Fragment } from "react"
 
 import { Icon } from "./Icon"
-import { LibrarySearchCombobox } from "./LibrarySearchCombobox"
 
 import type { ReactNode } from "react"
-import { Input } from "@/components/ui/input"
 import { useSidebar } from "@/components/ui/sidebar"
-
-type SearchVariant = "input" | "command"
 
 type TopBarProps = {
   title: ReactNode
   subtitle?: ReactNode
-  search?: string
-  setSearch?: (value: string) => void
-  searchVariant?: SearchVariant
   commandHint?: boolean
   right?: ReactNode
   crumbs?: Array<string>
@@ -25,9 +18,6 @@ type TopBarProps = {
 export function TopBar({
   title,
   subtitle,
-  search,
-  setSearch,
-  searchVariant = "input",
   commandHint = true,
   right,
   crumbs,
@@ -103,36 +93,6 @@ export function TopBar({
             </div>
           )}
         </div>
-
-        {setSearch && searchVariant === "command" && (
-          <LibrarySearchCombobox
-            value={search ?? ""}
-            onSearchChange={setSearch}
-          />
-        )}
-
-        {setSearch && searchVariant === "input" && (
-          <div style={{ position: "relative", width: 280 }}>
-            <Input
-              placeholder="Search library…"
-              value={search ?? ""}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pl-8"
-            />
-            <div
-              style={{
-                position: "absolute",
-                left: 10,
-                top: "50%",
-                transform: "translateY(-50%)",
-                color: "var(--color-ink-3)",
-                pointerEvents: "none",
-              }}
-            >
-              <Icon name="search" size={14} />
-            </div>
-          </div>
-        )}
 
         {commandHint && (
           <button

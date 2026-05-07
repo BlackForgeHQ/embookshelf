@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router"
+import { useQuery } from "@tanstack/react-query"
+import { createFileRoute, redirect } from "@tanstack/react-router"
 import type { FormEvent } from "react"
 
 import type { ApiError } from "@/api/client"
 import {
   fetchMe,
-  login,
   meQueryKey,
   oidcConfig,
   oidcConfigQueryKey,
-  signup,
   signupStatus,
 } from "@/api/auth"
+import { useLogin } from "@/hooks/useLogin"
+import { useSignup } from "@/hooks/useSignup"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -69,8 +69,6 @@ function safeNext(raw: string | undefined): string {
 
 function LoginPage() {
   const { next, mode: modeSearch, oidcError, local } = Route.useSearch()
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
 
   // /auth/signup reports whether the first-run bootstrap is still available.
   // Shown as a toggle at the bottom of the card when it is.
@@ -91,20 +89,9 @@ function LoginPage() {
   const [name, setName] = useState("")
   const [password, setPassword] = useState("")
 
-  const loginMut = useMutation({
-    mutationFn: () => login(email, password),
-    onSuccess: (user) => {
-      queryClient.setQueryData(meQueryKey, user)
-      void navigate({ to: safeNext(next), replace: true })
-    },
-  })
-  const signupMut = useMutation({
-    mutationFn: () => signup(email, name, password),
-    onSuccess: (user) => {
-      queryClient.setQueryData(meQueryKey, user)
-      void navigate({ to: safeNext(next), replace: true })
-    },
-  })
+  const target = safeNext(next)
+  const loginMut = useLogin(target)
+  const signupMut = useSignup(target)
 
   const active = mode === "signup" ? signupMut : loginMut
   const error = active.error as ApiError | null
@@ -140,8 +127,13 @@ function LoginPage() {
 
   function onSubmit(e: FormEvent) {
     e.preventDefault()
-    active.reset()
-    active.mutate()
+    if (mode === "signup") {
+      signupMut.reset()
+      signupMut.mutate({ email, name, password })
+    } else {
+      loginMut.reset()
+      loginMut.mutate({ email, password })
+    }
   }
 
   const showSignupToggle = signupOpen.data?.enabled

@@ -51,17 +51,19 @@ export type CoverBook = {
 
 type CoverSize = "xs" | "sm" | "md" | "lg" | "hero"
 
+// Palette bg/fg pairs reference @theme tokens (see styles.css). Components
+// stay declarative; any retheming happens centrally.
 const PALETTES: Record<CoverPalette, { bg: string; ink: string }> = {
-  navy: { bg: "var(--color-cov-navy)", ink: "oklch(0.88 0.04 85)" },
-  olive: { bg: "var(--color-cov-olive)", ink: "oklch(0.92 0.03 80)" },
-  rust: { bg: "var(--color-cov-rust)", ink: "oklch(0.92 0.04 85)" },
-  teal: { bg: "var(--color-cov-teal)", ink: "oklch(0.90 0.03 180)" },
-  plum: { bg: "var(--color-cov-plum)", ink: "oklch(0.90 0.03 60)" },
-  ochre: { bg: "var(--color-cov-ochre)", ink: "oklch(0.18 0.02 60)" },
-  forest: { bg: "var(--color-cov-forest)", ink: "oklch(0.90 0.03 85)" },
-  cream: { bg: "var(--color-cov-cream)", ink: "oklch(0.24 0.02 60)" },
-  brick: { bg: "var(--color-cov-brick)", ink: "oklch(0.90 0.04 85)" },
-  ink: { bg: "var(--color-cov-ink)", ink: "oklch(0.90 0.03 85)" },
+  navy: { bg: "var(--color-cov-navy)", ink: "var(--color-cov-navy-fg)" },
+  olive: { bg: "var(--color-cov-olive)", ink: "var(--color-cov-olive-fg)" },
+  rust: { bg: "var(--color-cov-rust)", ink: "var(--color-cov-rust-fg)" },
+  teal: { bg: "var(--color-cov-teal)", ink: "var(--color-cov-teal-fg)" },
+  plum: { bg: "var(--color-cov-plum)", ink: "var(--color-cov-plum-fg)" },
+  ochre: { bg: "var(--color-cov-ochre)", ink: "var(--color-cov-ochre-fg)" },
+  forest: { bg: "var(--color-cov-forest)", ink: "var(--color-cov-forest-fg)" },
+  cream: { bg: "var(--color-cov-cream)", ink: "var(--color-cov-cream-fg)" },
+  brick: { bg: "var(--color-cov-brick)", ink: "var(--color-cov-brick-fg)" },
+  ink: { bg: "var(--color-cov-ink)", ink: "var(--color-cov-ink-fg)" },
 }
 
 const VALID_STYLES: ReadonlyArray<CoverStyle> = [
@@ -267,33 +269,38 @@ function normalizeFormat(raw: string | undefined): string | null {
   return trimmed === "" ? null : trimmed
 }
 
-// Color map is explicit per format so the badge is recognizable at a
-// glance. Unknown formats fall through to the neutral secondary
-// variant — still visible, just not color-coded.
-const FORMAT_CLASSES: Record<string, string> = {
-  EPUB: "bg-emerald-600 text-white border-transparent",
-  PDF: "bg-red-600 text-white border-transparent",
-  CBZ: "bg-indigo-600 text-white border-transparent",
-  CBR: "bg-indigo-600 text-white border-transparent",
-  MOBI: "bg-amber-600 text-white border-transparent",
-  AZW3: "bg-amber-600 text-white border-transparent",
-  FB2: "bg-sky-600 text-white border-transparent",
-  TXT: "bg-slate-600 text-white border-transparent",
+// Per-format token name; resolves to `--color-format-{token}` in styles.css.
+// Unknown formats render with the neutral secondary Badge variant.
+const FORMAT_TOKEN: Record<string, string> = {
+  EPUB: "epub",
+  PDF: "pdf",
+  CBZ: "cbz",
+  CBR: "cbz",
+  MOBI: "mobi",
+  AZW3: "mobi",
+  FB2: "fb2",
+  TXT: "txt",
 }
 
 function FormatBadge({ format, size }: { format: string; size: CoverSize }) {
-  const cls = FORMAT_CLASSES[format]
-  // Smaller sizes get a tighter pill so it doesn't crowd the art.
+  const token = FORMAT_TOKEN[format]
   const compact = size === "xs" || size === "sm"
+  const tokenStyle: CSSProperties | undefined = token
+    ? {
+        background: `var(--color-format-${token})`,
+        color: "var(--color-format-fg)",
+        borderColor: "transparent",
+      }
+    : undefined
   return (
     <Badge
       aria-label={`format ${format}`}
       className={cn(
         "absolute top-1.5 left-1.5 tracking-wide uppercase",
-        compact ? "h-4 px-1.5 text-[9px]" : "h-5 px-2 text-[10px]",
-        cls
+        compact ? "h-4 px-1.5 text-[9px]" : "h-5 px-2 text-[10px]"
       )}
-      variant={cls ? "default" : "secondary"}
+      style={tokenStyle}
+      variant={token ? "default" : "secondary"}
     >
       {format}
     </Badge>
@@ -398,11 +405,12 @@ export function StarRating({
     >
       {[1, 2, 3, 4, 5].map((i) => {
         const isFilled = i <= full || (i === full + 1 && half)
-        const name = i <= full
-          ? "star-filled"
-          : i === full + 1 && half
-            ? "star-half"
-            : "star"
+        const name =
+          i <= full
+            ? "star-filled"
+            : i === full + 1 && half
+              ? "star-half"
+              : "star"
         const star = (
           <Icon
             name={name}
