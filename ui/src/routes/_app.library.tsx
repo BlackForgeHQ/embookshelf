@@ -356,7 +356,6 @@ function BookCard({
   layout: "grid" | "list"
 }) {
   if (layout === "list") {
-    
     return (
       <button
         type="button"
