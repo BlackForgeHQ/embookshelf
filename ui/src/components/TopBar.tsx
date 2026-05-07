@@ -140,18 +140,29 @@ export function TopBar({
             onClick={() =>
               window.dispatchEvent(new CustomEvent("embookshelf:open-command"))
             }
-            className="inline-flex h-9 items-center gap-2 rounded-md border px-3 text-xs text-(--color-ink-3) hover:text-(--color-ink-1)"
+            className="group inline-flex h-7 w-[240px] items-center gap-2 border-b border-(--color-rule) bg-transparent text-[13px] text-(--color-ink-3) transition-colors hover:border-(--color-ink-2) hover:text-(--color-ink-1) focus-visible:border-(--color-ink-1) focus-visible:outline-none"
             aria-label="Open command palette"
           >
-            <Icon name="search" size={12} />
-            <span>Search</span>
-            <kbd className="rounded bg-(--color-paper-2) px-1.5 py-0.5 font-mono text-[10px]">
+            <Icon name="search" size={13} className="text-(--color-ink-3)" />
+            <span className="font-serif tracking-tight italic">
+              Search the library
+            </span>
+            <span className="grow" />
+            <kbd className="font-mono text-[10px] tracking-[0.08em] text-(--color-ink-3) uppercase">
               ⌘K
             </kbd>
           </button>
         )}
 
-        {right}
+        {right && (
+          <div className="flex items-center gap-2.5">
+            <span
+              aria-hidden
+              className="mr-1 hidden h-4 w-px bg-(--color-rule) md:block"
+            />
+            {right}
+          </div>
+        )}
       </div>
     </div>
   )

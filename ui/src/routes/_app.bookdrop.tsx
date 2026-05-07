@@ -91,22 +91,22 @@ function BookDrop() {
     },
   })
 
-  const error = (approveMut.error ?? rejectMut.error) as unknown as
-    | ApiError
-    | null
+  const error = (approveMut.error ??
+    rejectMut.error) as unknown as ApiError | null
 
   const readyCount = active.filter((i) => i.state === "ready").length
 
   return (
-    <div className="fade-in bdrop-shell">
+    <div className="bdrop-shell fade-in">
       <TopBar
         title="BookDrop"
         subtitle="Drop files into /bookdrop and they'll appear here for review before joining your library."
         right={
           <div className="flex items-center gap-2">
             <Button
-              variant="outline"
+              variant="ghost"
               size="sm"
+              className="text-(--color-ink-2) hover:text-(--color-ink-1)"
               onClick={() =>
                 queryClient.invalidateQueries({ queryKey: bookdropQueryKey })
               }
@@ -114,6 +114,7 @@ function BookDrop() {
               <Icon name="refresh" size={13} /> Rescan
             </Button>
             <Button
+              variant="accent"
               size="sm"
               disabled={approveMut.isPending || readyCount === 0}
               onClick={() => {
@@ -124,7 +125,8 @@ function BookDrop() {
                 }
               }}
             >
-              <Icon name="check" size={13} /> Approve {readyCount > 0 ? readyCount : "all"}
+              <Icon name="check" size={13} /> Approve{" "}
+              {readyCount > 0 ? readyCount : "all"}
             </Button>
           </div>
         }
@@ -144,7 +146,7 @@ function BookDrop() {
             <RailSectionHeader label="In queue" count={active.length} />
             {queue.isLoading && <RailEmpty>Loading queue…</RailEmpty>}
             {queue.isError && (
-              <div className="mx-5 my-2 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink) text-[12.5px]">
+              <div className="mx-5 my-2 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-[12.5px] text-(--color-accent-ink)">
                 Failed to load the ingest queue.
               </div>
             )}
@@ -185,7 +187,6 @@ function BookDrop() {
           )}
         </main>
       </div>
-
     </div>
   )
 }
@@ -212,7 +213,7 @@ function RailSectionHeader({
 
 function RailEmpty({ children }: { children: ReactNode }) {
   return (
-    <div className="t-small italic px-6 py-3 text-(--color-ink-3)">
+    <div className="t-small px-6 py-3 text-(--color-ink-3) italic">
       {children}
     </div>
   )
@@ -286,14 +287,14 @@ function DropZone({ onUploaded }: { onUploaded: () => void }) {
         <div className="bdrop-drop-icon" aria-hidden>
           <Icon name="upload" size={18} />
         </div>
-        <div className="font-serif text-[15.5px] font-medium leading-tight">
+        <div className="font-serif text-[15.5px] leading-tight font-medium">
           {uploading
             ? "Uploading…"
             : dragOver
               ? "Drop to queue"
               : "Drop files or click to browse"}
         </div>
-        <div className="t-small italic mt-1 text-[12px] text-(--color-ink-3)">
+        <div className="t-small mt-1 text-[12px] text-(--color-ink-3) italic">
           EPUB · PDF · CBZ · MOBI · AZW3 · FB2 · audio
         </div>
 
@@ -339,7 +340,7 @@ function DropZone({ onUploaded }: { onUploaded: () => void }) {
             {failedCount ? (
               <>
                 {" · "}
-                <span className="text-(--color-accent-ink) font-medium">
+                <span className="font-medium text-(--color-accent-ink)">
                   {failedCount} failed
                 </span>
               </>
@@ -386,10 +387,7 @@ function QueueRow({
         {item.format}
       </span>
       <div className="min-w-0 flex-1">
-        <div
-          className="bdrop-row-title"
-          data-missing={!item.title}
-        >
+        <div className="bdrop-row-title" data-missing={!item.title}>
           {item.title || "Could not detect metadata"}
         </div>
         <div className="bdrop-row-meta">
@@ -400,7 +398,7 @@ function QueueRow({
           {item.author && (
             <>
               <span className="bdrop-row-meta-divider" aria-hidden />
-              <span className="truncate max-w-[120px]">{item.author}</span>
+              <span className="max-w-[120px] truncate">{item.author}</span>
             </>
           )}
         </div>
@@ -471,8 +469,16 @@ function DetailPane({
 
         <div className="min-w-0">
           <dl className="bdrop-meta-grid">
-            <MetaCell label="Title" value={item.title} missing="Could not detect" />
-            <MetaCell label="Author" value={item.author} missing="Could not detect" />
+            <MetaCell
+              label="Title"
+              value={item.title}
+              missing="Could not detect"
+            />
+            <MetaCell
+              label="Author"
+              value={item.author}
+              missing="Could not detect"
+            />
             <MetaCell label="Format" value={item.format} mono />
             <MetaCell label="Size" value={formatBytes(item.fileSize)} mono />
             <MetaCell label="Language" value={item.language} mono missing="—" />
@@ -488,7 +494,9 @@ function DetailPane({
 
           {item.state === "failed" && item.errorMsg && (
             <div className="bdrop-error">
-              <strong className="not-italic font-medium">Processing error.</strong>{" "}
+              <strong className="font-medium not-italic">
+                Processing error.
+              </strong>{" "}
               {item.errorMsg}
             </div>
           )}
@@ -518,11 +526,11 @@ function EmptyDetail() {
       </div>
       <p className="t-label mb-3">Nothing to review</p>
       <p
-        className="font-serif italic text-[15px] text-(--color-ink-2)"
+        className="font-serif text-[15px] text-(--color-ink-2) italic"
         style={{ maxWidth: 360, lineHeight: 1.55 }}
       >
-        Drop a file into the queue to start reviewing metadata before it joins
-        a library.
+        Drop a file into the queue to start reviewing metadata before it joins a
+        library.
       </p>
     </div>
   )
@@ -569,11 +577,7 @@ function CoverPanel({ item }: { item: BookDropItem }) {
         <img src={bookdropCoverUrl(item.id)} alt="" />
       ) : (
         <div className="bdrop-cover-blank">
-          <Icon
-            name="book"
-            size={28}
-            className="mb-2 text-(--color-ink-3)"
-          />
+          <Icon name="book" size={28} className="mb-2 text-(--color-ink-3)" />
           <span className="bdrop-cover-blank-label">
             {item.format === "PDF" && isPreapprovalState
               ? "rendering cover…"
@@ -635,7 +639,7 @@ function ApprovalBar({
       <Button
         variant="ghost"
         disabled={disabled}
-        className="text-(--color-accent-ink) hover:text-(--color-accent-ink) hover:bg-(--color-accent-soft)"
+        className="text-(--color-accent-ink) hover:bg-(--color-accent-soft) hover:text-(--color-accent-ink)"
         onClick={onReject}
       >
         Discard file

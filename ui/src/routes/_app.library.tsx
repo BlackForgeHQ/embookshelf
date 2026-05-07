@@ -73,9 +73,8 @@ function LibraryView() {
   } = Route.useSearch()
   const layout: Layout = layoutSearch ?? "grid"
   const isUnshelved = unshelvedSearch === "1"
-  const sortBy: SortKey = sortSearch ?? "added"
+  const sortBy: SortKey = sortSearch ?? "title"
 
-  const [search, setSearch] = useState("")
   const [filterFormat, setFilterFormat] = useState<string | null>(null)
 
   const setSortBy = (next: SortKey) => {
@@ -84,7 +83,7 @@ function LibraryView() {
       search: (prev) => ({
         ...prev,
         // Drop the param when the user picks the default — keeps URLs clean.
-        sort: next === "added" ? undefined : next,
+        sort: next === "title" ? undefined : next,
       }),
     })
   }
@@ -97,7 +96,6 @@ function LibraryView() {
   const queryParams = {
     shelf: activeShelf || undefined,
     library: activeLibrary || undefined,
-    q: search || undefined,
     format: filterFormat ? [filterFormat] : undefined,
     sort: sortKeyToApi(sortBy),
     unshelved: isUnshelved || undefined,
@@ -156,13 +154,7 @@ function LibraryView() {
       shelfTitle: "All Books",
       subtitle: "Your complete collection across every library.",
     }
-  }, [
-    activeShelf,
-    activeLibrary,
-    isUnshelved,
-    shelves.data,
-    libraries.data,
-  ])
+  }, [activeShelf, activeLibrary, isUnshelved, shelves.data, libraries.data])
 
   const setLayout = (next: Layout) => {
     void navigate({
@@ -196,12 +188,8 @@ function LibraryView() {
       <TopBar
         title={shelfTitle}
         subtitle={subtitle}
-        search={search}
-        setSearch={setSearch}
-        searchVariant="command"
-        commandHint={false}
         right={
-          <div className="flex items-center gap-1 bg-muted p-1 rounded-md border border-border">
+          <div className="flex items-center gap-1 rounded-md border border-border bg-muted p-1">
             {layoutBtn("shelf", "Shelf")}
             {layoutBtn("grid", "Grid")}
             {layoutBtn("list", "List")}
@@ -210,14 +198,14 @@ function LibraryView() {
       />
 
       {/* Filter rail */}
-      <div
-        className="flex flex-wrap items-center gap-3 px-4 md:px-8 py-3 border-b border-border bg-muted/50"
-      >
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Filter</span>
+      <div className="flex flex-wrap items-center gap-3 border-b border-border bg-muted/50 px-4 py-3 md:px-8">
+        <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+          Filter
+        </span>
         {[null, "EPUB", "PDF", "CBZ", "M4B"].map((f) => (
           <button
             key={f ?? "all"}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer ${filterFormat === f ? "bg-primary text-primary-foreground" : "bg-transparent hover:bg-muted text-muted-foreground"}`}
+            className={`cursor-pointer rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${filterFormat === f ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:bg-muted"}`}
             onClick={() => setFilterFormat(f)}
             style={{ border: "none" }}
           >
@@ -225,11 +213,10 @@ function LibraryView() {
           </button>
         ))}
         <div className="grow" />
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Sort</span>
-        <Select
-          value={sortBy}
-          onValueChange={(v) => setSortBy(v as SortKey)}
-        >
+        <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+          Sort
+        </span>
+        <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
           <SelectTrigger size="sm" className="w-auto">
             <SelectValue />
           </SelectTrigger>
@@ -249,7 +236,7 @@ function LibraryView() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 p-4 md:p-8 pb-20">
+      <div className="flex-1 p-4 pb-20 md:p-8">
         {books.isError ? (
           <ErrorPanel message="Failed to load books." />
         ) : rows.length === 0 && !books.isLoading ? (
@@ -281,8 +268,8 @@ function ShelfLayout({
     <div className="flex flex-col gap-10">
       {chunks.map((row, ri) => (
         <div key={ri} className="shelf-row">
-          <div className="w-full relative max-w-full overflow-hidden">
-            <div className="flex gap-4 overflow-x-auto pb-4 snap-x">
+          <div className="relative w-full max-w-full overflow-hidden">
+            <div className="flex snap-x gap-4 overflow-x-auto pb-4">
               {row.map((b) => (
                 <Cover
                   key={b.id}
@@ -308,9 +295,7 @@ function GridLayout({
   onOpen: (id: string) => void
 }) {
   return (
-    <div
-      className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] md:grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-x-6 gap-y-8"
-    >
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-x-6 gap-y-8 md:grid-cols-[repeat(auto-fill,minmax(110px,1fr))]">
       {books.map((b) => (
         <BookCard key={b.id} book={b} onOpen={onOpen} layout="grid" />
       ))}
@@ -326,18 +311,24 @@ function ListLayout({
   onOpen: (id: string) => void
 }) {
   return (
-    <div
-      className="bg-card border border-border rounded-lg shadow-sm overflow-hidden"
-    >
-      <div
-        className="grid grid-cols-[46px_2fr_1.2fr_80px_80px_60px] items-center gap-4 px-4 py-2.5 border-b border-border bg-muted/50 text-sm"
-      >
+    <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+      <div className="grid grid-cols-[46px_2fr_1.2fr_80px_80px_60px] items-center gap-4 border-b border-border bg-muted/50 px-4 py-2.5 text-sm">
         <span />
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Title</span>
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Author</span>
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Format</span>
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Rating</span>
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Year</span>
+        <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+          Title
+        </span>
+        <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+          Author
+        </span>
+        <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+          Format
+        </span>
+        <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+          Rating
+        </span>
+        <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+          Year
+        </span>
       </div>
       {books.map((b) => (
         <BookCard key={b.id} book={b} onOpen={onOpen} layout="list" />
@@ -356,20 +347,18 @@ function BookCard({
   layout: "grid" | "list"
 }) {
   if (layout === "list") {
-    
     return (
       <button
         type="button"
         onClick={() => onOpen(book.id)}
-        className="group grid grid-cols-[46px_2fr_1.2fr_80px_80px_60px] items-center gap-4 px-4 py-3 text-left border-b border-border hover:bg-muted/30 transition-colors w-full last:border-0"
+        className="group grid w-full grid-cols-[46px_2fr_1.2fr_80px_80px_60px] items-center gap-4 border-b border-border px-4 py-3 text-left transition-colors last:border-0 hover:bg-muted/30"
         aria-label={`Open ${book.title}`}
-        
       >
         <Cover book={book} size="xs" />
         <div>
           <div style={{ fontWeight: 500, fontSize: 14 }}>{book.title}</div>
           {book.series && (
-            <div className="text-sm italic text-muted-foreground">
+            <div className="text-sm text-muted-foreground italic">
               {book.series}
               {book.seriesNum ? ` #${book.seriesNum}` : ""}
             </div>
@@ -398,17 +387,15 @@ function BookCard({
     <button
       type="button"
       onClick={() => onOpen(book.id)}
-      className="group flex flex-col gap-3 text-left w-full max-w-[150px] mx-auto transition-transform duration-200 hover:scale-[1.02]"
+      className="group mx-auto flex w-full max-w-[150px] flex-col gap-3 text-left transition-transform duration-200 hover:scale-[1.02]"
       aria-label={`Open ${book.title}`}
     >
       <Cover book={book} size="md" />
       <div>
-        <div
-          className="text-[13px] font-medium leading-snug text-balance mt-1 group-hover:text-primary transition-colors"
-        >
+        <div className="mt-1 text-[13px] leading-snug font-medium text-balance transition-colors group-hover:text-primary">
           {book.title}
         </div>
-        <div className="text-xs italic text-muted-foreground mt-0.5">
+        <div className="mt-0.5 text-xs text-muted-foreground italic">
           {book.author}
         </div>
         {book.progress > 0 && book.progress < 1 && (
@@ -424,9 +411,9 @@ function BookCard({
 function EmptyPanel({ unshelved = false }: { unshelved?: boolean }) {
   if (unshelved) {
     return (
-      <div className="p-12 text-center border-2 border-dashed border-border rounded-lg bg-card text-muted-foreground">
+      <div className="rounded-lg border-2 border-dashed border-border bg-card p-12 text-center text-muted-foreground">
         <div
-          className="text-lg font-serif font-medium text-foreground"
+          className="font-serif text-lg font-medium text-foreground"
           style={{ marginBottom: 8 }}
         >
           All books are shelved.
@@ -435,13 +422,14 @@ function EmptyPanel({ unshelved = false }: { unshelved?: boolean }) {
     )
   }
   return (
-    <div
-      className="p-12 text-center border-2 border-dashed border-border rounded-lg bg-card text-muted-foreground"
-    >
-      <div className="text-lg font-serif font-medium text-foreground" style={{ marginBottom: 8 }}>
+    <div className="rounded-lg border-2 border-dashed border-border bg-card p-12 text-center text-muted-foreground">
+      <div
+        className="font-serif text-lg font-medium text-foreground"
+        style={{ marginBottom: 8 }}
+      >
         Nothing to show yet.
       </div>
-      <div className="text-sm italic text-muted-foreground">
+      <div className="text-sm text-muted-foreground italic">
         Drop an EPUB into <span className="mono">/bookdrop</span> or register a
         library path in Settings.
       </div>
@@ -451,9 +439,7 @@ function EmptyPanel({ unshelved = false }: { unshelved?: boolean }) {
 
 function ErrorPanel({ message }: { message: string }) {
   return (
-    <div
-      className="p-4 border border-destructive/20 bg-destructive/10 text-destructive rounded-lg text-sm"
-    >
+    <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive">
       {message}
     </div>
   )
