@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 
@@ -20,8 +20,9 @@ import {
   rejectBookDrop,
   uploadBookDrop,
 } from "@/api/bookdrop"
+import { useApiMutation } from "@/api/mutation"
 import { renderPdfPageOneJpeg } from "@/lib/pdfCover"
-import { booksQueryKey, fetchLibraries, librariesQueryKey } from "@/api/books"
+import { fetchLibraries, librariesQueryKey } from "@/api/books"
 import { Icon } from "@/components/Icon"
 import { TopBar } from "@/components/TopBar"
 import { Button } from "@/components/ui/button"
@@ -73,26 +74,15 @@ function BookDrop() {
     queueMicrotask(() => setSelectedId(current.id))
   }
 
-  const approveMut = useMutation({
-    mutationFn: ({ id, libraryId }: { id: string; libraryId?: string }) =>
-      approveBookDrop(id, libraryId),
+  const approveMut = useApiMutation(approveBookDrop, {
     onSuccess: (book) => {
-      queryClient.invalidateQueries({ queryKey: bookdropQueryKey })
-      queryClient.invalidateQueries({ queryKey: booksQueryKey() })
-      queryClient.invalidateQueries({ queryKey: librariesQueryKey })
       void navigate({ to: "/book/$id", params: { id: book.id } })
     },
   })
 
-  const rejectMut = useMutation({
-    mutationFn: (id: string) => rejectBookDrop(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: bookdropQueryKey })
-    },
-  })
+  const rejectMut = useApiMutation(rejectBookDrop)
 
-  const error = (approveMut.error ??
-    rejectMut.error) as unknown as ApiError | null
+  const error = approveMut.error ?? rejectMut.error
 
   const readyCount = active.filter((i) => i.state === "ready").length
 

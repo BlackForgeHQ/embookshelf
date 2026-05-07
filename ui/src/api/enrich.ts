@@ -1,4 +1,6 @@
 import { api } from "./client"
+import { bookQueryKey, booksQueryKey } from "./books"
+import { defineMutation } from "./mutation"
 import type { BookDetail } from "./books"
 
 // Mirrors internal/handler/enrich.go enrichMatchDTO.
@@ -69,19 +71,20 @@ export async function fetchEnrichment(
   return api<EnrichResult>(path)
 }
 
-export async function applyCoverFromUrl(
-  bookId: string,
-  url: string
-): Promise<{ coverMime: string }> {
-  return api<{ coverMime: string }>(`/api/v1/books/${bookId}/cover-from-url`, {
-    method: "POST",
-    body: JSON.stringify({ url }),
-  })
-}
+export const applyCoverFromUrl = defineMutation({
+  fn: (args: { bookId: string; url: string }): Promise<{ coverMime: string }> =>
+    api<{ coverMime: string }>(`/api/v1/books/${args.bookId}/cover-from-url`, {
+      method: "POST",
+      body: JSON.stringify({ url: args.url }),
+    }),
+  invalidates: (args) => [bookQueryKey(args.bookId), booksQueryKey()],
+})
 
-export async function removeCover(bookId: string): Promise<void> {
-  await api<void>(`/api/v1/books/${bookId}/cover`, { method: "DELETE" })
-}
+export const removeCover = defineMutation({
+  fn: (bookId: string): Promise<void> =>
+    api<void>(`/api/v1/books/${bookId}/cover`, { method: "DELETE" }),
+  invalidates: (bookId) => [bookQueryKey(bookId), booksQueryKey()],
+})
 
 export const enrichQueryKey = (bookId: string, q: EnrichQuery) =>
   ["enrich", bookId, q] as const
@@ -160,19 +163,22 @@ export type ApplyMatchBody = Omit<EnrichMatch, "confidence"> & {
   applyCover?: boolean
 }
 
-export async function applyEnrichmentMatch(
-  bookId: string,
-  body: ApplyMatchBody
-): Promise<BookDetail> {
-  const { book } = await api<{ book: BookDetail }>(
-    `/api/v1/books/${bookId}/metadata`,
-    {
-      method: "PUT",
-      body: JSON.stringify(body),
-    }
-  )
-  return book
-}
+export const applyEnrichmentMatch = defineMutation({
+  fn: async (args: {
+    bookId: string
+    body: ApplyMatchBody
+  }): Promise<BookDetail> => {
+    const { book } = await api<{ book: BookDetail }>(
+      `/api/v1/books/${args.bookId}/metadata`,
+      {
+        method: "PUT",
+        body: JSON.stringify(args.body),
+      }
+    )
+    return book
+  },
+  invalidates: (args) => [bookQueryKey(args.bookId), booksQueryKey()],
+})
 
 export type ISBNLookupResult = { provider: string; match: EnrichMatch }
 

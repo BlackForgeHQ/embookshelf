@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { toast } from "sonner"
 
-import type { ApiError } from "@/api/client"
 import type { BookDropItem } from "@/api/bookdrop"
 import {
+  bookdropFilesQueryKey,
   bookdropQueryKey,
   clearProcessedBookDrop,
   fetchBookDrop,
   previewBookDropFiles,
   wipeBookDropFiles,
 } from "@/api/bookdrop"
+import { useApiMutation } from "@/api/mutation"
 import { AdminGate, Card, DefRow } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import {
@@ -25,11 +25,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
-const bookdropFilesQueryKey = ["settings", "bookdrop", "files"] as const
-
 export function BookDropPanel({ isAdmin }: { isAdmin: boolean }) {
-  const queryClient = useQueryClient()
-
   const queue = useQuery({
     queryKey: bookdropQueryKey,
     queryFn: fetchBookDrop,
@@ -54,31 +50,17 @@ export function BookDropPanel({ isAdmin }: { isAdmin: boolean }) {
   const [clearOpen, setClearOpen] = useState(false)
   const [wipeOpen, setWipeOpen] = useState(false)
 
-  const clearMut = useMutation({
-    mutationFn: clearProcessedBookDrop,
-    onSuccess: (n) => {
-      queryClient.invalidateQueries({ queryKey: bookdropQueryKey })
-      toast.success(`Cleared ${n} processed item${n === 1 ? "" : "s"}.`)
-      setClearOpen(false)
-    },
-    onError: (err: ApiError) => {
-      toast.error(err.message || "Failed to clear processed history.")
-    },
+  const clearMut = useApiMutation(clearProcessedBookDrop, {
+    successToast: (n) => `Cleared ${n} processed item${n === 1 ? "" : "s"}.`,
+    errorToast: (err) => err.message || "Failed to clear processed history.",
+    onSuccess: () => setClearOpen(false),
   })
 
-  const wipeMut = useMutation({
-    mutationFn: wipeBookDropFiles,
-    onSuccess: (res) => {
-      queryClient.invalidateQueries({ queryKey: bookdropQueryKey })
-      queryClient.invalidateQueries({ queryKey: bookdropFilesQueryKey })
-      toast.success(
-        `Wiped ${res.deleted} file${res.deleted === 1 ? "" : "s"} (${formatBytes(res.freed)}).`
-      )
-      setWipeOpen(false)
-    },
-    onError: (err: ApiError) => {
-      toast.error(err.message || "Failed to wipe BookDrop.")
-    },
+  const wipeMut = useApiMutation(wipeBookDropFiles, {
+    successToast: (res) =>
+      `Wiped ${res.deleted} file${res.deleted === 1 ? "" : "s"} (${formatBytes(res.freed)}).`,
+    errorToast: (err) => err.message || "Failed to wipe BookDrop.",
+    onSuccess: () => setWipeOpen(false),
   })
 
   if (!isAdmin) return <AdminGate label="BookDrop" />
@@ -154,14 +136,14 @@ export function BookDropPanel({ isAdmin }: { isAdmin: boolean }) {
         Recently processed
       </h3>
       <p className="t-small" style={{ marginBottom: 12, fontStyle: "italic" }}>
-        Imported and discarded items. Use <em>Clear processed history</em>{" "}
-        above to empty this list.
+        Imported and discarded items. Use <em>Clear processed history</em> above
+        to empty this list.
       </p>
       <Card>
         {queue.isLoading ? (
-          <p className="t-small italic text-muted-foreground">Loading…</p>
+          <p className="t-small text-muted-foreground italic">Loading…</p>
         ) : processed.length === 0 ? (
-          <p className="t-small italic text-muted-foreground">
+          <p className="t-small text-muted-foreground italic">
             No processed items yet.
           </p>
         ) : (
@@ -208,15 +190,15 @@ function ProcessedRow({ item }: { item: BookDropItem }) {
   const title = item.title?.trim() || item.filename
   const isImported = item.state === "imported"
   return (
-    <li className="flex items-center gap-3 py-2 border-t border-dashed border-border first:border-0">
+    <li className="flex items-center gap-3 border-t border-dashed border-border py-2 first:border-0">
       <span
-        className="mono text-[10.5px] uppercase tracking-wide text-muted-foreground shrink-0 w-12"
+        className="mono w-12 shrink-0 text-[10.5px] tracking-wide text-muted-foreground uppercase"
         title={item.format}
       >
         {item.format}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="text-[13.5px] truncate">{title}</div>
+        <div className="truncate text-[13.5px]">{title}</div>
         <div className="t-small text-muted-foreground">
           <span
             className={
@@ -234,7 +216,7 @@ function ProcessedRow({ item }: { item: BookDropItem }) {
         <Link
           to="/book/$id"
           params={{ id: item.bookId }}
-          className="t-small underline text-muted-foreground hover:text-foreground shrink-0"
+          className="t-small shrink-0 text-muted-foreground underline hover:text-foreground"
         >
           Open
         </Link>

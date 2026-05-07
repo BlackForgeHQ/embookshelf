@@ -1,18 +1,13 @@
 // ui/src/routes/_app.book.$id_.find.tsx
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import {
-  Link,
-  createFileRoute,
-  useNavigate,
-} from "@tanstack/react-router"
-import { toast } from "sonner"
+import { useQuery } from "@tanstack/react-query"
+import { Link, createFileRoute, useNavigate } from "@tanstack/react-router"
 
-import type { ApiError } from "@/api/client"
 import type { EnrichMatch } from "@/api/enrich"
 import type { ProviderState } from "@/components/metadata/ProviderStatusChips"
 import { applyCoverFromUrl, streamEnrichment } from "@/api/enrich"
 import { bookQueryKey, fetchBook } from "@/api/books"
+import { useApiMutation } from "@/api/mutation"
 import { Icon } from "@/components/Icon"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -42,7 +37,6 @@ const KNOWN_PROVIDER_IDS = [
 function FindMetadata() {
   const { id } = Route.useParams()
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
 
   const book = useQuery({
     queryKey: bookQueryKey(id),
@@ -96,7 +90,8 @@ function FindMetadata() {
             if (
               prev.some(
                 (m) =>
-                  m.source === ev.match.source && m.sourceId === ev.match.sourceId
+                  m.source === ev.match.source &&
+                  m.sourceId === ev.match.sourceId
               )
             ) {
               return prev
@@ -113,7 +108,9 @@ function FindMetadata() {
         } else if (ev.type === "provider-error") {
           setProviderStates((prev) =>
             prev.map((p) =>
-              p.id === ev.provider ? { ...p, status: "error", error: ev.error } : p
+              p.id === ev.provider
+                ? { ...p, status: "error", error: ev.error }
+                : p
             )
           )
         } else {
@@ -144,15 +141,9 @@ function FindMetadata() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated])
 
-  const coverMut = useMutation({
-    mutationFn: (url: string) => applyCoverFromUrl(id, url),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: bookQueryKey(id) })
-      queryClient.invalidateQueries({ queryKey: ["books"] })
-      toast.success("Cover updated.")
-    },
-    onError: (err) =>
-      toast.error((err as unknown as ApiError).message || "Cover import failed."),
+  const coverMut = useApiMutation(applyCoverFromUrl, {
+    successToast: "Cover updated.",
+    errorToast: (err) => err.message || "Cover import failed.",
   })
 
   const uniqueCovers = useMemo(() => {
@@ -182,15 +173,18 @@ function FindMetadata() {
   const errored = providerStates.filter((p) => p.status === "error")
 
   return (
-    <div className="fade-in flex flex-col">
-      <header className="border-b border-(--color-rule-soft) px-8 py-3 flex items-center gap-3">
+    <div className="flex flex-col fade-in">
+      <header className="flex items-center gap-3 border-b border-(--color-rule-soft) px-8 py-3">
         <Button variant="ghost" size="sm" asChild>
           <Link to="/book/$id/edit" params={{ id }}>
             <Icon name="arrow-left" size={14} /> Back to edit
           </Link>
         </Button>
         <div>
-          <h1 className="font-serif text-[20px] leading-tight" style={{ fontWeight: 500 }}>
+          <h1
+            className="font-serif text-[20px] leading-tight"
+            style={{ fontWeight: 500 }}
+          >
             Find metadata online
           </h1>
           <p className="t-small italic">
@@ -212,9 +206,9 @@ function FindMetadata() {
         </Button>
       </header>
 
-      <div className="grid xl:grid-cols-[280px_minmax(0,1fr)_320px] lg:grid-cols-[280px_minmax(0,1fr)] grid-cols-1">
+      <div className="grid grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)_320px]">
         {/* Left rail — search refinement */}
-        <aside className="lg:sticky lg:top-0 lg:self-start lg:h-screen border-r border-(--color-rule-soft) p-5 flex flex-col gap-4">
+        <aside className="flex flex-col gap-4 border-r border-(--color-rule-soft) p-5 lg:sticky lg:top-0 lg:h-screen lg:self-start">
           <div>
             <div className="t-label mb-1.5">Title</div>
             <Input
@@ -248,9 +242,15 @@ function FindMetadata() {
         </aside>
 
         {/* Center — results */}
-        <main className="p-6 min-w-0">
-          <Tabs value={tab} onValueChange={(v) => setTab(v as "matches" | "covers")}>
-            <TabsList variant="line" className="h-9 w-full justify-start gap-4 border-b border-(--color-rule-soft) px-0 mb-5">
+        <main className="min-w-0 p-6">
+          <Tabs
+            value={tab}
+            onValueChange={(v) => setTab(v as "matches" | "covers")}
+          >
+            <TabsList
+              variant="line"
+              className="mb-5 h-9 w-full justify-start gap-4 border-b border-(--color-rule-soft) px-0"
+            >
               <TabsTrigger value="matches" className="flex-none px-3">
                 Matches{matches.length > 0 && ` (${matches.length})`}
               </TabsTrigger>
@@ -290,7 +290,9 @@ function FindMetadata() {
                       key={`${m.source}:${m.sourceId}`}
                       match={m}
                       onCompare={() => setSelected(m)}
-                      onUseCover={() => coverMut.mutate(m.coverUrl ?? "")}
+                      onUseCover={() =>
+                        coverMut.mutate({ bookId: id, url: m.coverUrl ?? "" })
+                      }
                       busy={coverMut.isPending}
                     />
                   ))}
@@ -312,21 +314,26 @@ function FindMetadata() {
               ) : (
                 <div
                   className="grid gap-5"
-                  style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}
+                  style={{
+                    gridTemplateColumns:
+                      "repeat(auto-fill, minmax(160px, 1fr))",
+                  }}
                 >
                   {uniqueCovers.map((c) => (
                     <button
                       key={c.url}
                       type="button"
-                      onClick={() => coverMut.mutate(c.url)}
+                      onClick={() =>
+                        coverMut.mutate({ bookId: id, url: c.url })
+                      }
                       disabled={coverMut.isPending}
-                      className="flex flex-col items-center gap-1.5 group"
+                      className="group flex flex-col items-center gap-1.5"
                     >
                       <img
                         src={c.url}
                         alt=""
                         loading="lazy"
-                        className="h-[240px] w-[160px] object-cover bg-(--color-paper-2) group-hover:ring-2 group-hover:ring-(--color-accent-ink)"
+                        className="h-[240px] w-[160px] bg-(--color-paper-2) object-cover group-hover:ring-2 group-hover:ring-(--color-accent-ink)"
                       />
                       <span className="t-micro text-center">{c.source}</span>
                     </button>
@@ -355,12 +362,12 @@ function FindMetadata() {
 
 function EmptyMatches() {
   return (
-    <div className="border border-dashed border-(--color-rule-soft) rounded-[3px] p-10 text-center">
+    <div className="rounded-[3px] border border-dashed border-(--color-rule-soft) p-10 text-center">
       <Icon name="search" size={20} />
-      <h3 className="font-serif mt-3 text-[18px]" style={{ fontWeight: 500 }}>
+      <h3 className="mt-3 font-serif text-[18px]" style={{ fontWeight: 500 }}>
         No matches found
       </h3>
-      <p className="t-small mt-2 max-w-md mx-auto">
+      <p className="t-small mx-auto mt-2 max-w-md">
         Try adjusting the title, author, or ISBN, or{" "}
         <Link
           to="/settings"
@@ -376,13 +383,13 @@ function EmptyMatches() {
 
 function FindPageSkeleton() {
   return (
-    <div className="grid xl:grid-cols-[280px_minmax(0,1fr)_320px] lg:grid-cols-[280px_minmax(0,1fr)] gap-0 fade-in">
-      <aside className="border-r border-(--color-rule-soft) p-5 flex flex-col gap-4">
+    <div className="grid gap-0 fade-in lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)_320px]">
+      <aside className="flex flex-col gap-4 border-r border-(--color-rule-soft) p-5">
         <Skeleton className="h-9 w-full" />
         <Skeleton className="h-9 w-full" />
         <Skeleton className="h-9 w-full" />
       </aside>
-      <main className="p-6 grid grid-cols-2 gap-4">
+      <main className="grid grid-cols-2 gap-4 p-6">
         <Skeleton className="h-[220px] w-full" />
         <Skeleton className="h-[220px] w-full" />
         <Skeleton className="h-[220px] w-full" />

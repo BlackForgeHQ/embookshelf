@@ -1,17 +1,16 @@
 import { useMemo } from "react"
-import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query"
+import { useQueries } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 
-import type { Annotation } from "@/api/annotations"
 import type { Book } from "@/api/books"
 import {
   annotationKind,
-  bookAnnotationsQueryKey,
   deleteAnnotation,
   fetchRecentAnnotations,
   recentAnnotationsQueryKey,
 } from "@/api/annotations"
 import { booksQueryKey, fetchBooks } from "@/api/books"
+import { useApiMutation } from "@/api/mutation"
 import { Cover } from "@/components/Cover"
 import { Icon } from "@/components/Icon"
 import { TopBar } from "@/components/TopBar"
@@ -23,7 +22,6 @@ export const Route = createFileRoute("/_app/notebook")({
 
 function Notebook() {
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const openBook = (id: string) =>
     void navigate({ to: "/book/$id", params: { id } })
 
@@ -47,17 +45,7 @@ function Notebook() {
     return map
   }, [books.data])
 
-  const deleteMut = useMutation({
-    mutationFn: (a: Annotation) => deleteAnnotation(a.id),
-    onSuccess: (_res, a) => {
-      queryClient.invalidateQueries({ queryKey: recentAnnotationsQueryKey })
-      // Keep the per-book cache in sync in case the user's looking at
-      // that book detail in another tab.
-      queryClient.invalidateQueries({
-        queryKey: bookAnnotationsQueryKey(a.bookId),
-      })
-    },
-  })
+  const deleteMut = useApiMutation(deleteAnnotation)
 
   const rows = annotations.data ?? []
 
@@ -166,7 +154,9 @@ function Notebook() {
                       type="button"
                       variant="ghost"
                       size="icon-xs"
-                      onClick={() => deleteMut.mutate(a)}
+                      onClick={() =>
+                        deleteMut.mutate({ id: a.id, bookId: a.bookId })
+                      }
                       disabled={deleteMut.isPending}
                       aria-label="Delete"
                       title="Delete"

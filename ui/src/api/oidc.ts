@@ -1,4 +1,6 @@
 import { api } from "./client"
+import { oidcConfigQueryKey } from "./auth"
+import { defineMutation } from "./mutation"
 
 export type ProviderSlug = "google" | "github" | "generic"
 
@@ -60,14 +62,14 @@ export async function fetchOidcAdminSettings(): Promise<OidcAdminSettings> {
   return api<OidcAdminSettings>("/api/v1/settings/oidc")
 }
 
-export async function saveOidcAdminSettings(
-  body: OidcAdminSettings
-): Promise<OidcAdminSettings> {
-  return api<OidcAdminSettings>("/api/v1/settings/oidc", {
-    method: "PUT",
-    body: JSON.stringify(body),
-  })
-}
+export const saveOidcAdminSettings = defineMutation({
+  fn: (body: OidcAdminSettings): Promise<OidcAdminSettings> =>
+    api<OidcAdminSettings>("/api/v1/settings/oidc", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  invalidates: [oidcAdminSettingsQueryKey, oidcConfigQueryKey],
+})
 
 export async function testOidcProvider(
   slug: ProviderSlug,

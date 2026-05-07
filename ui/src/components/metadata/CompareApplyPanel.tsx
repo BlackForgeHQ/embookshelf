@@ -1,13 +1,12 @@
 // ui/src/components/metadata/CompareApplyPanel.tsx
 import { useEffect, useState } from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { toast } from "sonner"
+import { useQueryClient } from "@tanstack/react-query"
 
-import type { ApiError } from "@/api/client"
 import type { BookDetail, LockField } from "@/api/books"
 import type { ApplyMatchBody, EnrichMatch } from "@/api/enrich"
 import { bookQueryKey } from "@/api/books"
 import { PROVIDER_LABELS, applyEnrichmentMatch } from "@/api/enrich"
+import { useApiMutation } from "@/api/mutation"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Icon } from "@/components/Icon"
@@ -31,18 +30,74 @@ type FieldSpec = {
 }
 
 const FIELD_SPECS: ReadonlyArray<FieldSpec> = [
-  { field: "title", label: "Title", lockKey: "title", current: (b) => b.title, next: (m) => m.title },
-  { field: "author", label: "Author(s)", lockKey: "author", current: (b) => b.author, next: (m) => m.authors.join(", ") },
-  { field: "description", label: "Description", lockKey: "description", current: (b) => b.description ?? "", next: (m) => m.description ?? "" },
-  { field: "publisher", label: "Publisher", lockKey: "publisher", current: (b) => b.publisher ?? "", next: (m) => m.publisher ?? "" },
-  { field: "year", label: "Year", current: (b) => (b.year ? String(b.year) : ""), next: (m) => (m.year ? String(m.year) : "") },
-  { field: "isbn", label: "ISBN", lockKey: "isbn", current: (b) => b.isbn ?? "", next: (m) => m.isbn ?? "" },
-  { field: "series", label: "Series", lockKey: "series", current: (b) => b.series ?? "", next: (m) => m.series ?? "" },
-  { field: "language", label: "Language", lockKey: "language", current: (b) => b.language ?? "", next: (m) => m.language ?? "" },
-  { field: "categories", label: "Categories", lockKey: "genres", current: (b) => b.genres.join(", "), next: (m) => (m.categories ?? []).join(", ") },
+  {
+    field: "title",
+    label: "Title",
+    lockKey: "title",
+    current: (b) => b.title,
+    next: (m) => m.title,
+  },
+  {
+    field: "author",
+    label: "Author(s)",
+    lockKey: "author",
+    current: (b) => b.author,
+    next: (m) => m.authors.join(", "),
+  },
+  {
+    field: "description",
+    label: "Description",
+    lockKey: "description",
+    current: (b) => b.description ?? "",
+    next: (m) => m.description ?? "",
+  },
+  {
+    field: "publisher",
+    label: "Publisher",
+    lockKey: "publisher",
+    current: (b) => b.publisher ?? "",
+    next: (m) => m.publisher ?? "",
+  },
+  {
+    field: "year",
+    label: "Year",
+    current: (b) => (b.year ? String(b.year) : ""),
+    next: (m) => (m.year ? String(m.year) : ""),
+  },
+  {
+    field: "isbn",
+    label: "ISBN",
+    lockKey: "isbn",
+    current: (b) => b.isbn ?? "",
+    next: (m) => m.isbn ?? "",
+  },
+  {
+    field: "series",
+    label: "Series",
+    lockKey: "series",
+    current: (b) => b.series ?? "",
+    next: (m) => m.series ?? "",
+  },
+  {
+    field: "language",
+    label: "Language",
+    lockKey: "language",
+    current: (b) => b.language ?? "",
+    next: (m) => m.language ?? "",
+  },
+  {
+    field: "categories",
+    label: "Categories",
+    lockKey: "genres",
+    current: (b) => b.genres.join(", "),
+    next: (m) => (m.categories ?? []).join(", "),
+  },
 ]
 
-export function buildDiffRows(book: BookDetail, match: EnrichMatch): Array<DiffRow> {
+export function buildDiffRows(
+  book: BookDetail,
+  match: EnrichMatch
+): Array<DiffRow> {
   const locks = book.locks ?? {}
   const rows: Array<DiffRow> = FIELD_SPECS.map((spec) => {
     const current = spec.current(book)
@@ -114,7 +169,9 @@ export function CompareApplyPanel({
   onApplied: () => void
 }) {
   const queryClient = useQueryClient()
-  const [rows, setRows] = useState<Array<DiffRow>>(() => buildDiffRows(book, match))
+  const [rows, setRows] = useState<Array<DiffRow>>(() =>
+    buildDiffRows(book, match)
+  )
 
   // Re-seed rows when a different match is selected. setState-in-effect
   // is intentional (prop→state sync, not a cascading render). We
@@ -127,17 +184,16 @@ export function CompareApplyPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [match])
 
-  const applyMut = useMutation({
-    mutationFn: () => applyEnrichmentMatch(book.id, buildApplyBody(match, rows)),
+  const applyMut = useApiMutation(applyEnrichmentMatch, {
+    successToast: () => {
+      const provider = PROVIDER_LABELS[match.source] ?? match.source
+      return `Metadata applied from ${provider}.`
+    },
+    errorToast: (err) => err.message || "Apply failed.",
     onSuccess: (fresh) => {
       queryClient.setQueryData(bookQueryKey(book.id), fresh)
-      queryClient.invalidateQueries({ queryKey: ["books"] })
-      const provider = PROVIDER_LABELS[match.source] ?? match.source
-      toast.success(`Metadata applied from ${provider}.`)
       onApplied()
     },
-    onError: (err) =>
-      toast.error((err as unknown as ApiError).message || "Apply failed."),
   })
 
   const toggle = (field: string, next: boolean) =>
@@ -163,19 +219,19 @@ export function CompareApplyPanel({
           type="button"
           aria-label="Close compare panel"
           onClick={onClose}
-          className="text-(--color-ink-3) hover:text-(--color-ink-1) cursor-pointer"
+          className="cursor-pointer text-(--color-ink-3) hover:text-(--color-ink-1)"
         >
           <Icon name="close" size={14} />
         </button>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
+      <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
         {rows.map((r) => (
           <div
             key={r.field}
             className="rounded-[3px] border border-(--color-rule-soft) p-3"
           >
-            <label className="flex items-center justify-between gap-3 mb-2">
+            <label className="mb-2 flex items-center justify-between gap-3">
               <span className="t-label flex items-center gap-1.5">
                 {FIELD_SPECS.find((s) => s.field === r.field)?.label ??
                   (r.field === "cover" ? "Cover" : r.field)}
@@ -199,7 +255,7 @@ export function CompareApplyPanel({
                     <img
                       src={`/api/v1/books/${book.id}/cover`}
                       alt=""
-                      className="h-[120px] w-[80px] object-cover bg-(--color-paper-2)"
+                      className="h-[120px] w-[80px] bg-(--color-paper-2) object-cover"
                     />
                   ) : (
                     <div className="t-small italic">—</div>
@@ -210,7 +266,7 @@ export function CompareApplyPanel({
                   <img
                     src={r.next}
                     alt=""
-                    className="h-[120px] w-[80px] object-cover bg-(--color-paper-2)"
+                    className="h-[120px] w-[80px] bg-(--color-paper-2) object-cover"
                   />
                 </div>
               </div>
@@ -218,13 +274,13 @@ export function CompareApplyPanel({
               <div className="flex flex-col gap-1.5">
                 <div>
                   <div className="t-micro mb-0.5">Current</div>
-                  <div className="text-[13px] text-(--color-ink-2) line-clamp-3">
+                  <div className="line-clamp-3 text-[13px] text-(--color-ink-2)">
                     {r.current || <span className="italic">—</span>}
                   </div>
                 </div>
                 <div>
                   <div className="t-micro mb-0.5">New</div>
-                  <div className="text-[13px] text-(--color-ink-1) line-clamp-3">
+                  <div className="line-clamp-3 text-[13px] text-(--color-ink-1)">
                     {r.next || <span className="italic">—</span>}
                   </div>
                 </div>
@@ -234,17 +290,27 @@ export function CompareApplyPanel({
         ))}
       </div>
 
-      <footer className="border-t border-(--color-rule-soft) p-4 flex items-center justify-between gap-2">
+      <footer className="flex items-center justify-between gap-2 border-t border-(--color-rule-soft) p-4">
         <span className="t-small">
           {checkedCount} field{checkedCount === 1 ? "" : "s"} selected
         </span>
         <div className="flex gap-2">
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={applyMut.isPending}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            disabled={applyMut.isPending}
+          >
             Cancel
           </Button>
           <Button
             size="sm"
-            onClick={() => applyMut.mutate()}
+            onClick={() =>
+              applyMut.mutate({
+                bookId: book.id,
+                body: buildApplyBody(match, rows),
+              })
+            }
             disabled={applyMut.isPending || checkedCount === 0}
           >
             {applyMut.isPending ? "Applying…" : "Apply selected"}

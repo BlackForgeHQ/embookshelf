@@ -1,4 +1,5 @@
 import { api } from "./client"
+import { defineMutation } from "./mutation"
 
 // Mirrors internal/handler/annotations.go annotationDTO.
 // `kind` is derived in the client — the server treats highlights and
@@ -56,40 +57,57 @@ export async function fetchRecentAnnotations(
   return annotations
 }
 
-export async function createAnnotation(
-  bookId: string,
-  body: CreateAnnotationInput
-): Promise<Annotation> {
-  const { annotation } = await api<{ annotation: Annotation }>(
-    `/api/v1/books/${bookId}/annotations`,
-    {
-      method: "POST",
-      body: JSON.stringify(body),
-    }
-  )
-  return annotation
-}
-
-export async function patchAnnotation(
-  id: string,
-  body: PatchAnnotationInput
-): Promise<Annotation> {
-  const { annotation } = await api<{ annotation: Annotation }>(
-    `/api/v1/annotations/${id}`,
-    {
-      method: "PATCH",
-      body: JSON.stringify(body),
-    }
-  )
-  return annotation
-}
-
-export async function deleteAnnotation(id: string): Promise<void> {
-  await api<void>(`/api/v1/annotations/${id}`, { method: "DELETE" })
-}
-
 // Shared query keys so mutation onSuccess can invalidate the right caches
 // in one call.
 export const bookAnnotationsQueryKey = (bookId: string) =>
   ["annotations", bookId] as const
 export const recentAnnotationsQueryKey = ["annotations", "recent"] as const
+
+export const createAnnotation = defineMutation({
+  fn: async (args: {
+    bookId: string
+    body: CreateAnnotationInput
+  }): Promise<Annotation> => {
+    const { annotation } = await api<{ annotation: Annotation }>(
+      `/api/v1/books/${args.bookId}/annotations`,
+      {
+        method: "POST",
+        body: JSON.stringify(args.body),
+      }
+    )
+    return annotation
+  },
+  invalidates: (args) => [
+    bookAnnotationsQueryKey(args.bookId),
+    recentAnnotationsQueryKey,
+  ],
+})
+
+export const patchAnnotation = defineMutation({
+  fn: async (args: {
+    id: string
+    body: PatchAnnotationInput
+  }): Promise<Annotation> => {
+    const { annotation } = await api<{ annotation: Annotation }>(
+      `/api/v1/annotations/${args.id}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(args.body),
+      }
+    )
+    return annotation
+  },
+  // Caller must include the bookId-scoped key when known; we can't
+  // recover bookId from the annotation id alone, so the recent feed
+  // is the only universally invalidated cache here.
+  invalidates: [recentAnnotationsQueryKey],
+})
+
+export const deleteAnnotation = defineMutation({
+  fn: (args: { id: string; bookId: string }): Promise<void> =>
+    api<void>(`/api/v1/annotations/${args.id}`, { method: "DELETE" }),
+  invalidates: (args) => [
+    bookAnnotationsQueryKey(args.bookId),
+    recentAnnotationsQueryKey,
+  ],
+})

@@ -1,13 +1,11 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { toast } from "sonner"
 
 import { FieldLockButton } from "./FieldLockButton"
 
-import type { ApiError } from "@/api/client"
 import type { BookDetail } from "@/api/books"
-import { bookQueryKey } from "@/api/books"
 import { removeCover } from "@/api/enrich"
+import { useApiMutation } from "@/api/mutation"
 import { Cover } from "@/components/Cover"
 import { Icon } from "@/components/Icon"
 import { Button } from "@/components/ui/button"
@@ -15,27 +13,18 @@ import { Button } from "@/components/ui/button"
 const COVER_W = 240
 
 export function CoverPanel({ book }: { book: BookDetail }) {
-  const queryClient = useQueryClient()
   const navigate = useNavigate()
 
-  const removeCoverMut = useMutation({
-    mutationFn: () => removeCover(book.id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: bookQueryKey(book.id) })
-      queryClient.invalidateQueries({ queryKey: ["books"] })
-      toast.success("Cover removed.")
-    },
-    onError: (err) =>
-      toast.error(
-        (err as unknown as ApiError).message || "Cover update failed.",
-      ),
+  const removeCoverMut = useApiMutation(removeCover, {
+    successToast: "Cover removed.",
+    errorToast: (err) => err.message || "Cover update failed.",
   })
 
   const onPickFile = () => {
     // File-picker upload arrives in a follow-up. The find page is the
     // primary path for cover changes today.
     toast.info(
-      "File-picker upload arrives in a follow-up. Use Find covers online for now.",
+      "File-picker upload arrives in a follow-up. Use Find covers online for now."
     )
   }
 
@@ -83,7 +72,7 @@ export function CoverPanel({ book }: { book: BookDetail }) {
           size="sm"
           className="w-full justify-start text-(--color-accent-ink) hover:bg-(--color-accent-soft) hover:text-(--color-accent-ink)"
           disabled={removeCoverMut.isPending || !book.hasCover}
-          onClick={() => removeCoverMut.mutate()}
+          onClick={() => removeCoverMut.mutate(book.id)}
         >
           <Icon name="close" size={13} />
           {removeCoverMut.isPending ? "Removing…" : "Remove cover"}

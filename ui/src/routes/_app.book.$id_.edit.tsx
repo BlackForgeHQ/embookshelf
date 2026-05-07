@@ -1,14 +1,24 @@
 // ui/src/routes/_app.book.$id_.edit.tsx
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link, createFileRoute, useBlocker, useNavigate } from "@tanstack/react-router"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  Link,
+  createFileRoute,
+  useBlocker,
+  useNavigate,
+} from "@tanstack/react-router"
 import type { ReactNode } from "react"
 
-import type { ApiError } from "@/api/client"
 import type { LockField } from "@/api/books"
 import type { FormState } from "@/lib/book-form"
 import { bookQueryKey, fetchBook, patchBook } from "@/api/books"
-import { blankForm, bookToForm, dirtyFieldCount, formToPatch } from "@/lib/book-form"
+import { useApiMutation } from "@/api/mutation"
+import {
+  blankForm,
+  bookToForm,
+  dirtyFieldCount,
+  formToPatch,
+} from "@/lib/book-form"
 import { validateField } from "@/lib/metadata-validators"
 import { Icon } from "@/components/Icon"
 import { ChipEditor } from "@/components/metadata/ChipEditor"
@@ -56,7 +66,9 @@ function MetadataEditor() {
 
   const [form, setForm] = useState<FormState>(blankForm())
   const baselineRef = useRef<FormState>(blankForm())
-  const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({})
+  const [errors, setErrors] = useState<
+    Partial<Record<keyof FormState, string>>
+  >({})
   const [hydrated, setHydrated] = useState(false)
   // Set during save's onSuccess so the route blocker doesn't fire on
   // the redirect — the closure captures the pre-render dirty state and
@@ -76,8 +88,11 @@ function MetadataEditor() {
     }
   }, [book.data, hydrated])
 
-  // eslint-disable-next-line react-hooks/refs
-  const dirtyCount = useMemo(() => dirtyFieldCount(form, baselineRef.current), [form])
+  const dirtyCount = useMemo(
+    // eslint-disable-next-line react-hooks/refs
+    () => dirtyFieldCount(form, baselineRef.current),
+    [form]
+  )
   const isDirty = dirtyCount > 0
 
   // beforeUnload guard for tab close / hard refresh. Router-level
@@ -105,11 +120,9 @@ function MetadataEditor() {
     },
   })
 
-  const saveMut = useMutation({
-    mutationFn: () => patchBook(id, formToPatch(form)),
+  const saveMut = useApiMutation(patchBook, {
     onSuccess: (updated) => {
       queryClient.setQueryData(bookQueryKey(id), updated)
-      queryClient.invalidateQueries({ queryKey: ["books"] })
       baselineRef.current = bookToForm(updated)
       setForm(bookToForm(updated))
       savingRef.current = true
@@ -144,7 +157,7 @@ function MetadataEditor() {
 
   const onSave = () => {
     if (!validateAll()) return
-    saveMut.mutate()
+    saveMut.mutate({ id, patch: formToPatch(form) })
   }
 
   if (book.isLoading) {
@@ -159,7 +172,7 @@ function MetadataEditor() {
   }
 
   const b = book.data
-  const error = saveMut.error as unknown as ApiError | null
+  const error = saveMut.error
 
   return (
     <div className="fade-in">
@@ -177,7 +190,11 @@ function MetadataEditor() {
               Find metadata online <Icon name="arrow-right" size={13} />
             </Link>
           </Button>
-          <Button onClick={onSave} disabled={!isDirty || saveMut.isPending} size="sm">
+          <Button
+            onClick={onSave}
+            disabled={!isDirty || saveMut.isPending}
+            size="sm"
+          >
             {saveMut.isPending ? "Saving…" : "Save changes"}
           </Button>
         </div>
@@ -194,7 +211,7 @@ function MetadataEditor() {
             {b.title}
           </h1>
           {b.author && (
-            <p className="t-body mt-3 italic text-(--color-ink-2)">
+            <p className="t-body mt-3 text-(--color-ink-2) italic">
               by {b.author}
             </p>
           )}
@@ -208,12 +225,16 @@ function MetadataEditor() {
             <CoverPanel book={b} />
           </aside>
 
-          <div className="min-w-0 max-w-[640px]">
+          <div className="max-w-[640px] min-w-0">
             <FormSection title="Title & author">
               <FieldRow
                 label="Title"
                 error={errors.title}
-                lock={{ bookId: b.id, field: "title", locked: !!b.locks?.title }}
+                lock={{
+                  bookId: b.id,
+                  field: "title",
+                  locked: !!b.locks?.title,
+                }}
               >
                 <Input
                   value={form.title}
@@ -224,7 +245,11 @@ function MetadataEditor() {
               </FieldRow>
               <FieldRow
                 label="Subtitle"
-                lock={{ bookId: b.id, field: "subtitle", locked: !!b.locks?.subtitle }}
+                lock={{
+                  bookId: b.id,
+                  field: "subtitle",
+                  locked: !!b.locks?.subtitle,
+                }}
               >
                 <Input
                   value={form.subtitle}
@@ -236,7 +261,11 @@ function MetadataEditor() {
               </FieldRow>
               <FieldRow
                 label="Author"
-                lock={{ bookId: b.id, field: "author", locked: !!b.locks?.author }}
+                lock={{
+                  bookId: b.id,
+                  field: "author",
+                  locked: !!b.locks?.author,
+                }}
               >
                 <Input
                   value={form.author}
@@ -272,7 +301,11 @@ function MetadataEditor() {
             <FormSection title="Publication">
               <FieldRow
                 label="Publisher"
-                lock={{ bookId: b.id, field: "publisher", locked: !!b.locks?.publisher }}
+                lock={{
+                  bookId: b.id,
+                  field: "publisher",
+                  locked: !!b.locks?.publisher,
+                }}
               >
                 <Input
                   value={form.publisher}
@@ -309,20 +342,30 @@ function MetadataEditor() {
                 </FieldRow>
                 <FieldRow
                   label="Language"
-                  lock={{ bookId: b.id, field: "language", locked: !!b.locks?.language }}
+                  lock={{
+                    bookId: b.id,
+                    field: "language",
+                    locked: !!b.locks?.language,
+                  }}
                 >
                   <Input
                     value={form.language}
                     onChange={(e) => set("language", e.target.value)}
                     placeholder="en"
-                    className={"mono " + (b.locks?.language ? "opacity-60" : "")}
+                    className={
+                      "mono " + (b.locks?.language ? "opacity-60" : "")
+                    }
                     disabled={!!b.locks?.language}
                   />
                 </FieldRow>
                 <FieldRow
                   label="Pages"
                   error={errors.pages}
-                  lock={{ bookId: b.id, field: "pages", locked: !!b.locks?.pages }}
+                  lock={{
+                    bookId: b.id,
+                    field: "pages",
+                    locked: !!b.locks?.pages,
+                  }}
                 >
                   <Input
                     inputMode="numeric"
@@ -343,7 +386,11 @@ function MetadataEditor() {
                 <FieldRow
                   label="ISBN-13"
                   error={errors.isbn13}
-                  lock={{ bookId: b.id, field: "isbn", locked: !!b.locks?.isbn }}
+                  lock={{
+                    bookId: b.id,
+                    field: "isbn",
+                    locked: !!b.locks?.isbn,
+                  }}
                 >
                   <Input
                     value={form.isbn13}
@@ -357,7 +404,11 @@ function MetadataEditor() {
                 <FieldRow
                   label="ISBN-10"
                   error={errors.isbn10}
-                  lock={{ bookId: b.id, field: "isbn10", locked: !!b.locks?.isbn10 }}
+                  lock={{
+                    bookId: b.id,
+                    field: "isbn10",
+                    locked: !!b.locks?.isbn10,
+                  }}
                 >
                   <Input
                     value={form.isbn10}
@@ -375,7 +426,11 @@ function MetadataEditor() {
               <div className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr_1fr]">
                 <FieldRow
                   label="Series name"
-                  lock={{ bookId: b.id, field: "series", locked: !!b.locks?.series }}
+                  lock={{
+                    bookId: b.id,
+                    field: "series",
+                    locked: !!b.locks?.series,
+                  }}
                 >
                   <Input
                     value={form.series}
@@ -407,7 +462,11 @@ function MetadataEditor() {
             <FormSection title="Categories & tags">
               <FieldRow
                 label="Genres"
-                lock={{ bookId: b.id, field: "genres", locked: !!b.locks?.genres }}
+                lock={{
+                  bookId: b.id,
+                  field: "genres",
+                  locked: !!b.locks?.genres,
+                }}
               >
                 <ChipEditor
                   value={form.genres}
@@ -418,7 +477,11 @@ function MetadataEditor() {
               </FieldRow>
               <FieldRow
                 label="Moods"
-                lock={{ bookId: b.id, field: "moods", locked: !!b.locks?.moods }}
+                lock={{
+                  bookId: b.id,
+                  field: "moods",
+                  locked: !!b.locks?.moods,
+                }}
               >
                 <ChipEditor
                   value={form.moods}
@@ -491,7 +554,7 @@ function MetadataEditor() {
                     onValueChange={(v) =>
                       set(
                         "publicReviews",
-                        (v === "__none" ? "" : v) as FormState["publicReviews"],
+                        (v === "__none" ? "" : v) as FormState["publicReviews"]
                       )
                     }
                   >
@@ -583,7 +646,13 @@ function EditPageSkeleton() {
   )
 }
 
-function FormSection({ title, children }: { title: string; children: ReactNode }) {
+function FormSection({
+  title,
+  children,
+}: {
+  title: string
+  children: ReactNode
+}) {
   return (
     <section className="mb-10 border-b border-(--color-rule-soft) pb-8 last:border-b-0">
       <h2
@@ -613,7 +682,11 @@ function FieldRow({
       <div className="t-label mb-1.5 flex items-center gap-2">
         <span>{label}</span>
         {lock && (
-          <FieldLockButton bookId={lock.bookId} field={lock.field} locked={lock.locked} />
+          <FieldLockButton
+            bookId={lock.bookId}
+            field={lock.field}
+            locked={lock.locked}
+          />
         )}
       </div>
       {children}

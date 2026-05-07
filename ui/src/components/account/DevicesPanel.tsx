@@ -1,8 +1,6 @@
 import { useMemo, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { toast } from "sonner"
+import { useQuery } from "@tanstack/react-query"
 
-import type { ApiError } from "@/api/client"
 import type { Device, DeviceKind } from "@/api/devices"
 import {
   DEVICE_KIND_LABELS,
@@ -11,13 +9,13 @@ import {
   fetchDevices,
   pairDevice,
 } from "@/api/devices"
+import { useApiMutation } from "@/api/mutation"
 import { Icon } from "@/components/Icon"
 import { Card, Field } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
 export function DevicesPanel() {
-  const queryClient = useQueryClient()
   const devices = useQuery({
     queryKey: devicesQueryKey,
     queryFn: fetchDevices,
@@ -25,13 +23,8 @@ export function DevicesPanel() {
 
   const [adding, setAdding] = useState<DeviceKind | null>(null)
 
-  const deleteMut = useMutation({
-    mutationFn: (id: string) => deleteDevice(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: devicesQueryKey })
-      toast.success("Device removed.")
-    },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
+  const deleteMut = useApiMutation(deleteDevice, {
+    successToast: "Device removed.",
   })
 
   const [copied, setCopied] = useState(false)
@@ -67,11 +60,7 @@ export function DevicesPanel() {
         <AddDeviceForm
           kind={adding}
           onClose={() => setAdding(null)}
-          onPaired={() => {
-            queryClient.invalidateQueries({ queryKey: devicesQueryKey })
-            setAdding(null)
-            toast.success("Device paired.")
-          }}
+          onPaired={() => setAdding(null)}
         />
       )}
 
@@ -236,15 +225,9 @@ function AddDeviceForm({
   const [name, setName] = useState(DEVICE_KIND_LABELS[kind])
   const [code, setCode] = useState("")
 
-  const pairMut = useMutation({
-    mutationFn: () =>
-      pairDevice({
-        kind,
-        name: name.trim(),
-        params: { code: code.trim() },
-      }),
+  const pairMut = useApiMutation(pairDevice, {
+    successToast: "Device paired.",
     onSuccess: () => onPaired(),
-    onError: (e) => toast.error((e as unknown as ApiError).message),
   })
 
   return (
@@ -269,7 +252,11 @@ function AddDeviceForm({
       <form
         onSubmit={(e) => {
           e.preventDefault()
-          pairMut.mutate()
+          pairMut.mutate({
+            kind,
+            name: name.trim(),
+            params: { code: code.trim() },
+          })
         }}
         style={{ display: "flex", flexDirection: "column", gap: 10 }}
       >

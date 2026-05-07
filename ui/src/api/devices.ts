@@ -1,4 +1,5 @@
 import { api } from "./client"
+import { defineMutation } from "./mutation"
 
 // Kinds the server ships with drivers for. Keep in sync with
 // internal/model/device.go — the Settings UI picks its "Add device" list
@@ -19,34 +20,38 @@ export async function fetchDevices(): Promise<Array<Device>> {
   return devices
 }
 
+export const devicesQueryKey = ["devices"] as const
+
 // Pairs a new device. For reMarkable Paper Pro, `params` carries the
 // 8-character code users see at https://my.remarkable.com/device/desktop/connect.
-export async function pairDevice(body: {
-  kind: DeviceKind
-  name: string
-  params: Record<string, unknown>
-}): Promise<Device> {
-  const { device } = await api<{ device: Device }>("/api/v1/devices", {
-    method: "POST",
-    body: JSON.stringify(body),
-  })
-  return device
-}
+export const pairDevice = defineMutation({
+  fn: async (body: {
+    kind: DeviceKind
+    name: string
+    params: Record<string, unknown>
+  }): Promise<Device> => {
+    const { device } = await api<{ device: Device }>("/api/v1/devices", {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+    return device
+  },
+  invalidates: [devicesQueryKey],
+})
 
-export async function deleteDevice(id: string): Promise<void> {
-  await api<void>(`/api/v1/devices/${id}`, { method: "DELETE" })
-}
+export const deleteDevice = defineMutation({
+  fn: (id: string): Promise<void> =>
+    api<void>(`/api/v1/devices/${id}`, { method: "DELETE" }),
+  invalidates: [devicesQueryKey],
+})
 
-export async function sendBookToDevice(
-  bookId: string,
-  deviceId: string
-): Promise<void> {
-  await api<void>(`/api/v1/books/${bookId}/send/${deviceId}`, {
-    method: "POST",
-  })
-}
-
-export const devicesQueryKey = ["devices"] as const
+export const sendBookToDevice = defineMutation({
+  fn: (args: { bookId: string; deviceId: string }): Promise<void> =>
+    api<void>(`/api/v1/books/${args.bookId}/send/${args.deviceId}`, {
+      method: "POST",
+    }),
+  invalidates: [],
+})
 
 // Human-friendly labels for device kinds — used by the Add-device list
 // and the badge on each device card.

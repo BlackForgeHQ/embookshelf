@@ -1,8 +1,6 @@
 import { useMemo, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { toast } from "sonner"
+import { useQuery } from "@tanstack/react-query"
 
-import type { ApiError } from "@/api/client"
 import type { AuthUser } from "@/api/auth"
 import {
   approveSettingsUser,
@@ -13,6 +11,7 @@ import {
   settingsUsersQueryKey,
   updateSettingsUserRole,
 } from "@/api/settings"
+import { useApiMutation } from "@/api/mutation"
 import { Icon } from "@/components/Icon"
 import {
   AdminGate,
@@ -31,7 +30,6 @@ export function UsersPanel({
   isAdmin: boolean
   me: AuthUser | null
 }) {
-  const queryClient = useQueryClient()
   const users = useQuery({
     queryKey: settingsUsersQueryKey,
     queryFn: fetchSettingsUsers,
@@ -63,67 +61,41 @@ export function UsersPanel({
     role: "user" as "user" | "admin",
   })
 
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: settingsUsersQueryKey })
-
-  const createMut = useMutation({
-    mutationFn: () => createSettingsUser(draft),
+  const createMut = useApiMutation(createSettingsUser, {
+    successToast: "User created.",
     onSuccess: () => {
-      invalidate()
       setCreateOpen(false)
       setDraft({ email: "", name: "", password: "", role: "user" })
-      toast.success("User created.")
     },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
   })
 
-  const roleMut = useMutation({
-    mutationFn: ({ id, role }: { id: string; role: "admin" | "user" }) =>
-      updateSettingsUserRole(id, role),
-    onSuccess: (_data, { role }) => {
-      invalidate()
-      toast.success(
-        role === "admin"
-          ? "User promoted to admin."
-          : "User demoted to regular user."
-      )
-    },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
+  const roleMut = useApiMutation(updateSettingsUserRole, {
+    successToast: (_, { role }) =>
+      role === "admin"
+        ? "User promoted to admin."
+        : "User demoted to regular user.",
   })
 
-  const deleteMut = useMutation({
-    mutationFn: (id: string) => deleteSettingsUser(id),
-    onSuccess: () => {
-      invalidate()
-      toast.success("User deleted.")
-    },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
+  const deleteMut = useApiMutation(deleteSettingsUser, {
+    successToast: "User deleted.",
   })
 
-  const approveMut = useMutation({
-    mutationFn: (id: string) => approveSettingsUser(id),
-    onSuccess: () => {
-      invalidate()
-      toast.success("User approved.")
-    },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
+  const approveMut = useApiMutation(approveSettingsUser, {
+    successToast: "User approved.",
   })
 
-  const denyMut = useMutation({
-    mutationFn: (id: string) => denySettingsUser(id),
-    onSuccess: () => {
-      invalidate()
-      toast.success("User denied.")
-    },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
+  const denyMut = useApiMutation(denySettingsUser, {
+    successToast: "User denied.",
   })
 
   if (!isAdmin) return <AdminGate label="Users & roles" />
 
   return (
     <>
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-serif font-medium text-foreground">Users &amp; roles</h2>
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="font-serif text-xl font-medium text-foreground">
+          Users &amp; roles
+        </h2>
         <Button
           type="button"
           variant="outline"
@@ -133,7 +105,7 @@ export function UsersPanel({
           <Icon name="plus" size={13} /> New user
         </Button>
       </div>
-      <p className="text-sm italic text-muted-foreground mb-6">
+      <p className="mb-6 text-sm text-muted-foreground italic">
         Admins see every settings pane; regular users see only Account, Reading
         preferences, Device sync, and About.
       </p>
@@ -143,7 +115,7 @@ export function UsersPanel({
           <form
             onSubmit={(e) => {
               e.preventDefault()
-              createMut.mutate()
+              createMut.mutate(draft)
             }}
             className="flex flex-col gap-4"
           >
@@ -184,9 +156,7 @@ export function UsersPanel({
                 ]}
               />
             </Field>
-            <div
-              className="flex items-center gap-2 justify-end mt-2"
-            >
+            <div className="mt-2 flex items-center justify-end gap-2">
               <Button
                 type="button"
                 variant="ghost"
@@ -204,12 +174,12 @@ export function UsersPanel({
       )}
 
       {users.isLoading && (
-        <div className="text-sm italic text-muted-foreground">Loading users…</div>
+        <div className="text-sm text-muted-foreground italic">
+          Loading users…
+        </div>
       )}
 
-      <div
-        className="flex flex-col gap-2 mt-4"
-      >
+      <div className="mt-4 flex flex-col gap-2">
         {sortedUsers.map((u) => {
           const isMe = u.id === me?.id
           return (
@@ -217,22 +187,27 @@ export function UsersPanel({
               key={u.id}
               data-row="user"
               data-user-id={u.id}
-              className="flex items-center gap-4 p-3 bg-card border border-border rounded-lg shadow-sm"
+              className="flex items-center gap-4 rounded-lg border border-border bg-card p-3 shadow-sm"
             >
               <Avatar initials={u.initials} size={32} />
               {u.status !== "active" && (
                 <span
                   data-row-status={u.status}
-                  className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${u.status === "pending" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" : "bg-muted text-muted-foreground"}`}
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${u.status === "pending" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" : "bg-muted text-muted-foreground"}`}
                 >
                   {u.status === "pending" ? "Pending" : "Denied"}
                 </span>
               )}
-              <div className="flex-1 min-w-0">
-                <div className="text-[14px] font-medium leading-snug truncate">
-                  {u.display} {isMe && <span className="text-[10px] uppercase tracking-wider text-muted-foreground ml-2">you</span>}
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[14px] leading-snug font-medium">
+                  {u.display}{" "}
+                  {isMe && (
+                    <span className="ml-2 text-[10px] tracking-wider text-muted-foreground uppercase">
+                      you
+                    </span>
+                  )}
                 </div>
-                <div className="text-xs text-muted-foreground truncate mt-0.5">
+                <div className="mt-0.5 truncate text-xs text-muted-foreground">
                   {u.email} · joined{" "}
                   {new Date(u.createdAt).toLocaleDateString(undefined, {
                     month: "short",
@@ -270,7 +245,7 @@ export function UsersPanel({
                         deleteMut.mutate(u.id)
                       }
                     }}
-                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                     aria-label="Delete user"
                     title={isMe ? "You can't delete yourself" : "Delete user"}
                   >

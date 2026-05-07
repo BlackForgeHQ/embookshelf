@@ -6,10 +6,7 @@ import { toast } from "sonner"
 import type { ApiError } from "@/api/client"
 import type { Annotation } from "@/api/annotations"
 import type { BookDetail } from "@/api/books"
-import type {
-  AudioProgress,
-  AudioReaderHandle,
-} from "@/components/AudioReader"
+import type { AudioProgress, AudioReaderHandle } from "@/components/AudioReader"
 import type {
   ComicFitMode,
   ComicProgress,
@@ -160,7 +157,7 @@ function ReaderShell({ book }: { book: BookDetail }) {
       locator?: string
       selectedText?: string
       note?: string
-    }) => createAnnotation(book.id, body),
+    }) => createAnnotation.fn({ bookId: book.id, body }),
     onSuccess: () => {
       invalidateAnnotations()
       setPendingSelection(null)
@@ -168,7 +165,8 @@ function ReaderShell({ book }: { book: BookDetail }) {
   })
 
   const deleteAnnotationMut = useMutation({
-    mutationFn: (a: Annotation) => deleteAnnotation(a.id),
+    mutationFn: (a: Annotation) =>
+      deleteAnnotation.fn({ id: a.id, bookId: a.bookId }),
     onSuccess: invalidateAnnotations,
   })
 
@@ -178,10 +176,13 @@ function ReaderShell({ book }: { book: BookDetail }) {
   // non-empty, so we put the literal label in selected_text.
   const bookmarkMut = useMutation({
     mutationFn: (locator: string) =>
-      createAnnotation(book.id, {
-        locator,
-        selectedText: "Bookmark",
-        color: "bookmark",
+      createAnnotation.fn({
+        bookId: book.id,
+        body: {
+          locator,
+          selectedText: "Bookmark",
+          color: "bookmark",
+        },
       }),
     onSuccess: () => {
       invalidateAnnotations()
@@ -798,7 +799,6 @@ function ReaderShell({ book }: { book: BookDetail }) {
           <Icon name="menu" size={14} />
         </Button>
       )}
-
     </div>
   )
 }
@@ -834,10 +834,13 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
 
   const bookmarkMut = useMutation({
     mutationFn: (locator: string) =>
-      createAnnotation(book.id, {
-        locator,
-        selectedText: `Bookmark · page ${page + 1}`,
-        color: "bookmark",
+      createAnnotation.fn({
+        bookId: book.id,
+        body: {
+          locator,
+          selectedText: `Bookmark · page ${page + 1}`,
+          color: "bookmark",
+        },
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({
@@ -1108,10 +1111,13 @@ function AudioReaderShell({ book }: { book: BookDetail }) {
 
   const bookmarkMut = useMutation({
     mutationFn: (locator: string) =>
-      createAnnotation(book.id, {
-        locator,
-        selectedText: `Bookmark · ${formatHMS(seconds)}`,
-        color: "bookmark",
+      createAnnotation.fn({
+        bookId: book.id,
+        body: {
+          locator,
+          selectedText: `Bookmark · ${formatHMS(seconds)}`,
+          color: "bookmark",
+        },
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({
@@ -1345,12 +1351,14 @@ function AudioReaderShell({ book }: { book: BookDetail }) {
           </div>
 
           {/* Scrubber */}
-          <div
-            style={{ display: "flex", alignItems: "center", gap: 10 }}
-          >
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span
               className="mono"
-              style={{ fontSize: 11, color: "var(--color-ink-3)", minWidth: 50 }}
+              style={{
+                fontSize: 11,
+                color: "var(--color-ink-3)",
+                minWidth: 50,
+              }}
             >
               {formatHMS(seconds)}
             </span>
@@ -1404,7 +1412,11 @@ function AudioReaderShell({ book }: { book: BookDetail }) {
             </div>
             <span
               className="mono"
-              style={{ fontSize: 11, color: "var(--color-ink-3)", minWidth: 50 }}
+              style={{
+                fontSize: 11,
+                color: "var(--color-ink-3)",
+                minWidth: 50,
+              }}
             >
               {formatHMS(duration)}
             </span>
@@ -1467,7 +1479,9 @@ function AudioReaderShell({ book }: { book: BookDetail }) {
         chapters={book.chapters}
         title={book.title}
         author={book.author}
-        artworkURL={book.hasCover ? `/api/v1/books/${book.id}/cover` : undefined}
+        artworkURL={
+          book.hasCover ? `/api/v1/books/${book.id}/cover` : undefined
+        }
         onReady={({ duration: d }) => setDuration(d)}
         onProgress={onAudioProgress}
         onChapterChange={(i) => setChapterIndex(i)}

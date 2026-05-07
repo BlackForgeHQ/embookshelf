@@ -1,4 +1,5 @@
 import { api } from "./client"
+import { defineMutation } from "./mutation"
 
 // Mirrors internal/handler/account_identities.go accountIdentitiesDTO.
 export type AccountIdentityProvider = {
@@ -29,15 +30,17 @@ export function linkOIDC(slug: AccountIdentityProvider["provider"]): void {
   window.location.assign(`/api/v1/account/oidc/link/${slug}`)
 }
 
-export async function unlinkOIDC(
-  provider: AccountIdentityProvider["provider"],
-): Promise<void> {
-  await api<void>(`/api/v1/account/oidc/${provider}`, { method: "DELETE" })
-}
+export const unlinkOIDC = defineMutation({
+  fn: (provider: AccountIdentityProvider["provider"]): Promise<void> =>
+    api<void>(`/api/v1/account/oidc/${provider}`, { method: "DELETE" }),
+  invalidates: [accountIdentitiesQueryKey],
+})
 
-export async function setInitialPassword(next: string): Promise<void> {
-  await api<void>("/api/v1/account/password/set", {
-    method: "POST",
-    body: JSON.stringify({ next }),
-  })
-}
+export const setInitialPassword = defineMutation({
+  fn: (next: string): Promise<void> =>
+    api<void>("/api/v1/account/password/set", {
+      method: "POST",
+      body: JSON.stringify({ next }),
+    }),
+  invalidates: [accountIdentitiesQueryKey],
+})

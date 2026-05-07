@@ -1,23 +1,18 @@
 import { useEffect, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+
 import { toast } from "sonner"
 
-import type { ApiError } from "@/api/client"
-import type {
-  MetadataSettings,
-  ProviderConfigField,
-  ProviderInfo,
-  ProviderPatch,
-} from "@/api/settings"
+import type { ProviderConfigField, ProviderInfo } from "@/api/settings"
 import {
   fetchMetadataSettings,
   fetchProviderSettings,
-  instanceInfoQueryKey,
   metadataSettingsQueryKey,
   providerSettingsQueryKey,
   updateMetadataSettings,
   updateProviderSetting,
 } from "@/api/settings"
+import { useApiMutation } from "@/api/mutation"
 import { Icon } from "@/components/Icon"
 import { AdminGate } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
@@ -39,29 +34,22 @@ export function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
     enabled: isAdmin,
   })
 
-  const metaMut = useMutation({
-    mutationFn: (body: MetadataSettings) => updateMetadataSettings(body),
+  const metaMut = useApiMutation(updateMetadataSettings, {
+    successToast: (data) =>
+      data.autoEnrich
+        ? "Auto-enrich on approve enabled."
+        : "Auto-enrich on approve disabled.",
+    errorToast: (err) => err.message || "Update failed.",
     onSuccess: (data) => {
       queryClient.setQueryData(metadataSettingsQueryKey, data)
-      toast.success(
-        data.autoEnrich
-          ? "Auto-enrich on approve enabled."
-          : "Auto-enrich on approve disabled."
-      )
     },
-    onError: (err) =>
-      toast.error((err as unknown as ApiError).message || "Update failed."),
   })
 
-  const patchMut = useMutation({
-    mutationFn: (args: { id: string; patch: ProviderPatch }) =>
-      updateProviderSetting(args.id, args.patch),
+  const patchMut = useApiMutation(updateProviderSetting, {
+    errorToast: (err) => err.message || "Update failed.",
     onSuccess: (providers) => {
       queryClient.setQueryData(providerSettingsQueryKey, providers)
-      queryClient.invalidateQueries({ queryKey: instanceInfoQueryKey })
     },
-    onError: (err) =>
-      toast.error((err as unknown as ApiError).message || "Update failed."),
   })
 
   if (!isAdmin) return <AdminGate label="Metadata providers" />
@@ -99,10 +87,10 @@ export function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
     <>
       <header className="mb-8 border-b border-(--color-rule-soft) pb-5">
         <div className="t-label mb-3">Settings · Enrichment</div>
-        <div className="flex items-end justify-between gap-8 flex-wrap">
+        <div className="flex flex-wrap items-end justify-between gap-8">
           <div className="min-w-0">
             <h2 className="t-h2">Metadata providers</h2>
-            <p className="t-small mt-2 italic max-w-[58ch]">
+            <p className="t-small mt-2 max-w-[58ch] italic">
               Enrichment queries fan out across enabled providers — toggle any
               row to include or skip it. Priority drives ISBN-lookup chain
               order; the parallel fan-out on the book editor still sorts by
@@ -122,14 +110,12 @@ export function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
         className="mb-10 border border-(--color-rule-soft) bg-(--color-paper-0)"
         aria-label="Auto-enrich"
       >
-        <label className="flex items-center gap-5 px-5 py-4 cursor-pointer">
+        <label className="flex cursor-pointer items-center gap-5 px-5 py-4">
           <span className="t-micro shrink-0 text-(--color-accent-ink)">
             Auto
           </span>
-          <div className="flex-1 min-w-0">
-            <div className="t-item-title">
-              Auto-enrich on bookdrop approve
-            </div>
+          <div className="min-w-0 flex-1">
+            <div className="t-item-title">Auto-enrich on bookdrop approve</div>
             <div className="t-small mt-1 max-w-[58ch]">
               When enabled, approving a bookdrop item triggers a provider
               fan-out and writes the top match — empty fields only, respecting
@@ -147,14 +133,14 @@ export function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
 
       <div className="mb-3 flex items-baseline justify-between gap-3">
         <div className="t-label">The provider chain</div>
-        <div className="font-mono text-[10.5px] tracking-widest uppercase text-(--color-ink-3) tabular-nums">
+        <div className="font-mono text-[10.5px] tracking-widest text-(--color-ink-3) uppercase tabular-nums">
           {isLoading
             ? "Loading…"
             : `${rankedCount.toString().padStart(2, "0")} ranked · ${enabledCount.toString().padStart(2, "0")} on`}
         </div>
       </div>
 
-      <div className="border border-(--color-rule-soft) bg-(--color-paper-0) divide-y divide-(--color-rule-soft)">
+      <div className="divide-y divide-(--color-rule-soft) border border-(--color-rule-soft) bg-(--color-paper-0)">
         {isLoading && <SkeletonRows count={3} />}
         {!isLoading && ordered.length === 0 && <EmptyState />}
         {!isLoading &&
@@ -198,7 +184,7 @@ function StatStrip({
 }) {
   return (
     <dl
-      className="flex items-stretch border border-(--color-rule-soft) bg-(--color-paper-0) divide-x divide-(--color-rule-soft) text-right"
+      className="flex items-stretch divide-x divide-(--color-rule-soft) border border-(--color-rule-soft) bg-(--color-paper-0) text-right"
       aria-busy={loading}
     >
       <Stat label="Enabled" value={loading ? "—" : `${enabled}/${total}`} />
@@ -209,9 +195,9 @@ function StatStrip({
 
 function Stat({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="px-4 py-2.5 min-w-[88px]">
+    <div className="min-w-[88px] px-4 py-2.5">
       <dt className="t-label">{label}</dt>
-      <dd className="font-mono text-[18px] leading-tight tabular-nums text-(--color-ink-1) mt-0.5">
+      <dd className="mt-0.5 font-mono text-[18px] leading-tight text-(--color-ink-1) tabular-nums">
         {value}
       </dd>
     </div>
@@ -224,15 +210,15 @@ function SkeletonRows({ count }: { count: number }) {
       {Array.from({ length: count }).map((_, i) => (
         <div
           key={i}
-          className="flex items-center gap-4 px-5 py-4 animate-pulse"
+          className="flex animate-pulse items-center gap-4 px-5 py-4"
         >
           <div className="w-9 shrink-0">
-            <div className="h-2.5 w-6 bg-(--color-paper-3) mb-2" />
+            <div className="mb-2 h-2.5 w-6 bg-(--color-paper-3)" />
             <div className="h-4 w-4 bg-(--color-paper-2)" />
           </div>
           <div className="h-2 w-2 rounded-full bg-(--color-paper-3)" />
-          <div className="flex-1 min-w-0">
-            <div className="h-3.5 w-40 bg-(--color-paper-3) mb-2" />
+          <div className="min-w-0 flex-1">
+            <div className="mb-2 h-3.5 w-40 bg-(--color-paper-3)" />
             <div className="h-3 w-56 bg-(--color-paper-2)" />
           </div>
           <div className="h-5 w-9 rounded-full bg-(--color-paper-2)" />
@@ -244,8 +230,8 @@ function SkeletonRows({ count }: { count: number }) {
 
 function EmptyState() {
   return (
-    <div className="flex flex-col items-center text-center gap-3 px-6 py-12">
-      <div className="size-10 rounded-full border border-dashed border-(--color-rule) flex items-center justify-center text-(--color-ink-3)">
+    <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
+      <div className="flex size-10 items-center justify-center rounded-full border border-dashed border-(--color-rule) text-(--color-ink-3)">
         <Icon name="sparkle" size={18} />
       </div>
       <div className="t-item-title">No metadata providers detected</div>
@@ -300,7 +286,7 @@ function ProviderRow({
   return (
     <div className="px-5 py-4">
       <div className="flex items-start gap-4">
-        <div className="flex flex-col items-center gap-1.5 w-9 shrink-0 pt-0.5">
+        <div className="flex w-9 shrink-0 flex-col items-center gap-1.5 pt-0.5">
           <span
             className={cn(
               "font-mono text-[10.5px] tracking-widest tabular-nums",
@@ -320,9 +306,9 @@ function ProviderRow({
               disabled={position === 0 || busy}
               onClick={onMoveUp}
               className={cn(
-                "p-0.5 border border-(--color-rule-soft) bg-(--color-paper-0) text-(--color-ink-2) leading-none transition-colors",
+                "border border-(--color-rule-soft) bg-(--color-paper-0) p-0.5 leading-none text-(--color-ink-2) transition-colors",
                 position === 0 || busy
-                  ? "opacity-30 cursor-default"
+                  ? "cursor-default opacity-30"
                   : "hover:bg-(--color-paper-2) hover:text-(--color-ink-1)"
               )}
             >
@@ -334,9 +320,9 @@ function ProviderRow({
               disabled={position === total - 1 || busy}
               onClick={onMoveDown}
               className={cn(
-                "p-0.5 border border-(--color-rule-soft) bg-(--color-paper-0) text-(--color-ink-2) leading-none transition-colors",
+                "border border-(--color-rule-soft) bg-(--color-paper-0) p-0.5 leading-none text-(--color-ink-2) transition-colors",
                 position === total - 1 || busy
-                  ? "opacity-30 cursor-default"
+                  ? "cursor-default opacity-30"
                   : "hover:bg-(--color-paper-2) hover:text-(--color-ink-1)"
               )}
             >
@@ -351,8 +337,8 @@ function ProviderRow({
           errorAt={provider.lastErrorAt}
         />
 
-        <div className="flex-1 min-w-0">
-          <div className="flex items-baseline gap-2 flex-wrap">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-baseline gap-2">
             <div className="t-item-title">{provider.name}</div>
             <span className="font-mono text-[11px] tracking-wide text-(--color-ink-3)">
               {provider.id}
@@ -361,7 +347,7 @@ function ProviderRow({
               <span className="t-micro text-(--color-ink-3)">External</span>
             )}
             {ranked && (
-              <span className="font-mono text-[10.5px] tracking-widest uppercase text-(--color-accent-ink) tabular-nums">
+              <span className="font-mono text-[10.5px] tracking-widest text-(--color-accent-ink) uppercase tabular-nums">
                 P{provider.priority}
               </span>
             )}
@@ -373,20 +359,17 @@ function ProviderRow({
           />
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex shrink-0 items-center gap-2">
           {hasConfig && (
             <button
               type="button"
               onClick={() => setExpanded((v) => !v)}
               aria-expanded={expanded}
               aria-controls={`provider-config-${provider.id}`}
-              className="t-micro flex items-center gap-1 px-2 py-1 border border-(--color-rule-soft) text-(--color-ink-2) hover:bg-(--color-paper-2) hover:text-(--color-ink-1) transition-colors"
+              className="t-micro flex items-center gap-1 border border-(--color-rule-soft) px-2 py-1 text-(--color-ink-2) transition-colors hover:bg-(--color-paper-2) hover:text-(--color-ink-1)"
             >
               Config
-              <Icon
-                name={expanded ? "chevron-up" : "chevron-down"}
-                size={11}
-              />
+              <Icon name={expanded ? "chevron-up" : "chevron-down"} size={11} />
             </button>
           )}
           <Switch
@@ -402,7 +385,7 @@ function ProviderRow({
       {hasConfig && expanded && (
         <div
           id={`provider-config-${provider.id}`}
-          className="mt-4 pt-4 pl-13 border-t border-dashed border-(--color-rule-soft) flex flex-col gap-3"
+          className="mt-4 flex flex-col gap-3 border-t border-dashed border-(--color-rule-soft) pt-4 pl-13"
         >
           {schema.map((field) => (
             <ConfigFieldRow
@@ -416,7 +399,7 @@ function ProviderRow({
           ))}
           <div className="flex items-center justify-end gap-2 pt-1">
             {dirty && (
-              <span className="t-micro text-(--color-accent-ink) mr-auto">
+              <span className="t-micro mr-auto text-(--color-accent-ink)">
                 Unsaved changes
               </span>
             )}
@@ -473,14 +456,14 @@ function StatusDot({
       : "Healthy"
   return (
     <span
-      className="relative inline-flex h-2 w-2 mt-2 shrink-0"
+      className="relative mt-2 inline-flex h-2 w-2 shrink-0"
       aria-label={label}
       title={label}
     >
       {enabled && (
         <span
           className={cn(
-            "absolute inset-0 rounded-full opacity-30 animate-ping",
+            "absolute inset-0 animate-ping rounded-full opacity-30",
             ringTone
           )}
         />
@@ -502,7 +485,7 @@ function ConfigFieldRow({
   const [reveal, setReveal] = useState(false)
   return (
     <div>
-      <div className="flex items-center gap-2 mb-1">
+      <div className="mb-1 flex items-center gap-2">
         <span className="t-label">{field.label}</span>
         {field.kind === "password" && value && (
           <button
@@ -573,7 +556,7 @@ function ProviderHealth({
   return (
     <div
       className={cn(
-        "mt-1 text-[11.5px] leading-tight font-mono tabular-nums",
+        "mt-1 font-mono text-[11.5px] leading-tight tabular-nums",
         errorWins ? "text-(--color-accent-ink)" : "text-(--color-cov-forest)"
       )}
       title={errorWins ? lastError : "Last successful fetch"}

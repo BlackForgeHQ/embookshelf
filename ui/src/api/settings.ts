@@ -1,4 +1,6 @@
 import { api } from "./client"
+import { librariesQueryKey } from "./books"
+import { defineMutation } from "./mutation"
 import type { AuthUser } from "./auth"
 import type { Library } from "./books"
 
@@ -29,44 +31,48 @@ export type CreateLibraryInput = {
   scan?: boolean
 }
 
-export async function createLibrary(
-  input: CreateLibraryInput
-): Promise<SettingsLibrary> {
-  const { name, kind, scan } = input
-  const { library } = await api<{ library: SettingsLibrary }>(
-    "/api/v1/settings/libraries",
-    {
-      method: "POST",
-      body: JSON.stringify({ name, kind, scan }),
-    }
-  )
-  return library
-}
+export const settingsLibrariesQueryKey = ["settings", "libraries"] as const
+
+export const createLibrary = defineMutation({
+  fn: async (input: CreateLibraryInput): Promise<SettingsLibrary> => {
+    const { name, kind, scan } = input
+    const { library } = await api<{ library: SettingsLibrary }>(
+      "/api/v1/settings/libraries",
+      {
+        method: "POST",
+        body: JSON.stringify({ name, kind, scan }),
+      }
+    )
+    return library
+  },
+  invalidates: [settingsLibrariesQueryKey, librariesQueryKey],
+})
 
 // deleteLibrary tears down a library and every book/annotation/etc
 // that depends on it. Source files on disk are left alone (they live
 // under the user-managed root); cover images and DB rows are removed.
 // When opts.purge is true and the library is backed by an S3 backend,
 // all objects under the library's prefix are also deleted.
-export async function deleteLibrary(
-  id: string,
-  opts?: { purge?: boolean }
-): Promise<void> {
-  const qs = opts?.purge ? "?purge=true" : ""
-  await api<void>(`/api/v1/settings/libraries/${id}${qs}`, {
-    method: "DELETE",
-  })
-}
+export const deleteLibrary = defineMutation({
+  fn: async (args: {
+    id: string
+    opts?: { purge?: boolean }
+  }): Promise<void> => {
+    const qs = args.opts?.purge ? "?purge=true" : ""
+    await api<void>(`/api/v1/settings/libraries/${args.id}${qs}`, {
+      method: "DELETE",
+    })
+  },
+  invalidates: [settingsLibrariesQueryKey, librariesQueryKey],
+})
 
 // rescanLibrary enqueues a library.scan job against the library's
 // filesystem root. The response is fire-and-forget (202).
-export async function rescanLibrary(id: string): Promise<void> {
-  await api<void>(`/api/v1/settings/libraries/${id}/rescan`, {
-    method: "POST",
-  })
-}
-
-export const settingsLibrariesQueryKey = ["settings", "libraries"] as const
+export const rescanLibrary = defineMutation({
+  fn: (id: string): Promise<void> =>
+    api<void>(`/api/v1/settings/libraries/${id}/rescan`, { method: "POST" }),
+  invalidates: [settingsLibrariesQueryKey],
+})
 
 // AppConfig is the lightweight feature-flag payload from GET /api/v1/config.
 export type AppConfig = {
@@ -146,21 +152,24 @@ export async function fetchProviderSettings(): Promise<Array<ProviderInfo>> {
   return providers
 }
 
-export async function updateProviderSetting(
-  id: string,
-  patch: ProviderPatch
-): Promise<Array<ProviderInfo>> {
-  const { providers } = await api<{ providers: Array<ProviderInfo> }>(
-    `/api/v1/settings/providers/${encodeURIComponent(id)}`,
-    {
-      method: "PATCH",
-      body: JSON.stringify(patch),
-    }
-  )
-  return providers
-}
-
 export const providerSettingsQueryKey = ["settings", "providers"] as const
+
+export const updateProviderSetting = defineMutation({
+  fn: async (args: {
+    id: string
+    patch: ProviderPatch
+  }): Promise<Array<ProviderInfo>> => {
+    const { providers } = await api<{ providers: Array<ProviderInfo> }>(
+      `/api/v1/settings/providers/${encodeURIComponent(args.id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(args.patch),
+      }
+    )
+    return providers
+  },
+  invalidates: [providerSettingsQueryKey, instanceInfoQueryKey],
+})
 
 // --- Instance-wide metadata switches --------------------------------------
 
@@ -174,16 +183,16 @@ export async function fetchMetadataSettings(): Promise<MetadataSettings> {
   return api<MetadataSettings>("/api/v1/settings/metadata")
 }
 
-export async function updateMetadataSettings(
-  body: MetadataSettings
-): Promise<MetadataSettings> {
-  return api<MetadataSettings>("/api/v1/settings/metadata", {
-    method: "PUT",
-    body: JSON.stringify(body),
-  })
-}
-
 export const metadataSettingsQueryKey = ["settings", "metadata"] as const
+
+export const updateMetadataSettings = defineMutation({
+  fn: (body: MetadataSettings): Promise<MetadataSettings> =>
+    api<MetadataSettings>("/api/v1/settings/metadata", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  invalidates: [metadataSettingsQueryKey],
+})
 
 // Lightweight, non-admin-gated version of InstanceInfo. Rendered in the
 // status bar at the bottom of every page, so all signed-in users can call
@@ -209,47 +218,57 @@ export async function fetchSettingsUsers(): Promise<Array<AuthUser>> {
   return users
 }
 
-export async function createSettingsUser(body: {
-  email: string
-  name: string
-  password: string
-  role: "admin" | "user"
-}): Promise<AuthUser> {
-  const { user } = await api<{ user: AuthUser }>("/api/v1/settings/users", {
-    method: "POST",
-    body: JSON.stringify(body),
-  })
-  return user
-}
-
-export async function updateSettingsUserRole(
-  id: string,
-  role: "admin" | "user"
-): Promise<void> {
-  await api<void>(`/api/v1/settings/users/${id}/role`, {
-    method: "PATCH",
-    body: JSON.stringify({ role }),
-  })
-}
-
-export async function deleteSettingsUser(id: string): Promise<void> {
-  await api<void>(`/api/v1/settings/users/${id}`, { method: "DELETE" })
-}
-
-export async function approveSettingsUser(id: string): Promise<AuthUser> {
-  const { user } = await api<{ user: AuthUser }>(
-    `/api/v1/settings/users/${id}/approve`,
-    { method: "POST" }
-  )
-  return user
-}
-
-export async function denySettingsUser(id: string): Promise<AuthUser> {
-  const { user } = await api<{ user: AuthUser }>(
-    `/api/v1/settings/users/${id}/deny`,
-    { method: "POST" }
-  )
-  return user
-}
-
 export const settingsUsersQueryKey = ["settings", "users"] as const
+
+export const createSettingsUser = defineMutation({
+  fn: async (body: {
+    email: string
+    name: string
+    password: string
+    role: "admin" | "user"
+  }): Promise<AuthUser> => {
+    const { user } = await api<{ user: AuthUser }>("/api/v1/settings/users", {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+    return user
+  },
+  invalidates: [settingsUsersQueryKey],
+})
+
+export const updateSettingsUserRole = defineMutation({
+  fn: (args: { id: string; role: "admin" | "user" }): Promise<void> =>
+    api<void>(`/api/v1/settings/users/${args.id}/role`, {
+      method: "PATCH",
+      body: JSON.stringify({ role: args.role }),
+    }),
+  invalidates: [settingsUsersQueryKey],
+})
+
+export const deleteSettingsUser = defineMutation({
+  fn: (id: string): Promise<void> =>
+    api<void>(`/api/v1/settings/users/${id}`, { method: "DELETE" }),
+  invalidates: [settingsUsersQueryKey],
+})
+
+export const approveSettingsUser = defineMutation({
+  fn: async (id: string): Promise<AuthUser> => {
+    const { user } = await api<{ user: AuthUser }>(
+      `/api/v1/settings/users/${id}/approve`,
+      { method: "POST" }
+    )
+    return user
+  },
+  invalidates: [settingsUsersQueryKey],
+})
+
+export const denySettingsUser = defineMutation({
+  fn: async (id: string): Promise<AuthUser> => {
+    const { user } = await api<{ user: AuthUser }>(
+      `/api/v1/settings/users/${id}/deny`,
+      { method: "POST" }
+    )
+    return user
+  },
+  invalidates: [settingsUsersQueryKey],
+})

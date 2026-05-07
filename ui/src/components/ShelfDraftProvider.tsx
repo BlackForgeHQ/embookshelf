@@ -1,11 +1,10 @@
 import { createContext, useContext, useMemo, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { ShelfCreatorDialog } from "./ShelfCreatorDialog"
 import type { ReactNode } from "react"
-import type { ShelfAccent } from "./AccentPicker"
 
-import type { ApiError } from "@/api/client"
 import { createShelf, fetchShelves, shelvesQueryKey } from "@/api/books"
+import { useApiMutation } from "@/api/mutation"
 
 type ShelfDraftDialogContextValue = {
   open: () => void
@@ -30,7 +29,6 @@ export function useShelfDraftDialog(): ShelfDraftDialogContextValue {
  * trigger it without threading props through the tree.
  */
 export function ShelfDraftProvider({ children }: { children: ReactNode }) {
-  const queryClient = useQueryClient()
   const [isOpen, setOpen] = useState(false)
 
   // Pull the shelf list to power duplicate-name validation in the dialog.
@@ -41,13 +39,8 @@ export function ShelfDraftProvider({ children }: { children: ReactNode }) {
     queryFn: fetchShelves,
   })
 
-  const createShelfMut = useMutation({
-    mutationFn: (args: { name: string; accent: ShelfAccent }) =>
-      createShelf(args.name, args.accent),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
-      setOpen(false)
-    },
+  const createShelfMut = useApiMutation(createShelf, {
+    onSuccess: () => setOpen(false),
   })
 
   const value = useMemo<ShelfDraftDialogContextValue>(
@@ -66,7 +59,7 @@ export function ShelfDraftProvider({ children }: { children: ReactNode }) {
         }}
         existingNames={(shelves.data?.shelves ?? []).map((s) => s.name)}
         busy={createShelfMut.isPending}
-        error={(createShelfMut.error as ApiError | null)?.message ?? null}
+        error={createShelfMut.error?.message ?? null}
         onSubmit={(draft) => createShelfMut.mutate(draft)}
       />
     </ShelfDraftDialogContext.Provider>

@@ -16,12 +16,8 @@ import {
   saveOidcAdminSettings,
   testOidcProvider,
 } from "@/api/oidc"
-import {
-  AdminGate,
-  Card,
-  Field,
-  Select,
-} from "@/components/SettingsShared"
+import { useApiMutation } from "@/api/mutation"
+import { AdminGate, Card, Field, Select } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -54,16 +50,13 @@ export function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
     }
   }, [query.data, draft])
 
-  const saveMut = useMutation({
-    mutationFn: saveOidcAdminSettings,
+  const saveMut = useApiMutation(saveOidcAdminSettings, {
+    successToast: "OIDC settings saved.",
     onSuccess: (data) => {
       queryClient.setQueryData(oidcAdminSettingsQueryKey, data)
       setDraft(data)
       setSecretTouched({ google: false, github: false, generic: false })
-      queryClient.invalidateQueries({ queryKey: ["oidc-config"] })
-      toast.success("OIDC settings saved.")
     },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
   })
 
   if (!isAdmin) return <AdminGate label="OIDC / SSO" />

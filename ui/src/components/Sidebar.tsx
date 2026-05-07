@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { Link, useRouterState } from "@tanstack/react-router"
 
 import { Icon } from "./Icon"
@@ -7,9 +7,8 @@ import { RuleEditor } from "./RuleEditor"
 import type { ShelfAccent } from "./AccentPicker"
 import type { IconName } from "./Icon"
 import type { ReactNode } from "react"
-import type { ApiError } from "@/api/client"
 import type { AuthUser } from "@/api/auth"
-import type { Shelf, ShelfRule } from "@/api/books"
+import type { Shelf } from "@/api/books"
 import {
   createSmartShelf,
   deleteShelf,
@@ -20,6 +19,7 @@ import {
   shelvesQueryKey,
   updateShelf,
 } from "@/api/books"
+import { useApiMutation } from "@/api/mutation"
 import { fetchMe, meQueryKey } from "@/api/auth"
 import { useLogout } from "@/hooks/useLogout"
 import { useShelfDraftDialog } from "@/components/ShelfDraftProvider"
@@ -60,7 +60,6 @@ export function AppSidebar() {
     unshelved?: string
   }
 
-  const queryClient = useQueryClient()
   const me = useQuery({
     queryKey: meQueryKey,
     queryFn: fetchMe,
@@ -79,51 +78,17 @@ export function AppSidebar() {
 
   // Smart shelves keep using the RuleEditor, extended with the
   // same accent picker so both shelf types share one design language.
-  const createSmartMut = useMutation({
-    mutationFn: (args: {
-      name: string
-      rule: ShelfRule
-      accent: ShelfAccent
-    }) => createSmartShelf(args.name, args.rule, args.accent),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
-      setSmartDraft(null)
-    },
+  const createSmartMut = useApiMutation(createSmartShelf, {
+    onSuccess: () => setSmartDraft(null),
   })
-  const updateSmartMut = useMutation({
-    mutationFn: (args: {
-      slug: string
-      name: string
-      rule: ShelfRule
-      accent: ShelfAccent
-    }) =>
-      updateShelf(args.slug, {
-        name: args.name,
-        accent: args.accent,
-        rule: args.rule,
-        ruleSet: true,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
-      setSmartDraft(null)
-    },
+  const updateSmartMut = useApiMutation(updateShelf, {
+    onSuccess: () => setSmartDraft(null),
   })
-  const deleteShelfMut = useMutation({
-    mutationFn: (slug: string) => deleteShelf(slug),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
-    },
-  })
-  // Admin-only "share" toggle. Reuses the same shelves invalidation
-  // path as edit/delete; the SSE broadcast hits other viewers via
-  // useRealtime, this onSuccess covers the local cache.
-  const publishShelfMut = useMutation({
-    mutationFn: (args: { slug: string; isPublic: boolean }) =>
-      publishShelf(args.slug, args.isPublic),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
-    },
-  })
+  const deleteShelfMut = useApiMutation(deleteShelf)
+  // Admin-only "share" toggle. SSE broadcast hits other viewers via
+  // useRealtime; the colocated invalidates list on publishShelf covers
+  // this local viewer.
+  const publishShelfMut = useApiMutation(publishShelf)
 
   const [smartDraft, setSmartDraft] = useState<
     { mode: "create" } | { mode: "edit"; shelf: Shelf } | null
@@ -138,21 +103,20 @@ export function AppSidebar() {
   // same filtered view. Public shelves (own or otherwise) split off into
   // their own SHARED group below.
   const ownPrivateShelves = allShelves.filter(
-    (s) => !s.isSmart && !s.isPublic && s.slug !== "reading",
+    (s) => !s.isSmart && !s.isPublic && s.slug !== "reading"
   )
   const ownSharedShelves = allShelves.filter(
-    (s) => !s.isSmart && s.isPublic && (s.ownerName ?? "") === "",
+    (s) => !s.isSmart && s.isPublic && (s.ownerName ?? "") === ""
   )
   const otherSharedShelves = allShelves.filter(
-    (s) => !s.isSmart && s.isPublic && (s.ownerName ?? "") !== "",
+    (s) => !s.isSmart && s.isPublic && (s.ownerName ?? "") !== ""
   )
   const sharedList = [...ownSharedShelves, ...otherSharedShelves]
   const shelfList = ownPrivateShelves
   const smartList = allShelves.filter((s) => s.isSmart)
   const totalBooks = libs.reduce((n, lib) => n + lib.bookCount, 0)
 
-  const smartMutError = (createSmartMut.error ??
-    updateSmartMut.error) as ApiError | null
+  const smartMutError = createSmartMut.error ?? updateSmartMut.error
 
   const isLibrary = pathname.startsWith("/library")
   const activeShelf = isLibrary ? (search.shelf ?? null) : null
@@ -245,7 +209,8 @@ export function AppSidebar() {
 
         <SidebarGroup>
           <SidebarGroupLabel>Shelves</SidebarGroupLabel>
-          <SidebarGroupAction className="group-data-[collapsible=icon]:!hidden"
+          <SidebarGroupAction
+            className="group-data-[collapsible=icon]:!hidden"
             title="New shelf"
             aria-label="New shelf"
             onClick={() => shelfDraft.open()}
@@ -295,7 +260,8 @@ export function AppSidebar() {
 
         <SidebarGroup>
           <SidebarGroupLabel>Magic Shelves</SidebarGroupLabel>
-          <SidebarGroupAction className="group-data-[collapsible=icon]:!hidden"
+          <SidebarGroupAction
+            className="group-data-[collapsible=icon]:!hidden"
             title="New smart shelf"
             aria-label="New smart shelf"
             onClick={() => setSmartDraft({ mode: "create" })}
@@ -374,9 +340,7 @@ export function AppSidebar() {
             } else {
               updateSmartMut.mutate({
                 slug: smartDraft.shelf.slug,
-                name,
-                rule,
-                accent,
+                body: { name, accent, rule, ruleSet: true },
               })
             }
           }}
@@ -561,7 +525,7 @@ function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
         to="/account"
         aria-label="My account"
         title="My account"
-        className="flex flex-1 min-w-0 items-center gap-2.5 rounded-md px-2 py-1.5 text-left group-data-[collapsible=icon]:flex-none group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 hover:bg-(--color-paper-3) focus-visible:ring-2 focus-visible:ring-(--color-accent) focus-visible:outline-none"
+        className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-2 py-1.5 text-left group-data-[collapsible=icon]:flex-none group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 hover:bg-(--color-paper-3) focus-visible:ring-2 focus-visible:ring-(--color-accent) focus-visible:outline-none"
       >
         <Avatar size="sm">
           <AvatarFallback className="bg-(--color-editorial-accent) font-serif font-medium text-(--color-paper-0)">
@@ -598,14 +562,7 @@ type NavItemProps = {
   active?: boolean
 }
 
-function NavItem({
-  to,
-  search,
-  icon,
-  label,
-  count,
-  active,
-}: NavItemProps) {
+function NavItem({ to, search, icon, label, count, active }: NavItemProps) {
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={label}>
@@ -614,7 +571,11 @@ function NavItem({
           <NavLabel>{label}</NavLabel>
         </Link>
       </SidebarMenuButton>
-      {count != null && <SidebarMenuBadge className="group-data-[collapsible=icon]:!hidden">{count}</SidebarMenuBadge>}
+      {count != null && (
+        <SidebarMenuBadge className="group-data-[collapsible=icon]:!hidden">
+          {count}
+        </SidebarMenuBadge>
+      )}
     </SidebarMenuItem>
   )
 }

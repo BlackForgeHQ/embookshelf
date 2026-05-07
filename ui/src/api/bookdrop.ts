@@ -1,4 +1,6 @@
 import { api } from "./client"
+import { booksQueryKey, librariesQueryKey, shelvesQueryKey } from "./books"
+import { defineMutation } from "./mutation"
 import type { BookDetail } from "./books"
 
 // Mirrors internal/handler/bookdrop.go bookdropDTO.
@@ -37,34 +39,56 @@ export async function fetchBookDrop(): Promise<Array<BookDropItem>> {
   return items
 }
 
-export async function approveBookDrop(
-  id: string,
-  libraryId?: string
-): Promise<BookDetail> {
-  const { book } = await api<{ book: BookDetail }>(
-    `/api/v1/bookdrop/${id}/approve`,
-    {
-      method: "POST",
-      body: libraryId ? JSON.stringify({ libraryId }) : undefined,
-    }
-  )
-  return book
-}
+export const bookdropQueryKey = ["bookdrop"] as const
+export const bookdropFilesQueryKey = ["settings", "bookdrop", "files"] as const
 
-export async function rejectBookDrop(id: string): Promise<void> {
-  await api<void>(`/api/v1/bookdrop/${id}/reject`, { method: "POST" })
-}
+export const approveBookDrop = defineMutation({
+  fn: async ({
+    id,
+    libraryId,
+  }: {
+    id: string
+    libraryId?: string
+  }): Promise<BookDetail> => {
+    const { book } = await api<{ book: BookDetail }>(
+      `/api/v1/bookdrop/${id}/approve`,
+      {
+        method: "POST",
+        body: libraryId ? JSON.stringify({ libraryId }) : undefined,
+      }
+    )
+    return book
+  },
+  // Approve flips the queue row to imported, materialises a books row,
+  // and bumps library counts. Unshelved is recomputed from shelves so
+  // the sidebar entry refreshes too.
+  invalidates: [
+    bookdropQueryKey,
+    booksQueryKey(),
+    librariesQueryKey,
+    shelvesQueryKey,
+  ],
+})
+
+export const rejectBookDrop = defineMutation({
+  fn: (id: string): Promise<void> =>
+    api<void>(`/api/v1/bookdrop/${id}/reject`, { method: "POST" }),
+  invalidates: [bookdropQueryKey],
+})
 
 // clearProcessedBookDrop drops every imported/rejected row from the queue
 // so "Recently processed" empties out. In-flight rows are left alone.
 // Admin-only — see ADR-0014.
-export async function clearProcessedBookDrop(): Promise<number> {
-  const { cleared } = await api<{ cleared: number }>(
-    "/api/v1/settings/bookdrop/processed",
-    { method: "DELETE" }
-  )
-  return cleared
-}
+export const clearProcessedBookDrop = defineMutation<void, number>({
+  fn: async () => {
+    const { cleared } = await api<{ cleared: number }>(
+      "/api/v1/settings/bookdrop/processed",
+      { method: "DELETE" }
+    )
+    return cleared
+  },
+  invalidates: [bookdropQueryKey],
+})
 
 export type BookDropFilesPreview = {
   count: number
@@ -88,11 +112,13 @@ export type BookDropWipeResult = {
 // wipeBookDropFiles recursively removes every file under BOOKDROP_PATH,
 // skipping files referenced by 'processing' rows, and drops orphan
 // queue rows. Admin-only — cross-user blast radius.
-export async function wipeBookDropFiles(): Promise<BookDropWipeResult> {
-  return api<BookDropWipeResult>("/api/v1/settings/bookdrop/files", {
-    method: "DELETE",
-  })
-}
+export const wipeBookDropFiles = defineMutation<void, BookDropWipeResult>({
+  fn: () =>
+    api<BookDropWipeResult>("/api/v1/settings/bookdrop/files", {
+      method: "DELETE",
+    }),
+  invalidates: [bookdropQueryKey, bookdropFilesQueryKey],
+})
 
 export type BookDropUploadResult = {
   filename: string
@@ -154,8 +180,6 @@ export function uploadBookDrop(
   })
 }
 
-export const bookdropQueryKey = ["bookdrop"] as const
-
 export const bookdropCoverUrl = (id: string) => `/api/v1/bookdrop/${id}/cover`
 
 // bookdropFileUrl returns the URL serving the staged file bytes for a
@@ -168,10 +192,7 @@ export const bookdropFileUrl = (id: string) =>
 // bytes, <= 5 MB) for a BookDrop item that doesn't yet have a cover.
 // 409 (already-present) is treated as success — caller doesn't need to
 // distinguish "we wrote it" from "someone else already did".
-export async function putBookDropCover(
-  id: string,
-  blob: Blob
-): Promise<void> {
+export async function putBookDropCover(id: string, blob: Blob): Promise<void> {
   const res = await fetch(`/api/v1/bookdrop/${encodeURIComponent(id)}/cover`, {
     method: "PUT",
     body: blob,

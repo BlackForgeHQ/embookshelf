@@ -1,4 +1,5 @@
 import { api } from "./client"
+import { defineMutation } from "./mutation"
 import type { ApiError } from "./client"
 
 export type UserStatus = "active" | "pending" | "denied"
@@ -92,19 +93,20 @@ export const oidcConfigQueryKey = ["oidc-config"] as const
 // invalidate it in one line.
 export const meQueryKey = ["me"] as const
 
-export async function changePassword(
-  current: string,
-  next: string
-): Promise<void> {
-  await api<void>("/api/v1/me/password", {
-    method: "POST",
-    body: JSON.stringify({ current, next }),
-  })
-}
+export const changePassword = defineMutation({
+  fn: (args: { current: string; next: string }): Promise<void> =>
+    api<void>("/api/v1/me/password", {
+      method: "POST",
+      body: JSON.stringify(args),
+    }),
+  invalidates: [meQueryKey],
+})
 
-export async function updateDisplayName(name: string): Promise<void> {
-  await api<void>("/api/v1/me", {
-    method: "PATCH",
-    body: JSON.stringify({ name }),
-  })
-}
+export const updateDisplayName = defineMutation({
+  fn: (name: string): Promise<void> =>
+    api<void>("/api/v1/me", {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    }),
+  invalidates: [meQueryKey],
+})

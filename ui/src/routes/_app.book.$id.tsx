@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { toast } from "sonner"
 import type { ReactNode } from "react"
 
 import type { ApiError } from "@/api/client"
-import type { Annotation } from "@/api/annotations"
 import type { BookDetail as BookDetailPayload } from "@/api/books"
 import {
   annotationKind,
@@ -13,17 +11,15 @@ import {
   createAnnotation,
   deleteAnnotation,
   fetchBookAnnotations,
-  recentAnnotationsQueryKey,
 } from "@/api/annotations"
 import { fetchMe, meQueryKey } from "@/api/auth"
+import { useApiMutation } from "@/api/mutation"
 import {
   addBookToShelf,
   bookQueryKey,
-  booksQueryKey,
   deleteBook,
   fetchBook,
   fetchShelves,
-  librariesQueryKey,
   patchBook,
   removeBookFromShelf,
   shelvesQueryKey,
@@ -55,7 +51,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import {
   Command,
   CommandEmpty,
@@ -90,26 +90,20 @@ function BookDetail() {
   })
   const isAdmin = me.data?.role === "admin"
 
-  const deleteMut = useMutation({
-    mutationFn: () => deleteBook(id),
+  const deleteMut = useApiMutation(deleteBook, {
     onSuccess: () => {
       queryClient.removeQueries({ queryKey: bookQueryKey(id) })
-      queryClient.invalidateQueries({ queryKey: booksQueryKey() })
       queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
-      queryClient.invalidateQueries({ queryKey: librariesQueryKey })
       void navigate({ to: "/library" })
     },
   })
-  const deleteError = deleteMut.error as unknown as ApiError | null
+  const deleteError = deleteMut.error
 
-  const ratingMut = useMutation({
-    mutationFn: (rating: number) => patchBook(id, { rating }),
+  const ratingMut = useApiMutation(patchBook, {
+    errorToast: (err) => err.message || "Rating failed.",
     onSuccess: (updated) => {
       queryClient.setQueryData(bookQueryKey(id), updated)
-      queryClient.invalidateQueries({ queryKey: booksQueryKey() })
     },
-    onError: (err) =>
-      toast.error((err as unknown as ApiError).message || "Rating failed."),
   })
 
   if (book.isLoading) {
@@ -255,7 +249,9 @@ function BookDetail() {
             <StarRating
               rating={b.rating}
               size={18}
-              onChange={(next) => ratingMut.mutate(next)}
+              onChange={(next) =>
+                ratingMut.mutate({ id, patch: { rating: next } })
+              }
               disabled={ratingMut.isPending}
             />
             <span
@@ -326,9 +322,7 @@ function BookDetail() {
                 <Meta label="Published">{b.year}</Meta>
                 <Meta label="Format">{b.format}</Meta>
                 {b.publisher && <Meta label="Publisher">{b.publisher}</Meta>}
-                <Meta label="Categories">
-                  {b.tags.join(" · ") || "—"}
-                </Meta>
+                <Meta label="Categories">{b.tags.join(" · ") || "—"}</Meta>
                 <Meta label="Added">
                   {new Date(b.addedAt).toLocaleDateString()}
                 </Meta>
@@ -440,7 +434,7 @@ function BookDetail() {
                       title={b.title}
                       busy={deleteMut.isPending}
                       onConfirm={() => {
-                        deleteMut.mutate()
+                        deleteMut.mutate(id)
                         setDeleteOpen(false)
                       }}
                     />
@@ -487,32 +481,14 @@ function Meta({ label, children }: { label: string; children: ReactNode }) {
 // are surfaced read-only with a rule hint so users learn why they can't
 // be edited directly.
 function ShelfCard({ book }: { book: BookDetailPayload }) {
-  const queryClient = useQueryClient()
   const shelves = useQuery({ queryKey: shelvesQueryKey, queryFn: fetchShelves })
   const [pickerOpen, setPickerOpen] = useState(false)
 
-  const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: bookQueryKey(book.id) })
-    queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
-    queryClient.invalidateQueries({ queryKey: booksQueryKey() })
-  }
-
-  const addMut = useMutation({
-    mutationFn: (slug: string) => addBookToShelf(book.id, slug),
-    onSuccess: invalidate,
-    onError: (err: unknown) => {
-      const msg = (err as ApiError | null)?.message ?? "Couldn't add to shelf"
-      toast.error(msg)
-    },
+  const addMut = useApiMutation(addBookToShelf, {
+    errorToast: (err) => err.message || "Couldn't add to shelf",
   })
-  const removeMut = useMutation({
-    mutationFn: (slug: string) => removeBookFromShelf(book.id, slug),
-    onSuccess: invalidate,
-    onError: (err: unknown) => {
-      const msg =
-        (err as ApiError | null)?.message ?? "Couldn't remove from shelf"
-      toast.error(msg)
-    },
+  const removeMut = useApiMutation(removeBookFromShelf, {
+    errorToast: (err) => err.message || "Couldn't remove from shelf",
   })
 
   const currentSlugs = useMemo(() => new Set(book.shelves), [book.shelves])
@@ -527,9 +503,9 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
   const manual = useMemo(
     () =>
       all.filter(
-        (s) => !s.isSmart && (!s.isPublic || (s.ownerName ?? "") === ""),
+        (s) => !s.isSmart && (!s.isPublic || (s.ownerName ?? "") === "")
       ),
-    [all],
+    [all]
   )
   const smartActive = useMemo(
     () => all.filter((s) => s.isSmart && currentSlugs.has(s.slug)),
@@ -543,8 +519,9 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
   const pending = addMut.isPending || removeMut.isPending
 
   const onToggle = (slug: string) => {
-    if (currentSlugs.has(slug)) removeMut.mutate(slug)
-    else addMut.mutate(slug)
+    if (currentSlugs.has(slug))
+      removeMut.mutate({ bookId: book.id, shelfSlug: slug })
+    else addMut.mutate({ bookId: book.id, shelfSlug: slug })
   }
 
   return (
@@ -611,7 +588,9 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
               key={s.slug}
               type="button"
               className="chip accent group"
-              onClick={() => removeMut.mutate(s.slug)}
+              onClick={() =>
+                removeMut.mutate({ bookId: book.id, shelfSlug: s.slug })
+              }
               disabled={pending}
               title={`Remove from ${s.name}`}
               style={{
@@ -876,30 +855,17 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
 // (`selectedText` stays empty) — highlights come from the EPUB reader's
 // selection flow, not from typing here.
 function NotesPanel({ bookId }: { bookId: string }) {
-  const queryClient = useQueryClient()
   const annotations = useQuery({
     queryKey: bookAnnotationsQueryKey(bookId),
     queryFn: () => fetchBookAnnotations(bookId),
   })
 
-  const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: bookAnnotationsQueryKey(bookId) })
-    queryClient.invalidateQueries({ queryKey: recentAnnotationsQueryKey })
-  }
-
-  const createMut = useMutation({
-    mutationFn: (note: string) => createAnnotation(bookId, { note }),
-    onSuccess: invalidate,
-  })
-  const deleteMut = useMutation({
-    mutationFn: (a: Annotation) => deleteAnnotation(a.id),
-    onSuccess: invalidate,
-  })
+  const createMut = useApiMutation(createAnnotation)
+  const deleteMut = useApiMutation(deleteAnnotation)
 
   const [draft, setDraft] = useState("")
   const rows = annotations.data ?? []
-  const error = (createMut.error ??
-    deleteMut.error) as unknown as ApiError | null
+  const error = createMut.error ?? deleteMut.error
 
   return (
     <div
@@ -915,7 +881,7 @@ function NotesPanel({ bookId }: { bookId: string }) {
           e.preventDefault()
           const value = draft.trim()
           if (!value) return
-          createMut.mutate(value)
+          createMut.mutate({ bookId, body: { note: value } })
           setDraft("")
         }}
         style={{
@@ -1007,7 +973,7 @@ function NotesPanel({ bookId }: { bookId: string }) {
                   type="button"
                   variant="ghost"
                   size="icon-xs"
-                  onClick={() => deleteMut.mutate(a)}
+                  onClick={() => deleteMut.mutate({ id: a.id, bookId })}
                   disabled={deleteMut.isPending}
                   aria-label="Delete"
                   title="Delete"
@@ -1050,21 +1016,16 @@ function shortLocator(locator: string): string {
 // paired, the button navigates to the account page on the Devices section.
 function SendToDeviceButton({ bookId }: { bookId: string }) {
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const devices = useQuery({ queryKey: devicesQueryKey, queryFn: fetchDevices })
   const [open, setOpen] = useState(false)
 
-  const sendMut = useMutation({
-    mutationFn: (deviceId: string) => sendBookToDevice(bookId, deviceId),
-    onSuccess: (_data, deviceId) => {
-      const target = devices.data?.find((d) => d.id === deviceId)
-      toast.success(`Sent to ${target?.name ?? "device"}.`)
-      queryClient.invalidateQueries({ queryKey: devicesQueryKey })
-      setOpen(false)
+  const sendMut = useApiMutation(sendBookToDevice, {
+    successToast: (_data, vars) => {
+      const target = devices.data?.find((d) => d.id === vars.deviceId)
+      return `Sent to ${target?.name ?? "device"}.`
     },
-    onError: (e) => {
-      toast.error((e as unknown as ApiError).message || "Send failed.")
-    },
+    errorToast: (e) => e.message || "Send failed.",
+    onSuccess: () => setOpen(false),
   })
 
   const list = devices.data ?? []
@@ -1096,7 +1057,7 @@ function SendToDeviceButton({ bookId }: { bookId: string }) {
         {list.map((d) => (
           <DropdownMenuItem
             key={d.id}
-            onSelect={() => sendMut.mutate(d.id)}
+            onSelect={() => sendMut.mutate({ bookId, deviceId: d.id })}
             className="flex flex-col items-start gap-0.5"
           >
             <span className="t-item-title">{d.name}</span>

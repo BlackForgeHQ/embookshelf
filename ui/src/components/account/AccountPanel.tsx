@@ -1,17 +1,14 @@
 import { useEffect, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { useNavigate, useSearch } from "@tanstack/react-router"
 import { toast } from "sonner"
 
-import type { ApiError } from "@/api/client"
-import type {AccountIdentityProvider} from "@/api/account";
 import {
-  
   accountIdentitiesQueryKey,
   fetchAccountIdentities,
   linkOIDC,
   setInitialPassword,
-  unlinkOIDC
+  unlinkOIDC,
 } from "@/api/account"
 import {
   changePassword,
@@ -19,12 +16,14 @@ import {
   meQueryKey,
   updateDisplayName,
 } from "@/api/auth"
+import { useApiMutation } from "@/api/mutation"
 import { Avatar, Card, Field } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
 const LINK_ERROR_MESSAGES: Record<string, string> = {
-  session_expired: "Your session expired before the link finished. Sign in and try again.",
+  session_expired:
+    "Your session expired before the link finished. Sign in and try again.",
   already_linked_elsewhere:
     "That sign-in method is already linked to another account.",
   provider_already_linked:
@@ -32,7 +31,6 @@ const LINK_ERROR_MESSAGES: Record<string, string> = {
 }
 
 export function AccountPanel() {
-  const queryClient = useQueryClient()
   const navigate = useNavigate({ from: "/account" })
   const search = useSearch({ from: "/_app/account" })
 
@@ -80,49 +78,32 @@ export function AccountPanel() {
   const [initPwNext, setInitPwNext] = useState("")
   const [initPwConfirm, setInitPwConfirm] = useState("")
 
-  const nameMut = useMutation({
-    mutationFn: (next: string) => updateDisplayName(next),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: meQueryKey })
-      setEditing(false)
-      toast.success("Display name updated.")
-    },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
+  const nameMut = useApiMutation(updateDisplayName, {
+    successToast: "Display name updated.",
+    onSuccess: () => setEditing(false),
   })
 
-  const pwMut = useMutation({
-    mutationFn: ({ current, next }: { current: string; next: string }) =>
-      changePassword(current, next),
+  const pwMut = useApiMutation(changePassword, {
+    successToast: "Password updated.",
     onSuccess: () => {
       setPwOpen(false)
       setPwCurrent("")
       setPwNext("")
       setPwConfirm("")
-      toast.success("Password updated.")
     },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
   })
 
-  const initPwMut = useMutation({
-    mutationFn: (next: string) => setInitialPassword(next),
+  const initPwMut = useApiMutation(setInitialPassword, {
+    successToast: "Password set. You can now unlink sign-in methods.",
     onSuccess: () => {
       setInitPwOpen(false)
       setInitPwNext("")
       setInitPwConfirm("")
-      queryClient.invalidateQueries({ queryKey: accountIdentitiesQueryKey })
-      toast.success("Password set. You can now unlink sign-in methods.")
     },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
   })
 
-  const unlinkMut = useMutation({
-    mutationFn: (provider: AccountIdentityProvider["provider"]) =>
-      unlinkOIDC(provider),
-    onSuccess: (_, provider) => {
-      queryClient.invalidateQueries({ queryKey: accountIdentitiesQueryKey })
-      toast.success(`${prettyProvider(provider)} disconnected.`)
-    },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
+  const unlinkMut = useApiMutation(unlinkOIDC, {
+    successToast: (_, provider) => `${prettyProvider(provider)} disconnected.`,
   })
 
   const joined = user?.createdAt
@@ -304,9 +285,9 @@ export function AccountPanel() {
             }}
           >
             <div className="t-small" style={{ fontSize: 12 }}>
-              You signed up via a sign-in provider, so you don't have a
-              password yet. Setting one lets you sign in directly and
-              unlink providers without losing access.
+              You signed up via a sign-in provider, so you don't have a password
+              yet. Setting one lets you sign in directly and unlink providers
+              without losing access.
             </div>
             <Field label="New password">
               <Input
@@ -359,8 +340,7 @@ export function AccountPanel() {
         {data?.providers.map((p) => {
           // Lockout: user with no password and exactly one linked
           // identity cannot remove their last credential.
-          const isLastCredential =
-            p.linked && !hasPassword && linkedCount === 1
+          const isLastCredential = p.linked && !hasPassword && linkedCount === 1
           return (
             <SignInRow
               key={p.provider}

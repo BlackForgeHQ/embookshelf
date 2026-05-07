@@ -1,4 +1,5 @@
 import { api } from "./client"
+import { defineMutation } from "./mutation"
 
 // Mirrors internal/handler/library.go libraryDTO.
 export type Library = {
@@ -143,19 +144,22 @@ export type LockField =
   | "pages"
   | "cover"
 
-export async function toggleBookFieldLocks(
-  id: string,
-  locks: Partial<Record<LockField, boolean>>
-): Promise<BookDetail> {
-  const { book } = await api<{ book: BookDetail }>(
-    `/api/v1/books/${id}/metadata/locks`,
-    {
-      method: "PUT",
-      body: JSON.stringify({ locks }),
-    }
-  )
-  return book
-}
+export const toggleBookFieldLocks = defineMutation({
+  fn: async (args: {
+    id: string
+    locks: Partial<Record<LockField, boolean>>
+  }): Promise<BookDetail> => {
+    const { book } = await api<{ book: BookDetail }>(
+      `/api/v1/books/${args.id}/metadata/locks`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ locks: args.locks }),
+      }
+    )
+    return book
+  },
+  invalidates: (args) => [bookQueryKey(args.id)],
+})
 
 export type BookDetail = Book & { shelves: Array<string> }
 
@@ -244,23 +248,31 @@ export type BookPatch = {
   publicReviewsClear?: boolean
 }
 
-export async function patchBook(
-  id: string,
-  patch: BookPatch
-): Promise<BookDetail> {
-  const { book } = await api<{ book: BookDetail }>(`/api/v1/books/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(patch),
-  })
-  return book
-}
+export const patchBook = defineMutation({
+  fn: async (args: { id: string; patch: BookPatch }): Promise<BookDetail> => {
+    const { book } = await api<{ book: BookDetail }>(
+      `/api/v1/books/${args.id}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(args.patch),
+      }
+    )
+    return book
+  },
+  invalidates: (args) => [bookQueryKey(args.id), booksQueryKey()],
+})
 
 // deleteBook hard-deletes a book (and its cover + source file). Admin-only
 // on the backend; non-admin callers get 403.
-export async function deleteBook(id: string): Promise<void> {
-  await api<void>(`/api/v1/books/${id}`, { method: "DELETE" })
-}
+export const deleteBook = defineMutation({
+  fn: (id: string): Promise<void> =>
+    api<void>(`/api/v1/books/${id}`, { method: "DELETE" }),
+  invalidates: (id) => [bookQueryKey(id), booksQueryKey(), librariesQueryKey],
+})
 
+// updateProgress is called from reader event handlers and timers, not
+// from useMutation. Keep it as a plain async function; the reader has
+// no toast/invalidate orchestration to share with form-driven mutations.
 export async function updateProgress(
   id: string,
   progress: number,
@@ -284,90 +296,31 @@ export function comicPageURL(id: string, page: number): string {
   return `/api/v1/books/${id}/pages/${page}`
 }
 
-export async function addBookToShelf(
-  bookId: string,
-  shelfSlug: string
-): Promise<void> {
-  await api<void>(
-    `/api/v1/books/${bookId}/shelves/${encodeURIComponent(shelfSlug)}`,
-    { method: "POST" }
-  )
-}
+export const addBookToShelf = defineMutation({
+  fn: (args: { bookId: string; shelfSlug: string }): Promise<void> =>
+    api<void>(
+      `/api/v1/books/${args.bookId}/shelves/${encodeURIComponent(args.shelfSlug)}`,
+      { method: "POST" }
+    ),
+  invalidates: (args) => [
+    bookQueryKey(args.bookId),
+    booksQueryKey(),
+    shelvesQueryKey,
+  ],
+})
 
-export async function removeBookFromShelf(
-  bookId: string,
-  shelfSlug: string
-): Promise<void> {
-  await api<void>(
-    `/api/v1/books/${bookId}/shelves/${encodeURIComponent(shelfSlug)}`,
-    { method: "DELETE" }
-  )
-}
-
-export async function createShelf(
-  name: string,
-  accent?: string
-): Promise<Shelf> {
-  const { shelf } = await api<{ shelf: Shelf }>("/api/v1/shelves", {
-    method: "POST",
-    body: JSON.stringify({ name, accent }),
-  })
-  return shelf
-}
-
-// createSmartShelf attaches a rule on creation — the backend switches on
-// `rule` being present to flip is_smart and validate the payload.
-export async function createSmartShelf(
-  name: string,
-  rule: ShelfRule,
-  accent?: string
-): Promise<Shelf> {
-  const { shelf } = await api<{ shelf: Shelf }>("/api/v1/shelves", {
-    method: "POST",
-    body: JSON.stringify({ name, accent, rule }),
-  })
-  return shelf
-}
-
-// updateShelf lets callers rename + recolor + (for smart shelves) edit
-// the rule. ruleSet disambiguates "don't touch the rule" from a rule
-// payload — see internal/handler/shelves.go patchShelfReq.
-export async function updateShelf(
-  slug: string,
-  body: { name?: string; accent?: string; rule?: ShelfRule; ruleSet?: boolean }
-): Promise<Shelf> {
-  const { shelf } = await api<{ shelf: Shelf }>(
-    `/api/v1/shelves/${encodeURIComponent(slug)}`,
-    {
-      method: "PATCH",
-      body: JSON.stringify(body),
-    }
-  )
-  return shelf
-}
-
-export async function deleteShelf(slug: string): Promise<void> {
-  await api<void>(`/api/v1/shelves/${encodeURIComponent(slug)}`, {
-    method: "DELETE",
-  })
-}
-
-// publishShelf flips a shelf's is_public flag. Admin-only at the
-// server (403 from any other caller); owner-only beyond that. Pass
-// the canonical slug — public-prefixed once published, bare otherwise.
-export async function publishShelf(
-  slug: string,
-  isPublic: boolean
-): Promise<Shelf> {
-  const { shelf } = await api<{ shelf: Shelf }>(
-    `/api/v1/shelves/${encodeURIComponent(slug)}/publish`,
-    {
-      method: "PUT",
-      body: JSON.stringify({ public: isPublic }),
-    }
-  )
-  return shelf
-}
+export const removeBookFromShelf = defineMutation({
+  fn: (args: { bookId: string; shelfSlug: string }): Promise<void> =>
+    api<void>(
+      `/api/v1/books/${args.bookId}/shelves/${encodeURIComponent(args.shelfSlug)}`,
+      { method: "DELETE" }
+    ),
+  invalidates: (args) => [
+    bookQueryKey(args.bookId),
+    booksQueryKey(),
+    shelvesQueryKey,
+  ],
+})
 
 // Stable query keys — share them across components so a mutation can
 // invalidate a list and the detail view in one call.
@@ -376,6 +329,90 @@ export const shelvesQueryKey = ["shelves"] as const
 export const booksQueryKey = (params: BooksQuery = {}) =>
   ["books", params] as const
 export const bookQueryKey = (id: string) => ["book", id] as const
+
+export const createShelf = defineMutation({
+  fn: async (args: { name: string; accent?: string }): Promise<Shelf> => {
+    const { shelf } = await api<{ shelf: Shelf }>("/api/v1/shelves", {
+      method: "POST",
+      body: JSON.stringify({ name: args.name, accent: args.accent }),
+    })
+    return shelf
+  },
+  invalidates: [shelvesQueryKey],
+})
+
+// createSmartShelf attaches a rule on creation — the backend switches on
+// `rule` being present to flip is_smart and validate the payload.
+export const createSmartShelf = defineMutation({
+  fn: async (args: {
+    name: string
+    rule: ShelfRule
+    accent?: string
+  }): Promise<Shelf> => {
+    const { shelf } = await api<{ shelf: Shelf }>("/api/v1/shelves", {
+      method: "POST",
+      body: JSON.stringify({
+        name: args.name,
+        accent: args.accent,
+        rule: args.rule,
+      }),
+    })
+    return shelf
+  },
+  invalidates: [shelvesQueryKey],
+})
+
+// updateShelf lets callers rename + recolor + (for smart shelves) edit
+// the rule. ruleSet disambiguates "don't touch the rule" from a rule
+// payload — see internal/handler/shelves.go patchShelfReq.
+export const updateShelf = defineMutation({
+  fn: async (args: {
+    slug: string
+    body: {
+      name?: string
+      accent?: string
+      rule?: ShelfRule
+      ruleSet?: boolean
+    }
+  }): Promise<Shelf> => {
+    const { shelf } = await api<{ shelf: Shelf }>(
+      `/api/v1/shelves/${encodeURIComponent(args.slug)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(args.body),
+      }
+    )
+    return shelf
+  },
+  invalidates: [shelvesQueryKey],
+})
+
+export const deleteShelf = defineMutation({
+  fn: (slug: string): Promise<void> =>
+    api<void>(`/api/v1/shelves/${encodeURIComponent(slug)}`, {
+      method: "DELETE",
+    }),
+  invalidates: [shelvesQueryKey],
+})
+
+// publishShelf flips a shelf's is_public flag. Admin-only at the
+// server (403 from any other caller); owner-only beyond that. Pass
+// the canonical slug — public-prefixed once published, bare otherwise.
+export const publishShelf = defineMutation({
+  fn: async (args: { slug: string; isPublic: boolean }): Promise<Shelf> => {
+    const { shelf } = await api<{ shelf: Shelf }>(
+      `/api/v1/shelves/${encodeURIComponent(args.slug)}/publish`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ public: args.isPublic }),
+      }
+    )
+    return shelf
+  },
+  // Public flag toggles change shelf membership visibility; bust the
+  // shelves list and the books-on-this-shelf query.
+  invalidates: (args) => [shelvesQueryKey, booksQueryKey({ shelf: args.slug })],
+})
 
 // Cover URL helper — the <img> tag fetches directly from this path; no
 // TanStack Query wrapper needed.

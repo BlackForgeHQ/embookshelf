@@ -1,12 +1,7 @@
 import { useEffect, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { toast } from "sonner"
+import { useQuery } from "@tanstack/react-query"
 
-import type { ApiError } from "@/api/client"
-import type {
-  LibraryKind,
-  SettingsLibrary,
-} from "@/api/settings"
+import type { LibraryKind, SettingsLibrary } from "@/api/settings"
 import {
   appConfigQueryKey,
   createLibrary,
@@ -16,10 +11,9 @@ import {
   rescanLibrary,
   settingsLibrariesQueryKey,
 } from "@/api/settings"
+import { useApiMutation } from "@/api/mutation"
 import { Icon } from "@/components/Icon"
-import {
-  AdminGate,
-} from "@/components/SettingsShared"
+import { AdminGate } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -35,7 +29,6 @@ import { Switch } from "@/components/ui/switch"
 import { slugify } from "@/lib/utils"
 
 export function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
-  const queryClient = useQueryClient()
   const [creatorOpen, setCreatorOpen] = useState(false)
 
   const libraries = useQuery({
@@ -49,27 +42,11 @@ export function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
     queryFn: fetchAppConfig,
   })
 
-  const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: settingsLibrariesQueryKey })
-    queryClient.invalidateQueries({ queryKey: ["libraries"] })
-  }
-
-  const rescanMut = useMutation({
-    mutationFn: (id: string) => rescanLibrary(id),
-    onSuccess: () => {
-      invalidate()
-      toast.success("Rescan started.")
-    },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
+  const rescanMut = useApiMutation(rescanLibrary, {
+    successToast: "Rescan started.",
   })
-  const deleteLibraryMut = useMutation({
-    mutationFn: ({ id, purge }: { id: string; purge: boolean }) =>
-      deleteLibrary(id, { purge }),
-    onSuccess: () => {
-      invalidate()
-      toast.success("Library removed.")
-    },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
+  const deleteLibraryMut = useApiMutation(deleteLibrary, {
+    successToast: "Library removed.",
   })
 
   if (!isAdmin) return <AdminGate label="Libraries" />
@@ -113,7 +90,7 @@ export function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
           deleteBusy={deleteLibraryMut.isPending}
           onRescan={() => rescanMut.mutate(lib.id)}
           onDeleteLibrary={(purge) =>
-            deleteLibraryMut.mutate({ id: lib.id, purge })
+            deleteLibraryMut.mutate({ id: lib.id, opts: { purge } })
           }
         />
       ))}
@@ -123,10 +100,7 @@ export function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
         onOpenChange={setCreatorOpen}
         existingNames={existingNames}
         s3Available={appConfig.data?.s3Available ?? false}
-        onCreated={() => {
-          invalidate()
-          setCreatorOpen(false)
-        }}
+        onCreated={() => setCreatorOpen(false)}
       />
     </>
   )
@@ -177,18 +151,9 @@ function LibraryCreatorDialog({
   const derivedPrefix =
     kind === "s3" && slug !== "" ? `libraries/${slug}/` : null
 
-  const createMut = useMutation({
-    mutationFn: () =>
-      createLibrary({
-        name: trimmedName,
-        kind,
-        scan: scanOnCreate,
-      }),
-    onSuccess: () => {
-      toast.success("Library created.")
-      onCreated()
-    },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
+  const createMut = useApiMutation(createLibrary, {
+    successToast: "Library created.",
+    onSuccess: () => onCreated(),
   })
 
   const submitDisabled = !nameValid || createMut.isPending
@@ -231,7 +196,7 @@ function LibraryCreatorDialog({
 
           <div>
             <Label style={{ display: "block", marginBottom: 6 }}>Storage</Label>
-            <div className="flex flex-col sm:flex-row gap-2 sm:gap-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:gap-4">
               <button
                 type="button"
                 onClick={() => setKind("local")}
@@ -251,7 +216,10 @@ function LibraryCreatorDialog({
                 <div className="t-small" style={{ fontWeight: 500 }}>
                   Local filesystem
                 </div>
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground" style={{ fontStyle: "italic" }}>
+                <div
+                  className="text-[10px] tracking-wider text-muted-foreground uppercase"
+                  style={{ fontStyle: "italic" }}
+                >
                   Books stored on disk
                 </div>
               </button>
@@ -260,7 +228,9 @@ function LibraryCreatorDialog({
                 onClick={() => s3Available && setKind("s3")}
                 disabled={!s3Available}
                 title={
-                  s3Available ? undefined : "Set EMBOOKSHELF_S3_BUCKET to enable"
+                  s3Available
+                    ? undefined
+                    : "Set EMBOOKSHELF_S3_BUCKET to enable"
                 }
                 style={{
                   flex: 1,
@@ -279,7 +249,10 @@ function LibraryCreatorDialog({
                 <div className="t-small" style={{ fontWeight: 500 }}>
                   S3 bucket
                 </div>
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground" style={{ fontStyle: "italic" }}>
+                <div
+                  className="text-[10px] tracking-wider text-muted-foreground uppercase"
+                  style={{ fontStyle: "italic" }}
+                >
                   {s3Available
                     ? "Books stored in shared bucket"
                     : "EMBOOKSHELF_S3_BUCKET not set"}
@@ -293,12 +266,12 @@ function LibraryCreatorDialog({
               <Label style={{ display: "block", marginBottom: 6 }}>
                 Folder (auto-derived)
               </Label>
-              <p className="t-small italic text-(--color-ink-3)">
+              <p className="t-small text-(--color-ink-3) italic">
                 Will be created at{" "}
                 <span className="mono">{`(data path)/libraries/${slug || "<slug>"}/`}</span>
               </p>
               <div
-                className="text-[10px] uppercase tracking-wider text-muted-foreground"
+                className="text-[10px] tracking-wider text-muted-foreground uppercase"
                 style={{ marginTop: 6, fontStyle: "italic" }}
               >
                 The folder is created under the configured DATA_PATH and cannot
@@ -317,16 +290,14 @@ function LibraryCreatorDialog({
                   background: "var(--color-paper-2)",
                   borderRadius: 4,
                   fontSize: 12.5,
-                  color: derivedPrefix
-                    ? "inherit"
-                    : "var(--color-ink-3)",
+                  color: derivedPrefix ? "inherit" : "var(--color-ink-3)",
                   fontStyle: derivedPrefix ? "normal" : "italic",
                 }}
               >
                 {derivedPrefix ?? "Enter a name above to preview"}
               </div>
               <div
-                className="text-[10px] uppercase tracking-wider text-muted-foreground"
+                className="text-[10px] tracking-wider text-muted-foreground uppercase"
                 style={{ marginTop: 6, fontStyle: "italic" }}
               >
                 Prefix is derived from the library name and cannot be changed
@@ -362,7 +333,13 @@ function LibraryCreatorDialog({
           </Button>
           <Button
             type="button"
-            onClick={() => createMut.mutate()}
+            onClick={() =>
+              createMut.mutate({
+                name: trimmedName,
+                kind,
+                scan: scanOnCreate,
+              })
+            }
             disabled={submitDisabled}
           >
             {createMut.isPending ? "Creating…" : "Create library"}
@@ -402,22 +379,18 @@ function LibraryCard({
     : null
 
   return (
-    <div
-      className="flex flex-col gap-4 p-5 mb-5 bg-card border border-border rounded-lg shadow-sm"
-    >
-      <div
-        className="flex items-baseline gap-3 mb-1"
-      >
+    <div className="mb-5 flex flex-col gap-4 rounded-lg border border-border bg-card p-5 shadow-sm">
+      <div className="mb-1 flex items-baseline gap-3">
         <div>
-          <div className="text-[15px] font-medium truncate">{library.name}</div>
-          <div
-            className="font-mono text-[11px] text-muted-foreground truncate max-w-full"
-          >
+          <div className="truncate text-[15px] font-medium">{library.name}</div>
+          <div className="max-w-full truncate font-mono text-[11px] text-muted-foreground">
             /{library.slug}
           </div>
         </div>
         <div className="grow" />
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{library.bookCount} volumes</span>
+        <span className="text-[10px] tracking-wider text-muted-foreground uppercase">
+          {library.bookCount} volumes
+        </span>
         <Button
           type="button"
           variant="ghost"
@@ -466,7 +439,7 @@ function LibraryCard({
             {library.path || <em>(empty)</em>}
           </div>
           <div
-            className="text-[10px] uppercase tracking-wider text-muted-foreground"
+            className="text-[10px] tracking-wider text-muted-foreground uppercase"
             style={{ marginTop: 4, fontStyle: "italic" }}
           >
             {lastScanned
@@ -565,7 +538,10 @@ function DeleteLibraryDialog({
               cursor: "pointer",
             }}
           >
-            <Switch checked={purge} onCheckedChange={(v) => setPurge(Boolean(v))} />
+            <Switch
+              checked={purge}
+              onCheckedChange={(v) => setPurge(Boolean(v))}
+            />
             <span className="t-small">
               Also delete all files in the S3 bucket prefix
             </span>
