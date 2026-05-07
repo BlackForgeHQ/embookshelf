@@ -160,7 +160,7 @@ func main() {
 		Dialect:  config.Dialect(string(dbh.Dialect)),
 		DataPath: cfg.DataPath,
 	})
-	shelfSvc := service.NewShelfService(shelfRepo)
+	shelfSvc := service.NewShelfService(shelfRepo, hub)
 	searchSvc := service.NewSearchService(libRepo, bookRepo, shelfRepo)
 	authSvc := service.NewAuthService(userRepo, sessionRepo, hub)
 	libStore := service.NewLibraryStore(service.LibraryStoreDeps{

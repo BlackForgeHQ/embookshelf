@@ -44,7 +44,9 @@ export type ShelfRule = {
 // Mirrors internal/handler/shelves.go shelfDTO. `rule` is only present
 // on smart shelves; the UI keys off `isSmart` when deciding whether to
 // surface the shelf in the "Magic Shelves" section and which
-// mutation flows to expose.
+// mutation flows to expose. Public shelves arrive with their slug
+// already prefixed `public:` and `isPublic=true`; viewers other than
+// the owner also get `ownerName` for the sidebar tooltip.
 export type Shelf = {
   id: string
   name: string
@@ -52,8 +54,19 @@ export type Shelf = {
   accent: string
   bookCount: number
   isSmart: boolean
+  isPublic: boolean
+  ownerName?: string
   rule?: ShelfRule
   createdAt: string
+}
+
+// PUBLIC_SLUG_PREFIX mirrors internal/service/shelf.go. Kept here so
+// the sidebar / realtime layer can identify public shelves without a
+// dedicated server roundtrip.
+export const PUBLIC_SLUG_PREFIX = "public:"
+
+export function isPublicShelfSlug(slug: string): boolean {
+  return slug.startsWith(PUBLIC_SLUG_PREFIX)
 }
 
 // Mirrors internal/handler/library.go bookDTO. Progress is 0..1 on the wire.
@@ -337,6 +350,23 @@ export async function deleteShelf(slug: string): Promise<void> {
   await api<void>(`/api/v1/shelves/${encodeURIComponent(slug)}`, {
     method: "DELETE",
   })
+}
+
+// publishShelf flips a shelf's is_public flag. Admin-only at the
+// server (403 from any other caller); owner-only beyond that. Pass
+// the canonical slug — public-prefixed once published, bare otherwise.
+export async function publishShelf(
+  slug: string,
+  isPublic: boolean
+): Promise<Shelf> {
+  const { shelf } = await api<{ shelf: Shelf }>(
+    `/api/v1/shelves/${encodeURIComponent(slug)}/publish`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ public: isPublic }),
+    }
+  )
+  return shelf
 }
 
 // Stable query keys — share them across components so a mutation can

@@ -94,6 +94,39 @@ filter — never a row in `shelves`. Implemented with a single
 `NOT EXISTS` subquery over `shelf_books`. Distinct from "All
 Books" (every book) and from a smart shelf (rule-driven).
 
+Shared shelves (see below) do **not** count as curation for the
+viewer — the test still considers only shelves the viewer owns.
+A book that sits on admin's shared "Top Picks" but on no
+shelf of mine is still Unshelved for me.
+
+## Shared shelf
+
+A regular shelf that an admin has flipped public so every user
+sees it in their sidebar under a dedicated `SHARED` section.
+Stored as `shelves.is_public = true`; the same row backs every
+viewer (one row, many readers — admin's edits propagate). Only
+admins can publish, and only their own shelves
+(`user_id = caller.id`). Smart shelves cannot be shared — a
+CHECK constraint forbids `is_public = true AND is_smart = true`,
+because smart-shelf rules touch per-user fields (rating,
+progress) that don't translate cross-user.
+
+URL form is `?shelf=public:<slug>` (and the matching
+`/api/v1/shelves/public:<slug>/...`); the prefix disambiguates
+from the per-user `(user_id, slug)` index. Slug uniqueness across
+public shelves is enforced by a partial unique index on
+`shelves(slug) WHERE is_public = true`. Mutations
+(add/remove book, rename, accent, un-publish, delete) are
+owner-only — non-owners cannot curate. Non-owners never see
+shared shelves in the "Add to shelf" picker, only in the sidebar.
+
+Realtime updates fan out via a broadcast channel on `/events`
+(`shelf.public.updated` / `shelf.public.removed`); per-user
+events stay scoped. Un-publishing or deleting redirects active
+viewers back to `/library` with a toast — the shelf vanishes
+softly rather than 404-ing them mid-page. Admin role demotion
+auto un-publishes any public shelves the demoted user owns.
+
 ## Wipe BookDrop
 
 Admin-only housekeeping op that recursively removes every file

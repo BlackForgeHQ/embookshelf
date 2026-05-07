@@ -8,8 +8,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/service"
 )
 
 type shelfDTO struct {
@@ -19,18 +21,29 @@ type shelfDTO struct {
 	Accent    string           `json:"accent"`
 	BookCount int              `json:"bookCount"`
 	IsSmart   bool             `json:"isSmart"`
+	IsPublic  bool             `json:"isPublic"`
+	OwnerName string           `json:"ownerName,omitempty"`
 	Rule      *model.ShelfRule `json:"rule,omitempty"`
 	CreatedAt string           `json:"createdAt"`
 }
 
+// toShelfDTO converts a domain shelf to the wire shape. Public shelves
+// expose their slug under the `public:` namespace so client URLs and
+// query keys disambiguate from a private shelf with the same name.
 func toShelfDTO(s model.Shelf) shelfDTO {
+	slug := s.Slug
+	if s.IsPublic {
+		slug = service.PublicSlugPrefix + s.Slug
+	}
 	return shelfDTO{
 		ID:        s.ID,
 		Name:      s.Name,
-		Slug:      s.Slug,
+		Slug:      slug,
 		Accent:    s.Accent,
 		BookCount: s.BookCount,
 		IsSmart:   s.IsSmart,
+		IsPublic:  s.IsPublic,
+		OwnerName: s.OwnerName,
 		Rule:      s.Rule,
 		CreatedAt: s.CreatedAt.UTC().Format(time.RFC3339),
 	}
@@ -114,13 +127,15 @@ type patchShelfReq struct {
 
 // ShelfUpdate edits a shelf's name, accent, and/or rule. Only smart
 // shelves can change their rule; the repo rejects the regular→smart
-// transition cleanly.
+// transition cleanly. A `public:<slug>` URL form is accepted (and
+// stripped) because owners use the canonical public-prefixed URL for
+// the same row both before and after publishing (ADR-0017).
 func (h *Handler) ShelfUpdate(c *gin.Context) {
 	userID := requireUserID(c)
 	if userID == "" {
 		return
 	}
-	slug := c.Param("slug")
+	slug, _ := service.SplitPublicSlug(c.Param("slug"))
 	var body patchShelfReq
 	if !bindJSON(c, &body) {
 		return
@@ -144,13 +159,14 @@ func (h *Handler) ShelfUpdate(c *gin.Context) {
 }
 
 // ShelfDelete removes a user shelf. 404 when the slug doesn't belong to
-// the current user (or doesn't exist).
+// the current user (or doesn't exist). A `public:<slug>` form is
+// accepted and stripped — owners use the canonical URL.
 func (h *Handler) ShelfDelete(c *gin.Context) {
 	userID := requireUserID(c)
 	if userID == "" {
 		return
 	}
-	slug := c.Param("slug")
+	slug, _ := service.SplitPublicSlug(c.Param("slug"))
 	if err := h.shelf.Delete(c.Request.Context(), userID, slug); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "shelf not found")
@@ -160,4 +176,45 @@ func (h *Handler) ShelfDelete(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+type publishShelfReq struct {
+	Public bool `json:"public"`
+}
+
+// ShelfPublish flips a shelf's is_public flag. Admin-only and
+// owner-only — non-admins are blocked here, non-owners 404 from the
+// repo lookup. A regular shelf publishing flips on; passing
+// `public:false` un-publishes (the canonical un-publish path).
+//
+// Smart shelves are rejected at the repo layer (CHECK constraint on
+// Postgres, application-side check on SQLite).
+func (h *Handler) ShelfPublish(c *gin.Context) {
+	u := auth.UserFromContext(c.Request.Context())
+	if u == nil {
+		writeError(c, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if u.Role != model.RoleAdmin {
+		writeError(c, http.StatusForbidden, service.ErrShelfPublishForbidden.Error())
+		return
+	}
+	slug, _ := service.SplitPublicSlug(c.Param("slug"))
+	var body publishShelfReq
+	if !bindJSON(c, &body) {
+		return
+	}
+	updated, err := h.shelf.SetPublic(c.Request.Context(), u.ID, slug, body.Public)
+	if err != nil {
+		switch {
+		case errors.Is(err, repo.ErrNotFound):
+			writeError(c, http.StatusNotFound, "shelf not found")
+		default:
+			// "smart shelves cannot be public" + any future repo
+			// validation surfaces as a 400 — message is safe.
+			writeError(c, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"shelf": toShelfDTO(updated)})
 }

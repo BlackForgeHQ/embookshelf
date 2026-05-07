@@ -520,7 +520,17 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
     () => shelves.data?.shelves ?? [],
     [shelves.data?.shelves]
   )
-  const manual = useMemo(() => all.filter((s) => !s.isSmart), [all])
+  // Picker only offers shelves the viewer actually curates: smart
+  // shelves are rule-driven, and shared shelves owned by someone else
+  // are read-only (ADR-0017). `ownerName` is empty when the viewer is
+  // the owner — admin-owned shared shelves stay in the picker.
+  const manual = useMemo(
+    () =>
+      all.filter(
+        (s) => !s.isSmart && (!s.isPublic || (s.ownerName ?? "") === ""),
+      ),
+    [all],
+  )
   const smartActive = useMemo(
     () => all.filter((s) => s.isSmart && currentSlugs.has(s.slug)),
     [all, currentSlugs]

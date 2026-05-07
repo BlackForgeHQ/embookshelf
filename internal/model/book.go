@@ -166,6 +166,13 @@ type Shelf struct {
 	// column; compiled to SQL at the repo layer.
 	Rule      *ShelfRule
 	CreatedAt time.Time
+	// IsPublic flips a regular shelf into the cross-user "Shared
+	// shelves" surface. CHECK constraint forbids public+smart.
+	IsPublic bool
+	// OwnerName is filled by the repo when the viewer is not the
+	// owner — used by the sidebar tooltip on public shelves. Empty for
+	// shelves the viewer owns.
+	OwnerName string
 }
 
 // ShelfAccents is the palette picker used by shelf creation.

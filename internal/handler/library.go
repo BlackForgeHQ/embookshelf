@@ -17,6 +17,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/service"
 )
 
 // libraryDTO is the wire shape for a library row.
@@ -431,13 +432,19 @@ func (h *Handler) BookProgressUpdate(c *gin.Context) {
 
 // BookAddShelf puts a book on one of the user's shelves. Idempotent —
 // the underlying repo ON CONFLICTs so reposting is a no-op.
+//
+// A `public:<slug>` URL form is accepted: the owner-admin's picker
+// shows their shared shelf using the canonical public-prefixed slug
+// (ADR-0017); we strip and resolve to the same row via (user_id,
+// slug). Non-owners attempting the public path 404 from the repo
+// lookup — the picker filters them client-side as well.
 func (h *Handler) BookAddShelf(c *gin.Context) {
 	userID := requireUserID(c)
 	if userID == "" {
 		return
 	}
 	id := c.Param("id")
-	slug := c.Param("slug")
+	slug, _ := service.SplitPublicSlug(c.Param("slug"))
 	if err := h.shelf.AddBook(c.Request.Context(), userID, slug, id); err != nil {
 		switch {
 		case errors.Is(err, repo.ErrNotFound):
@@ -554,7 +561,7 @@ func (h *Handler) BookRemoveShelf(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	slug := c.Param("slug")
+	slug, _ := service.SplitPublicSlug(c.Param("slug"))
 	if err := h.shelf.RemoveBook(c.Request.Context(), userID, slug, id); err != nil {
 		switch {
 		case errors.Is(err, repo.ErrNotFound):

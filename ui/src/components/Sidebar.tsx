@@ -16,6 +16,7 @@ import {
   fetchLibraries,
   fetchShelves,
   librariesQueryKey,
+  publishShelf,
   shelvesQueryKey,
   updateShelf,
 } from "@/api/books"
@@ -113,6 +114,16 @@ export function AppSidebar() {
       queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
     },
   })
+  // Admin-only "share" toggle. Reuses the same shelves invalidation
+  // path as edit/delete; the SSE broadcast hits other viewers via
+  // useRealtime, this onSuccess covers the local cache.
+  const publishShelfMut = useMutation({
+    mutationFn: (args: { slug: string; isPublic: boolean }) =>
+      publishShelf(args.slug, args.isPublic),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
+    },
+  })
 
   const [smartDraft, setSmartDraft] = useState<
     { mode: "create" } | { mode: "edit"; shelf: Shelf } | null
@@ -121,10 +132,22 @@ export function AppSidebar() {
   const libs = libraries.data ?? []
   const allShelves = shelves.data?.shelves ?? []
   const unshelvedCount = shelves.data?.unshelvedCount ?? 0
+  const isAdmin = me.data?.role === "admin"
   // "reading" is promoted into the Browse section as a first-class nav item,
   // so drop it from the Shelves list to avoid rendering two links to the
-  // same filtered view.
-  const shelfList = allShelves.filter((s) => !s.isSmart && s.slug !== "reading")
+  // same filtered view. Public shelves (own or otherwise) split off into
+  // their own SHARED group below.
+  const ownPrivateShelves = allShelves.filter(
+    (s) => !s.isSmart && !s.isPublic && s.slug !== "reading",
+  )
+  const ownSharedShelves = allShelves.filter(
+    (s) => !s.isSmart && s.isPublic && (s.ownerName ?? "") === "",
+  )
+  const otherSharedShelves = allShelves.filter(
+    (s) => !s.isSmart && s.isPublic && (s.ownerName ?? "") !== "",
+  )
+  const sharedList = [...ownSharedShelves, ...otherSharedShelves]
+  const shelfList = ownPrivateShelves
   const smartList = allShelves.filter((s) => s.isSmart)
   const totalBooks = libs.reduce((n, lib) => n + lib.bookCount, 0)
 
@@ -232,19 +255,43 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {shelfList.map((s) => (
-                <NavItem
+                <RegularShelfRow
                   key={s.id}
-                  to="/library"
-                  search={{ shelf: s.slug }}
-                  icon={BUILTIN_SHELF_ICONS[s.slug] ?? "folder"}
-                  label={s.name}
-                  count={s.bookCount}
+                  shelf={s}
                   active={activeShelf === s.slug}
+                  canShare={isAdmin}
+                  onShare={() =>
+                    publishShelfMut.mutate({ slug: s.slug, isPublic: true })
+                  }
                 />
               ))}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {sharedList.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Shared</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {sharedList.map((s) => (
+                  <SharedShelfRow
+                    key={s.id}
+                    shelf={s}
+                    active={activeShelf === s.slug}
+                    canUnshare={isAdmin && (s.ownerName ?? "") === ""}
+                    onUnshare={() =>
+                      publishShelfMut.mutate({
+                        slug: s.slug,
+                        isPublic: false,
+                      })
+                    }
+                  />
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
 
         <SidebarGroup>
           <SidebarGroupLabel>Magic Shelves</SidebarGroupLabel>
@@ -341,6 +388,98 @@ export function AppSidebar() {
         />
       )}
     </Sidebar>
+  )
+}
+
+// RegularShelfRow is the private regular-shelf surface. Admins get a
+// hover-revealed "share" affordance that flips is_public; non-admins
+// see no extra controls.
+function RegularShelfRow({
+  shelf,
+  active,
+  canShare,
+  onShare,
+}: {
+  shelf: Shelf
+  active: boolean
+  canShare: boolean
+  onShare: () => void
+}) {
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={active} tooltip={shelf.name}>
+        <Link to="/library" search={{ shelf: shelf.slug }}>
+          <Icon name={BUILTIN_SHELF_ICONS[shelf.slug] ?? "folder"} size={15} />
+          <span>{shelf.name}</span>
+        </Link>
+      </SidebarMenuButton>
+      <SidebarMenuBadge className="group-focus-within/menu-item:hidden group-hover/menu-item:hidden group-data-[collapsible=icon]:!hidden">
+        {shelf.bookCount}
+      </SidebarMenuBadge>
+      {canShare && (
+        <SidebarMenuAction
+          showOnHover
+          className="group-data-[collapsible=icon]:!hidden"
+          title="Share with all users"
+          aria-label={`Share ${shelf.name} with all users`}
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            onShare()
+          }}
+        >
+          <Icon name="upload" size={11} />
+        </SidebarMenuAction>
+      )}
+    </SidebarMenuItem>
+  )
+}
+
+// SharedShelfRow renders a public shelf in the SHARED section. Owner
+// admins see an "unshare" affordance; everyone else sees a read-only
+// row with the owner's name in the tooltip.
+function SharedShelfRow({
+  shelf,
+  active,
+  canUnshare,
+  onUnshare,
+}: {
+  shelf: Shelf
+  active: boolean
+  canUnshare: boolean
+  onUnshare: () => void
+}) {
+  const tooltip =
+    (shelf.ownerName ?? "") !== ""
+      ? `${shelf.name} — shared by ${shelf.ownerName}`
+      : `${shelf.name} — shared with everyone`
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={active} tooltip={tooltip}>
+        <Link to="/library" search={{ shelf: shelf.slug }}>
+          <Icon name="user" size={15} aria-label="shared shelf" />
+          <span>{shelf.name}</span>
+        </Link>
+      </SidebarMenuButton>
+      <SidebarMenuBadge className="group-focus-within/menu-item:hidden group-hover/menu-item:hidden group-data-[collapsible=icon]:!hidden">
+        {shelf.bookCount}
+      </SidebarMenuBadge>
+      {canUnshare && (
+        <SidebarMenuAction
+          showOnHover
+          className="group-data-[collapsible=icon]:!hidden"
+          title="Stop sharing"
+          aria-label={`Stop sharing ${shelf.name}`}
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            onUnshare()
+          }}
+        >
+          <Icon name="close" size={11} />
+        </SidebarMenuAction>
+      )}
+    </SidebarMenuItem>
   )
 }
 

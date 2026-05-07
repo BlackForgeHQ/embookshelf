@@ -27,24 +27,28 @@ func NewShelfRepo(d *db.DB) *ShelfRepo {
 
 // shelfCols keeps the book_count cheap for regular shelves by pulling it
 // from shelf_books; smart shelves return 0 here and the service fills in
-// the live count via CountForSmartShelf.
+// the live count via CountForSmartShelf. The trailing empty owner_name
+// is overridden in queries that JOIN users; left blank for own-only
+// queries to avoid a needless join.
 const shelfCols = `s.id, s.user_id, s.name, s.slug, s.accent, s.created_at,
-                  s.is_smart, s.rule,
+                  s.is_smart, s.rule, s.is_public,
                   CASE
                     WHEN s.is_smart THEN 0
                     ELSE (SELECT count(*) FROM shelf_books sb WHERE sb.shelf_id = s.id)
-                  END AS book_count`
+                  END AS book_count,
+                  '' AS owner_name`
 
 // shelfColsReturning is the same projection for INSERT/UPDATE ... RETURNING
 // clauses, which can't use a table alias — they reference columns on the
 // target table directly. Kept in sync with shelfCols column order so
 // scanShelf handles rows from either.
 const shelfColsReturning = `id, user_id, name, slug, accent, created_at,
-                           is_smart, rule,
+                           is_smart, rule, is_public,
                            CASE
                              WHEN is_smart THEN 0
                              ELSE (SELECT count(*) FROM shelf_books sb WHERE sb.shelf_id = shelves.id)
-                           END AS book_count`
+                           END AS book_count,
+                           '' AS owner_name`
 
 func (r *ShelfRepo) ListForUser(ctx context.Context, userID string) ([]model.Shelf, error) {
 	const qPG = `
@@ -497,7 +501,7 @@ func (r *ShelfRepo) scanShelf(s scanner) (model.Shelf, error) {
 	)
 	err := s.Scan(
 		&sh.ID, &sh.UserID, &sh.Name, &sh.Slug, &sh.Accent, &createdAny,
-		&sh.IsSmart, &ruleJS, &sh.BookCount,
+		&sh.IsSmart, &ruleJS, &sh.IsPublic, &sh.BookCount, &sh.OwnerName,
 	)
 	if err != nil {
 		if dberr.IsNotFound(err) {
@@ -715,6 +719,174 @@ func (r *ShelfRepo) CountUnshelvedForUser(ctx context.Context, userID string) (i
 		return 0, err
 	}
 	return n, nil
+}
+
+// shelfColsVisible mirrors shelfCols but populates owner_name for public
+// shelves the viewer doesn't own (LEFT JOIN users so private rows still
+// match without paying the join cost). $1 is bound to userID.
+const shelfColsVisible = `s.id, s.user_id, s.name, s.slug, s.accent, s.created_at,
+                  s.is_smart, s.rule, s.is_public,
+                  CASE
+                    WHEN s.is_smart THEN 0
+                    ELSE (SELECT count(*) FROM shelf_books sb WHERE sb.shelf_id = s.id)
+                  END AS book_count,
+                  CASE
+                    WHEN s.user_id = $1 THEN ''
+                    ELSE COALESCE(NULLIF(u.name, ''), u.email, '')
+                  END AS owner_name`
+
+const shelfColsVisibleSQLite = `s.id, s.user_id, s.name, s.slug, s.accent, s.created_at,
+                  s.is_smart, s.rule, s.is_public,
+                  CASE
+                    WHEN s.is_smart THEN 0
+                    ELSE (SELECT count(*) FROM shelf_books sb WHERE sb.shelf_id = s.id)
+                  END AS book_count,
+                  CASE
+                    WHEN s.user_id = ?1 THEN ''
+                    ELSE COALESCE(NULLIF(u.name, ''), u.email, '')
+                  END AS owner_name`
+
+// ListVisibleToUser returns the user's own shelves plus every public
+// shelf in the system. Own shelves come first; public ones land after,
+// ordered by creation date — same shape sidebar UI expects.
+func (r *ShelfRepo) ListVisibleToUser(ctx context.Context, userID string) ([]model.Shelf, error) {
+	const qPG = `
+		SELECT ` + shelfColsVisible + `
+		FROM shelves s
+		LEFT JOIN users u ON u.id = s.user_id
+		WHERE s.user_id = $1 OR s.is_public = true
+		ORDER BY (s.user_id = $1) DESC, s.is_smart ASC, s.created_at ASC
+	`
+	const qSQLite = `
+		SELECT ` + shelfColsVisibleSQLite + `
+		FROM shelves s
+		LEFT JOIN users u ON u.id = s.user_id
+		WHERE s.user_id = ?1 OR s.is_public = 1
+		ORDER BY (s.user_id = ?1) DESC, s.is_smart ASC, s.created_at ASC
+	`
+	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []model.Shelf
+	for rows.Next() {
+		s, err := r.scanShelf(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// GetPublicBySlug looks up a shelf by its public-namespace slug. Used by
+// the read-only viewer paths that resolve `public:<slug>`. Returns
+// ErrNotFound when the slug doesn't exist or the shelf is not public.
+func (r *ShelfRepo) GetPublicBySlug(ctx context.Context, slug string) (model.Shelf, error) {
+	const qPG = `
+		SELECT ` + shelfCols + `
+		FROM shelves s
+		WHERE s.slug = $1 AND s.is_public = true
+	`
+	const qSQLite = `
+		SELECT ` + shelfCols + `
+		FROM shelves s
+		WHERE s.slug = ? AND s.is_public = 1
+	`
+	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), slug)
+	return r.scanShelf(row)
+}
+
+// BooksInPublicShelf returns the books on a public shelf. The viewer's
+// userID is passed in only because the books-projection joins per-user
+// progress on $1; the WHERE clause itself filters by is_public + slug,
+// not by ownership. Smart shelves can never be public so membership
+// comes straight from shelf_books.
+func (r *ShelfRepo) BooksInPublicShelf(ctx context.Context, viewerUserID, slug, sort string) ([]model.Book, error) {
+	orderBy := shelfBooksOrderBy(sort)
+	qPG := `
+		SELECT ` + bookCols + `
+		` + bookFromPG + `
+		JOIN shelf_books sb ON sb.book_id = b.id
+		JOIN shelves     s  ON s.id = sb.shelf_id
+		WHERE s.is_public = true AND s.slug = $2 AND b.deleted_at IS NULL
+		ORDER BY ` + orderBy
+	qSQLite := `
+		SELECT ` + bookCols + `
+		` + bookFromSQLite + `
+		JOIN shelf_books sb ON sb.book_id = b.id
+		JOIN shelves     s  ON s.id = sb.shelf_id
+		WHERE s.is_public = 1 AND s.slug = ?2 AND b.deleted_at IS NULL
+		ORDER BY ` + orderBy
+	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), viewerUserID, slug)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	return collectBooks(r.db.Dialect, rows)
+}
+
+// SetPublic flips a shelf's is_public flag, scoped to the owner. Returns
+// ErrNotFound when the slug doesn't belong to userID. The caller is
+// responsible for the role check (admin-only); the repo enforces
+// ownership only. Smart shelves are rejected at the SQL layer for
+// Postgres via the CHECK constraint and explicitly here for SQLite.
+func (r *ShelfRepo) SetPublic(ctx context.Context, userID, slug string, public bool) (model.Shelf, error) {
+	cur, err := r.GetBySlugForUser(ctx, userID, slug)
+	if err != nil {
+		return model.Shelf{}, err
+	}
+	if public && cur.IsSmart {
+		return model.Shelf{}, errors.New("smart shelves cannot be public")
+	}
+	if cur.IsPublic == public {
+		return cur, nil // idempotent
+	}
+	const qPG = `
+		UPDATE shelves SET is_public = $3
+		WHERE user_id = $1 AND slug = $2
+	`
+	const qSQLite = `
+		UPDATE shelves SET is_public = ?3
+		WHERE user_id = ?1 AND slug = ?2
+	`
+	if _, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID, slug, public); err != nil {
+		return model.Shelf{}, err
+	}
+	return r.GetBySlugForUser(ctx, userID, slug)
+}
+
+// UnpublishAllForOwner flips every is_public shelf belonging to userID
+// back to private. Returns the slugs that were affected so callers can
+// emit one removed-broadcast per shelf. Used when an admin is demoted
+// to a regular user — they lose authority to keep shelves shared.
+func (r *ShelfRepo) UnpublishAllForOwner(ctx context.Context, userID string) ([]string, error) {
+	const qPG = `
+		UPDATE shelves SET is_public = false
+		WHERE user_id = $1 AND is_public = true
+		RETURNING slug
+	`
+	const qSQLite = `
+		UPDATE shelves SET is_public = 0
+		WHERE user_id = ?1 AND is_public = 1
+		RETURNING slug
+	`
+	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var slugs []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		slugs = append(slugs, s)
+	}
+	return slugs, rows.Err()
 }
 
 // SuggestShelf is the slim shape returned by SearchSuggest for the

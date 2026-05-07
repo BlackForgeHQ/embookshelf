@@ -89,11 +89,15 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.POST("/books/:id/shelves/:slug", h.BookAddShelf)
 			authed.DELETE("/books/:id/shelves/:slug", h.BookRemoveShelf)
 
-			// Per-user shelves (regular + smart)
+			// Per-user shelves (regular + smart). Public-shelf routing
+			// is folded into the same paths via the `public:<slug>`
+			// prefix (ADR-0017); the publish toggle is a separate
+			// admin-gated endpoint.
 			authed.GET("/shelves", h.Shelves)
 			authed.POST("/shelves", h.ShelfCreate)
 			authed.PATCH("/shelves/:slug", h.ShelfUpdate)
 			authed.DELETE("/shelves/:slug", h.ShelfDelete)
+			authed.PUT("/shelves/:slug/publish", h.ShelfPublish)
 
 			// BookDrop ingest queue
 			authed.GET("/bookdrop", h.BookDropList)

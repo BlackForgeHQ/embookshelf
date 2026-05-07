@@ -63,15 +63,26 @@ type updateUserRoleReq struct {
 }
 
 // SettingsUsersUpdateRole promotes/demotes a user. Refuses to demote the
-// last remaining admin (service-layer guard).
+// last remaining admin (service-layer guard). Demoting an admin
+// cascades into un-publishing any shelves they had shared — only
+// admins can keep shelves shared (ADR-0017).
 func (h *Handler) SettingsUsersUpdateRole(c *gin.Context) {
 	var body updateUserRoleReq
 	if !bindJSON(c, &body) {
 		return
 	}
-	err := h.auth.SetUserRole(c.Request.Context(), c.Param("id"), model.Role(body.Role))
+	targetID := c.Param("id")
+	role := model.Role(body.Role)
+	err := h.auth.SetUserRole(c.Request.Context(), targetID, role)
 	switch {
 	case err == nil:
+		if role == model.RoleUser {
+			// Best-effort: a failed cascade shouldn't poison the role
+			// change. Public shelves owned by the demoted user remain
+			// flagged is_public=true until the next admin un-flips
+			// them manually — recoverable, no data lost.
+			_ = h.shelf.UnpublishAllForOwner(c.Request.Context(), targetID)
+		}
 		c.Status(http.StatusNoContent)
 	case errors.Is(err, repo.ErrNotFound):
 		writeError(c, http.StatusNotFound, "user not found")

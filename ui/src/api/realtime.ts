@@ -1,5 +1,7 @@
 import { useEffect } from "react"
 import { useQueryClient } from "@tanstack/react-query"
+import { useNavigate, useRouterState } from "@tanstack/react-router"
+import { toast } from "sonner"
 
 import { bookdropQueryKey } from "./bookdrop"
 import { booksQueryKey, librariesQueryKey, shelvesQueryKey } from "./books"
@@ -7,9 +9,28 @@ import { settingsUsersQueryKey } from "./settings"
 
 // Event names the server publishes. Keep the union narrow so the dispatch
 // map below is exhaustive — TypeScript will catch a typo before it ships.
-type RealtimeEvent = "bookdrop.updated" | "bookdrop.cleared" | "users.updated"
+type RealtimeEvent =
+  | "bookdrop.updated"
+  | "bookdrop.cleared"
+  | "users.updated"
+  | "shelf.public.updated"
+  | "shelf.public.removed"
 
-type Handler = () => void
+type Handler = (data: string) => void
+
+type SharedShelfPayload = { slug: string }
+
+function parseSharedShelfPayload(raw: string): SharedShelfPayload | null {
+  try {
+    const parsed = JSON.parse(raw) as SharedShelfPayload
+    if (typeof parsed.slug === "string" && parsed.slug.length > 0) {
+      return parsed
+    }
+  } catch {
+    /* fall through */
+  }
+  return null
+}
 
 // useRealtime opens a single EventSource to the server's SSE stream and
 // invalidates the right react-query caches when background state changes.
@@ -17,6 +38,8 @@ type Handler = () => void
 // backoff, 3 s default); we only wire up teardown on unmount.
 export function useRealtime() {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const router = useRouterState()
 
   useEffect(() => {
     // Dispatch table: event name → list of queryKeys to bust. Bookdrop
@@ -40,17 +63,57 @@ export function useRealtime() {
       "users.updated": () => {
         queryClient.invalidateQueries({ queryKey: settingsUsersQueryKey })
       },
+      // A shared shelf's owner just edited it (membership, name,
+      // accent). Refresh the sidebar list and any open books-on-shelf
+      // query so every connected viewer sees the change in lockstep
+      // (ADR-0017). The single broadcast costs O(1) on the server
+      // regardless of viewer count.
+      "shelf.public.updated": (raw) => {
+        queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
+        const payload = parseSharedShelfPayload(raw)
+        if (payload) {
+          queryClient.invalidateQueries({
+            queryKey: booksQueryKey({ shelf: payload.slug }),
+          })
+        } else {
+          // Defensive: invalidate every books query when payload is
+          // malformed. Worst case is one extra refetch per viewer.
+          queryClient.invalidateQueries({ queryKey: booksQueryKey() })
+        }
+      },
+      // A shared shelf was un-published or deleted. Drop it from the
+      // sidebar; if the active route happens to be displaying that
+      // shelf, redirect back to /library with a toast so the viewer
+      // doesn't sit on a 404 mid-page.
+      "shelf.public.removed": (raw) => {
+        queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
+        const payload = parseSharedShelfPayload(raw)
+        const search = router.location.search as { shelf?: string }
+        if (
+          payload &&
+          router.location.pathname.startsWith("/library") &&
+          search.shelf === payload.slug
+        ) {
+          toast.info("Shared shelf is no longer available.")
+          void navigate({ to: "/library", search: {} })
+        }
+        if (payload) {
+          queryClient.invalidateQueries({
+            queryKey: booksQueryKey({ shelf: payload.slug }),
+          })
+        }
+      },
     }
 
     const es = new EventSource("/events", { withCredentials: true })
 
-    // addEventListener's second argument is typed for DOM events; cast to
-    // MessageEvent-compatible so TypeScript doesn't whine. We don't parse
-    // the data today (no payload fields need it) — that changes when
-    // future events carry structured payloads.
+    // The MessageEvent.data field carries the raw JSON payload; some
+    // events (bookdrop, users) ignore it, others (shelf.public.*)
+    // parse it for the affected slug.
     const subscriptions: Array<[RealtimeEvent, (e: MessageEvent) => void]> = []
     for (const name of Object.keys(handlers) as Array<RealtimeEvent>) {
-      const listener = () => handlers[name]()
+      const listener = (e: MessageEvent) =>
+        handlers[name](typeof e.data === "string" ? e.data : "")
       es.addEventListener(name, listener as EventListener)
       subscriptions.push([name, listener])
     }
@@ -70,5 +133,5 @@ export function useRealtime() {
       }
       es.close()
     }
-  }, [queryClient])
+  }, [queryClient, navigate, router])
 }
