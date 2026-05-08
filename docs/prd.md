@@ -71,7 +71,7 @@ are registered.
 | Device/Service | Direction | Status | Sync Capabilities |
 |----------------|-----------|--------|-------------------|
 | **OPDS 1.2** | Pull | **Live** | Library access from any OPDS-compatible e-reader app (KOReader, Moon+ Reader, FBReader, Aldiko, Marvin). HTTP Basic Auth, OpenSearch, per-book acquisition links. |
-| **reMarkable Paper Pro** (RM1/RM2/Paper Pro share a driver) | Push | **Live** | One-time-code pairing via `my.remarkable.com/device/desktop/connect`; one-click push of EPUB/PDF from the book page to the device's cloud inbox. Per-push `last_sent_at` / `last_error` surfaces on the device card. |
+| **reMarkable Paper Pro** (RM1/RM2/Paper Pro share a driver) | Push | **Live** | One-time-code pairing; one-click EPUB/PDF push to cloud inbox. |
 | **Kobo** | Pull | Planned | Full library sync, reading progress, shelves, thumbnails. |
 | **KOReader** | Push | Planned | Reading-progress sync via KOReader's companion protocol. |
 | **Hardcover.app** | Push | Planned | Reading-status + wishlist sync. |
@@ -145,10 +145,17 @@ stores per-driver config as JSONB.
 
 | Method | Description |
 |--------|-------------|
-| **Local session** | Username/password, bcrypt-hashed, server-side `sessions` table, `HttpOnly; SameSite=Lax` cookie, 7-day sliding TTL |
+| **Local session** | Username/password with secure server-side sessions and cookies |
 | **OIDC** | External identity providers (Authentik, PocketID, Keycloak, etc.) with group-to-role mapping |
 | **Remote/Forward Auth** | Reverse proxy auth headers (Authentik Forward Auth, Authelia, Caddy) |
 | **Basic Auth (OPDS only)** | E-reader apps authenticate against the same `users` table over HTTPS; no session is created |
+
+### 5.1 Local Session Security Details
+
+- Passwords are bcrypt-hashed
+- Sessions are stored server-side in a `sessions` table
+- Session cookies are set with `HttpOnly; SameSite=Lax`
+- Session TTL is 7 days with sliding expiration
 
 - Backchannel logout support for OIDC
 - OIDC group-to-role mapping (auto-assign admin/user based on IdP groups)
@@ -196,7 +203,11 @@ stores per-driver config as JSONB.
 
 - **Self-contained** — No external service dependencies for core functionality (metadata providers are optional enrichment)
 - **Privacy-first** — All data stays on the user's server; optional telemetry is opt-out
-- **Performance** — Go runtime (lightweight goroutines, single static binary); pgx connection pooling; HTTP `Cache-Control` for cover / static assets. In-memory cache (ristretto) reserved for a specific hot spot rather than blanket-applied.
+- **Performance**
+  - Go runtime (lightweight goroutines, single static binary)
+  - `pgx` connection pooling
+  - HTTP `Cache-Control` for cover / static assets
+  - In-memory cache (`ristretto`) reserved for a specific hot spot rather than blanket-applied
 - **Responsive UI** — Mobile and desktop layouts
 - **Real-time updates** — Server-Sent Events stream (`/events`) for background task progress
 - **Health monitoring** — `/api/v1/healthcheck` endpoint for orchestrators
