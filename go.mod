@@ -21,6 +21,7 @@ require (
 	github.com/riverqueue/river v0.35.1
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.35.1
 	github.com/sony/gobreaker/v2 v2.4.0
+	github.com/wneessen/go-mail v0.7.2
 	go.opentelemetry.io/contrib/bridges/otelslog v0.18.0
 	go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin v0.68.0
 	go.opentelemetry.io/otel v1.43.0
@@ -56,7 +57,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.30.17 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.21 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.42.1 // indirect
-	github.com/wneessen/go-mail v0.7.2 // indirect
 )
 
 require (
