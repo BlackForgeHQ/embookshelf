@@ -393,8 +393,6 @@ backlog. Near-term candidates:
 
 - **CBR + AZW3/MOBI/FB2 ingest** — CBZ + audio shipped; CBR needs a
   rar decoder, the rest need format parsers.
-- **Calibre library import** — one-shot path for users migrating from
-  an existing Calibre tree.
 - **Forward auth / reverse-proxy header auth** — complements OIDC for
   setups that terminate SSO at the proxy (Authelia, oauth2-proxy).
 - **Per-library permissions** — the user model is currently binary

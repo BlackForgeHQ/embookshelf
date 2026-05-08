@@ -347,5 +347,3 @@ what is live vs. what's still planned. See
   `reading_sessions` heatmap
 - Parental controls / content restrictions
 - Amazon + DuckDuckGo metadata / cover fallbacks
-- Self-hosted fonts (remove Google Fonts CDN dependency)
-- i18n string catalog + Weblate integration

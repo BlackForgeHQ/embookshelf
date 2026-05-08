@@ -295,7 +295,7 @@ function renderPath(name: IconName) {
           <text
             x="3"
             y="17"
-            fontFamily="Source Serif 4, Georgia, serif"
+            fontFamily="Source Serif 4 Variable, Georgia, serif"
             fontSize="14"
           >
             A
@@ -303,7 +303,7 @@ function renderPath(name: IconName) {
           <text
             x="13"
             y="17"
-            fontFamily="Source Serif 4, Georgia, serif"
+            fontFamily="Source Serif 4 Variable, Georgia, serif"
             fontSize="10"
           >
             a
@@ -381,8 +381,22 @@ function renderPath(name: IconName) {
     case "pause":
       return (
         <>
-          <rect x="6" y="5" width="4" height="14" fill="currentColor" stroke="none" />
-          <rect x="14" y="5" width="4" height="14" fill="currentColor" stroke="none" />
+          <rect
+            x="6"
+            y="5"
+            width="4"
+            height="14"
+            fill="currentColor"
+            stroke="none"
+          />
+          <rect
+            x="14"
+            y="5"
+            width="4"
+            height="14"
+            fill="currentColor"
+            stroke="none"
+          />
         </>
       )
     default:

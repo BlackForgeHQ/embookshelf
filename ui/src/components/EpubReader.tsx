@@ -79,7 +79,6 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(
       const flag = { cancelled: false }
       let book: any
       let rendition: any
-
       ;(async () => {
         try {
           // epub.js guesses "directory" mode for URLs without a .epub
@@ -103,7 +102,7 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(
           // the iframe per chapter).
           rendition.themes.default({
             body: {
-              "font-family": fontFamily || "Literata, Georgia, serif",
+              "font-family": fontFamily || "Literata Variable, Georgia, serif",
               "font-size": fontSize ? `${fontSize}px` : undefined,
               "line-height": lineHeight ? String(lineHeight) : undefined,
               color: "var(--color-ink-1)",
@@ -183,7 +182,7 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(
       if (!r || !booted) return
       r.themes.default({
         body: {
-          "font-family": fontFamily || "Literata, Georgia, serif",
+          "font-family": fontFamily || "Literata Variable, Georgia, serif",
           "font-size": fontSize ? `${fontSize}px` : undefined,
           "line-height": lineHeight ? String(lineHeight) : undefined,
         },
