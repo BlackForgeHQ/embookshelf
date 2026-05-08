@@ -196,7 +196,11 @@ stores per-driver config as JSONB.
 
 - **Self-contained** — No external service dependencies for core functionality (metadata providers are optional enrichment)
 - **Privacy-first** — All data stays on the user's server; optional telemetry is opt-out
-- **Performance** — Go runtime (lightweight goroutines, single static binary); pgx connection pooling; HTTP `Cache-Control` for cover / static assets. In-memory cache (ristretto) reserved for a specific hot spot rather than blanket-applied.
+- **Performance**
+  - Go runtime (lightweight goroutines, single static binary)
+  - `pgx` connection pooling
+  - HTTP `Cache-Control` for cover / static assets
+  - In-memory cache (`ristretto`) reserved for a specific hot spot rather than blanket-applied
 - **Responsive UI** — Mobile and desktop layouts
 - **Real-time updates** — Server-Sent Events stream (`/events`) for background task progress
 - **Health monitoring** — `/api/v1/healthcheck` endpoint for orchestrators
