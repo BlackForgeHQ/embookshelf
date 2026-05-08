@@ -145,10 +145,17 @@ stores per-driver config as JSONB.
 
 | Method | Description |
 |--------|-------------|
-| **Local session** | Username/password, bcrypt-hashed, server-side `sessions` table, `HttpOnly; SameSite=Lax` cookie, 7-day sliding TTL |
+| **Local session** | Username/password with secure server-side sessions and cookies |
 | **OIDC** | External identity providers (Authentik, PocketID, Keycloak, etc.) with group-to-role mapping |
 | **Remote/Forward Auth** | Reverse proxy auth headers (Authentik Forward Auth, Authelia, Caddy) |
 | **Basic Auth (OPDS only)** | E-reader apps authenticate against the same `users` table over HTTPS; no session is created |
+
+### 5.1 Local Session Security Details
+
+- Passwords are bcrypt-hashed
+- Sessions are stored server-side in a `sessions` table
+- Session cookies are set with `HttpOnly; SameSite=Lax`
+- Session TTL is 7 days with sliding expiration
 
 - Backchannel logout support for OIDC
 - OIDC group-to-role mapping (auto-assign admin/user based on IdP groups)
