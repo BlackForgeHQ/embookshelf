@@ -174,3 +174,45 @@ func TestUnshelvedFilter(t *testing.T) {
 		})
 	}
 }
+
+// TestShelfUpdateIcon guards against a positional-arg regression in the
+// SQLite UPDATE: SET clauses bind earlier `?` than the WHERE, so the
+// builder must append the WHERE values last. Postgres uses $N and is
+// indifferent to order, but exercising both keeps the behaviour pinned.
+func TestShelfUpdateIcon(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "postgres"} {
+		dialect := dialect
+		t.Run(dialect, func(t *testing.T) {
+			d := repotest.NewWithDialect(t, dialect)
+			ur := repo.NewUserRepo(d)
+			sr := repo.NewShelfRepo(d)
+			ctx := context.Background()
+
+			alice, err := ur.Create(ctx, "alice@example.com", "Alice", "alice-hash", model.RoleUser)
+			if err != nil {
+				t.Fatalf("create alice: %v", err)
+			}
+			created, err := sr.Create(ctx, alice.ID, "Favourites", "accent", "library", nil)
+			if err != nil {
+				t.Fatalf("create shelf: %v", err)
+			}
+
+			nextIcon := "circle-check"
+			updated, err := sr.Update(ctx, alice.ID, created.Slug, nil, nil, &nextIcon, nil, false)
+			if err != nil {
+				t.Fatalf("update icon: %v", err)
+			}
+			if updated.Icon != nextIcon {
+				t.Errorf("icon after update = %q, want %q", updated.Icon, nextIcon)
+			}
+
+			fresh, err := sr.GetBySlugForUser(ctx, alice.ID, created.Slug)
+			if err != nil {
+				t.Fatalf("re-fetch: %v", err)
+			}
+			if fresh.Icon != nextIcon {
+				t.Errorf("icon persisted = %q, want %q", fresh.Icon, nextIcon)
+			}
+		})
+	}
+}

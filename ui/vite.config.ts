@@ -29,6 +29,34 @@ const config = defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // lucide-react's main barrel re-exports each icon module. Sonner
+        // and the shelf-icon static map statically import a handful of
+        // those icons, so the main lucide chunk ends up *importing* the
+        // individual icon chunks (e.g. circle-check). Each icon chunk in
+        // turn imports `createLucideIcon`, which Rollup keeps in the main
+        // lucide chunk by default → static-import cycle, and the icon
+        // chunk evaluates while `createLucideIcon` is still in TDZ
+        // ("t is not a function" at icon-chunk:1).
+        //
+        // Hoisting the lucide primitives (createLucideIcon, Icon,
+        // shared utils) into a sibling chunk breaks the cycle: icon
+        // chunks import primitives from `lucide-core`, the main barrel
+        // imports the icon chunks, primitives never import back.
+        manualChunks(id) {
+          if (
+            id.includes("lucide-react/dist/esm/createLucideIcon") ||
+            id.includes("lucide-react/dist/esm/Icon.mjs") ||
+            id.includes("lucide-react/dist/esm/defaultAttributes") ||
+            id.includes("lucide-react/dist/esm/context") ||
+            id.includes("lucide-react/dist/esm/shared/")
+          ) {
+            return "lucide-core"
+          }
+        },
+      },
+    },
   },
   server: {
     port: 5173,

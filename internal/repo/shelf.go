@@ -306,8 +306,8 @@ func (r *ShelfRepo) Update(ctx context.Context, userID, slug string, name, accen
 
 	if r.db.Dialect == db.DialectSQLite {
 		// SQLite uses positional ? placeholders; $N-style positional binding
-		// is NOT supported in go-sqlite3. Build args first, then sets.
-		args = []any{userID, slug}
+		// is NOT supported in go-sqlite3. SET args first (their `?` come
+		// first in the query), then WHERE args.
 		if name != nil {
 			trimmed := strings.TrimSpace(*name)
 			if trimmed == "" {
@@ -345,7 +345,7 @@ func (r *ShelfRepo) Update(ctx context.Context, userID, slug string, name, accen
 		if len(sets) == 0 {
 			return cur, nil
 		}
-		// WHERE clauses come after SET args for SQLite (? is positional)
+		args = append(args, userID, slug)
 		query := `UPDATE shelves SET ` + strings.Join(sets, ", ") + ` WHERE user_id = ? AND slug = ?`
 		if _, err := r.db.SQL.ExecContext(ctx, query, args...); err != nil {
 			return model.Shelf{}, err
