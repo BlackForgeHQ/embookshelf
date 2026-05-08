@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -119,6 +120,20 @@ func (h *Handler) SettingsEmailUpdate(c *gin.Context) {
 	if err := h.appSettings.SetEmail(c.Request.Context(), h.cipher, cfg); err != nil {
 		writeServerError(c, "email settings save", err)
 		return
+	}
+	// Hot-reload so the new SMTP config takes effect without restart.
+	// Reload errors don't fail the save — the row is already persisted
+	// and Notifier holds a disabled state until the admin fixes the
+	// config — but they're returned so the UI can surface the SMTP
+	// construction error inline.
+	if h.notifier != nil {
+		if err := h.notifier.Reload(c.Request.Context()); err != nil {
+			slog.Warn("email settings reload", "err", err)
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error": gin.H{"code": "EMAIL_RELOAD_FAILED", "message": err.Error()},
+			})
+			return
+		}
 	}
 	c.Status(http.StatusNoContent)
 }

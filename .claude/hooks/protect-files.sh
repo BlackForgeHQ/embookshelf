@@ -29,7 +29,13 @@ PATH_LC=$(printf '%s' "$FILE_PATH" | tr '[:upper:]' '[:lower:]')
 # Protected basename patterns. Matched case-insensitively via BASENAME_LC.
 PROTECTED_PATTERNS=(
   ".env"
-  ".env.*"
+  ".env.local"
+  ".env.development"
+  ".env.production"
+  ".env.test"
+  ".env.staging"
+  ".env.prod"
+  ".env.dev"
   "*.pem"
   "*.key"
   "*.crt"
@@ -65,7 +71,7 @@ case "$PATH_LC" in
     emit deny "Cannot edit files inside .git/" ;;
   secrets/*|*/secrets/*)
     emit deny "Cannot edit files inside secrets/" ;;
-  .env|.env.*|*/.env|*/.env.*)
+  .env|*/.env|.env.local|.env.production|.env.development|.env.prod|.env.dev|.env.staging|.env.test|*/.env.local|*/.env.production|*/.env.development|*/.env.prod|*/.env.dev|*/.env.staging|*/.env.test)
     emit deny "Cannot edit .env files" ;;
   .claude/hooks/*|*/.claude/hooks/*)
     emit deny "Cannot edit hook scripts. These enforce security boundaries." ;;

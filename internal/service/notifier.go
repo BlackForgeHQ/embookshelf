@@ -8,11 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/blackforge/embookshelf/internal/crypto"
 	"github.com/blackforge/embookshelf/internal/email"
 	"github.com/blackforge/embookshelf/internal/layout"
 	"github.com/blackforge/embookshelf/internal/model"
@@ -63,34 +66,43 @@ var ErrFileTooLarge = errors.New("kindle attachment too large")
 // hasn't configured their kindle_email yet.
 var ErrKindleEmailUnset = errors.New("kindle email not set")
 
-// NotifierDeps bundles the seams Notifier needs. Keeping a struct
-// rather than a long argument list makes test wiring readable and
-// avoids the "add an arg, change six call sites" tax.
+// NotifierDeps bundles the static seams Notifier needs. Sender,
+// publicURL, and enabled flag live in runtime state so admins can
+// flip the email subsystem on/off without restarting. Reload reads
+// the EMAIL row through AppSettings + Cipher and rebuilds the
+// runtime under the mutex.
 type NotifierDeps struct {
-	Sender    email.Sender
-	Templates *email.Templates
-	Resets    *repo.PasswordResetTokenRepo
-	Invites   *repo.UserInviteRepo
-	Users     *repo.UserRepo
-	LibStore  LibraryStore
-	PublicURL string
+	Templates   *email.Templates
+	Resets      *repo.PasswordResetTokenRepo
+	Invites     *repo.UserInviteRepo
+	Users       *repo.UserRepo
+	LibStore    LibraryStore
+	AppSettings *repo.AppSettingsRepo
+	Cipher      crypto.Cipher
 	// Now allows tests to pin time. Production passes time.Now.
 	Now func() time.Time
-	// Enabled mirrors EMAIL.enabled. False short-circuits every send
-	// with ErrEmailDisabled so handlers never reach the wire.
-	Enabled bool
 }
 
 // Notifier is the orchestration above email.Sender. Owns token
 // generation (crypto/rand → sha256 at rest), URL composition from
 // PublicURL, and the Send-to-Kindle attachment build. The Sender
 // itself does bytes; Notifier knows the domain. ADR-0020.
+//
+// The runtime state (sender, publicURL, enabled) is hot-reloadable.
+// Admin edits to the EMAIL row trigger Reload; existing references
+// in handlers and queue closures keep working without a restart.
 type Notifier struct {
 	deps NotifierDeps
+
+	mu        sync.RWMutex
+	sender    email.Sender
+	publicURL string
+	enabled   bool
 }
 
-// NewNotifier wires deps. Callers (cmd/embookshelf/main.go) build
-// the Sender + Templates first and hand them in.
+// NewNotifier wires the static deps. The runtime sender starts
+// disabled — call Reload before serving requests so the EMAIL row is
+// applied.
 func NewNotifier(deps NotifierDeps) *Notifier {
 	if deps.Now == nil {
 		deps.Now = time.Now
@@ -98,12 +110,68 @@ func NewNotifier(deps NotifierDeps) *Notifier {
 	return &Notifier{deps: deps}
 }
 
+// Reload reads the current EMAIL row and rebuilds the SMTP sender.
+// Disabled rows clear the sender so methods short-circuit with
+// ErrEmailDisabled. A bad SMTP config also clears state and returns
+// the construction error so the admin sees why hot-enable failed.
+func (n *Notifier) Reload(ctx context.Context) error {
+	cfg, err := n.deps.AppSettings.GetEmail(ctx, n.deps.Cipher)
+	if err != nil {
+		return fmt.Errorf("load email settings: %w", err)
+	}
+	if !cfg.Enabled {
+		n.swap(nil, "", false)
+		return nil
+	}
+	s, err := email.NewSMTPSender(email.SMTPConfig{
+		Host:        cfg.SMTP.Host,
+		Port:        cfg.SMTP.Port,
+		Username:    cfg.SMTP.Username,
+		Password:    cfg.SMTP.Password,
+		TLS:         email.TLSMode(cfg.SMTP.TLS),
+		FromAddress: cfg.From.Address,
+		FromName:    cfg.From.Name,
+	})
+	if err != nil {
+		n.swap(nil, "", false)
+		return fmt.Errorf("smtp sender: %w", err)
+	}
+	n.swap(s, cfg.PublicURL, true)
+	slog.Info("email subsystem ready", "from", cfg.From.Address, "host", cfg.SMTP.Host, "port", cfg.SMTP.Port)
+	return nil
+}
+
+// Enabled reports whether the runtime sender is wired and the row is
+// flagged on. Handlers consult this for the 503 EMAIL_DISABLED gate.
+func (n *Notifier) Enabled() bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.enabled
+}
+
+func (n *Notifier) swap(sender email.Sender, publicURL string, enabled bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.sender = sender
+	n.publicURL = publicURL
+	n.enabled = enabled
+}
+
+// snapshot copies the runtime state under the read lock so methods
+// don't hold the lock across SMTP I/O.
+func (n *Notifier) snapshot() (sender email.Sender, publicURL string, enabled bool) {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.sender, n.publicURL, n.enabled
+}
+
 // IssuePasswordReset stores a fresh reset token for user and sends
 // the email. The plaintext token is generated here, hashed before
 // storage, and embedded in the URL passed to the template — it never
 // leaves the function.
 func (n *Notifier) IssuePasswordReset(ctx context.Context, user model.User) error {
-	if !n.deps.Enabled {
+	sender, publicURL, enabled := n.snapshot()
+	if !enabled {
 		return ErrEmailDisabled
 	}
 	if user.Email == "" {
@@ -119,7 +187,7 @@ func (n *Notifier) IssuePasswordReset(ctx context.Context, user model.User) erro
 		return fmt.Errorf("store reset token: %w", err)
 	}
 
-	resetURL := joinURL(n.deps.PublicURL, "/reset", "token", plain)
+	resetURL := joinURL(publicURL, "/reset", "token", plain)
 	data := struct {
 		Name      string
 		ResetURL  string
@@ -133,7 +201,7 @@ func (n *Notifier) IssuePasswordReset(ctx context.Context, user model.User) erro
 	if err != nil {
 		return fmt.Errorf("render reset template: %w", err)
 	}
-	return n.deps.Sender.Send(ctx, email.Message{
+	return sender.Send(ctx, email.Message{
 		To:      user.Email,
 		Subject: "Reset your embookshelf password",
 		Text:    text,
@@ -145,7 +213,8 @@ func (n *Notifier) IssuePasswordReset(ctx context.Context, user model.User) erro
 // plaintext token only when callers need it for tests; production
 // callers should ignore it.
 func (n *Notifier) IssueAdminInvite(ctx context.Context, email_ string, role model.Role, invitedBy model.User) (plainToken string, err error) {
-	if !n.deps.Enabled {
+	sender, publicURL, enabled := n.snapshot()
+	if !enabled {
 		return "", ErrEmailDisabled
 	}
 	plain, hash, err := newToken()
@@ -157,7 +226,7 @@ func (n *Notifier) IssueAdminInvite(ctx context.Context, email_ string, role mod
 		return "", fmt.Errorf("store invite: %w", err)
 	}
 
-	acceptURL := joinURL(n.deps.PublicURL, "/accept-invite", "token", plain)
+	acceptURL := joinURL(publicURL, "/accept-invite", "token", plain)
 	data := struct {
 		InvitedByName string
 		Role          string
@@ -173,7 +242,7 @@ func (n *Notifier) IssueAdminInvite(ctx context.Context, email_ string, role mod
 	if err != nil {
 		return "", fmt.Errorf("render invite template: %w", err)
 	}
-	if err := n.deps.Sender.Send(ctx, email.Message{
+	if err := sender.Send(ctx, email.Message{
 		To:      email_,
 		Subject: "You're invited to embookshelf",
 		Text:    text,
@@ -189,7 +258,8 @@ func (n *Notifier) IssueAdminInvite(ctx context.Context, email_ string, role mod
 // to user.KindleEmail. Synchronous — callers (the queue worker) are
 // already off the request goroutine. ADR-0021.
 func (n *Notifier) SendToKindle(ctx context.Context, book model.Book, user model.User) error {
-	if !n.deps.Enabled {
+	sender, _, enabled := n.snapshot()
+	if !enabled {
 		return ErrEmailDisabled
 	}
 	if user.KindleEmail == "" {
@@ -224,7 +294,7 @@ func (n *Notifier) SendToKindle(ctx context.Context, book model.Book, user model
 	filename := kindleAttachmentName(book)
 	contentType := kindleContentType(book.Format)
 
-	return n.deps.Sender.Send(ctx, email.Message{
+	return sender.Send(ctx, email.Message{
 		To:      user.KindleEmail,
 		Subject: book.Title,
 		// Amazon strips the body — keep one short line so spam

@@ -89,16 +89,17 @@ func newRiver(ctx context.Context, d *db.DB, deps Deps) (*RiverClient, error) {
 			Files:    deps.FileRepo,
 		},
 	})
-	if deps.Notifier != nil {
-		river.AddWorker(workers, &task.SendToKindleWorker{
-			Deps: task.SendToKindleDeps{
-				Notifier: deps.Notifier,
-				Books:    deps.Books,
-				Users:    deps.Users,
-				Hub:      deps.Hub,
-			},
-		})
-	}
+	// Notifier is always non-nil — its runtime state gates whether the
+	// send actually fires. Registering unconditionally lets admins
+	// hot-enable email without restart and have queued jobs picked up.
+	river.AddWorker(workers, &task.SendToKindleWorker{
+		Deps: task.SendToKindleDeps{
+			Notifier: deps.Notifier,
+			Books:    deps.Books,
+			Users:    deps.Users,
+			Hub:      deps.Hub,
+		},
+	})
 
 	c, err := river.NewClient(driver, &river.Config{
 		Queues: map[string]river.QueueConfig{

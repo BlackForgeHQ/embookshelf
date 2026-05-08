@@ -272,51 +272,32 @@ func main() {
 		slog.Info("purged expired sessions", "count", n)
 	}
 
-	// Email subsystem (ADR-0020). Read EMAIL row, build Sender + Notifier
-	// when enabled. Disabled instances wire NoopSender so the
-	// service-layer code path is uniform but the public APIs return
-	// 503 EMAIL_DISABLED via emailEnabled() on the handler.
+	// Email subsystem (ADR-0020). Notifier is always built; its runtime
+	// sender is hot-reloadable via Notifier.Reload so admins can flip
+	// the EMAIL row from the settings UI without restarting the
+	// process. Reload at boot applies the persisted state.
 	if err := appSettingsRepo.SeedEmailIfAbsent(ctx); err != nil {
 		slog.Warn("seed email settings", "err", err)
-	}
-	emailCfg, err := appSettingsRepo.GetEmail(ctx, secretCipher)
-	if err != nil {
-		slog.Warn("load email settings", "err", err)
 	}
 	emailTpl, err := email.NewTemplates()
 	if err != nil {
 		slog.Error("email templates", "err", err)
 		os.Exit(1)
 	}
-	var notifier *service.Notifier
 	resetRepo := repo.NewPasswordResetTokenRepo(dbh)
 	inviteRepo := repo.NewUserInviteRepo(dbh)
-	if emailCfg.Enabled {
-		s, err := email.NewSMTPSender(email.SMTPConfig{
-			Host:        emailCfg.SMTP.Host,
-			Port:        emailCfg.SMTP.Port,
-			Username:    emailCfg.SMTP.Username,
-			Password:    emailCfg.SMTP.Password,
-			TLS:         email.TLSMode(emailCfg.SMTP.TLS),
-			FromAddress: emailCfg.From.Address,
-			FromName:    emailCfg.From.Name,
-		})
-		if err != nil {
-			slog.Warn("email sender disabled — invalid SMTP config", "err", err)
-		} else {
-			notifier = service.NewNotifier(service.NotifierDeps{
-				Sender:    s,
-				Templates: emailTpl,
-				Resets:    resetRepo,
-				Invites:   inviteRepo,
-				Users:     userRepo,
-				LibStore:  libStore,
-				PublicURL: emailCfg.PublicURL,
-				Enabled:   true,
-			})
-			slog.Info("email subsystem ready", "from", emailCfg.From.Address, "host", emailCfg.SMTP.Host, "port", emailCfg.SMTP.Port)
-		}
-	} else {
+	notifier := service.NewNotifier(service.NotifierDeps{
+		Templates:   emailTpl,
+		Resets:      resetRepo,
+		Invites:     inviteRepo,
+		Users:       userRepo,
+		LibStore:    libStore,
+		AppSettings: appSettingsRepo,
+		Cipher:      secretCipher,
+	})
+	if err := notifier.Reload(ctx); err != nil {
+		slog.Warn("email subsystem disabled — reload failed", "err", err)
+	} else if !notifier.Enabled() {
 		slog.Info("email subsystem disabled — configure under admin settings to enable")
 	}
 

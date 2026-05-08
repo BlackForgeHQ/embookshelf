@@ -73,9 +73,6 @@ func newSQLiteQueue(ctx context.Context, d *db.DB, deps Deps) (*sqliteQueue, err
 			return task.LibraryScan(ctx, args, libDeps)
 		},
 		(task.SendToKindleArgs{}).Kind(): func(ctx context.Context, raw string) error {
-			if kindleDeps.Notifier == nil {
-				return errors.New("kindle send: notifier not wired")
-			}
 			var args task.SendToKindleArgs
 			if err := json.Unmarshal([]byte(raw), &args); err != nil {
 				return fmt.Errorf("decode args: %w", err)

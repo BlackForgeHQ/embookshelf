@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query"
 
 import {
   createInvite,
+  emailSettingsQueryKey,
+  fetchEmailSettings,
   fetchInvites,
   invitesQueryKey,
   revokeInvite,
@@ -19,10 +21,20 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
 export function InvitesPanel({ isAdmin }: { isAdmin: boolean }) {
+  // Invites endpoints return 503 EMAIL_DISABLED when SMTP is off, so gate
+  // the listing query on the email subsystem being enabled — otherwise
+  // TanStack Query's retry storm hammers the server with failed GETs.
+  const emailSettings = useQuery({
+    queryKey: emailSettingsQueryKey,
+    queryFn: fetchEmailSettings,
+    enabled: isAdmin,
+  })
+  const emailEnabled = emailSettings.data?.enabled ?? false
+
   const invites = useQuery({
     queryKey: invitesQueryKey,
     queryFn: fetchInvites,
-    enabled: isAdmin,
+    enabled: isAdmin && emailEnabled,
   })
 
   const [open, setOpen] = useState(false)
@@ -46,6 +58,22 @@ export function InvitesPanel({ isAdmin }: { isAdmin: boolean }) {
   })
 
   if (!isAdmin) return <AdminGate label="Invites" />
+
+  if (emailSettings.isSuccess && !emailEnabled) {
+    return (
+      <>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="font-serif text-xl font-medium text-foreground">
+            Invites
+          </h2>
+        </div>
+        <p className="text-sm text-muted-foreground italic">
+          Email delivery is disabled. Enable SMTP in “Email delivery” to
+          send invitations.
+        </p>
+      </>
+    )
+  }
 
   const rows = invites.data ?? []
 

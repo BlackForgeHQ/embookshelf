@@ -42,9 +42,10 @@ type Handler struct {
 	// installs that haven't configured a storage backend — serveBookFile
 	// falls back to local serving.
 	libStore service.LibraryStore
-	// Email subsystem seams. notifier is nil when EMAIL.enabled=false;
-	// handlers gate the feature on that nil rather than re-reading the
-	// row each request. resetRepo + inviteRepo + users back the token
+	// Email subsystem seams. notifier is always non-nil — its runtime
+	// state holds whether SMTP is wired. emailEnabled() consults
+	// notifier.Enabled() so admin edits to the EMAIL row hot-reload
+	// without a restart. resetRepo + inviteRepo + users back the token
 	// flows; cipher + emailTpl back the admin "send test email"
 	// endpoint and any handler-side render. ADR-0020.
 	users      *repo.UserRepo
@@ -82,8 +83,9 @@ type Deps struct {
 	// and any other library-aware lookup. Optional — omitting it falls
 	// back to local c.File() serving for every book.
 	LibStore service.LibraryStore
-	// Email subsystem seams. Notifier nil → email features disabled and
-	// affected handlers return 503 EMAIL_DISABLED. ADR-0020.
+	// Email subsystem seams. Notifier is always wired; its runtime
+	// state determines whether email features are enabled. Disabled
+	// handlers return 503 EMAIL_DISABLED via emailEnabled(). ADR-0020.
 	Users      *repo.UserRepo
 	Books      *repo.BookRepo
 	Notifier   *service.Notifier
@@ -121,9 +123,10 @@ func New(d Deps) *Handler {
 
 // emailEnabled reports whether the email subsystem is wired and on.
 // Handlers gate the feature on this so feature-disabled installs
-// return 503 EMAIL_DISABLED uniformly. ADR-0020.
+// return 503 EMAIL_DISABLED uniformly. Reload via SettingsEmailUpdate
+// flips the runtime state without a restart. ADR-0020.
 func (h *Handler) emailEnabled() bool {
-	return h.notifier != nil
+	return h.notifier != nil && h.notifier.Enabled()
 }
 
 // Secure reports whether the session cookie should be marked Secure.
