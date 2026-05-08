@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.16](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.15...v0.4.16) (2026-05-08)
+
+
+### Features
+
+* add TestShelfUpdateIcon to validate SQLite and Postgres update behavior ([54b5d03](https://github.com/BlackForgeHQ/embookshelf/commit/54b5d03e6d23d28627220bc7895aeb6d1ad457fa))
+
 ## [0.4.15](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.14...v0.4.15) (2026-05-08)
 
 
