@@ -53,6 +53,7 @@ export type Shelf = {
   name: string
   slug: string
   accent: string
+  icon: string
   bookCount: number
   isSmart: boolean
   isPublic: boolean
@@ -331,10 +332,18 @@ export const booksQueryKey = (params: BooksQuery = {}) =>
 export const bookQueryKey = (id: string) => ["book", id] as const
 
 export const createShelf = defineMutation({
-  fn: async (args: { name: string; accent?: string }): Promise<Shelf> => {
+  fn: async (args: {
+    name: string
+    accent?: string
+    icon?: string
+  }): Promise<Shelf> => {
     const { shelf } = await api<{ shelf: Shelf }>("/api/v1/shelves", {
       method: "POST",
-      body: JSON.stringify({ name: args.name, accent: args.accent }),
+      body: JSON.stringify({
+        name: args.name,
+        accent: args.accent,
+        icon: args.icon,
+      }),
     })
     return shelf
   },
@@ -348,12 +357,14 @@ export const createSmartShelf = defineMutation({
     name: string
     rule: ShelfRule
     accent?: string
+    icon?: string
   }): Promise<Shelf> => {
     const { shelf } = await api<{ shelf: Shelf }>("/api/v1/shelves", {
       method: "POST",
       body: JSON.stringify({
         name: args.name,
         accent: args.accent,
+        icon: args.icon,
         rule: args.rule,
       }),
     })
@@ -371,6 +382,7 @@ export const updateShelf = defineMutation({
     body: {
       name?: string
       accent?: string
+      icon?: string
       rule?: ShelfRule
       ruleSet?: boolean
     }

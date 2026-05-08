@@ -1,0 +1,1 @@
+ALTER TABLE shelves DROP COLUMN icon;

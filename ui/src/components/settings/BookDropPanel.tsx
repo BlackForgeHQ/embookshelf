@@ -12,7 +12,13 @@ import {
   wipeBookDropFiles,
 } from "@/api/bookdrop"
 import { useApiMutation } from "@/api/mutation"
-import { AdminGate, Card, DefRow } from "@/components/SettingsShared"
+import {
+  AdminGate,
+  Card,
+  DefRow,
+  InboxMark,
+  NotebookEmpty,
+} from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -139,21 +145,25 @@ export function BookDropPanel({ isAdmin }: { isAdmin: boolean }) {
         Imported and discarded items. Use <em>Clear processed history</em> above
         to empty this list.
       </p>
-      <Card>
-        {queue.isLoading ? (
+      {queue.isLoading ? (
+        <Card>
           <p className="t-small text-muted-foreground italic">Loading…</p>
-        ) : processed.length === 0 ? (
-          <p className="t-small text-muted-foreground italic">
-            No processed items yet.
-          </p>
-        ) : (
+        </Card>
+      ) : processed.length === 0 ? (
+        <NotebookEmpty
+          mark={<InboxMark />}
+          title="No processed items yet."
+          body="Imported and discarded BookDrop items will land here. Drop a file into the watched folder to populate the list."
+        />
+      ) : (
+        <Card>
           <ul className="flex flex-col">
             {processed.map((item) => (
               <ProcessedRow key={item.id} item={item} />
             ))}
           </ul>
-        )}
-      </Card>
+        </Card>
+      )}
 
       <ClearProcessedDialog
         open={clearOpen}

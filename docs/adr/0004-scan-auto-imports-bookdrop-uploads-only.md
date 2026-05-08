@@ -4,7 +4,9 @@ Library scan creates `books` rows directly when it detects a `LeafBook` it has n
 
 ## Status
 
-accepted (2026-05-02)
+superseded by ADR-0018 (2026-05-08)
+
+Original status: accepted (2026-05-02). Reversed when operational reality showed every file enters via bookdrop or web upload — no one places files directly under the library tree, so scan-as-ingest is dead weight. See ADR-0018.
 
 ## Context
 

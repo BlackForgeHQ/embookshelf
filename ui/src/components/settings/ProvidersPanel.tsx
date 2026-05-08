@@ -14,7 +14,11 @@ import {
 } from "@/api/settings"
 import { useApiMutation } from "@/api/mutation"
 import { Icon } from "@/components/Icon"
-import { AdminGate } from "@/components/SettingsShared"
+import {
+  AdminGate,
+  NotebookEmpty,
+  QuillMark,
+} from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -230,16 +234,11 @@ function SkeletonRows({ count }: { count: number }) {
 
 function EmptyState() {
   return (
-    <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
-      <div className="flex size-10 items-center justify-center rounded-full border border-dashed border-(--color-rule) text-(--color-ink-3)">
-        <Icon name="sparkle" size={18} />
-      </div>
-      <div className="t-item-title">No metadata providers detected</div>
-      <div className="t-small max-w-[44ch]">
-        Build flags or runtime configuration removed every catalog entry. Check
-        the binary build tags or restart with the default provider set.
-      </div>
-    </div>
+    <NotebookEmpty
+      mark={<QuillMark />}
+      title="No metadata providers detected."
+      body="Build flags or runtime configuration removed every catalog entry. Check the binary build tags or restart with the default provider set."
+    />
   )
 }
 

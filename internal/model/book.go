@@ -160,6 +160,7 @@ type Shelf struct {
 	Name      string
 	Slug      string
 	Accent    string
+	Icon      string
 	BookCount int
 	IsSmart   bool
 	// Rule is non-nil iff IsSmart is true. Marshaled to/from a JSONB

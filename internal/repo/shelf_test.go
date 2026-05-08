@@ -67,7 +67,7 @@ func TestUnshelvedFilter(t *testing.T) {
 			bobOnly := mkBook("Bob Shelved")
 
 			// Alice's regular shelf with one book on it.
-			favs, err := sr.Create(ctx, alice.ID, "Favourites", "accent", nil)
+			favs, err := sr.Create(ctx, alice.ID, "Favourites", "accent", "library", nil)
 			if err != nil {
 				t.Fatalf("create favourites: %v", err)
 			}
@@ -86,14 +86,14 @@ func TestUnshelvedFilter(t *testing.T) {
 					Value: onSmartShelfOnly.Title,
 				}},
 			}
-			if _, err := sr.Create(ctx, alice.ID, "Smart", "accent", rule); err != nil {
+			if _, err := sr.Create(ctx, alice.ID, "Smart", "accent", "sparkles", rule); err != nil {
 				t.Fatalf("create smart shelf: %v", err)
 			}
 
 			// System shelves: insert directly with reserved slugs. These
 			// auto-populate from progress and are excluded from the
 			// "shelved" test.
-			reading, err := sr.Create(ctx, alice.ID, "Reading", "accent", nil)
+			reading, err := sr.Create(ctx, alice.ID, "Reading", "accent", "book-open", nil)
 			if err != nil {
 				t.Fatalf("create reading: %v", err)
 			}
@@ -105,7 +105,7 @@ func TestUnshelvedFilter(t *testing.T) {
 			if err := sr.AddBook(ctx, alice.ID, "reading", onReadingOnly.ID); err != nil {
 				t.Fatalf("add to reading: %v", err)
 			}
-			finished, err := sr.Create(ctx, alice.ID, "Finished", "accent", nil)
+			finished, err := sr.Create(ctx, alice.ID, "Finished", "accent", "check-circle-2", nil)
 			if err != nil {
 				t.Fatalf("create finished: %v", err)
 			}
@@ -118,7 +118,7 @@ func TestUnshelvedFilter(t *testing.T) {
 
 			// Bob shelves bobOnly so we can verify per-user scoping: the
 			// same book should still be unshelved for Alice.
-			bobShelf, err := sr.Create(ctx, bob.ID, "Bob Shelf", "accent", nil)
+			bobShelf, err := sr.Create(ctx, bob.ID, "Bob Shelf", "accent", "library", nil)
 			if err != nil {
 				t.Fatalf("create bob shelf: %v", err)
 			}

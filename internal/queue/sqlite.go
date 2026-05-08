@@ -47,8 +47,6 @@ func newSQLiteQueue(
 	resolver storage.Resolver,
 	libStore service.LibraryStore,
 	fileRepo *repo.FileRepo,
-	bookRepo *repo.BookRepo,
-	scanDeps service.ScanImportLeafBookDeps,
 ) (*sqliteQueue, error) {
 	q := &sqliteQueue{
 		db:       d,
@@ -59,13 +57,9 @@ func newSQLiteQueue(
 
 	bdropDeps := task.BookDropDeps{Svc: bdropSvc, Resolver: resolver}
 	libDeps := task.LibraryScanDeps{
-		BookDrop:   bdropSvc,
-		Lib:        libSvc,
-		Queue:      q, // back-reference so LibraryScan can enqueue children
-		LibStore:   libStore,
-		Files:      fileRepo,
-		Books:      bookRepo,
-		LockMerger: service.MergeLocked,
+		Lib:      libSvc,
+		LibStore: libStore,
+		Files:    fileRepo,
 	}
 
 	q.handlers = map[string]kindHandler{
@@ -82,13 +76,6 @@ func newSQLiteQueue(
 				return fmt.Errorf("decode args: %w", err)
 			}
 			return task.LibraryScan(ctx, args, libDeps)
-		},
-		(task.ScanImportArgs{}).Kind(): func(ctx context.Context, raw string) error {
-			var args task.ScanImportArgs
-			if err := json.Unmarshal([]byte(raw), &args); err != nil {
-				return fmt.Errorf("decode args: %w", err)
-			}
-			return task.ScanImport(ctx, args, scanDeps)
 		},
 	}
 
@@ -123,19 +110,6 @@ func (q *sqliteQueue) EnqueueLibraryScan(ctx context.Context, libraryID string) 
 	_, err = q.db.SQL.ExecContext(ctx, `
 		INSERT INTO jobs (kind, args) VALUES (?, ?)
 	`, task.LibraryScanArgs{}.Kind(), string(args))
-	return err
-}
-
-// EnqueueScanImport inserts a scan.import job for one classified
-// LeafBook (ADR-0004 §1).
-func (q *sqliteQueue) EnqueueScanImport(ctx context.Context, args task.ScanImportArgs) error {
-	raw, err := json.Marshal(args)
-	if err != nil {
-		return fmt.Errorf("encode args: %w", err)
-	}
-	_, err = q.db.SQL.ExecContext(ctx, `
-		INSERT INTO jobs (kind, args) VALUES (?, ?)
-	`, task.ScanImportArgs{}.Kind(), string(raw))
 	return err
 }
 

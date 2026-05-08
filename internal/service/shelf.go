@@ -93,13 +93,13 @@ func (s *ShelfService) GetMeta(ctx context.Context, userID, slug string) (model.
 
 // Create accepts an optional rule; nil creates a regular shelf and a
 // non-nil rule creates a smart shelf (validated up-front).
-func (s *ShelfService) Create(ctx context.Context, userID, name, accent string, rule *model.ShelfRule) (model.Shelf, error) {
+func (s *ShelfService) Create(ctx context.Context, userID, name, accent, icon string, rule *model.ShelfRule) (model.Shelf, error) {
 	if rule != nil {
 		if err := rule.Validate(); err != nil {
 			return model.Shelf{}, err
 		}
 	}
-	return s.repo.Create(ctx, userID, name, accent, rule)
+	return s.repo.Create(ctx, userID, name, accent, icon, rule)
 }
 
 // Update edits a shelf's name, accent, and/or rule. Nil pointers are
@@ -107,13 +107,13 @@ func (s *ShelfService) Create(ctx context.Context, userID, name, accent string, 
 // "replace with nil" — the latter is rejected at the repo layer for
 // smart shelves. Public shelves get a broadcast invalidation so every
 // connected viewer's sidebar/cache stays fresh.
-func (s *ShelfService) Update(ctx context.Context, userID, slug string, name, accent *string, rule *model.ShelfRule, ruleChanged bool) (model.Shelf, error) {
+func (s *ShelfService) Update(ctx context.Context, userID, slug string, name, accent, icon *string, rule *model.ShelfRule, ruleChanged bool) (model.Shelf, error) {
 	if ruleChanged && rule != nil {
 		if err := rule.Validate(); err != nil {
 			return model.Shelf{}, err
 		}
 	}
-	updated, err := s.repo.Update(ctx, userID, slug, name, accent, rule, ruleChanged)
+	updated, err := s.repo.Update(ctx, userID, slug, name, accent, icon, rule, ruleChanged)
 	if err != nil {
 		return updated, err
 	}

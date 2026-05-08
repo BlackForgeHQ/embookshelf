@@ -57,6 +57,16 @@ URL form is `?shelf=public:<slug>` (and the matching `/api/v1/shelves/public:<sl
 
 Realtime updates fan out via a broadcast channel on `/events` (`shelf.public.updated` / `shelf.public.removed`); per-user events stay scoped. Un-publishing or deleting redirects active viewers back to `/library` with a toast — the shelf vanishes softly rather than 404-ing them mid-page. Admin role demotion auto un-publishes any public shelves the demoted user owns.
 
+### Shelf icon
+
+The lucide-react icon name a shelf renders with across every surface — sidebar row, library header, command palette, "Add to shelf" picker, account "My shelves" panel. Stored as `shelves.icon TEXT NOT NULL DEFAULT 'library'`; one column, single source of truth (no per-slug fallback map). Owner-curated like name and accent; for shared shelves the owner's icon propagates to every viewer through the existing `shelf.public.updated` broadcast.
+
+System slugs (`reading`, `finished`) are not locked — icon is presentation, not behavior. The migration backfills visual continuity (`reading → book-open`, `finished → check-circle-2`, smart shelves → `sparkles`, etc.) so existing instances render unchanged after upgrade; the user is free to override.
+
+Server-side validation is **regex only** (`^[a-z][a-z0-9-]{0,63}$`), not an allow-list. Trade-off recorded in ADR-0019: lucide ships ~1500 icons and adds new ones every release, so a Go-side enum would churn for no real safety win. A typo'd slug renders as a fallback glyph — fixable in 5s by re-picking. Distinct from `ShelfAccents` (closed palette of 8, allow-list enforced).
+
+Picker UX: search-driven popover (sidebar inline) / inline panel (account page) over the lucide name list. Twelve suggestion glyphs are statically imported for the common case (no flash); the long tail loads via `lucide-react/dynamic`. Default for new shelves is `library` (regular) or `sparkles` (smart), set client-side at create-time.
+
 ---
 
 ## BookDrop housekeeping
@@ -157,7 +167,7 @@ Opaque change token from a backend (S3 returns one; LocalFS leaves it empty). Us
 
 ### Library scan
 
-`task.LibraryScan`; the periodic walk-then-diff-then-act over a Library.
+`task.LibraryScan`; on-demand walk-then-diff over a Library, scoped to drift detection only (ADR-0018). Acts on two diff buckets: **New** entries get a hash + `Files.GetByContentHash` lookup — a same-library hash match means external rename, update the row's `location`; no match means ignore (no `books` row materialised, scan is never an ingest path). **Missing** entries are soft-flagged via `MarkMissing` for the 24h purge sweeper. Changed and Unchanged are no-ops apart from clearing `missing_since` on reappearance. No periodic timer — admin triggers the worker explicitly. Distinct from earlier scan-as-ingest behavior (ADR-0004, superseded).
 
 ### Walker
 
@@ -167,9 +177,9 @@ Opaque change token from a backend (S3 returns one; LocalFS leaves it empty). Us
 
 `internal/scan.Diff`; pure function classifying walk × DB rows into `Changeset{Unchanged, Changed, New, Missing}`.
 
-### Reattach
+### Relocate by hash
 
-`internal/scan.MaybeReattach`; on a Changed file's hash matching another row in the same Library, treats as a rename and preserves `book_id` continuity.
+`scan.RelocateByHash` (or inline equivalent in `task.LibraryScan`); for a New walk entry, hashes the bytes and queries `Files.GetByContentHash` in the same library. On hit, updates the existing `files.location` to the new path — the rename safety net under ADR-0018. On miss, returns without side effect; scan is never an ingest path.
 
 ### Drainer
 
@@ -233,19 +243,11 @@ Every Book lives in its own folder named `{Author}/{Title}/{filename}` under the
 
 ### LeafBook
 
-A directory under the library root that holds ≥1 supported file. Scanner treats it as one Book; all supported files inside (any depth, recursive when no nested LeafBook descendants) become `files` rows under one `book_id`. Sidecar at folder root.
+A directory under the library root that holds the files for one Book — all `files` rows tied to a single `book_id` plus the JSON sidecar at folder root. Materialized by `BookDropService.Approve` via the Placer at the `{Author}/{Title}/` path. Distinct from Container.
 
 ### Container
 
-A directory under the library root that holds only subdirectories (no supported files at this level). Scanner recurses into each subdir as a `LeafBook` candidate. Handles the `Author/` layer of `Author/Title/file.epub`.
-
-### Classify
-
-`scan.Classify(entries, isSupported)`; pure function partitioning a `[]WalkEntry` into `Flat` (root-depth files, legacy single-file Books) and `LeafBooks` (folder-as-Book groupings, including the `Mixed` flag for dirs with both direct files and subdir-LeafBooks). Building block for the scan rewrite (ADR-0004); not yet wired into `task.LibraryScan`.
-
-### PickCover
-
-`scan.PickCover(CoverInputs) CoverChoice`; pure function encoding ADR-0003 §9 cover precedence (`Locked > FolderImage > EmbeddedPrimary > EmbeddedCompanion > SidecarJSON > None`). Companion to `Classify`; the caller (eventual `ScanImportJob`) reads bytes from whichever source the result names. Not yet wired.
+A directory under the library root that holds only subdirectories — the `Author/` layer in `Author/Title/file.epub`. Created implicitly by the Placer when an Author folder doesn't yet exist; no row anywhere in the DB.
 
 ### Primary file / primary format
 
@@ -263,13 +265,9 @@ The highest-priority supported file inside a LeafBook (EPUB > PDF > CBZ > AZW3 >
 
 Existing libraries keep their current shape. Place-time uses the new layout for new approves; edit-time rename lazily moves actively-curated Books into the new shape. No boot-time relocation. Inactive flat-layout Books stay flat indefinitely. Mirrors ADR-0002's "no automatic move" principle. Mixed-layout libraries are expected during the transition tail; all reads use `files.location` + `books.folder_path` from DB, not disk-walk inference.
 
-### Scan auto-import
-
-(ADR-0004) `service.ScanImport(ctx, deps, libraryID, lb)`; service-layer function that materializes one `scan.LeafBook` into a Book row + N files rows + cover + audio metadata. Idempotent via `Files.ExistsByLocation`; returns `service.ErrAlreadyImported` for noops. Performs content-hash reattach (ADR-0003 §10): on import, hashes the LeafBook's primary file and looks up `Files.GetByContentHash`; a same-library match folds into the existing `book_id`, inserts any new sibling files, and updates `books.folder_path` so externally-renamed folders don't duplicate. Wrapped by `task.ScanImportArgs` + `task.ScanImportWorker` (kind `scan.import`) and reachable via `queue.Client.EnqueueScanImport`. `task.LibraryScan` runs `scan.Classify` over its `New` set: LeafBooks dispatch through `ScanImport`; root-depth flat files keep the legacy bookdrop staging path until the lazy ADR-0003 §5 migration eventually moves them into folders.
-
 ### Extract
 
-`extractor.Extract(ctx, store, src, format, key) ExtractResult`; shared extraction primitive returning format metadata + cover bytes + audio fields + sidecar overlay. Single contract between the bookdrop ingest path (already cut over) and the future `ScanImportJob`. Lives in `internal/extractor/` to avoid the import cycle with `internal/ingest/`'s bookdrop watcher (which imports `queue`, which imports `task`).
+`extractor.Extract(ctx, store, src, format, key) ExtractResult`; shared extraction primitive returning format metadata + cover bytes + audio fields + sidecar overlay. Sole consumer is the bookdrop ingest path — under ADR-0018, scan never extracts. Lives in `internal/extractor/` to avoid the import cycle with `internal/ingest/`'s bookdrop watcher (which imports `queue`, which imports `task`).
 
 ---
 

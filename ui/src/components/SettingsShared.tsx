@@ -15,9 +15,20 @@ import { Switch } from "@/components/ui/switch"
 // (per-user) pages. Extracted so the two routes can import them without
 // duplicating 100 lines each.
 
-export function Card({ children, className }: { children: ReactNode; className?: string }) {
+export function Card({
+  children,
+  className,
+}: {
+  children: ReactNode
+  className?: string
+}) {
   return (
-    <div className={cn("flex flex-col gap-3.5 p-4 mb-4 bg-card border border-border rounded-lg shadow-sm", className)}>
+    <div
+      className={cn(
+        "mb-4 flex flex-col gap-3.5 rounded-lg border border-border bg-card p-4 shadow-sm",
+        className
+      )}
+    >
       {children}
     </div>
   )
@@ -81,10 +92,12 @@ export function Toggle({
   onChange: (v: boolean) => void
 }) {
   return (
-    <label className="flex items-center gap-3 py-2 cursor-pointer border-t border-dashed border-border first:border-0">
+    <label className="flex cursor-pointer items-center gap-3 border-t border-dashed border-border py-2 first:border-0">
       <Switch checked={checked} onCheckedChange={onChange} />
       <div className="grow">
-        <div className="text-[13.5px] font-medium leading-none mb-1">{label}</div>
+        <div className="mb-1 text-[13.5px] leading-none font-medium">
+          {label}
+        </div>
         {hint && <div className="text-sm text-muted-foreground">{hint}</div>}
       </div>
     </label>
@@ -93,9 +106,9 @@ export function Toggle({
 
 export function DefRow({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="flex gap-3 py-1.5 items-baseline">
+    <div className="flex items-baseline gap-3 py-1.5">
       <div className="t-label w-40 shrink-0">{label}</div>
-      <div className="text-[13.5px] flex-1 min-w-0 break-words">{value}</div>
+      <div className="min-w-0 flex-1 text-[13.5px] break-words">{value}</div>
     </div>
   )
 }
@@ -127,11 +140,114 @@ export function Avatar({
   )
 }
 
+// NotebookEmpty is the editorial-archival empty-state shell shared across
+// settings panels and the library route. Dashed hairline well, decorative
+// shelf mark, serif headline, italic 44ch subtitle, optional CTA. Defined
+// here so the Libraries / BookDrop / Providers / Library route states stay
+// visually identical without each panel re-implementing the markup.
+export function NotebookEmpty({
+  title,
+  body,
+  action,
+  mark,
+  className,
+}: {
+  title: string
+  body: ReactNode
+  action?: ReactNode
+  // mark overrides the default ShelfMark — pass an alternative SVG when
+  // the panel calls for a different metaphor (e.g. inbox for BookDrop).
+  mark?: ReactNode
+  className?: string
+}) {
+  return (
+    <div
+      className={cn(
+        "mt-2 grid place-items-center gap-6 rounded-xl border border-dashed border-rule-soft px-8 py-16 text-center",
+        className
+      )}
+    >
+      {mark ?? <ShelfMark />}
+      <div className="max-w-[44ch]">
+        <h3 className="font-heading text-[22px] tracking-tight">{title}</h3>
+        <div className="t-small mt-2 text-(--color-ink-3) italic">{body}</div>
+      </div>
+      {action}
+    </div>
+  )
+}
+
+// ShelfMark — three uneven shelf bars. Decorative only, used by the
+// Libraries panel and as the default mark for NotebookEmpty.
+export function ShelfMark() {
+  return (
+    <svg
+      width="84"
+      height="56"
+      viewBox="0 0 84 56"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      className="text-(--color-rule)"
+      aria-hidden
+    >
+      <path d="M2 14h80M2 30h80M2 46h80" />
+      <path d="M14 4v10M22 4v10M30 7v7M46 18v12M54 22v8M62 18v12M14 34v12M26 34v12M38 38v8" />
+    </svg>
+  )
+}
+
+// InboxMark — open inbox glyph, used for BookDrop "no items processed" empty.
+export function InboxMark() {
+  return (
+    <svg
+      width="74"
+      height="56"
+      viewBox="0 0 74 56"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="text-(--color-rule)"
+      aria-hidden
+    >
+      <path d="M8 26l8-18h42l8 18" />
+      <path d="M8 26v22h58V26" />
+      <path d="M8 26h16l4 6h18l4-6h16" />
+      <path d="M30 14h14M30 20h14" />
+    </svg>
+  )
+}
+
+// QuillMark — a stylised feather for "no providers detected" / metadata
+// empty states.
+export function QuillMark() {
+  return (
+    <svg
+      width="60"
+      height="60"
+      viewBox="0 0 60 60"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="text-(--color-rule)"
+      aria-hidden
+    >
+      <path d="M48 8c-18 4-30 16-34 32 6 0 12-2 18-6" />
+      <path d="M14 40l-4 12 12-4" />
+      <path d="M22 28l8 8M26 22l8 8M30 16l8 8" />
+    </svg>
+  )
+}
+
 export function AdminGate({ label }: { label: string }) {
   return (
     <>
       <h2 className="t-h2 mb-6">{label}</h2>
-      <div className="t-small italic text-muted-foreground">
+      <div className="t-small text-muted-foreground italic">
         {label} are admin-only.
       </div>
     </>
@@ -160,8 +276,8 @@ export function SettingsShell<TKey extends string>({
   children: ReactNode
 }) {
   return (
-    <div className="p-4 md:p-8 grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6 md:gap-10 max-w-[960px] mx-auto w-full">
-      <nav className="flex md:flex-col gap-1 overflow-x-auto pb-2 md:pb-0 scrollbar-hide -mx-4 px-4 md:mx-0 md:px-0 border-b md:border-b-0 border-border">
+    <div className="mx-auto grid w-full max-w-[960px] grid-cols-1 gap-6 p-4 md:grid-cols-[220px_1fr] md:gap-10 md:p-8">
+      <nav className="scrollbar-hide -mx-4 flex gap-1 overflow-x-auto border-b border-border px-4 pb-2 md:mx-0 md:flex-col md:border-b-0 md:px-0 md:pb-0">
         {sections.map((s) => {
           const selected = s.key === active
           const gated = s.adminOnly && !isAdmin
@@ -172,11 +288,11 @@ export function SettingsShell<TKey extends string>({
               onClick={() => onSelect(s.key)}
               disabled={gated}
               className={cn(
-                "flex items-center gap-2 px-3 py-2 text-left whitespace-nowrap transition-colors rounded-md md:rounded-none md:border-l-2 font-serif text-[13.5px]",
+                "flex items-center gap-2 rounded-md px-3 py-2 text-left font-serif text-[13.5px] whitespace-nowrap transition-colors md:rounded-none md:border-l-2",
                 selected
-                  ? "bg-muted md:bg-transparent md:border-primary text-foreground"
+                  ? "bg-muted text-foreground md:border-primary md:bg-transparent"
                   : "border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-                gated && "opacity-50 cursor-not-allowed"
+                gated && "cursor-not-allowed opacity-50"
               )}
               title={gated ? "Admin-only" : undefined}
             >
@@ -187,7 +303,7 @@ export function SettingsShell<TKey extends string>({
         })}
       </nav>
 
-      <div className="max-w-[640px] w-full">{children}</div>
+      <div className="w-full max-w-[640px]">{children}</div>
     </div>
   )
 }

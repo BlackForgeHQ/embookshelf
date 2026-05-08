@@ -13,6 +13,8 @@ import {
 } from "@/api/books"
 import { Cover, StarRating } from "@/components/Cover"
 import { Icon } from "@/components/Icon"
+import { NotebookEmpty } from "@/components/SettingsShared"
+import { ShelfIcon } from "@/components/ShelfIcon"
 import { TopBar } from "@/components/TopBar"
 import { Button } from "@/components/ui/button"
 import {
@@ -115,7 +117,7 @@ function LibraryView() {
 
   const rows = books.data?.books ?? []
 
-  const { shelfTitle, subtitle } = useMemo(() => {
+  const { shelfTitle, subtitle, shelfIcon } = useMemo(() => {
     if (isUnshelved) {
       const n = shelves.data?.unshelvedCount ?? 0
       return {
@@ -124,6 +126,7 @@ function LibraryView() {
           n === 0
             ? "All books are shelved."
             : `${n} ${n === 1 ? "book" : "books"} waiting to be shelved.`,
+        shelfIcon: undefined,
       }
     }
     if (activeShelf) {
@@ -137,9 +140,10 @@ function LibraryView() {
               : activeShelf === "finished"
                 ? "Shelved, loved, occasionally revisited."
                 : `${s.bookCount} volumes on this shelf.`,
+          shelfIcon: s.icon,
         }
       }
-      return { shelfTitle: "Shelf", subtitle: "" }
+      return { shelfTitle: "Shelf", subtitle: "", shelfIcon: undefined }
     }
     if (activeLibrary) {
       const lib = libraries.data?.find((x) => x.slug === activeLibrary)
@@ -147,12 +151,14 @@ function LibraryView() {
         return {
           shelfTitle: lib.name,
           subtitle: `${lib.bookCount} volumes in this library.`,
+          shelfIcon: undefined,
         }
       }
     }
     return {
       shelfTitle: "All Books",
       subtitle: "Your complete collection across every library.",
+      shelfIcon: undefined,
     }
   }, [activeShelf, activeLibrary, isUnshelved, shelves.data, libraries.data])
 
@@ -186,7 +192,16 @@ function LibraryView() {
   return (
     <div className="fade-in">
       <TopBar
-        title={shelfTitle}
+        title={
+          shelfIcon ? (
+            <span className="inline-flex items-center gap-2">
+              <ShelfIcon name={shelfIcon} size={22} />
+              <span>{shelfTitle}</span>
+            </span>
+          ) : (
+            shelfTitle
+          )
+        }
         subtitle={subtitle}
         right={
           <div className="flex items-center gap-1 rounded-md border border-border bg-muted p-1">
@@ -411,29 +426,22 @@ function BookCard({
 function EmptyPanel({ unshelved = false }: { unshelved?: boolean }) {
   if (unshelved) {
     return (
-      <div className="rounded-lg border-2 border-dashed border-border bg-card p-12 text-center text-muted-foreground">
-        <div
-          className="font-serif text-lg font-medium text-foreground"
-          style={{ marginBottom: 8 }}
-        >
-          All books are shelved.
-        </div>
-      </div>
+      <NotebookEmpty
+        title="Every book has a home."
+        body="Nothing to surface here — every book in your library is already shelved."
+      />
     )
   }
   return (
-    <div className="rounded-lg border-2 border-dashed border-border bg-card p-12 text-center text-muted-foreground">
-      <div
-        className="font-serif text-lg font-medium text-foreground"
-        style={{ marginBottom: 8 }}
-      >
-        Nothing to show yet.
-      </div>
-      <div className="text-sm text-muted-foreground italic">
-        Drop an EPUB into <span className="mono">/bookdrop</span> or register a
-        library path in Settings.
-      </div>
-    </div>
+    <NotebookEmpty
+      title="An empty stack."
+      body={
+        <>
+          Drop an EPUB into <span className="mono">/bookdrop</span> to stage it
+          for review, or create a library in Settings.
+        </>
+      }
+    />
   )
 }
 

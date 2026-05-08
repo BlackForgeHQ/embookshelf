@@ -14,8 +14,8 @@ import (
 // ExtractResult is the unified output of one extraction pass over a
 // book file: format-specific metadata from the embedded extractor,
 // the cover bytes (if any), audio-only fields, and the merged sidecar
-// overlay. It is the single contract shared by the bookdrop ingest
-// path and the (future) scan-direct ScanImportJob, per ADR-0004 §2.
+// overlay. Sole consumer is the bookdrop ingest path — under ADR-0018,
+// scan never extracts.
 type ExtractResult struct {
 	Format      string
 	Title       string

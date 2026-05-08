@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 
 import { AccentPicker } from "./AccentPicker"
+import { ShelfIconPicker } from "./ShelfIconPicker"
 import type { ShelfAccent } from "./AccentPicker"
 import { Button } from "@/components/ui/button"
 import {
@@ -20,7 +21,11 @@ export type ShelfCreatorDialogProps = {
   existingNames: Array<string>
   busy: boolean
   error: string | null
-  onSubmit: (draft: { name: string; accent: ShelfAccent }) => void
+  onSubmit: (draft: {
+    name: string
+    accent: ShelfAccent
+    icon: string
+  }) => void
 }
 
 // ShelfCreatorDialog replaces the old window.prompt-based shelf creation.
@@ -36,6 +41,7 @@ export function ShelfCreatorDialog({
 }: ShelfCreatorDialogProps) {
   const [name, setName] = useState("")
   const [accent, setAccent] = useState<ShelfAccent>("accent")
+  const [icon, setIcon] = useState<string>("library")
 
   useEffect(() => {
     if (open) return
@@ -44,6 +50,7 @@ export function ShelfCreatorDialog({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setName("")
     setAccent("accent")
+    setIcon("library")
   }, [open])
 
   const trimmed = name.trim()
@@ -85,6 +92,11 @@ export function ShelfCreatorDialog({
             <AccentPicker value={accent} onChange={setAccent} />
           </div>
 
+          <div className="flex flex-col gap-2">
+            <Label>Icon</Label>
+            <ShelfIconPicker value={icon} onChange={setIcon} />
+          </div>
+
           {error && (
             <div className="t-small rounded-sm border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink)">
               {error}
@@ -103,7 +115,7 @@ export function ShelfCreatorDialog({
           </Button>
           <Button
             type="button"
-            onClick={() => onSubmit({ name: trimmed, accent })}
+            onClick={() => onSubmit({ name: trimmed, accent, icon })}
             disabled={!valid || busy}
           >
             {busy ? "Creating…" : "Create shelf"}

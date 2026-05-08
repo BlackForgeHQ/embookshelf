@@ -30,7 +30,7 @@ func NewShelfRepo(d *db.DB) *ShelfRepo {
 // the live count via CountForSmartShelf. The trailing empty owner_name
 // is overridden in queries that JOIN users; left blank for own-only
 // queries to avoid a needless join.
-const shelfCols = `s.id, s.user_id, s.name, s.slug, s.accent, s.created_at,
+const shelfCols = `s.id, s.user_id, s.name, s.slug, s.accent, s.icon, s.created_at,
                   s.is_smart, s.rule, s.is_public,
                   CASE
                     WHEN s.is_smart THEN 0
@@ -42,7 +42,7 @@ const shelfCols = `s.id, s.user_id, s.name, s.slug, s.accent, s.created_at,
 // clauses, which can't use a table alias — they reference columns on the
 // target table directly. Kept in sync with shelfCols column order so
 // scanShelf handles rows from either.
-const shelfColsReturning = `id, user_id, name, slug, accent, created_at,
+const shelfColsReturning = `id, user_id, name, slug, accent, icon, created_at,
                            is_smart, rule, is_public,
                            CASE
                              WHEN is_smart THEN 0
@@ -226,13 +226,16 @@ func smartShelfOrderBy(sort string) string {
 // smart shelves it must be non-nil and already validated by the service.
 // Generates a URL-safe slug from the name and appends -N on collision
 // until unique.
-func (r *ShelfRepo) Create(ctx context.Context, userID, name, accent string, rule *model.ShelfRule) (model.Shelf, error) {
+func (r *ShelfRepo) Create(ctx context.Context, userID, name, accent, icon string, rule *model.ShelfRule) (model.Shelf, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return model.Shelf{}, errors.New("name is required")
 	}
 	if accent == "" {
 		accent = "accent"
+	}
+	if icon == "" {
+		icon = "library"
 	}
 	baseSlug := slugify(name)
 	if baseSlug == "" {
@@ -251,13 +254,13 @@ func (r *ShelfRepo) Create(ctx context.Context, userID, name, accent string, rul
 
 	id := db.NewID()
 	const qPG = `
-		INSERT INTO shelves (id, user_id, name, slug, accent, is_smart, rule)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO shelves (id, user_id, name, slug, accent, icon, is_smart, rule)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (user_id, slug) DO NOTHING
 		RETURNING ` + shelfColsReturning
 	const qSQLite = `
-		INSERT INTO shelves (id, user_id, name, slug, accent, is_smart, rule)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO shelves (id, user_id, name, slug, accent, icon, is_smart, rule)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (user_id, slug) DO NOTHING
 		RETURNING ` + shelfColsReturning
 
@@ -268,7 +271,7 @@ func (r *ShelfRepo) Create(ctx context.Context, userID, name, accent string, rul
 		}
 		row := r.db.SQL.QueryRowContext(ctx,
 			db.SelectQ(r.db.Dialect, qPG, qSQLite),
-			id, userID, name, slug, accent, isSmart, nullOrJSON(ruleJSON))
+			id, userID, name, slug, accent, icon, isSmart, nullOrJSON(ruleJSON))
 		s, err := r.scanShelf(row)
 		// scanShelf maps sql.ErrNoRows → repo.ErrNotFound. Empty
 		// RETURNING after `ON CONFLICT DO NOTHING` lands here, so
@@ -288,7 +291,7 @@ func (r *ShelfRepo) Create(ctx context.Context, userID, name, accent string, rul
 // untouched. Converting a regular shelf to smart or vice-versa is
 // intentionally not supported — shelf_books membership and smart rules
 // don't coexist cleanly, so the right action is delete + re-create.
-func (r *ShelfRepo) Update(ctx context.Context, userID, slug string, name, accent *string, rule *model.ShelfRule, ruleChanged bool) (model.Shelf, error) {
+func (r *ShelfRepo) Update(ctx context.Context, userID, slug string, name, accent, icon *string, rule *model.ShelfRule, ruleChanged bool) (model.Shelf, error) {
 	// Pre-check so we can reject name→empty and smart→regular edits
 	// before building a dynamic UPDATE.
 	cur, err := r.GetBySlugForUser(ctx, userID, slug)
@@ -316,6 +319,14 @@ func (r *ShelfRepo) Update(ctx context.Context, userID, slug string, name, accen
 		if accent != nil {
 			args = append(args, strings.TrimSpace(*accent))
 			sets = append(sets, "accent = ?")
+		}
+		if icon != nil {
+			trimmed := strings.TrimSpace(*icon)
+			if trimmed == "" {
+				return model.Shelf{}, errors.New("icon cannot be empty")
+			}
+			args = append(args, trimmed)
+			sets = append(sets, "icon = ?")
 		}
 		if ruleChanged {
 			if !cur.IsSmart {
@@ -353,6 +364,14 @@ func (r *ShelfRepo) Update(ctx context.Context, userID, slug string, name, accen
 		if accent != nil {
 			args = append(args, strings.TrimSpace(*accent))
 			sets = append(sets, fmt.Sprintf("accent = $%d", len(args)))
+		}
+		if icon != nil {
+			trimmed := strings.TrimSpace(*icon)
+			if trimmed == "" {
+				return model.Shelf{}, errors.New("icon cannot be empty")
+			}
+			args = append(args, trimmed)
+			sets = append(sets, fmt.Sprintf("icon = $%d", len(args)))
 		}
 		if ruleChanged {
 			if !cur.IsSmart {
@@ -500,7 +519,7 @@ func (r *ShelfRepo) scanShelf(s scanner) (model.Shelf, error) {
 		createdAny any
 	)
 	err := s.Scan(
-		&sh.ID, &sh.UserID, &sh.Name, &sh.Slug, &sh.Accent, &createdAny,
+		&sh.ID, &sh.UserID, &sh.Name, &sh.Slug, &sh.Accent, &sh.Icon, &createdAny,
 		&sh.IsSmart, &ruleJS, &sh.IsPublic, &sh.BookCount, &sh.OwnerName,
 	)
 	if err != nil {
@@ -724,7 +743,7 @@ func (r *ShelfRepo) CountUnshelvedForUser(ctx context.Context, userID string) (i
 // shelfColsVisible mirrors shelfCols but populates owner_name for public
 // shelves the viewer doesn't own (LEFT JOIN users so private rows still
 // match without paying the join cost). $1 is bound to userID.
-const shelfColsVisible = `s.id, s.user_id, s.name, s.slug, s.accent, s.created_at,
+const shelfColsVisible = `s.id, s.user_id, s.name, s.slug, s.accent, s.icon, s.created_at,
                   s.is_smart, s.rule, s.is_public,
                   CASE
                     WHEN s.is_smart THEN 0
@@ -735,7 +754,7 @@ const shelfColsVisible = `s.id, s.user_id, s.name, s.slug, s.accent, s.created_a
                     ELSE COALESCE(NULLIF(u.name, ''), u.email, '')
                   END AS owner_name`
 
-const shelfColsVisibleSQLite = `s.id, s.user_id, s.name, s.slug, s.accent, s.created_at,
+const shelfColsVisibleSQLite = `s.id, s.user_id, s.name, s.slug, s.accent, s.icon, s.created_at,
                   s.is_smart, s.rule, s.is_public,
                   CASE
                     WHEN s.is_smart THEN 0

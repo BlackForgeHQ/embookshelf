@@ -2,6 +2,7 @@ import { useState } from "react"
 
 import { AccentPicker } from "./AccentPicker"
 import { Icon } from "./Icon"
+import { ShelfIconPicker } from "./ShelfIconPicker"
 import type { ShelfAccent } from "./AccentPicker"
 import type {
   RuleField,
@@ -142,6 +143,7 @@ type Props = {
   initialName?: string
   initialRule?: ShelfRule
   initialAccent?: ShelfAccent
+  initialIcon?: string
   submitLabel: string
   error?: string | null
   busy?: boolean
@@ -152,6 +154,7 @@ type Props = {
     name: string
     rule: ShelfRule
     accent: ShelfAccent
+    icon: string
   }) => void
   onCancel: () => void
 }
@@ -163,6 +166,7 @@ export function RuleEditor({
   initialName,
   initialRule,
   initialAccent = "accent",
+  initialIcon = "sparkles",
   submitLabel,
   error,
   busy,
@@ -172,6 +176,7 @@ export function RuleEditor({
 }: Props) {
   const [name, setName] = useState(initialName ?? "")
   const [accent, setAccent] = useState<ShelfAccent>(initialAccent)
+  const [icon, setIcon] = useState<string>(initialIcon)
   const [rule, setRule] = useState<ShelfRule>(
     initialRule ?? { match: "all", predicates: [blankPredicate()] }
   )
@@ -229,6 +234,11 @@ export function RuleEditor({
         <div className="flex flex-col gap-2">
           <Label>Accent</Label>
           <AccentPicker value={accent} onChange={setAccent} />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label>Icon</Label>
+          <ShelfIconPicker value={icon} onChange={setIcon} />
         </div>
 
         <div className="flex items-center gap-2.5">
@@ -291,7 +301,7 @@ export function RuleEditor({
           </Button>
           <Button
             disabled={!canSubmit || busy}
-            onClick={() => onSubmit({ name: name.trim(), rule, accent })}
+            onClick={() => onSubmit({ name: name.trim(), rule, accent, icon })}
           >
             {busy ? "Saving…" : submitLabel}
           </Button>

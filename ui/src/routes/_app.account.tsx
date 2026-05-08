@@ -2,11 +2,12 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router"
 
 import { AccountPanel } from "@/components/account/AccountPanel"
 import { DevicesPanel } from "@/components/account/DevicesPanel"
+import { MyShelvesPanel } from "@/components/account/MyShelvesPanel"
 import { ReadingPreferencesPanel } from "@/components/account/ReadingPreferencesPanel"
 import { SettingsShell } from "@/components/SettingsShared"
 import { TopBar } from "@/components/TopBar"
 
-type SectionKey = "account" | "reading" | "devices"
+type SectionKey = "account" | "reading" | "devices" | "shelves"
 
 type AccountSearch = {
   section?: SectionKey
@@ -19,12 +20,15 @@ type AccountSearch = {
 
 const SECTIONS: ReadonlyArray<{ key: SectionKey; label: string }> = [
   { key: "account", label: "Account" },
+  { key: "shelves", label: "My shelves" },
   { key: "reading", label: "Reading preferences" },
   { key: "devices", label: "Device sync" },
 ]
 
 function isSectionKey(v: unknown): v is SectionKey {
-  return v === "account" || v === "reading" || v === "devices"
+  return (
+    v === "account" || v === "reading" || v === "devices" || v === "shelves"
+  )
 }
 
 export const Route = createFileRoute("/_app/account")({
@@ -59,6 +63,7 @@ function AccountPage() {
         isAdmin
       >
         {active === "account" && <AccountPanel />}
+        {active === "shelves" && <MyShelvesPanel />}
         {active === "reading" && <ReadingPreferencesPanel />}
         {active === "devices" && <DevicesPanel />}
       </SettingsShell>

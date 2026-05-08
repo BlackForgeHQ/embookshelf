@@ -4,6 +4,7 @@ import { Link, useRouterState } from "@tanstack/react-router"
 
 import { Icon } from "./Icon"
 import { RuleEditor } from "./RuleEditor"
+import { ShelfIcon } from "./ShelfIcon"
 import type { ShelfAccent } from "./AccentPicker"
 import type { IconName } from "./Icon"
 import type { ReactNode } from "react"
@@ -39,14 +40,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-
-const BUILTIN_SHELF_ICONS: Record<string, IconName> = {
-  reading: "book-open",
-  new: "sparkle",
-  finished: "check",
-  tofinish: "flag",
-  wishlist: "bookmark",
-}
 
 // AppSidebar is mounted once inside the authed shell. Every nav target is a
 // real TanStack Router <Link> so browser back/forward, right-click-open, and
@@ -332,15 +325,18 @@ export function AppSidebar() {
               ? (smartDraft.shelf.accent as ShelfAccent)
               : "accent"
           }
+          initialIcon={
+            smartDraft.mode === "edit" ? smartDraft.shelf.icon : "sparkles"
+          }
           busy={createSmartMut.isPending || updateSmartMut.isPending}
           error={smartMutError?.message ?? null}
-          onSubmit={({ name, rule, accent }) => {
+          onSubmit={({ name, rule, accent, icon }) => {
             if (smartDraft.mode === "create") {
-              createSmartMut.mutate({ name, rule, accent })
+              createSmartMut.mutate({ name, rule, accent, icon })
             } else {
               updateSmartMut.mutate({
                 slug: smartDraft.shelf.slug,
-                body: { name, accent, rule, ruleSet: true },
+                body: { name, accent, icon, rule, ruleSet: true },
               })
             }
           }}
@@ -373,7 +369,7 @@ function RegularShelfRow({
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={shelf.name}>
         <Link to="/library" search={{ shelf: shelf.slug }}>
-          <Icon name={BUILTIN_SHELF_ICONS[shelf.slug] ?? "folder"} size={15} />
+          <ShelfIcon name={shelf.icon} size={15} />
           <span>{shelf.name}</span>
         </Link>
       </SidebarMenuButton>
@@ -421,7 +417,11 @@ function SharedShelfRow({
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={tooltip}>
         <Link to="/library" search={{ shelf: shelf.slug }}>
-          <Icon name="user" size={15} aria-label="shared shelf" />
+          <ShelfIcon
+            name={shelf.icon}
+            size={15}
+            aria-label="shared shelf"
+          />
           <span>{shelf.name}</span>
         </Link>
       </SidebarMenuButton>
@@ -465,7 +465,7 @@ function SmartShelfRow({
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={shelf.name}>
         <Link to="/library" search={{ shelf: shelf.slug }}>
-          <Icon name="sparkle" size={13} aria-label="smart shelf" />
+          <ShelfIcon name={shelf.icon} size={13} aria-label="smart shelf" />
           <span>{shelf.name}</span>
         </Link>
       </SidebarMenuButton>

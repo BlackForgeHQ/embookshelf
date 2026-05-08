@@ -25,7 +25,6 @@ import (
 type Client interface {
 	EnqueueBookDrop(ctx context.Context, itemID string) error
 	EnqueueLibraryScan(ctx context.Context, libraryID string) error
-	EnqueueScanImport(ctx context.Context, args task.ScanImportArgs) error
 	Stop(ctx context.Context) error
 }
 
@@ -39,14 +38,12 @@ func New(
 	resolver storage.Resolver,
 	libStore service.LibraryStore,
 	fileRepo *repo.FileRepo,
-	bookRepo *repo.BookRepo,
-	scanDeps service.ScanImportLeafBookDeps,
 ) (Client, error) {
 	switch d.Dialect {
 	case db.DialectPostgres:
-		return newRiver(ctx, d, bdropSvc, libSvc, resolver, libStore, fileRepo, bookRepo, scanDeps)
+		return newRiver(ctx, d, bdropSvc, libSvc, resolver, libStore, fileRepo)
 	case db.DialectSQLite:
-		return newSQLiteQueue(ctx, d, bdropSvc, libSvc, resolver, libStore, fileRepo, bookRepo, scanDeps)
+		return newSQLiteQueue(ctx, d, bdropSvc, libSvc, resolver, libStore, fileRepo)
 	default:
 		return nil, fmt.Errorf("queue: unknown dialect %q", d.Dialect)
 	}
@@ -67,8 +64,6 @@ func newRiver(
 	resolver storage.Resolver,
 	libStore service.LibraryStore,
 	fileRepo *repo.FileRepo,
-	bookRepo *repo.BookRepo,
-	scanDeps service.ScanImportLeafBookDeps,
 ) (*RiverClient, error) {
 	if d.PG == nil {
 		return nil, errors.New("queue: db.PG is nil for postgres dialect")
@@ -86,23 +81,13 @@ func newRiver(
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &task.BookDropWorker{Deps: task.BookDropDeps{Svc: bdropSvc, Resolver: resolver}})
-	river.AddWorker(workers, &task.ScanImportWorker{Deps: scanDeps})
-
-	// The scan worker needs to enqueue bookdrop.ingest jobs; wire that up
-	// after the client is constructed (circular dep resolved via the
-	// BookDropEnqueuer interface).
-	scanWorker := &task.LibraryScanWorker{
+	river.AddWorker(workers, &task.LibraryScanWorker{
 		Deps: task.LibraryScanDeps{
-			BookDrop:   bdropSvc,
-			Lib:        libSvc,
-			LibStore:   libStore,
-			Files:      fileRepo,
-			Books:      bookRepo,
-			LockMerger: service.MergeLocked,
-			// Queue is set after the river.Client is constructed (cyclic dep).
+			Lib:      libSvc,
+			LibStore: libStore,
+			Files:    fileRepo,
 		},
-	}
-	river.AddWorker(workers, scanWorker)
+	})
 
 	c, err := river.NewClient(driver, &river.Config{
 		Queues: map[string]river.QueueConfig{
@@ -115,8 +100,6 @@ func newRiver(
 	}
 
 	rc := &RiverClient{c: c}
-	scanWorker.Deps.Queue = rc // now the scan worker can enqueue further jobs
-
 	if err := c.Start(ctx); err != nil {
 		return nil, fmt.Errorf("river start: %w", err)
 	}
@@ -132,14 +115,6 @@ func (r *RiverClient) EnqueueBookDrop(ctx context.Context, itemID string) error 
 // EnqueueLibraryScan inserts a library.scan job for the given library.
 func (r *RiverClient) EnqueueLibraryScan(ctx context.Context, libraryID string) error {
 	_, err := r.c.Insert(ctx, task.LibraryScanArgs{LibraryID: libraryID}, nil)
-	return err
-}
-
-// EnqueueScanImport inserts a scan.import job for one classified
-// LeafBook. Called by the LibraryScan worker after it groups new
-// files via scan.Classify (ADR-0004 §1).
-func (r *RiverClient) EnqueueScanImport(ctx context.Context, args task.ScanImportArgs) error {
-	_, err := r.c.Insert(ctx, args, nil)
 	return err
 }
 

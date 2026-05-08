@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -136,6 +137,16 @@ func Load() (Config, error) {
 		case "grpc", "http/protobuf":
 		default:
 			return cfg, errors.New("OTEL_EXPORTER_OTLP_PROTOCOL must be 'grpc' or 'http/protobuf'")
+		}
+	}
+
+	// LocalFS is rooted at "/" (storageloader), so every caller must hand it
+	// absolute paths. The bookdrop watcher records whatever WalkDir yields,
+	// which is relative when BOOKDROP_PATH itself is relative — resolve once
+	// here so item.Path lands in the DB as absolute.
+	if cfg.BookDropPath != "" {
+		if abs, err := filepath.Abs(cfg.BookDropPath); err == nil {
+			cfg.BookDropPath = abs
 		}
 	}
 

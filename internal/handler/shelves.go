@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -14,11 +15,18 @@ import (
 	"github.com/blackforge/embookshelf/internal/service"
 )
 
+// shelfIconRe enforces a kebab-case lucide icon slug shape. The server
+// deliberately does not enumerate lucide's ~1500-icon catalog (ADR-0019);
+// a slug that doesn't resolve at render time falls back to a default
+// glyph in the UI, owner-only blast radius.
+var shelfIconRe = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
+
 type shelfDTO struct {
 	ID        string           `json:"id"`
 	Name      string           `json:"name"`
 	Slug      string           `json:"slug"`
 	Accent    string           `json:"accent"`
+	Icon      string           `json:"icon"`
 	BookCount int              `json:"bookCount"`
 	IsSmart   bool             `json:"isSmart"`
 	IsPublic  bool             `json:"isPublic"`
@@ -40,6 +48,7 @@ func toShelfDTO(s model.Shelf) shelfDTO {
 		Name:      s.Name,
 		Slug:      slug,
 		Accent:    s.Accent,
+		Icon:      s.Icon,
 		BookCount: s.BookCount,
 		IsSmart:   s.IsSmart,
 		IsPublic:  s.IsPublic,
@@ -79,6 +88,7 @@ func (h *Handler) Shelves(c *gin.Context) {
 type createShelfReq struct {
 	Name   string           `json:"name"`
 	Accent string           `json:"accent,omitempty"`
+	Icon   string           `json:"icon,omitempty"`
 	Rule   *model.ShelfRule `json:"rule,omitempty"`
 }
 
@@ -99,7 +109,12 @@ func (h *Handler) ShelfCreate(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "name is required")
 		return
 	}
-	shelf, err := h.shelf.Create(c.Request.Context(), userID, body.Name, body.Accent, body.Rule)
+	body.Icon = strings.TrimSpace(body.Icon)
+	if body.Icon != "" && !shelfIconRe.MatchString(body.Icon) {
+		writeError(c, http.StatusBadRequest, "invalid icon slug")
+		return
+	}
+	shelf, err := h.shelf.Create(c.Request.Context(), userID, body.Name, body.Accent, body.Icon, body.Rule)
 	if err != nil {
 		switch {
 		case errors.Is(err, repo.ErrShelfSlugTaken):
@@ -117,6 +132,7 @@ func (h *Handler) ShelfCreate(c *gin.Context) {
 type patchShelfReq struct {
 	Name   *string `json:"name,omitempty"`
 	Accent *string `json:"accent,omitempty"`
+	Icon   *string `json:"icon,omitempty"`
 	// Distinguishing "omitted" from "explicit null" requires raw json
 	// peeking; for simplicity we treat a present `rule` field as
 	// ruleChanged=true. A regular shelf that sends `rule` gets 400 from
@@ -140,7 +156,15 @@ func (h *Handler) ShelfUpdate(c *gin.Context) {
 	if !bindJSON(c, &body) {
 		return
 	}
-	updated, err := h.shelf.Update(c.Request.Context(), userID, slug, body.Name, body.Accent, body.Rule, body.RuleSet)
+	if body.Icon != nil {
+		trimmed := strings.TrimSpace(*body.Icon)
+		if !shelfIconRe.MatchString(trimmed) {
+			writeError(c, http.StatusBadRequest, "invalid icon slug")
+			return
+		}
+		body.Icon = &trimmed
+	}
+	updated, err := h.shelf.Update(c.Request.Context(), userID, slug, body.Name, body.Accent, body.Icon, body.Rule, body.RuleSet)
 	if err != nil {
 		switch {
 		case errors.Is(err, repo.ErrNotFound):
