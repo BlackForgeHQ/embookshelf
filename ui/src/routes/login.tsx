@@ -115,11 +115,24 @@ function LoginPage() {
     }
   }, [canAutoRedirect, mode, providers])
 
-  const hideLocalForm =
+  // Two paths can hide the local form:
+  // - OIDC force-only: at least one OIDC provider enabled and admin
+  //   flipped the "force SSO" toggle.
+  // - Forward-auth: upstream proxy gates the deployment and admin
+  //   asked to hide the form.
+  // The `?local=true` escape hatch and any OIDC error always show the
+  // form so admins can recover from a misconfiguration.
+  const fwdAuthHidesLocal =
+    oidc.data?.forwardAuthEnabled === true &&
+    oidc.data.hideLocalLogin === true &&
+    !local &&
+    !oidcError
+  const oidcHidesLocal =
     oidc.data?.forceOnly === true &&
     providers.length > 0 &&
     !local &&
     !oidcError
+  const hideLocalForm = oidcHidesLocal || fwdAuthHidesLocal
 
   const oidcErrorMessage = oidcError
     ? (OIDC_ERROR_MESSAGES[oidcError] ?? OIDC_ERROR_MESSAGES.unknown)
@@ -234,6 +247,26 @@ function LoginPage() {
               }}
             >
               {error.message}
+            </div>
+          )}
+
+          {fwdAuthHidesLocal && (
+            <div
+              style={{
+                padding: "14px 16px",
+                border: "1px solid var(--color-rule-soft)",
+                background: "var(--color-paper-1)",
+                borderRadius: 3,
+                fontSize: 13,
+                lineHeight: 1.5,
+                color: "var(--color-ink-2)",
+                marginBottom: 16,
+              }}
+              role="status"
+            >
+              This deployment uses upstream SSO via your reverse proxy. Sign in
+              through your provider — embookshelf trusts the session it
+              forwards.
             </div>
           )}
 

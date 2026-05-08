@@ -31,8 +31,16 @@ type SessionResolver interface {
 // RequireAuth ensures a valid session exists and attaches the current user
 // to the request context. On failure the JSON API gets a plain 401 — the
 // React SPA decides how to react (typically `navigate('/login?next=...')`).
+//
+// Short-circuits when an upstream middleware (forward-auth) has already
+// pinned a user to the request — the cookie path is one of two
+// alternatives, not the only authentication channel. ADR-0022.
 func RequireAuth(resolver SessionResolver) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if u := UserFromContext(c.Request.Context()); u != nil {
+			c.Next()
+			return
+		}
 		cookie, err := c.Cookie(SessionCookieName)
 		if err != nil || cookie == "" {
 			unauthorized(c)
@@ -94,6 +102,15 @@ func CSRFGuard(trustedOrigins []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		switch c.Request.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			c.Next()
+			return
+		}
+		// Forward-auth requests come from a trusted upstream proxy
+		// (the trusted-IP gate already established provenance). The
+		// proxy enforces same-origin for its own session cookie;
+		// adding an Origin/Referer check here blocks legitimate
+		// proxy-to-app calls without strengthening trust. ADR-0022.
+		if ForwardAuthAttached(c) {
 			c.Next()
 			return
 		}

@@ -3,6 +3,7 @@ package handler
 import (
 	"embed"
 
+	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/crypto"
@@ -55,6 +56,12 @@ type Handler struct {
 	inviteRepo *repo.UserInviteRepo
 	cipher     crypto.Cipher
 	emailTpl   *email.Templates
+	// Forward-auth (ADR-0022). fwdAuthHolder carries the runtime
+	// CIDR/header config — atomically swappable so settings saves
+	// hot-reload without a restart. fwdAuth is the resolver invoked
+	// by the middleware on a trusted-IP hit.
+	fwdAuthHolder *auth.ForwardAuthHolder
+	fwdAuth       auth.ForwardAuthResolver
 }
 
 type Deps struct {
@@ -93,6 +100,11 @@ type Deps struct {
 	InviteRepo *repo.UserInviteRepo
 	Cipher     crypto.Cipher
 	EmailTpl   *email.Templates
+	// Forward-auth (ADR-0022). FwdAuthHolder is hot-swappable; when
+	// nil or pointing at a disabled config the middleware falls
+	// through to RequireAuth on every request.
+	FwdAuthHolder *auth.ForwardAuthHolder
+	FwdAuth       auth.ForwardAuthResolver
 }
 
 func New(d Deps) *Handler {
@@ -110,14 +122,16 @@ func New(d Deps) *Handler {
 		appSettings:  d.AppSettings,
 		covers:       d.Covers,
 		hub:          d.Hub, queue: d.Queue,
-		libStore:   d.LibStore,
-		users:      d.Users,
-		books:      d.Books,
-		notifier:   d.Notifier,
-		resetRepo:  d.ResetRepo,
-		inviteRepo: d.InviteRepo,
-		cipher:     d.Cipher,
-		emailTpl:   d.EmailTpl,
+		libStore:      d.LibStore,
+		users:         d.Users,
+		books:         d.Books,
+		notifier:      d.Notifier,
+		resetRepo:     d.ResetRepo,
+		inviteRepo:    d.InviteRepo,
+		cipher:        d.Cipher,
+		emailTpl:      d.EmailTpl,
+		fwdAuthHolder: d.FwdAuthHolder,
+		fwdAuth:       d.FwdAuth,
 	}
 }
 

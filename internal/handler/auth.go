@@ -96,12 +96,24 @@ func (h *Handler) Login(c *gin.Context) {
 }
 
 // Logout clears the session cookie and destroys the server-side session.
-// Idempotent — returns 204 even if no session was attached.
+// Idempotent — returns 204 when no logout redirect is needed.
+//
+// When forward-auth is enabled and a logoutUrl is configured, the SPA
+// gets 200 + {"logoutUrl"} so it can redirect to the upstream proxy's
+// logout endpoint (Authelia /logout, etc.). The cookie clear is still
+// performed for any local session a break-glass admin had in parallel.
+// ADR-0022.
 func (h *Handler) Logout(c *gin.Context) {
 	if cookie, err := c.Cookie(auth.SessionCookieName); err == nil && cookie != "" {
 		_ = h.auth.Logout(c.Request.Context(), cookie)
 	}
 	auth.ClearSessionCookie(c)
+	if h.fwdAuthHolder != nil {
+		if cfg := h.fwdAuthHolder.Get(); cfg != nil && cfg.Enabled && cfg.LogoutURL != "" {
+			c.JSON(http.StatusOK, gin.H{"logoutUrl": cfg.LogoutURL})
+			return
+		}
+	}
 	c.Status(http.StatusNoContent)
 }
 

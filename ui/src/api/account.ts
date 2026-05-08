@@ -3,13 +3,16 @@ import { meQueryKey } from "./auth"
 import { defineMutation } from "./mutation"
 
 // Mirrors internal/handler/account_identities.go accountIdentitiesDTO.
+// `proxy` is the forward-auth slug — managed by the upstream reverse
+// proxy, surfaced read-only with `managed=true`. ADR-0022.
 export type AccountIdentityProvider = {
-  provider: "google" | "github" | "generic"
+  provider: "google" | "github" | "generic" | "proxy"
   displayName: string
   linked: boolean
   email?: string
   linkedAt?: string
   lastLoginAt?: string
+  managed?: boolean
 }
 
 export type AccountIdentities = {

@@ -26,6 +26,11 @@ type accountIdentityProviderDTO struct {
 	Email       *string `json:"email,omitempty"`
 	LinkedAt    *string `json:"linkedAt,omitempty"`
 	LastLoginAt *string `json:"lastLoginAt,omitempty"`
+	// Managed marks identities the user cannot disconnect from the
+	// panel. Today only the forward-auth `proxy` identity sets this:
+	// the row is recreated on the next proxy-trusted request, so a
+	// Disconnect button would mislead. ADR-0022.
+	Managed bool `json:"managed,omitempty"`
 }
 
 // AccountIdentities returns the user's per-provider link state plus
@@ -81,6 +86,27 @@ func (h *Handler) AccountIdentities(c *gin.Context) {
 		}
 		out.Providers = append(out.Providers, row)
 	}
+	// Forward-auth identity (slug=`proxy`) is admin-managed: it is
+	// surfaced read-only, never as a Connect/Disconnect button, since
+	// deleting the row would just be re-created on the next
+	// proxy-trusted request. CONTEXT.md → "Proxy identity".
+	if i, ok := bySlug[repo.ProviderSlugProxy]; ok {
+		ident := links[i]
+		row := accountIdentityProviderDTO{
+			Provider:    repo.ProviderSlugProxy,
+			DisplayName: "Reverse proxy",
+			Linked:      true,
+			Managed:     true,
+			Email:       ident.Email,
+		}
+		la := ident.LinkedAt.UTC().Format("2006-01-02T15:04:05Z")
+		row.LinkedAt = &la
+		if ident.LastLoginAt != nil {
+			ll := ident.LastLoginAt.UTC().Format("2006-01-02T15:04:05Z")
+			row.LastLoginAt = &ll
+		}
+		out.Providers = append(out.Providers, row)
+	}
 	c.JSON(http.StatusOK, out)
 }
 
@@ -129,6 +155,14 @@ func (h *Handler) AccountOIDCUnlink(c *gin.Context) {
 	provider := strings.TrimSpace(c.Param("provider"))
 	if provider == "" {
 		writeError(c, http.StatusBadRequest, "provider is required")
+		return
+	}
+	// Forward-auth identity is managed by the upstream proxy; the row
+	// is recreated on the next request so unlinking is a no-op
+	// dressed up as success. Refuse with 409 instead of pretending.
+	// ADR-0022.
+	if provider == repo.ProviderSlugProxy {
+		writeError(c, http.StatusConflict, "reverse-proxy identity is managed by your administrator and cannot be unlinked here")
 		return
 	}
 	deleted, err := h.identities.DeleteWithGuard(c.Request.Context(), u.ID, provider)

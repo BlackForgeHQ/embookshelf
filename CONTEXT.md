@@ -14,7 +14,11 @@ A credential link between an embookshelf user and an OIDC provider account. Stor
 
 ### OIDC provider
 
-An OIDC identity provider slug used in URLs and DB rows. Three slugs: `google`, `github`, `generic`. The `generic` slug points at whatever issuer the admin configured (Authelia, Keycloak, Okta, etc.). A provider is "enabled" when its admin row in `app_settings` has `Enabled=true`. **Distinct** from the metadata Provider used by the enrichment subsystem (see below).
+An OIDC identity provider slug used in URLs and DB rows. Three slugs: `google`, `github`, `generic`. The `generic` slug points at whatever issuer the admin configured (Authelia, Keycloak, Okta, etc.). A provider is "enabled" when its admin row in `app_settings` has `Enabled=true`. **Distinct** from the metadata Provider used by the enrichment subsystem (see below). **Distinct** from Forward-auth (header-injected identity from a reverse proxy) — both materialize as rows in `user_identities`, but only OIDC slugs run a redirect/exchange flow.
+
+### External identity provider
+
+Umbrella term for any source of `user_identities` rows: the three OIDC providers above plus the reverse-proxy `proxy` slug. Used when a statement applies to both auth surfaces (Lockout guard, Linking, Provisioning). Prefer the specific term (OIDC provider, Forward-auth) when you mean only one.
 
 ### Linking
 
@@ -33,15 +37,23 @@ The invariant enforced on every unlink: a user must end the operation with at le
 
 ### Provisioning
 
-Admin policy controlling whether an unknown OIDC identity creates a new user. Three knobs in `oidc_auto_provision_details`: `EnableAutoProvisioning`, `RequireAdminApproval`, `DefaultRole`. Off by default after the first user; the first OIDC login on an empty instance is always admitted as admin to avoid an unrecoverable state.
+Admin policy controlling whether an unknown External identity creates a new user. Three knobs in `oidc_auto_provision_details`: `EnableAutoProvisioning`, `RequireAdminApproval`, `DefaultRole`. Off by default after the first user; the first External-identity login on an empty instance (OIDC callback or first trusted-proxy header hit) is always admitted as admin to avoid an unrecoverable state. Same row, same knobs, both auth paths — the table name is historical, not OIDC-only.
 
 ### Force-only mode
 
-Admin toggle `oidc_force_only_mode` that hides the local-password form on the login page when exactly one OIDC provider is enabled. Does not affect API auth or existing local users.
+Admin toggle `oidc_force_only_mode` that hides the local-password form on the login page when exactly one OIDC provider is enabled. Does not affect API auth or existing local users. Distinct from `forward_auth.hideLocalLogin` — that one hides the form whenever forward-auth is enabled, regardless of OIDC provider count.
 
----
+### Forward-auth
 
-## Library curation
+Reverse-proxy header authentication: the upstream proxy (Authelia, oauth2-proxy, Traefik forwardAuth, Cloudflare Access) terminates SSO and injects identity headers (`Remote-User`, `Remote-Email`, …) on every proxied request. embookshelf trusts those headers and attaches the matching `users` row to the request context — no session cookie issued, no redirect dance. Materializes as a `user_identities` row with slug `proxy` and `subject = Remote-User` (the identity key) plus `email = Remote-Email` (auto-link helper). Per-request stateless: proxy logout propagates immediately because no cookie outlives the proxy session. Configured via `app_settings.FORWARD_AUTH`. Only ever applied to browser/SPA routes — OPDS endpoints stay on HTTP Basic regardless. ADR-0022.
+
+### Trusted proxy CIDR
+
+The `app_settings.FORWARD_AUTH.trustedProxyCIDRs` allowlist. The forward-auth middleware reads identity headers **only** if `c.Request.RemoteAddr` (the immediate TCP peer) falls inside one of these CIDRs. `X-Forwarded-For` and `X-Real-IP` are ignored — trusting them would let any caller spoof the source address and forge identity. Boot refuses to start when forward-auth is enabled and the list is empty (mirrors Cipher's bad-key boot semantics, ADR-0010). Implies a deployment shape where the forward-auth proxy is the immediate upstream of embookshelf; sandwiching another LB between them is unsupported.
+
+### Proxy identity
+
+A `user_identities` row with `provider = 'proxy'`, created automatically on the first trusted forward-auth hit (via auto-link by email or Provisioning). Surfaced read-only in the account panel ("Reverse proxy: <Remote-Email> — managed by your administrator") — no Connect/Disconnect buttons, because deleting the row would just be re-created on the next request. Counts as a credential for Lockout guard purposes.
 
 ### Unshelved
 
@@ -387,7 +399,8 @@ Avoid these substitutes — they drift the meaning:
 - "API" / "signature" → say **interface** (includes invariants, error modes, ordering, not just types).
 - "boundary" → say **seam** (boundary is overloaded with DDD bounded contexts).
 - "Storage source" / "BookSource" used interchangeably → no. `storage.Source` = bytes; `service.BookSource` = delivery target.
-- "Provider" alone is ambiguous — say **OIDC provider** (auth) or **metadata provider** (enrichment).
+- "Provider" alone is ambiguous — say **OIDC provider** (auth, redirect flow) or **metadata provider** (enrichment) or **Forward-auth** (proxy header trust). For statements that span OIDC + forward-auth, say **External identity provider**.
+- "Trusted proxy" alone is ambiguous — say **Trusted proxy CIDR** (the IP allowlist) when discussing the gate; "the upstream proxy" when discussing the deployment.
 - "Email provider" — **don't use**. There is no email-provider abstraction. Say **Sender** (transport seam) or **SMTP config** (the `app_settings.EMAIL` row). ADR-0020.
 
 When proposing a deepening, use the architecture vocabulary: **module**, **interface**, **implementation**, **depth**, **seam**, **adapter**, **leverage**, **locality**, plus **deletion test** and **one-adapter-is-hypothetical-two-is-real**.

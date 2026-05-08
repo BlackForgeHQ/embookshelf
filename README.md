@@ -115,6 +115,14 @@ there is no Node/Bun runtime in production.
 - Redirect URIs fall back to the live request's scheme + host when
   `APP_URL` is unset, so local dev and self-hosted deployments behind a
   reverse proxy work without extra env wiring.
+- **Forward auth (reverse-proxy headers)** — for setups that terminate
+  SSO at the proxy (Authelia, oauth2-proxy, Traefik forwardAuth,
+  Cloudflare Access). Stateless per-request: trusts identity headers
+  only when the immediate TCP peer matches `trustedProxyCIDRs`,
+  ignores `X-Forwarded-For`, no session cookie minted so proxy
+  logout propagates immediately. Auto-provisioning + email auto-link
+  reuse the OIDC policy row. See
+  [docs/ops/forward-auth.md](docs/ops/forward-auth.md) and ADR-0022.
 
 ### Library, shelves, reading
 - Multi-library model with **one root per library**, fixed at creation.
@@ -393,8 +401,6 @@ backlog. Near-term candidates:
 
 - **CBR + AZW3/MOBI/FB2 ingest** — CBZ + audio shipped; CBR needs a
   rar decoder, the rest need format parsers.
-- **Forward auth / reverse-proxy header auth** — complements OIDC for
-  setups that terminate SSO at the proxy (Authelia, oauth2-proxy).
 - **Per-library permissions** — the user model is currently binary
   (admin / user); a shared instance with mixed audiences needs
   finer-grained library ACLs.

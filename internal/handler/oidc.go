@@ -11,20 +11,36 @@ import (
 	"github.com/blackforge/embookshelf/internal/service"
 )
 
-// OIDCConfig returns the public list of enabled providers — the login
-// page uses this to render one "Sign in with …" button per provider.
-// Safe to serve unauthenticated: no secrets.
+// OIDCConfig returns the public list of enabled providers + the
+// forward-auth notice flag — the login page uses this to render one
+// "Sign in with …" button per provider and to swap the local form
+// for an SSO-only notice when the deployment is gated by an upstream
+// proxy. Safe to serve unauthenticated: no secrets.
 func (h *Handler) OIDCConfig(c *gin.Context) {
-	if h.oidc == nil {
-		c.JSON(http.StatusOK, gin.H{"providers": []any{}, "forceOnly": false})
-		return
+	resp := gin.H{
+		"providers":            []any{},
+		"forceOnly":            false,
+		"forwardAuthEnabled":   false,
+		"hideLocalLogin":       false,
+		"forwardAuthLogoutUrl": "",
 	}
-	cfg, err := h.oidc.PublicConfig(c.Request.Context())
-	if err != nil {
-		writeServerError(c, "oidc public config", err)
-		return
+	if h.oidc != nil {
+		cfg, err := h.oidc.PublicConfig(c.Request.Context())
+		if err != nil {
+			writeServerError(c, "oidc public config", err)
+			return
+		}
+		resp["providers"] = cfg.Providers
+		resp["forceOnly"] = cfg.ForceOnly
 	}
-	c.JSON(http.StatusOK, cfg)
+	if h.fwdAuthHolder != nil {
+		if fa := h.fwdAuthHolder.Get(); fa != nil && fa.Enabled {
+			resp["forwardAuthEnabled"] = true
+			resp["hideLocalLogin"] = fa.HideLocalForm
+			resp["forwardAuthLogoutUrl"] = fa.LogoutURL
+		}
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // OIDCLogin initiates the flow for the provider slug in the URL.

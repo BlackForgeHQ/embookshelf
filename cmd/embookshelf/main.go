@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 
+	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/crypto"
@@ -266,6 +267,46 @@ func main() {
 	identityRepo := repo.NewIdentityRepo(dbh)
 	oidcSvc := service.NewOIDCService(appSettingsRepo, userRepo, sessionRepo, identityRepo, cfg.AppURL)
 
+	// Forward-auth — reverse-proxy header trust (ADR-0022). Settings
+	// row seeded with a disabled default; admins flip Enabled and
+	// list TrustedProxyCIDRs from the settings UI. Boot refuses to
+	// start if the persisted row is inconsistent (Enabled=true with
+	// no CIDR), mirroring Cipher's bad-key behavior from ADR-0010.
+	if err := appSettingsRepo.SeedForwardAuthIfAbsent(ctx); err != nil {
+		slog.Warn("seed forward_auth settings", "err", err)
+	}
+	fwdAuthCfgRow, err := appSettingsRepo.GetForwardAuth(ctx)
+	if err != nil {
+		slog.Error("load forward_auth settings", "err", err)
+		os.Exit(1)
+	}
+	if err := repo.ValidateForwardAuth(fwdAuthCfgRow); err != nil {
+		slog.Error("forward_auth config invalid — refusing to start", "err", err)
+		os.Exit(1)
+	}
+	fwdAuthRuntime, err := auth.NewForwardAuthConfig(
+		fwdAuthCfgRow.Enabled,
+		fwdAuthCfgRow.TrustedProxyCIDRs,
+		fwdAuthCfgRow.Headers.User,
+		fwdAuthCfgRow.Headers.Email,
+		fwdAuthCfgRow.Headers.Name,
+		fwdAuthCfgRow.Headers.Groups,
+		fwdAuthCfgRow.LogoutURL,
+		fwdAuthCfgRow.HideLocalLogin,
+	)
+	if err != nil {
+		slog.Error("forward_auth runtime config", "err", err)
+		os.Exit(1)
+	}
+	fwdAuthHolder := auth.NewForwardAuthHolder(fwdAuthRuntime)
+	fwdAuthSvc := service.NewForwardAuthService(appSettingsRepo, userRepo, identityRepo)
+	if fwdAuthCfgRow.Enabled {
+		slog.Info("forward_auth enabled",
+			"trustedCIDRs", fwdAuthCfgRow.TrustedProxyCIDRs,
+			"userHeader", fwdAuthCfgRow.Headers.User,
+		)
+	}
+
 	if n, err := authSvc.PurgeExpiredSessions(ctx); err != nil {
 		slog.Warn("purge sessions", "err", err)
 	} else if n > 0 {
@@ -382,35 +423,37 @@ func main() {
 
 	// HTTP.
 	h := handler.New(handler.Deps{
-		Cfg:          cfg,
-		Static:       staticfs.FS,
-		Version:      version,
-		Commit:       commit,
-		Lib:          libSvc,
-		Shelf:        shelfSvc,
-		Auth:         authSvc,
-		BookDrop:     bdropSvc,
-		Progress:     progressSvc,
-		Enrich:       enrichSvc,
-		Annotations:  annotationSvc,
-		Stats:        statsSvc,
-		ReadingStats: readingStatsSvc,
-		Devices:      deviceSvc,
-		OIDC:         oidcSvc,
-		Identities:   identityRepo,
-		Search:       searchSvc,
-		AppSettings:  appSettingsRepo,
-		Covers:       covers,
-		Hub:          hub,
-		Queue:        q,
-		LibStore:     libStore,
-		Users:        userRepo,
-		Books:        bookRepo,
-		Notifier:     notifier,
-		ResetRepo:    resetRepo,
-		InviteRepo:   inviteRepo,
-		Cipher:       secretCipher,
-		EmailTpl:     emailTpl,
+		Cfg:           cfg,
+		Static:        staticfs.FS,
+		Version:       version,
+		Commit:        commit,
+		Lib:           libSvc,
+		Shelf:         shelfSvc,
+		Auth:          authSvc,
+		BookDrop:      bdropSvc,
+		Progress:      progressSvc,
+		Enrich:        enrichSvc,
+		Annotations:   annotationSvc,
+		Stats:         statsSvc,
+		ReadingStats:  readingStatsSvc,
+		Devices:       deviceSvc,
+		OIDC:          oidcSvc,
+		Identities:    identityRepo,
+		Search:        searchSvc,
+		AppSettings:   appSettingsRepo,
+		Covers:        covers,
+		Hub:           hub,
+		Queue:         q,
+		LibStore:      libStore,
+		Users:         userRepo,
+		Books:         bookRepo,
+		Notifier:      notifier,
+		ResetRepo:     resetRepo,
+		InviteRepo:    inviteRepo,
+		Cipher:        secretCipher,
+		EmailTpl:      emailTpl,
+		FwdAuthHolder: fwdAuthHolder,
+		FwdAuth:       fwdAuthSvc,
 	})
 
 	srv := &http.Server{

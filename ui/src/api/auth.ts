@@ -47,8 +47,21 @@ export async function login(
   return user
 }
 
-export async function logout(): Promise<void> {
-  await api<void>("/api/v1/auth/logout", { method: "POST" })
+// LogoutResult mirrors the server's response. When forward-auth is
+// enabled and `logoutUrl` is configured, the server returns 200 with
+// the URL so the SPA can redirect the browser to the upstream proxy's
+// logout endpoint (Authelia /logout, etc.). Otherwise 204 / undefined.
+export type LogoutResult = { logoutUrl?: string }
+
+export async function logout(): Promise<LogoutResult> {
+  // 204 / 200+JSON are both valid responses. The api helper returns
+  // `undefined` typed-as-T for the empty-body case, so widen here and
+  // collapse to the empty result.
+  const res: LogoutResult | undefined = await api<LogoutResult | undefined>(
+    "/api/v1/auth/logout",
+    { method: "POST" }
+  )
+  return res ?? {}
 }
 
 export async function signup(
@@ -76,12 +89,18 @@ export type OIDCPublicProvider = {
   loginUrl: string
 }
 
-// OIDCConfig is the anonymous login-page view: one entry per enabled
-// provider plus the force-only flag. Empty `providers` means "local
-// login only".
+// OIDCConfig is the anonymous login-page view. `providers` is one
+// entry per enabled OIDC provider; `forceOnly` hides the local form
+// when an OIDC provider is in use; the `forwardAuth*` fields advertise
+// whether reverse-proxy header SSO is enabled and where to redirect on
+// logout. Empty `providers` + disabled forwardAuth means "local login
+// only". ADR-0022.
 export type OIDCConfig = {
   providers: Array<OIDCPublicProvider>
   forceOnly: boolean
+  forwardAuthEnabled: boolean
+  hideLocalLogin: boolean
+  forwardAuthLogoutUrl: string
 }
 
 export async function oidcConfig(): Promise<OIDCConfig> {

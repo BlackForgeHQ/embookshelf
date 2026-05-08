@@ -343,6 +343,24 @@ export function AccountPanel() {
           enabled={hasPassword}
         />
         {data?.providers.map((p) => {
+          // Forward-auth (slug=`proxy`) is admin-managed: surface a
+          // read-only badge with no Connect / Disconnect button.
+          // Deleting the row would just be re-created on the next
+          // proxy-trusted request. ADR-0022.
+          if (p.managed) {
+            return (
+              <SignInRow
+                key={p.provider}
+                title={p.displayName}
+                subtitle={
+                  p.email
+                    ? `${p.email} — managed by your administrator`
+                    : "Managed by your administrator"
+                }
+                enabled
+              />
+            )
+          }
           // Lockout: user with no password and exactly one linked
           // identity cannot remove their last credential.
           const isLastCredential = p.linked && !hasPassword && linkedCount === 1

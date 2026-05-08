@@ -7,6 +7,7 @@ import { AboutPanel } from "@/components/settings/AboutPanel"
 import { BackupsPanel } from "@/components/settings/BackupsPanel"
 import { BookDropPanel } from "@/components/settings/BookDropPanel"
 import { OidcPanel } from "@/components/settings/OidcPanel"
+import { ForwardAuthPanel } from "@/components/settings/ForwardAuthPanel"
 import { UsersPanel } from "@/components/settings/UsersPanel"
 import { EmailPanel } from "@/components/settings/EmailPanel"
 import { InvitesPanel } from "@/components/settings/InvitesPanel"
@@ -34,6 +35,7 @@ type SectionKey =
   | "invites"
   | "users"
   | "oidc"
+  | "forwardAuth"
   | "backups"
   | "about"
 
@@ -52,6 +54,7 @@ const SECTIONS: Array<SectionSpec> = [
   { key: "invites", label: "Invites", adminOnly: true },
   { key: "users", label: "Users & roles", adminOnly: true },
   { key: "oidc", label: "OIDC / SSO", adminOnly: true },
+  { key: "forwardAuth", label: "Forward auth", adminOnly: true },
   { key: "backups", label: "Backups", adminOnly: true },
   { key: "about", label: "About", adminOnly: true },
 ]
@@ -108,6 +111,7 @@ function Admin() {
           <UsersPanel isAdmin={isAdmin} me={me.data ?? null} />
         )}
         {active === "oidc" && <OidcPanel isAdmin={isAdmin} />}
+        {active === "forwardAuth" && <ForwardAuthPanel isAdmin={isAdmin} />}
         {active === "backups" && <BackupsPanel isAdmin={isAdmin} />}
         {active === "about" && <AboutPanel isAdmin={isAdmin} />}
       </SettingsShell>

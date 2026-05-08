@@ -33,6 +33,13 @@ func (h *Handler) Engine() *gin.Engine {
 		AllowCredentials: true,
 	}))
 
+	// Forward-auth runs before CSRFGuard so a trusted-IP hit can mark
+	// the request and skip the origin check. No-op when disabled or
+	// when the source IP is outside TrustedProxyCIDRs. ADR-0022.
+	if h.fwdAuthHolder != nil && h.fwdAuth != nil {
+		r.Use(auth.ForwardAuth(h.fwdAuthHolder, h.fwdAuth))
+	}
+
 	r.Use(auth.CSRFGuard(h.cfg.AllowedOrigins))
 
 	api := r.Group("/api/v1")
@@ -169,6 +176,9 @@ func (h *Handler) Engine() *gin.Engine {
 				admin.GET("/oidc", h.SettingsOIDCGet)
 				admin.PUT("/oidc", h.SettingsOIDCUpdate)
 				admin.POST("/oidc/test/:slug", h.SettingsOIDCTest)
+
+				admin.GET("/forward-auth", h.SettingsForwardAuthGet)
+				admin.PUT("/forward-auth", h.SettingsForwardAuthUpdate)
 
 				admin.GET("/email", h.SettingsEmailGet)
 				admin.PUT("/email", h.SettingsEmailUpdate)
