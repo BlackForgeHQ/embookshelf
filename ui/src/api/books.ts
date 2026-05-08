@@ -432,3 +432,17 @@ export const bookCoverUrl = (id: string, version?: string) =>
   version
     ? `/api/v1/books/${id}/cover?v=${encodeURIComponent(version)}`
     : `/api/v1/books/${id}/cover`
+
+// Amazon's Send-to-Kindle service accepts EPUB and PDF only. Mirrors
+// the eligibility check on internal/handler/kindle.go so the UI can
+// disable the action up front instead of round-tripping for a 415.
+export function isKindleEligibleFormat(format: string): boolean {
+  const f = format.toLowerCase()
+  return f === "epub" || f === "pdf"
+}
+
+export const sendBookToKindle = defineMutation({
+  fn: (id: string): Promise<void> =>
+    api<void>(`/api/v1/books/${id}/send-to-kindle`, { method: "POST" }),
+  invalidates: [],
+})

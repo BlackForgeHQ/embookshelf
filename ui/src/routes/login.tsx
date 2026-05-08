@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { createFileRoute, redirect } from "@tanstack/react-router"
+import { Link, createFileRoute, redirect } from "@tanstack/react-router"
 import type { FormEvent } from "react"
 
 import type { ApiError } from "@/api/client"
@@ -272,6 +272,22 @@ function LoginPage() {
                     onChange={(e) => setPassword(e.target.value)}
                   />
                 </Field>
+
+                {mode === "login" && signupOpen.data?.emailEnabled && (
+                  <div style={{ marginTop: -4, textAlign: "right" }}>
+                    <Link
+                      to="/forgot-password"
+                      className="t-small"
+                      style={{
+                        color: "var(--color-ink-2)",
+                        textDecoration: "underline",
+                        fontSize: 12,
+                      }}
+                    >
+                      Forgot password?
+                    </Link>
+                  </div>
+                )}
 
                 <Button
                   type="submit"

@@ -135,13 +135,18 @@ type appConfigDTO struct {
 	// false the UI disables the "S3" kind option in the library-create form
 	// so the user learns immediately rather than on submit.
 	S3Available bool `json:"s3Available"`
+	// EmailEnabled mirrors EMAIL.enabled. The login page hides "Forgot
+	// password" and the book detail disables Send-to-Kindle when false.
+	// ADR-0020.
+	EmailEnabled bool `json:"emailEnabled"`
 }
 
 // AppConfig returns lightweight feature flags derived from the server
 // configuration. Session-authed, not admin-gated.
 func (h *Handler) AppConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, appConfigDTO{
-		S3Available: h.cfg.SharedS3.Configured(),
+		S3Available:  h.cfg.SharedS3.Configured(),
+		EmailEnabled: h.emailEnabled(),
 	})
 }
 

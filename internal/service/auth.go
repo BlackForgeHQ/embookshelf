@@ -146,6 +146,20 @@ func (s *AuthService) PurgeExpiredSessions(ctx context.Context) (int64, error) {
 	return s.sessions.PurgeExpired(ctx)
 }
 
+// IssueSession mints a session for an already-validated user.
+// Callers (invite-accept, OIDC callback) have proven the user is who
+// they say they are through a different channel; this method is the
+// single seam for "now make them logged in" so cookie issuance and
+// last-seen bumping stay together.
+func (s *AuthService) IssueSession(ctx context.Context, userID, userAgent string) (model.Session, error) {
+	sess, err := s.sessions.Create(ctx, userID, userAgent, SessionTTL)
+	if err != nil {
+		return model.Session{}, err
+	}
+	_ = s.users.TouchLastSeen(ctx, userID, time.Now())
+	return sess, nil
+}
+
 // ErrPasswordAlreadySet is returned by SetInitialPassword when the
 // user already has a password — they should hit ChangePassword
 // (which proves possession of the current credential) instead.

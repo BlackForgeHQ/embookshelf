@@ -5,6 +5,8 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/coverstore"
+	"github.com/blackforge/embookshelf/internal/crypto"
+	"github.com/blackforge/embookshelf/internal/email"
 	"github.com/blackforge/embookshelf/internal/queue"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -40,6 +42,18 @@ type Handler struct {
 	// installs that haven't configured a storage backend — serveBookFile
 	// falls back to local serving.
 	libStore service.LibraryStore
+	// Email subsystem seams. notifier is nil when EMAIL.enabled=false;
+	// handlers gate the feature on that nil rather than re-reading the
+	// row each request. resetRepo + inviteRepo + users back the token
+	// flows; cipher + emailTpl back the admin "send test email"
+	// endpoint and any handler-side render. ADR-0020.
+	users      *repo.UserRepo
+	books      *repo.BookRepo
+	notifier   *service.Notifier
+	resetRepo  *repo.PasswordResetTokenRepo
+	inviteRepo *repo.UserInviteRepo
+	cipher     crypto.Cipher
+	emailTpl   *email.Templates
 }
 
 type Deps struct {
@@ -68,6 +82,15 @@ type Deps struct {
 	// and any other library-aware lookup. Optional — omitting it falls
 	// back to local c.File() serving for every book.
 	LibStore service.LibraryStore
+	// Email subsystem seams. Notifier nil → email features disabled and
+	// affected handlers return 503 EMAIL_DISABLED. ADR-0020.
+	Users      *repo.UserRepo
+	Books      *repo.BookRepo
+	Notifier   *service.Notifier
+	ResetRepo  *repo.PasswordResetTokenRepo
+	InviteRepo *repo.UserInviteRepo
+	Cipher     crypto.Cipher
+	EmailTpl   *email.Templates
 }
 
 func New(d Deps) *Handler {
@@ -85,8 +108,22 @@ func New(d Deps) *Handler {
 		appSettings:  d.AppSettings,
 		covers:       d.Covers,
 		hub:          d.Hub, queue: d.Queue,
-		libStore: d.LibStore,
+		libStore:   d.LibStore,
+		users:      d.Users,
+		books:      d.Books,
+		notifier:   d.Notifier,
+		resetRepo:  d.ResetRepo,
+		inviteRepo: d.InviteRepo,
+		cipher:     d.Cipher,
+		emailTpl:   d.EmailTpl,
 	}
+}
+
+// emailEnabled reports whether the email subsystem is wired and on.
+// Handlers gate the feature on this so feature-disabled installs
+// return 503 EMAIL_DISABLED uniformly. ADR-0020.
+func (h *Handler) emailEnabled() bool {
+	return h.notifier != nil
 }
 
 // Secure reports whether the session cookie should be marked Secure.

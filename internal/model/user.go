@@ -29,6 +29,7 @@ type User struct {
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	LastSeenAt      *time.Time
+	KindleEmail     string // Send-to-Kindle target; empty when unset. ADR-0021.
 }
 
 // Display returns a friendly name, falling back to the email.

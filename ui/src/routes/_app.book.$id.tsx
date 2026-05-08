@@ -20,10 +20,13 @@ import {
   deleteBook,
   fetchBook,
   fetchShelves,
+  isKindleEligibleFormat,
   patchBook,
   removeBookFromShelf,
+  sendBookToKindle,
   shelvesQueryKey,
 } from "@/api/books"
+import { appConfigQueryKey, fetchAppConfig } from "@/api/settings"
 import {
   DEVICE_KIND_LABELS,
   devicesQueryKey,
@@ -176,6 +179,7 @@ function BookDetail() {
             <Icon name="download" size={13} /> Download
           </a>
         </Button>
+        <SendToKindleButton book={b} kindleEmail={me.data?.kindleEmail ?? ""} />
         <SendToDeviceButton bookId={id} />
       </div>
 
@@ -1010,6 +1014,83 @@ function shortLocator(locator: string): string {
   if (locator.startsWith("page:")) return `p.${locator.slice(5)}`
   if (locator.startsWith("epubcfi")) return "EPUB"
   return locator
+}
+
+// SendToKindleButton fires the book at the user's @kindle.com address.
+// Disabled with an explanatory tooltip when (a) the format isn't supported
+// by Amazon's converter, (b) the user hasn't set a Kindle email yet, or
+// (c) email delivery is off on this instance. The "set email" path
+// deep-links to the account section so the user can fill it in once and
+// come back.
+function SendToKindleButton({
+  book,
+  kindleEmail,
+}: {
+  book: BookDetailPayload
+  kindleEmail: string
+}) {
+  const navigate = useNavigate()
+  const cfg = useQuery({
+    queryKey: appConfigQueryKey,
+    queryFn: fetchAppConfig,
+    staleTime: 5 * 60_000,
+  })
+
+  const sendMut = useApiMutation(sendBookToKindle, {
+    successToast: "Send-to-Kindle queued.",
+    errorToast: (e) => e.message || "Send to Kindle failed.",
+  })
+
+  const eligible = isKindleEligibleFormat(book.format)
+  const emailEnabled = cfg.data?.emailEnabled !== false
+  const hasKindle = kindleEmail.trim() !== ""
+
+  if (!emailEnabled) {
+    // Hide entirely when the instance has no SMTP wired up — avoids
+    // teasing a feature the admin can't enable in this session.
+    return null
+  }
+
+  if (!eligible) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        disabled
+        title="Send-to-Kindle accepts EPUB and PDF only"
+      >
+        <Icon name="device" size={13} /> Send to Kindle
+      </Button>
+    )
+  }
+
+  if (!hasKindle) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() =>
+          navigate({ to: "/account", search: { section: "account" } })
+        }
+        title="Set your @kindle.com address in Account settings first"
+      >
+        <Icon name="device" size={13} /> Set Kindle email
+      </Button>
+    )
+  }
+
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={sendMut.isPending}
+      onClick={() => sendMut.mutate(book.id)}
+      title={`Send to ${kindleEmail}`}
+    >
+      <Icon name="device" size={13} />{" "}
+      {sendMut.isPending ? "Sending…" : "Send to Kindle"}
+    </Button>
+  )
 }
 
 // SendToDeviceButton opens a tiny dropdown of paired devices. If none are

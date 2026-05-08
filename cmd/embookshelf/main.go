@@ -19,6 +19,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/crypto"
 	"github.com/blackforge/embookshelf/internal/db"
+	"github.com/blackforge/embookshelf/internal/email"
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/handler"
 	"github.com/blackforge/embookshelf/internal/ingest"
@@ -271,8 +272,66 @@ func main() {
 		slog.Info("purged expired sessions", "count", n)
 	}
 
+	// Email subsystem (ADR-0020). Read EMAIL row, build Sender + Notifier
+	// when enabled. Disabled instances wire NoopSender so the
+	// service-layer code path is uniform but the public APIs return
+	// 503 EMAIL_DISABLED via emailEnabled() on the handler.
+	if err := appSettingsRepo.SeedEmailIfAbsent(ctx); err != nil {
+		slog.Warn("seed email settings", "err", err)
+	}
+	emailCfg, err := appSettingsRepo.GetEmail(ctx, secretCipher)
+	if err != nil {
+		slog.Warn("load email settings", "err", err)
+	}
+	emailTpl, err := email.NewTemplates()
+	if err != nil {
+		slog.Error("email templates", "err", err)
+		os.Exit(1)
+	}
+	var notifier *service.Notifier
+	resetRepo := repo.NewPasswordResetTokenRepo(dbh)
+	inviteRepo := repo.NewUserInviteRepo(dbh)
+	if emailCfg.Enabled {
+		s, err := email.NewSMTPSender(email.SMTPConfig{
+			Host:        emailCfg.SMTP.Host,
+			Port:        emailCfg.SMTP.Port,
+			Username:    emailCfg.SMTP.Username,
+			Password:    emailCfg.SMTP.Password,
+			TLS:         email.TLSMode(emailCfg.SMTP.TLS),
+			FromAddress: emailCfg.From.Address,
+			FromName:    emailCfg.From.Name,
+		})
+		if err != nil {
+			slog.Warn("email sender disabled — invalid SMTP config", "err", err)
+		} else {
+			notifier = service.NewNotifier(service.NotifierDeps{
+				Sender:    s,
+				Templates: emailTpl,
+				Resets:    resetRepo,
+				Invites:   inviteRepo,
+				Users:     userRepo,
+				LibStore:  libStore,
+				PublicURL: emailCfg.PublicURL,
+				Enabled:   true,
+			})
+			slog.Info("email subsystem ready", "from", emailCfg.From.Address, "host", emailCfg.SMTP.Host, "port", emailCfg.SMTP.Port)
+		}
+	} else {
+		slog.Info("email subsystem disabled — configure under admin settings to enable")
+	}
+
 	// Background queue. PG → River; SQLite → polling worker (queue.New dispatches by dialect).
-	q, err := queue.New(ctx, dbh, bdropSvc, libSvc, storageResolver, libStore, fileRepo)
+	q, err := queue.New(ctx, dbh, queue.Deps{
+		BookDropSvc: bdropSvc,
+		LibSvc:      libSvc,
+		Resolver:    storageResolver,
+		LibStore:    libStore,
+		FileRepo:    fileRepo,
+		Books:       bookRepo,
+		Users:       userRepo,
+		Notifier:    notifier,
+		Hub:         hub,
+	})
 	if err != nil {
 		slog.Error("queue", "err", err)
 		os.Exit(1)
@@ -364,6 +423,13 @@ func main() {
 		Hub:          hub,
 		Queue:        q,
 		LibStore:     libStore,
+		Users:        userRepo,
+		Books:        bookRepo,
+		Notifier:     notifier,
+		ResetRepo:    resetRepo,
+		InviteRepo:   inviteRepo,
+		Cipher:       secretCipher,
+		EmailTpl:     emailTpl,
 	})
 
 	srv := &http.Server{

@@ -1,0 +1,12 @@
+Hi,
+
+{{.InvitedByName}} invited you to join their embookshelf instance as
+a {{.Role}}.
+
+Accept the invitation and choose a password here:
+
+  {{.AcceptURL}}
+
+This link expires on {{.ExpiresAt}}.
+
+— embookshelf

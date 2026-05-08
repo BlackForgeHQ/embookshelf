@@ -17,9 +17,6 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/db"
-	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/storage"
 	"github.com/blackforge/embookshelf/internal/task"
 )
 
@@ -39,15 +36,7 @@ type kindHandler func(ctx context.Context, rawArgs string) error
 // Compile-time interface check.
 var _ Client = (*sqliteQueue)(nil)
 
-func newSQLiteQueue(
-	ctx context.Context,
-	d *db.DB,
-	bdropSvc *service.BookDropService,
-	libSvc *service.LibraryService,
-	resolver storage.Resolver,
-	libStore service.LibraryStore,
-	fileRepo *repo.FileRepo,
-) (*sqliteQueue, error) {
+func newSQLiteQueue(ctx context.Context, d *db.DB, deps Deps) (*sqliteQueue, error) {
 	q := &sqliteQueue{
 		db:       d,
 		interval: time.Second,
@@ -55,11 +44,17 @@ func newSQLiteQueue(
 		doneCh:   make(chan struct{}),
 	}
 
-	bdropDeps := task.BookDropDeps{Svc: bdropSvc, Resolver: resolver}
+	bdropDeps := task.BookDropDeps{Svc: deps.BookDropSvc, Resolver: deps.Resolver}
 	libDeps := task.LibraryScanDeps{
-		Lib:      libSvc,
-		LibStore: libStore,
-		Files:    fileRepo,
+		Lib:      deps.LibSvc,
+		LibStore: deps.LibStore,
+		Files:    deps.FileRepo,
+	}
+	kindleDeps := task.SendToKindleDeps{
+		Notifier: deps.Notifier,
+		Books:    deps.Books,
+		Users:    deps.Users,
+		Hub:      deps.Hub,
 	}
 
 	q.handlers = map[string]kindHandler{
@@ -76,6 +71,16 @@ func newSQLiteQueue(
 				return fmt.Errorf("decode args: %w", err)
 			}
 			return task.LibraryScan(ctx, args, libDeps)
+		},
+		(task.SendToKindleArgs{}).Kind(): func(ctx context.Context, raw string) error {
+			if kindleDeps.Notifier == nil {
+				return errors.New("kindle send: notifier not wired")
+			}
+			var args task.SendToKindleArgs
+			if err := json.Unmarshal([]byte(raw), &args); err != nil {
+				return fmt.Errorf("decode args: %w", err)
+			}
+			return task.SendToKindle(ctx, args, kindleDeps)
 		},
 	}
 
@@ -110,6 +115,17 @@ func (q *sqliteQueue) EnqueueLibraryScan(ctx context.Context, libraryID string) 
 	_, err = q.db.SQL.ExecContext(ctx, `
 		INSERT INTO jobs (kind, args) VALUES (?, ?)
 	`, task.LibraryScanArgs{}.Kind(), string(args))
+	return err
+}
+
+func (q *sqliteQueue) EnqueueSendToKindle(ctx context.Context, bookID, userID string) error {
+	args, err := json.Marshal(task.SendToKindleArgs{BookID: bookID, UserID: userID})
+	if err != nil {
+		return fmt.Errorf("encode args: %w", err)
+	}
+	_, err = q.db.SQL.ExecContext(ctx, `
+		INSERT INTO jobs (kind, args) VALUES (?, ?)
+	`, task.SendToKindleArgs{}.Kind(), string(args))
 	return err
 }
 

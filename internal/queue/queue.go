@@ -17,6 +17,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/sse"
 	"github.com/blackforge/embookshelf/internal/storage"
 	"github.com/blackforge/embookshelf/internal/task"
 )
@@ -25,25 +26,33 @@ import (
 type Client interface {
 	EnqueueBookDrop(ctx context.Context, itemID string) error
 	EnqueueLibraryScan(ctx context.Context, libraryID string) error
+	EnqueueSendToKindle(ctx context.Context, bookID, userID string) error
 	Stop(ctx context.Context) error
+}
+
+// Deps groups the seams every backend needs. Splitting from the
+// long positional list of New() keeps the boot wiring readable when
+// new workers (Send-to-Kindle, future jobs) join.
+type Deps struct {
+	BookDropSvc *service.BookDropService
+	LibSvc      *service.LibraryService
+	Resolver    storage.Resolver
+	LibStore    service.LibraryStore
+	FileRepo    *repo.FileRepo
+	Books       *repo.BookRepo
+	Users       *repo.UserRepo
+	Notifier    *service.Notifier
+	Hub         *sse.Hub
 }
 
 // New constructs a Client appropriate for the dialect of d:
 // Postgres → River-backed; SQLite → polling worker.
-func New(
-	ctx context.Context,
-	d *db.DB,
-	bdropSvc *service.BookDropService,
-	libSvc *service.LibraryService,
-	resolver storage.Resolver,
-	libStore service.LibraryStore,
-	fileRepo *repo.FileRepo,
-) (Client, error) {
+func New(ctx context.Context, d *db.DB, deps Deps) (Client, error) {
 	switch d.Dialect {
 	case db.DialectPostgres:
-		return newRiver(ctx, d, bdropSvc, libSvc, resolver, libStore, fileRepo)
+		return newRiver(ctx, d, deps)
 	case db.DialectSQLite:
-		return newSQLiteQueue(ctx, d, bdropSvc, libSvc, resolver, libStore, fileRepo)
+		return newSQLiteQueue(ctx, d, deps)
 	default:
 		return nil, fmt.Errorf("queue: unknown dialect %q", d.Dialect)
 	}
@@ -56,15 +65,7 @@ type RiverClient struct {
 
 // newRiver builds and starts the River-backed implementation. The
 // caller is queue.New, which dispatches by dialect.
-func newRiver(
-	ctx context.Context,
-	d *db.DB,
-	bdropSvc *service.BookDropService,
-	libSvc *service.LibraryService,
-	resolver storage.Resolver,
-	libStore service.LibraryStore,
-	fileRepo *repo.FileRepo,
-) (*RiverClient, error) {
+func newRiver(ctx context.Context, d *db.DB, deps Deps) (*RiverClient, error) {
 	if d.PG == nil {
 		return nil, errors.New("queue: db.PG is nil for postgres dialect")
 	}
@@ -80,14 +81,24 @@ func newRiver(
 	}
 
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &task.BookDropWorker{Deps: task.BookDropDeps{Svc: bdropSvc, Resolver: resolver}})
+	river.AddWorker(workers, &task.BookDropWorker{Deps: task.BookDropDeps{Svc: deps.BookDropSvc, Resolver: deps.Resolver}})
 	river.AddWorker(workers, &task.LibraryScanWorker{
 		Deps: task.LibraryScanDeps{
-			Lib:      libSvc,
-			LibStore: libStore,
-			Files:    fileRepo,
+			Lib:      deps.LibSvc,
+			LibStore: deps.LibStore,
+			Files:    deps.FileRepo,
 		},
 	})
+	if deps.Notifier != nil {
+		river.AddWorker(workers, &task.SendToKindleWorker{
+			Deps: task.SendToKindleDeps{
+				Notifier: deps.Notifier,
+				Books:    deps.Books,
+				Users:    deps.Users,
+				Hub:      deps.Hub,
+			},
+		})
+	}
 
 	c, err := river.NewClient(driver, &river.Config{
 		Queues: map[string]river.QueueConfig{
@@ -115,6 +126,12 @@ func (r *RiverClient) EnqueueBookDrop(ctx context.Context, itemID string) error 
 // EnqueueLibraryScan inserts a library.scan job for the given library.
 func (r *RiverClient) EnqueueLibraryScan(ctx context.Context, libraryID string) error {
 	_, err := r.c.Insert(ctx, task.LibraryScanArgs{LibraryID: libraryID}, nil)
+	return err
+}
+
+// EnqueueSendToKindle inserts a kindle.send job for the given book + user.
+func (r *RiverClient) EnqueueSendToKindle(ctx context.Context, bookID, userID string) error {
+	_, err := r.c.Insert(ctx, task.SendToKindleArgs{BookID: bookID, UserID: userID}, nil)
 	return err
 }
 

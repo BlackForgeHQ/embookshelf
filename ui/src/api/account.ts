@@ -1,4 +1,5 @@
 import { api } from "./client"
+import { meQueryKey } from "./auth"
 import { defineMutation } from "./mutation"
 
 // Mirrors internal/handler/account_identities.go accountIdentitiesDTO.
@@ -43,4 +44,16 @@ export const setInitialPassword = defineMutation({
       body: JSON.stringify({ next }),
     }),
   invalidates: [accountIdentitiesQueryKey],
+})
+
+// updateKindleEmail sets (or clears, with empty string) the user's
+// Send-to-Kindle target. Server validates the `^[a-z0-9._-]+@kindle.com$`
+// shape so a typo here doesn't leak the file to a stranger's address.
+export const updateKindleEmail = defineMutation({
+  fn: (email: string): Promise<void> =>
+    api<void>("/api/v1/account/kindle-email", {
+      method: "PUT",
+      body: JSON.stringify({ email }),
+    }),
+  invalidates: [meQueryKey],
 })

@@ -9,6 +9,7 @@ import {
   linkOIDC,
   setInitialPassword,
   unlinkOIDC,
+  updateKindleEmail,
 } from "@/api/account"
 import {
   changePassword,
@@ -16,6 +17,10 @@ import {
   meQueryKey,
   updateDisplayName,
 } from "@/api/auth"
+import {
+  appConfigQueryKey,
+  fetchAppConfig,
+} from "@/api/settings"
 import { useApiMutation } from "@/api/mutation"
 import { Avatar, Card, Field } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
@@ -381,7 +386,126 @@ export function AccountPanel() {
           </div>
         )}
       </div>
+
+      <SendToKindleSection currentEmail={user?.kindleEmail ?? ""} />
     </>
+  )
+}
+
+// SendToKindleSection lets users register the @kindle.com address Amazon
+// will accept files at. Server-side validation enforces the domain shape;
+// the panel just trims whitespace and reflects the saved value back so
+// the form can be cleared by saving an empty string.
+function SendToKindleSection({ currentEmail }: { currentEmail: string }) {
+  const cfg = useQuery({
+    queryKey: appConfigQueryKey,
+    queryFn: fetchAppConfig,
+    staleTime: 5 * 60_000,
+  })
+  const [draft, setDraft] = useState(currentEmail)
+
+  // Keep the input synced when the cached `me` updates from elsewhere
+  // (e.g. another tab persists a new value). Effectively a controlled
+  // "reset on prop change" — write a key swap when this gets noisy.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDraft(currentEmail)
+  }, [currentEmail])
+
+  const saveMut = useApiMutation(updateKindleEmail, {
+    successToast: (_, value) =>
+      value === "" ? "Kindle email cleared." : "Kindle email saved.",
+    errorToast: (err) =>
+      err.message || "Could not save Kindle email.",
+  })
+
+  const trimmed = draft.trim()
+  const dirty = trimmed !== currentEmail
+
+  if (cfg.data && cfg.data.emailEnabled === false) {
+    return (
+      <div id="kindle">
+        <div className="t-label" style={{ marginTop: 24, marginBottom: 10 }}>
+          Send to Kindle
+        </div>
+        <div
+          style={{
+            border: "1px solid var(--color-rule-soft)",
+            padding: 14,
+            background: "var(--color-paper-0)",
+          }}
+          className="t-small"
+        >
+          Send-to-Kindle is unavailable on this instance. Ask an administrator
+          to configure SMTP under{" "}
+          <strong>Settings &rarr; Email delivery</strong> to enable it.
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div id="kindle">
+      <div className="t-label" style={{ marginTop: 24, marginBottom: 10 }}>
+        Send to Kindle
+      </div>
+      <Card>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            saveMut.mutate(trimmed)
+          }}
+          className="flex flex-col gap-3"
+        >
+          <Field label="Kindle email">
+            <Input
+              type="email"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="you@kindle.com"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </Field>
+          <p className="t-small" style={{ fontSize: 12, lineHeight: 1.55 }}>
+            Add this server&apos;s sender address to your Amazon{" "}
+            <a
+              href="https://www.amazon.com/sendtokindle"
+              target="_blank"
+              rel="noreferrer"
+              style={{ textDecoration: "underline" }}
+            >
+              approved senders
+            </a>{" "}
+            list. The exact address is shown to administrators under{" "}
+            <strong>Settings &rarr; Email delivery</strong>.
+          </p>
+          <div className="flex items-center justify-end gap-2">
+            {currentEmail && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setDraft("")
+                  saveMut.mutate("")
+                }}
+                disabled={saveMut.isPending}
+              >
+                Remove
+              </Button>
+            )}
+            <Button
+              type="submit"
+              size="sm"
+              disabled={!dirty || saveMut.isPending}
+            >
+              {saveMut.isPending ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </form>
+      </Card>
+    </div>
   )
 }
 

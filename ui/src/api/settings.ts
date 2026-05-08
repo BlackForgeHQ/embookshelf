@@ -77,6 +77,7 @@ export const rescanLibrary = defineMutation({
 // AppConfig is the lightweight feature-flag payload from GET /api/v1/config.
 export type AppConfig = {
   s3Available: boolean
+  emailEnabled: boolean
 }
 
 export async function fetchAppConfig(): Promise<AppConfig> {

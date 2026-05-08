@@ -14,12 +14,13 @@ export type AuthUser = {
   statusChangedAt?: string
   display: string
   initials: string
+  kindleEmail: string
   createdAt: string
   lastSeenAt?: string
 }
 
 type UserEnvelope = { user: AuthUser }
-type SignupStatus = { enabled: boolean }
+type SignupStatus = { enabled: boolean; emailEnabled: boolean }
 
 // fetchMe returns the authenticated user or null when the server responds
 // with 401. Keeps useQuery's error state reserved for actual failures
@@ -108,5 +109,59 @@ export const updateDisplayName = defineMutation({
       method: "PATCH",
       body: JSON.stringify({ name }),
     }),
+  invalidates: [meQueryKey],
+})
+
+// --- Password reset --------------------------------------------------------
+
+// Mirrors internal/handler/auth_password_reset.go passwordResetVerifyResp.
+// Server returns the same shape with `valid: false` for unknown / expired /
+// consumed tokens so callers can't distinguish failure modes by response code.
+export type PasswordResetVerify = {
+  valid: boolean
+  email?: string
+  expiresAt?: string
+}
+
+export const requestPasswordReset = defineMutation({
+  fn: (email: string): Promise<void> =>
+    api<void>("/api/v1/auth/password-reset/request", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+  invalidates: [],
+})
+
+export async function verifyPasswordReset(
+  token: string
+): Promise<PasswordResetVerify> {
+  return api<PasswordResetVerify>(
+    `/api/v1/auth/password-reset/verify?token=${encodeURIComponent(token)}`
+  )
+}
+
+export const confirmPasswordReset = defineMutation({
+  fn: (args: { token: string; newPassword: string }): Promise<void> =>
+    api<void>("/api/v1/auth/password-reset/confirm", {
+      method: "POST",
+      body: JSON.stringify(args),
+    }),
+  invalidates: [],
+})
+
+// --- Invite acceptance -----------------------------------------------------
+
+export const acceptInvite = defineMutation({
+  fn: async (args: {
+    token: string
+    name: string
+    password: string
+  }): Promise<AuthUser> => {
+    const { user } = await api<UserEnvelope>("/api/v1/auth/invites/accept", {
+      method: "POST",
+      body: JSON.stringify(args),
+    })
+    return user
+  },
   invalidates: [meQueryKey],
 })

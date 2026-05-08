@@ -9,7 +9,10 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as ResetRouteImport } from './routes/reset'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
+import { Route as AcceptInviteRouteImport } from './routes/accept-invite'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app.index'
 import { Route as ReadIdRouteImport } from './routes/read.$id'
@@ -24,9 +27,24 @@ import { Route as AppBookIdRouteImport } from './routes/_app.book.$id'
 import { Route as AppBookIdFindRouteImport } from './routes/_app.book.$id_.find'
 import { Route as AppBookIdEditRouteImport } from './routes/_app.book.$id_.edit'
 
+const ResetRoute = ResetRouteImport.update({
+  id: '/reset',
+  path: '/reset',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
+  id: '/forgot-password',
+  path: '/forgot-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AcceptInviteRoute = AcceptInviteRouteImport.update({
+  id: '/accept-invite',
+  path: '/accept-invite',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppRoute = AppRouteImport.update({
@@ -96,7 +114,10 @@ const AppBookIdEditRoute = AppBookIdEditRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
+  '/accept-invite': typeof AcceptInviteRoute
+  '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRouteWithChildren
+  '/reset': typeof ResetRoute
   '/account': typeof AppAccountRoute
   '/bookdrop': typeof AppBookdropRoute
   '/library': typeof AppLibraryRoute
@@ -110,7 +131,10 @@ export interface FileRoutesByFullPath {
   '/book/$id/find': typeof AppBookIdFindRoute
 }
 export interface FileRoutesByTo {
+  '/accept-invite': typeof AcceptInviteRoute
+  '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRouteWithChildren
+  '/reset': typeof ResetRoute
   '/account': typeof AppAccountRoute
   '/bookdrop': typeof AppBookdropRoute
   '/library': typeof AppLibraryRoute
@@ -127,7 +151,10 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
+  '/accept-invite': typeof AcceptInviteRoute
+  '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRouteWithChildren
+  '/reset': typeof ResetRoute
   '/_app/account': typeof AppAccountRoute
   '/_app/bookdrop': typeof AppBookdropRoute
   '/_app/library': typeof AppLibraryRoute
@@ -145,7 +172,10 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/accept-invite'
+    | '/forgot-password'
     | '/login'
+    | '/reset'
     | '/account'
     | '/bookdrop'
     | '/library'
@@ -159,7 +189,10 @@ export interface FileRouteTypes {
     | '/book/$id/find'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/accept-invite'
+    | '/forgot-password'
     | '/login'
+    | '/reset'
     | '/account'
     | '/bookdrop'
     | '/library'
@@ -175,7 +208,10 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/_app'
+    | '/accept-invite'
+    | '/forgot-password'
     | '/login'
+    | '/reset'
     | '/_app/account'
     | '/_app/bookdrop'
     | '/_app/library'
@@ -192,17 +228,41 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
+  AcceptInviteRoute: typeof AcceptInviteRoute
+  ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRouteWithChildren
+  ResetRoute: typeof ResetRoute
   ReadIdRoute: typeof ReadIdRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/reset': {
+      id: '/reset'
+      path: '/reset'
+      fullPath: '/reset'
+      preLoaderRoute: typeof ResetRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/login': {
       id: '/login'
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/forgot-password': {
+      id: '/forgot-password'
+      path: '/forgot-password'
+      fullPath: '/forgot-password'
+      preLoaderRoute: typeof ForgotPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/accept-invite': {
+      id: '/accept-invite'
+      path: '/accept-invite'
+      fullPath: '/accept-invite'
+      preLoaderRoute: typeof AcceptInviteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app': {
@@ -339,7 +399,10 @@ const LoginRouteWithChildren = LoginRoute._addFileChildren(LoginRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
+  AcceptInviteRoute: AcceptInviteRoute,
+  ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRouteWithChildren,
+  ResetRoute: ResetRoute,
   ReadIdRoute: ReadIdRoute,
 }
 export const routeTree = rootRouteImport

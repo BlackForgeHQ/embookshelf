@@ -335,6 +335,50 @@ Fan-out policy: per-provider error → log + write to health table + return nil 
 
 ---
 
+## Email delivery (ADRs 0020–0021)
+
+### Email subsystem
+
+The set of features that send transactional mail: password reset, admin invite, Send-to-Kindle. Gated by a single feature flag in `app_settings.EMAIL.enabled`. When off, the password-reset link hides on the login page, the Send-to-Kindle button disables, the admin invite UI redirects to email settings, and the affected APIs return 503 `{"error":{"code":"EMAIL_DISABLED"}}`. ADR-0020.
+
+### Sender
+
+`email.Sender`; the transport seam. `Send(ctx, Message) error`. One real implementation: `SMTPSender` built on `github.com/wneessen/go-mail`. A `NoopSender` is wired when the email subsystem is disabled so domain code never branches on enabled-ness. **No** provider catalog mirroring `internal/provider` — the SMTP transport covers Brevo, Mailjet, SES (SMTP endpoint), Postmark, Mailgun, Gmail, and self-hosted Postfix without a discriminator. Adding a second adapter (Resend HTTP) is a localised change behind the same interface, deferred until a real user is blocked. ADR-0020.
+
+### Notifier
+
+`service.Notifier`; orchestration above `Sender`. Knows about reset tokens, invite tokens, the Send-to-Kindle attachment build (via `LibraryHandle`), and the public URL used to render absolute links in templates. Three entry points: `SendPasswordReset(ctx, user, token)`, `SendAdminInvite(ctx, invite, invitedBy)`, `SendToKindle(ctx, book, user, source)`. Templates live in `internal/email/templates/` (HTML + plaintext, embedded via `//go:embed`, parsed once at boot). Distinct from `Sender` — Sender does bytes; Notifier does domain.
+
+### SMTP config
+
+`app_settings.EMAIL` JSON: `{enabled, smtp:{host,port,username,password,tls}, from:{address,name}, publicUrl}`. Server-wide outbound — one config row, used by every email send (auth + Kindle). `smtp.password` is AES-GCM encrypted in place per ADR-0010; the same per-field encryption walk that operates on `provider_settings.config` is generalised to `app_settings`. `tls` enum: `none | starttls | tls` for ports 25 / 587 / 465 respectively. Distinct from per-user SMTP — there is none; users supply only a kindle email target.
+
+### Public URL
+
+`EMAIL.publicUrl`; the absolute base URL embedded in email links (`{publicUrl}/reset?token=...`, `{publicUrl}/accept-invite?token=...`). Stored in `app_settings`, **not** an env var, because background workers (the Send-to-Kindle queue job, future async invite re-sends) lack request context and can't infer the host from `c.Request`. Validated at save time: parses as URL, scheme `http` or `https`, no trailing slash. Inferring from `Host` / `X-Forwarded-Host` is rejected — header spoofing in a reset email is a phish vector.
+
+### Reset token
+
+A 32-byte random value (`crypto/rand`, base64url-encoded, ~43 chars) issued on `POST /api/v1/auth/password-reset/request`. Stored as `sha256(token)` in `password_reset_tokens(token_hash, user_id, created_at, expires_at, used_at)`; the plaintext exists only in the email and the URL. Single-use (consumption sets `used_at`), 1h expiry, one row per request. The request endpoint always returns 202 regardless of whether the email exists — identical response shape prevents account enumeration. Rate-limited per-user (1 / 5min) and per-IP (10 / hour).
+
+### Invite token
+
+The admin-invite analogue of a reset token. Stored in `user_invites(token_hash, email, role, invited_by, created_at, expires_at, accepted_at, user_id)`; carries the invitee's email, target role (`user` | `admin`), and the inviting admin's id. Same crypto shape (32-byte random, sha256 at rest, single-use), but a 7-day expiry to survive a weekend onboarding gap. Acceptance via `POST /api/v1/auth/invites/accept {token, password}` creates the user, marks the invite consumed, and returns a session. Distinct table from reset because the lifecycle and fields diverge — an invite has no user yet at creation, a reset always does.
+
+### Send-to-Kindle
+
+Per-book action that emails the primary file as an attachment to the user's `kindle_email`. Eligible formats: **EPUB and PDF only** (intersection of embookshelf's supported set and Amazon's current ingestion list). 50 MB hard cap, no in-binary conversion, no MOBI/AZW3/CBZ delivery. The button is disabled with a tooltip on every other format. Async via the existing `queue.Client` (`EnqueueSendToKindle`); the worker does `LibraryHandle.For` → `Storage.Open` → re-check format/size → `Sender.Send` → SSE event (`kindle.sent` / `kindle.failed`). Subject = book title, attachment filename = `{Title} - {Author}.{ext}` sanitised, body empty. ADR-0021. **Distinct** from generic email — has attachments, no body templating, format-gated.
+
+### Kindle email
+
+`users.kindle_email TEXT`; the per-user destination address for Send-to-Kindle. Validated by regex `^[a-z0-9._-]+@kindle\.com$` (cheap shape check; Amazon-side bounces handle non-Kindle addresses anyway). Empty means the user has not configured Send-to-Kindle — the button surfaces "Set Kindle email" linking to the account panel instead. Editable in the account panel only. Distinct from `EMAIL.from.address` (server-wide outbound sender) — Amazon requires the user to add the From address to their "approved senders" list once.
+
+### Eligible format
+
+The set `{epub, pdf}`; the formats Send-to-Kindle accepts. Defined as a constant in `internal/email/` and checked at three points: the UI button (reads `book.format`), the HTTP handler (rejects with 415 `FORMAT_NOT_SUPPORTED`), and the queue worker (re-validates after `LibraryHandle.For` to defend against re-import races). Distinct from `books.format` (primary file format cache) — eligible format is a delivery filter, not a property of the book.
+
+---
+
 ## Vocabulary discipline
 
 Avoid these substitutes — they drift the meaning:
@@ -344,6 +388,7 @@ Avoid these substitutes — they drift the meaning:
 - "boundary" → say **seam** (boundary is overloaded with DDD bounded contexts).
 - "Storage source" / "BookSource" used interchangeably → no. `storage.Source` = bytes; `service.BookSource` = delivery target.
 - "Provider" alone is ambiguous — say **OIDC provider** (auth) or **metadata provider** (enrichment).
+- "Email provider" — **don't use**. There is no email-provider abstraction. Say **Sender** (transport seam) or **SMTP config** (the `app_settings.EMAIL` row). ADR-0020.
 
 When proposing a deepening, use the architecture vocabulary: **module**, **interface**, **implementation**, **depth**, **seam**, **adapter**, **leverage**, **locality**, plus **deletion test** and **one-adapter-is-hypothetical-two-is-real**.
 

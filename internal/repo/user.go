@@ -19,7 +19,7 @@ func NewUserRepo(d *db.DB) *UserRepo {
 	return &UserRepo{db: d}
 }
 
-const userCols = `id, email, password_hash, name, role, avatar_url, status, status_changed_at, created_at, updated_at, last_seen_at`
+const userCols = `id, email, password_hash, name, role, avatar_url, status, status_changed_at, created_at, updated_at, last_seen_at, kindle_email`
 
 func (r *UserRepo) GetByEmail(ctx context.Context, email string) (model.User, error) {
 	const qPG = `
@@ -121,6 +121,27 @@ func (r *UserRepo) UpdateRole(ctx context.Context, id string, role model.Role) e
 	const qPG = `UPDATE users SET role = $2, updated_at = now() WHERE id = $1`
 	const qSQLite = `UPDATE users SET role = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?`
 	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), string(role), id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateKindleEmail sets or clears the Send-to-Kindle target for the
+// caller. Empty string clears the column. The handler validates the
+// `^[a-z0-9._-]+@kindle\.com$` shape — this method is shape-agnostic.
+// ADR-0021.
+func (r *UserRepo) UpdateKindleEmail(ctx context.Context, id, email string) error {
+	const qPG = `UPDATE users SET kindle_email = $2, updated_at = now() WHERE id = $1`
+	const qSQLite = `UPDATE users SET kindle_email = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?`
+	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), strings.TrimSpace(email), id)
 	if err != nil {
 		return err
 	}
@@ -297,6 +318,7 @@ func scanUser(d db.Dialect, s scanner) (model.User, error) {
 		&u.AvatarURL,
 		&status, &statusChangedAny,
 		&createdAny, &updatedAny, &lastSeenAny,
+		&u.KindleEmail,
 	)
 	if passwordHash != nil {
 		u.PasswordHash = *passwordHash

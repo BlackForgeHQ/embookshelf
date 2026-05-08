@@ -23,20 +23,22 @@ type userDTO struct {
 	StatusChangedAt string `json:"statusChangedAt,omitempty"`
 	Display         string `json:"display"`
 	Initials        string `json:"initials"`
+	KindleEmail     string `json:"kindleEmail"`
 	CreatedAt       string `json:"createdAt"`
 	LastSeenAt      string `json:"lastSeenAt,omitempty"`
 }
 
 func toUserDTO(u model.User) userDTO {
 	d := userDTO{
-		ID:        u.ID,
-		Email:     u.Email,
-		Name:      u.Name,
-		Role:      string(u.Role),
-		Status:    string(u.Status),
-		Display:   u.Display(),
-		Initials:  u.Initials(),
-		CreatedAt: u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		ID:          u.ID,
+		Email:       u.Email,
+		Name:        u.Name,
+		Role:        string(u.Role),
+		Status:      string(u.Status),
+		Display:     u.Display(),
+		Initials:    u.Initials(),
+		KindleEmail: u.KindleEmail,
+		CreatedAt:   u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
 	if d.Status == "" {
 		// Defensive default — older rows or test fakes may leave Status zero.
@@ -63,7 +65,8 @@ type signupReq struct {
 }
 
 type signupStatus struct {
-	Enabled bool `json:"enabled"`
+	Enabled      bool `json:"enabled"`
+	EmailEnabled bool `json:"emailEnabled"`
 }
 
 // Login authenticates a user, sets the session cookie, and returns the user DTO.
@@ -102,14 +105,17 @@ func (h *Handler) Logout(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// SignupStatus tells the SPA whether the signup form should be shown.
+// SignupStatus tells the SPA whether the signup form should be shown
+// and whether the email subsystem is on. The login page reads the
+// latter to decide whether to render the "Forgot password" link
+// without making a second auth round trip. ADR-0020.
 func (h *Handler) SignupStatus(c *gin.Context) {
 	open, err := h.auth.SignupEnabled(c.Request.Context())
 	if err != nil {
 		writeServerError(c, "signup status", err)
 		return
 	}
-	c.JSON(http.StatusOK, signupStatus{Enabled: open})
+	c.JSON(http.StatusOK, signupStatus{Enabled: open, EmailEnabled: h.emailEnabled()})
 }
 
 // Signup handles the first-run bootstrap flow — creates the admin user and

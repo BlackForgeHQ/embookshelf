@@ -9,6 +9,7 @@ import { BookDropPanel } from "@/components/settings/BookDropPanel"
 import { OidcPanel } from "@/components/settings/OidcPanel"
 import { UsersPanel } from "@/components/settings/UsersPanel"
 import { EmailPanel } from "@/components/settings/EmailPanel"
+import { InvitesPanel } from "@/components/settings/InvitesPanel"
 import { ProvidersPanel } from "@/components/settings/ProvidersPanel"
 import { LibrariesPanel } from "@/components/settings/LibrariesPanel"
 import {
@@ -30,6 +31,7 @@ type SectionKey =
   | "bookdrop"
   | "providers"
   | "email"
+  | "invites"
   | "users"
   | "oidc"
   | "backups"
@@ -47,6 +49,7 @@ const SECTIONS: Array<SectionSpec> = [
   { key: "bookdrop", label: "BookDrop", adminOnly: true },
   { key: "providers", label: "Metadata providers", adminOnly: true },
   { key: "email", label: "Email delivery", adminOnly: true },
+  { key: "invites", label: "Invites", adminOnly: true },
   { key: "users", label: "Users & roles", adminOnly: true },
   { key: "oidc", label: "OIDC / SSO", adminOnly: true },
   { key: "backups", label: "Backups", adminOnly: true },
@@ -100,6 +103,7 @@ function Admin() {
         {active === "bookdrop" && <BookDropPanel isAdmin={isAdmin} />}
         {active === "providers" && <ProvidersPanel isAdmin={isAdmin} />}
         {active === "email" && <EmailPanel isAdmin={isAdmin} />}
+        {active === "invites" && <InvitesPanel isAdmin={isAdmin} />}
         {active === "users" && (
           <UsersPanel isAdmin={isAdmin} me={me.data ?? null} />
         )}

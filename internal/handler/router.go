@@ -46,6 +46,13 @@ func (h *Handler) Engine() *gin.Engine {
 		api.GET("/auth/signup", h.SignupStatus)
 		api.POST("/auth/signup", h.Signup)
 
+		// Password reset + invite acceptance. Public — pre-auth surface
+		// gated by token possession. ADR-0020.
+		api.POST("/auth/password-reset/request", h.PasswordResetRequest)
+		api.GET("/auth/password-reset/verify", h.PasswordResetVerify)
+		api.POST("/auth/password-reset/confirm", h.PasswordResetConfirm)
+		api.POST("/auth/invites/accept", h.InviteAccept)
+
 		// OIDC / SSO — each provider has its own /auth/oidc/:slug
 		// entrypoint (slug ∈ { google | github | generic }). The
 		// callback is shared; the state token carries the slug so the
@@ -70,6 +77,7 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.GET("/account/oidc/link/:slug", h.AccountOIDCLink)
 			authed.DELETE("/account/oidc/:provider", h.AccountOIDCUnlink)
 			authed.POST("/account/password/set", h.AccountSetInitialPassword)
+			authed.PUT("/account/kindle-email", h.AccountKindleEmailUpdate)
 
 			// Cross-entity search powering the global command palette
 			// and the library page combobox.
@@ -121,6 +129,10 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.GET("/stats", h.Stats)
 			authed.GET("/stats/reading", h.ReadingStats)
 
+			// Send-to-Kindle delivery. Email subsystem must be on; the
+			// handler returns 503 EMAIL_DISABLED otherwise. ADR-0021.
+			authed.POST("/books/:id/send-to-kindle", h.SendToKindle)
+
 			// Device sync (reMarkable Paper Pro, ...) — per-user
 			// destinations you can push books to.
 			authed.GET("/devices", h.Devices)
@@ -157,6 +169,14 @@ func (h *Handler) Engine() *gin.Engine {
 				admin.GET("/oidc", h.SettingsOIDCGet)
 				admin.PUT("/oidc", h.SettingsOIDCUpdate)
 				admin.POST("/oidc/test/:slug", h.SettingsOIDCTest)
+
+				admin.GET("/email", h.SettingsEmailGet)
+				admin.PUT("/email", h.SettingsEmailUpdate)
+				admin.POST("/email/test", h.SettingsEmailTest)
+
+				admin.GET("/invites", h.AdminInvitesList)
+				admin.POST("/invites", h.AdminInviteCreate)
+				admin.DELETE("/invites/:id", h.AdminInviteRevoke)
 
 				admin.GET("/users", h.SettingsUsersList)
 				admin.POST("/users", h.SettingsUsersCreate)
