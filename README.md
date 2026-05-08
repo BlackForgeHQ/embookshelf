@@ -202,10 +202,17 @@ there is no Node/Bun runtime in production.
   under the target library backend (local copy or S3 PUT).
   Drag-and-drop upload from the BookDrop page hits
   `POST /api/v1/bookdrop/upload` (streamed multipart, no buffering).
+- **PDF discovery** parses XMP packets (DC + Identifier Bag), decodes
+  hex / UTF-16BE DocInfo strings, normalises ISBNs, and accepts a
+  client-rendered page-1 cover via `PUT /bookdrop/:id/cover`
+  (ADR-0015) so the queue card shows the right artwork even when the
+  PDF lacks an embedded thumbnail.
 - Cover images render as real `<img>` (with lazy-loading + onError
   fallback to the typographic tile) once the backend has the
   extracted bytes. SHA-256 dedup means books pointing at the same
-  artwork share one blob in `coverstore`.
+  artwork share one blob in `coverstore`; a `coverVersion` token on
+  every cover URL busts caches when admins remove or replace artwork
+  via `DELETE /books/:id/cover`.
 - **Format badges** on every cover (shadcn Badge) — EPUB, PDF, CBZ,
   MP3/M4B, MOBI, FB2 — color-coded per format.
 
@@ -230,6 +237,15 @@ Left-nav panels at `/settings`:
 - **Users & roles** — admin / user split, approve/deny pending OIDC
   signups, role transitions, hard delete.
 - **Instance** — instance name, signup-open flag, default library.
+- **Email** — SMTP transport with hot-reload on save, `Send test`
+  endpoint, encrypted credentials. Powers send-to-Kindle, password
+  reset, and admin invites (ADR-0021). Callers return
+  `503 EMAIL_DISABLED` when the transport is off.
+- **Invites** — admin mints single-use tokens; recipient lands on
+  `/accept-invite` and sets a password. Pairs with the password-reset
+  flow (`/forgot-password` → emailed link → `/reset`).
+- **BookDrop housekeeping** — admin-only clear-processed and
+  preview / wipe orphan files (cross-user blast radius, ADR-0014).
 
 Per-user preferences live at `/account` (profile, password, linked
 OIDC identities) and in a sidebar-footer dropdown (reading
@@ -239,6 +255,9 @@ preferences, device sync, sign out).
 - **reMarkable Paper Pro** pairing with a one-time code; push any book
   to a paired device from the book detail page. OPDS is still the
   vendor-neutral fallback.
+- **Send-to-Kindle** via the email transport — per-user Kindle address
+  on `/account`, `POST /books/:id/send-to-kindle` attaches the file
+  and ships it through SMTP.
 
 ### Platform
 - **OPDS 1.2** catalog at `/opds/*` with Basic Auth. Works with
@@ -383,4 +402,10 @@ backlog. Near-term candidates:
   finer-grained library ACLs.
 - **Audit logs + parental controls** — `audit_logs` and
   `user_content_restrictions` tables are reserved.
-- **Send-to-Kindle** — blocked on SMTP transport.
+- **More device drivers** — Kobo cloud sync, KOReader progress sync,
+  Hardcover.app, Komga import. The `DeviceDriver` interface is in
+  place; each new target is one Go file.
+- **SendGrid (or other API-based) email transport** — SMTP is live;
+  swap is a `Sender` implementation.
+- **Smart / Magic shelf rule engine** — schema + sidebar visuals
+  shipped; the rule evaluator + editor still to build.

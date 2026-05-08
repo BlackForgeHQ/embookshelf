@@ -229,28 +229,47 @@ what is live vs. what's still planned. See
 
 - **Library model** — multi-library + `library_paths` + `bookdrop_items`
   queue + filesystem scanner
-- **EPUB ingest** — metadata + cover extraction via `fileproc.Processor`
-  (EPUB-only today; other formats stubbed)
+- **Ingest** — EPUB + PDF metadata + cover extraction via
+  `fileproc.Processor`. PDF discovery covers XMP packet (DC + Identifier
+  Bag), DocInfo with hex / UTF-16BE decoders, ISBN normalisation, and a
+  client-rendered page-1 cover fallback (ADR-0015).
 - **Cover storage** — atomic writes under `coverstore/`, promoted from
-  the bookdrop namespace to `books/` on approval
+  the bookdrop namespace to `books/` on approval, content-addressable
+  SHA-256 hashing for dedup, admin cover removal endpoint, cache-busting
+  `coverVersion` on URLs
 - **Metadata enrichment** — Google Books + Open Library concurrent
-  fan-out, confidence-sorted matches, allow-listed cover import (SSRF
-  protection baked in)
+  fan-out, confidence-sorted matches, ISBN lookup endpoint, per-field
+  metadata locks, allow-listed cover import (SSRF protection baked in)
 - **OPDS 1.2 catalog** at `/opds/*` (Basic Auth) — root nav, All /
   Library / Recent / Search acquisition feeds, OpenSearch description,
   per-book download + cover
 - **`river` background queue** with workers for `bookdrop.ingest` +
   `library.scan`
+- **Pluggable storage** — local FS + S3 backends, env-driven boot-time
+  reconcile, pending-orphan tracking for S3 folder renames
 - **Schema migrations** auto-applied on boot (`MIGRATE_ON_START`,
   default on)
 
 ### Built — web app (JSON API + React SPA)
 
 - **Auth** — session cookies, bcrypt passwords, first-run signup,
-  CSRF via SameSite + Origin/Referer (`/api/v1/auth/{login,logout,signup}`,
-  `/api/v1/me`)
-- **Libraries + shelves** — list, counts, per-user shelf CRUD,
-  book-to-shelf toggle (`/api/v1/libraries`, `/api/v1/shelves`,
+  CSRF via SameSite + Origin/Referer
+  (`/api/v1/auth/{login,logout,signup}`, `/api/v1/me`)
+- **OIDC / SSO** — multi-provider linking against Google, GitHub, and a
+  generic OIDC slug. Per-provider settings UI, callback handler, link /
+  unlink with last-credential lockout guard, set-initial-password flow
+  for OIDC-provisioned users, encrypted client secrets via ADR-0010
+  (`/api/v1/auth/oidc/*`, `/api/v1/account/oidc/*`,
+  `/api/v1/settings/oidc*`)
+- **User lifecycle** — admin invites with token acceptance, password
+  reset (request / verify / confirm), admin user list with role updates,
+  approve / deny pending signups, account deletion, per-user Kindle
+  email (`/api/v1/auth/{password-reset,invites}/*`,
+  `/api/v1/settings/{invites,users}*`, `/api/v1/account/kindle-email`)
+- **Libraries + shelves** — list, counts, per-user shelf CRUD with
+  custom icon (regex-validated), publish toggle for public / shared
+  shelves (ADR-0017), book-to-shelf toggle, "Unshelved" virtual view
+  (`/api/v1/libraries`, `/api/v1/shelves`,
   `/api/v1/books/:id/shelves/:slug`)
 - **Books** — list (search / sort / filter / library / shelf), detail,
   metadata PATCH, cover streaming, file streaming (path-sandboxed),
@@ -259,14 +278,30 @@ what is live vs. what's still planned. See
 - **Metadata enrichment flow** — `/api/v1/books/:id/enrich` (provider
   fan-out) + `/api/v1/books/:id/cover-from-url` (allow-list-protected
   cover import), wired into the metadata editor as live match cards
-- **BookDrop queue** — list, pre-approval cover, approve, reject
-  (`/api/v1/bookdrop/*`)
+- **BookDrop queue** — list, upload, pre-approval cover (incl. PUT for
+  client-rendered PDF page-1), approve, reject; admin-only housekeeping
+  (clear processed, preview / wipe orphan files — ADR-0014)
+  (`/api/v1/bookdrop/*`, `/api/v1/settings/bookdrop/*`)
 - **Settings → Libraries** (admin-only) — register/remove filesystem
   roots, trigger scans (`/api/v1/settings/libraries*`)
 - **Settings → Device sync** — per-user device registration and push.
   reMarkable Paper Pro driver: one-time-code pairing + EPUB/PDF push.
   Extensible via `DeviceDriver` interface
   (`/api/v1/devices`, `/api/v1/books/:id/send/:deviceId`)
+- **Settings → Email** (admin-only) — SMTP transport with hot-reload on
+  config change, send-test endpoint, encrypted credentials. Powers
+  send-to-Kindle, password reset, and invite emails (ADR-0021).
+  `503 EMAIL_DISABLED` returned by callers when transport is off
+  (`/api/v1/settings/email*`, `/api/v1/books/:id/send-to-kindle`)
+- **Settings → Metadata + Providers** — provider toggles + credentials
+  (encrypted), default-metadata policy
+  (`/api/v1/settings/{providers,metadata}*`)
+- **Annotations** — highlights + notes per book, recent-across-library
+  feed feeding the Notebook view
+  (`/api/v1/annotations`, `/api/v1/books/:id/annotations`)
+- **Statistics** — library distribution dashboard + reading-session
+  analytics (heatmap, minutes-in-window) backed by real
+  `reading_sessions` ticks (`/api/v1/stats`, `/api/v1/stats/reading`)
 - **Realtime** — `/events` SSE stream; browser `EventSource` reuses the
   session cookie and invalidates react-query caches on each published
   event (`bookdrop.updated` today)
@@ -275,6 +310,11 @@ what is live vs. what's still planned. See
     progress as `epubcfi(...)` + percent
   - PDF — pdfjs-dist with per-page lazy canvas rendering, progress as
     `page:N` + percent
+  - Comics (CBZ / CBR / CB7) — server-side page index +
+    on-demand page streaming
+    (`/api/v1/books/:id/pages`, `/api/v1/books/:id/pages/:n`)
+  - Audiobooks — chapter-aware HTML5 audio player with playback-speed
+    control and per-user progress
 - **React SPA shell** — auth-gated layout, typed file-based routing
   (TanStack Router), server-state cache (TanStack Query), realtime-driven
   cache invalidation, Tailwind 4 design tokens
@@ -282,20 +322,19 @@ what is live vs. what's still planned. See
 
 ### Planned (greenfield — not yet built on any stack)
 
-- OIDC + remote/forward auth
-- Additional device drivers: Kindle (send-to-kindle via SMTP), Kobo
-  cloud sync, KOReader progress sync, Hardcover.app integration, Komga
-  import. The driver interface exists today; each addition is a single
-  file.
-- CBX/CBR/CBZ comic reader, audiobook player, MOBI/AZW3/FB2 readers
-- Bookmarks, highlights, annotations (the Notebook view already exists
-  for read-only display)
-- Smart/Magic shelves (rule-based dynamic — visuals ready in the sidebar)
-- Email delivery (send-to-Kindle, SMTP/SendGrid)
-- Reading-session analytics (time spent, streaks — heatmap visuals ready
-  and fed with mock data today)
+- Remote / forward-auth proxy support (OIDC native is live)
+- Additional device drivers: Kobo cloud sync, KOReader progress sync,
+  Hardcover.app integration, Komga import. The `DeviceDriver` interface
+  exists today; each addition is a single Go file. (reMarkable Paper Pro
+  is live; Kindle ships via the email transport on the `send-to-kindle`
+  endpoint.)
+- MOBI / AZW3 / FB2 readers (EPUB, PDF, CBZ/CBR/CB7, audiobook are live)
+- Smart / Magic shelves (rule-based dynamic — schema + visuals ready
+  in the sidebar; rule engine + evaluator still to build)
+- SendGrid (or other API-based) email transport — SMTP is live
+- Reading streaks + per-book time-spent breakdown on top of the existing
+  `reading_sessions` heatmap
 - Parental controls / content restrictions
-- Library statistics dashboard
-- Amazon + DuckDuckGo metadata/cover fallbacks
+- Amazon + DuckDuckGo metadata / cover fallbacks
 - Self-hosted fonts (remove Google Fonts CDN dependency)
 - i18n string catalog + Weblate integration
