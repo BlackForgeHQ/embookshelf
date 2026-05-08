@@ -71,7 +71,7 @@ are registered.
 | Device/Service | Direction | Status | Sync Capabilities |
 |----------------|-----------|--------|-------------------|
 | **OPDS 1.2** | Pull | **Live** | Library access from any OPDS-compatible e-reader app (KOReader, Moon+ Reader, FBReader, Aldiko, Marvin). HTTP Basic Auth, OpenSearch, per-book acquisition links. |
-| **reMarkable Paper Pro** (RM1/RM2/Paper Pro share a driver) | Push | **Live** | One-time-code pairing via `my.remarkable.com/device/desktop/connect`; one-click push of EPUB/PDF from the book page to the device's cloud inbox. Per-push `last_sent_at` / `last_error` surfaces on the device card. |
+| **reMarkable Paper Pro** (RM1/RM2/Paper Pro share a driver) | Push | **Live** | One-time-code pairing; one-click EPUB/PDF push to cloud inbox. |
 | **Kobo** | Pull | Planned | Full library sync, reading progress, shelves, thumbnails. |
 | **KOReader** | Push | Planned | Reading-progress sync via KOReader's companion protocol. |
 | **Hardcover.app** | Push | Planned | Reading-status + wishlist sync. |
