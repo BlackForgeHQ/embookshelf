@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.15](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.14...v0.4.15) (2026-05-08)
+
+
+### Features
+
+* enhance SidebarMenuButton with mobile click handling ([2f43def](https://github.com/BlackForgeHQ/embookshelf/commit/2f43defa027d180902f086cde03f80b79fb3cdba))
+* implement email delivery subsystem with SMTP support ([e734ce7](https://github.com/BlackForgeHQ/embookshelf/commit/e734ce76453c540f5e2c791604d4ec7602d6539e))
+* implement shelf icon feature with regex validation and UI integration ([ba879fb](https://github.com/BlackForgeHQ/embookshelf/commit/ba879fb83f7f07a5fca3a56cd4605513a2c5ca50))
+* remove outdated implementation plans for metadata enrichment, command search, OIDC admin approval, and SQLite support ([8a29960](https://github.com/BlackForgeHQ/embookshelf/commit/8a29960d4593e2db9fe943f90738d90d668ab770))
+
 ## [0.4.14](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.13...v0.4.14) (2026-05-07)
 
 
