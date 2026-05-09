@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package task holds job args, business-logic functions, and River
 // adapters. The pure functions (BookDropIngest, LibraryScan) are
 // dialect-agnostic; River workers and the SQLite queue both call

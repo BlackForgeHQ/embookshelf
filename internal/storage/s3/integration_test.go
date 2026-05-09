@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // go:build s3integration
 //
 // Run: go test -tags s3integration ./internal/storage/s3/
@@ -18,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	s3backend "github.com/blackforge/embookshelf/internal/storage/s3"
 	"github.com/blackforge/embookshelf/internal/storage"
+	s3backend "github.com/blackforge/embookshelf/internal/storage/s3"
 	"github.com/blackforge/embookshelf/internal/storage/storagetest"
 )
 

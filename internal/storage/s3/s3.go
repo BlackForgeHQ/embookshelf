@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package s3 implements storage.Storage against an S3-compatible
 // object store (AWS S3, minio, Cloudflare R2, Backblaze B2, Wasabi).
 // Bucket versioning is probed at construction time and surfaced as a

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package task
 
 // The layerSidecar helper that lived here moved to internal/ingest as

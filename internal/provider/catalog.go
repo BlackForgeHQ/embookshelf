@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package provider
 
 // RateLimitConfig tunes the per-provider token-bucket rate limiter.

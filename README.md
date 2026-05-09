@@ -411,3 +411,8 @@ backlog. Near-term candidates:
   place; each new target is one Go file.
 - **SendGrid (or other API-based) email transport** — SMTP is live;
   swap is a `Sender` implementation.
+
+## License
+
+[AGPL-3.0-or-later](LICENSE). Hosted forks must publish their source
+under the same license.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package sse is a tiny fan-out hub for Server-Sent Events. Background work
 // (the BookDrop worker, library scans, etc.) publishes events here; the
 // /events HTTP handler serves each connected client from a per-connection

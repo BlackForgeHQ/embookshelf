@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package local implements storage.Storage against a local filesystem
 // rooted at a configurable absolute path. Keys are interpreted as
 // slash-separated paths relative to the root; the implementation

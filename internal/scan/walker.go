@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package scan orchestrates the two-phase library scan: walk, diff,
 // then act on the changeset. The walker yields entries via a
 // channel so the iterator API of storage.Storage doesn't leak into

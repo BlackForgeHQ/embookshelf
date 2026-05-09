@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package db owns database connection setup and dialect identity for the
 // app. It exposes a single `*DB` value that wraps a `database/sql.DB` for
 // repo queries plus a `pgxpool.Pool` for the queue's River driver. The

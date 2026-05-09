@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package queue's SQLite implementation. A single goroutine polls the
 // jobs table for work, claims rows atomically via UPDATE, dispatches
 // by kind to a registered handler, and updates the row on success or

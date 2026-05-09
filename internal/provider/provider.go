@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package provider contains external metadata sources. Each implementation
 // takes a Query (title/author/isbn) and returns ranked Matches. The
 // EnrichmentService fans queries out across providers concurrently and the

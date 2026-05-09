@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package opds builds OPDS 1.2 (Atom/XML) catalog and acquisition feeds.
 // Namespaces are declared manually on the root <feed> to sidestep Go's
 // encoding/xml namespace handling — the Local tags `xml:"dc:language"` are

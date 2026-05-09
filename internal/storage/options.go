@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package storage
 
 // GetOpts holds the resolved values of all GetOption values applied

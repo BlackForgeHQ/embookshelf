@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package staticfs embeds the compiled React bundle so the production binary
 // ships self-contained. Files land under dist/ via `npm run build`.
 package staticfs

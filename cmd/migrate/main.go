@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Tiny CLI around internal/migrator. Usage:
 //
 //	go run ./cmd/migrate up

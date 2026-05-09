@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package storage defines a backend-agnostic interface for reading and
 // writing book bytes and sidecar files. Implementations live in
 // subpackages (local, s3). The DB layer never touches files directly —

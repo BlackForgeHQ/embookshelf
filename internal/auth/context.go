@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package auth contains the session-based authentication primitives:
 // password hashing, session cookie management, Gin middleware, and the
 // request-scoped "current user" helper used throughout handlers.

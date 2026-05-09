@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package search holds search-related helpers shared by the library
 // repo and the OPDS layer. Today the only export is EscapeFTS5Query
 // for the SQLite FTS5 path; Postgres uses websearch_to_tsquery and

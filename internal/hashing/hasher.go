@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package hashing computes content hashes from a storage.Storage
 // stream. sha256 is the project-wide identity primitive.
 package hashing

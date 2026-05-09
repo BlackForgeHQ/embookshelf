@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package ingest scans the BookDrop directory and enqueues processing jobs
 // for new files. Uses polling (simple, robust across NFS/SMB mounts) rather
 // than fsnotify.

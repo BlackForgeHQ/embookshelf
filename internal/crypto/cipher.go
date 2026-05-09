@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package crypto handles at-rest encryption for sensitive settings
 // (API keys, cookies, OIDC client secrets). It exposes a single
 // Cipher interface with two implementations:

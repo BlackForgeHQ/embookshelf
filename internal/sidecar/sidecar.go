@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package sidecar reads and writes per-book metadata files that live
 // next to the book bytes on disk (or in object storage). Two formats:
 // metadata.opf (Calibre-compatible XML, read-only) and

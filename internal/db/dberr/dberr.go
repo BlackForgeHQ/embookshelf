@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package dberr centralizes the error-inspection helpers that repos used
 // to do inline against pgx-specific types. Branches for Postgres (pgx)
 // and SQLite (modernc.org/sqlite) live behind one interface so repos

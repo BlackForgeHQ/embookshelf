@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package storageloader provides LoadStorageBackends, the boot-time
 // helper that reads storage_backends rows from the database and
 // constructs the appropriate Storage implementation for each. It lives

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package email is the transport seam for outbound mail. The Sender
 // interface hides the SMTP/HTTP/etc choice from the service layer so
 // domain code never reaches into a vendor SDK. The shipping

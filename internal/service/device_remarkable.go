@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // reMarkable cloud driver. The tablet (Paper Pro, RM2, RM1) shares the
 // same cloud protocol — pair once with an 8-character code from
 // https://my.remarkable.com/device/desktop/connect, store the device

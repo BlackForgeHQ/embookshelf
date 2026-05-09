@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package telemetry wires OpenTelemetry traces, metrics, and logs to an
 // OTLP-compatible collector (e.g. grafana/otel-lgtm during local dev, or
 // an external Grafana / Datadog / Honeycomb backend in production).

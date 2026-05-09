@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package queue wraps the River client (Postgres) and a homegrown
 // polling worker (SQLite) so callers see a single Client interface.
 // Keeps the service layer free of driver imports and makes the

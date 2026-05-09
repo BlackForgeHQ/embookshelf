@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package db
 
 // Register the modernc pure-Go SQLite driver under the "sqlite" name.

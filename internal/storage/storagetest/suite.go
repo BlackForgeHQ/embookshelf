@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package storagetest provides a contract test suite that any
 // storage.Storage implementation must pass. Backends call RunSuite
 // from their own test packages with a factory that returns a fresh

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package tagging classifies books into hot/warm/cold tiers based on
 // recency of last-read events and writes the result back to S3 via
 // PutObjectTagging. Tier tags drive bucket lifecycle rules that

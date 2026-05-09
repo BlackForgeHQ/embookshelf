@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package repotest provides per-test database setup for repo-level
 // integration tests. Call New(t) to receive a fully-migrated *db.DB
 // pointed at an isolated database. The dialect is selected by the

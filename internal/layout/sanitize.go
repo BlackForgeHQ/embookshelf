@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package layout owns the rules for placing Books on disk under the
 // managed library layout `{library_root}/{Author}/{Title}/{filename}`
 // (ADR-0003, docs/spec/library-layout.spec.md). The package is

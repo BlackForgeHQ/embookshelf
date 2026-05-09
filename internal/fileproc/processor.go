@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package fileproc extracts metadata and (eventually) covers from book files.
 // Each supported format has a Processor; Dispatch picks the right one based
 // on file extension.

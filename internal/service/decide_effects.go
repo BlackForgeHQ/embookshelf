@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package service
 
 // Effects is the plan returned by DecideEffects: the set of side

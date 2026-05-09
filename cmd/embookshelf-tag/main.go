@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Command embookshelf-tag walks every book in the configured libraries,
 // classifies it into hot/warm/cold tiers based on the latest
 // user_book_progress.last_read_at (max across all users), and writes the
