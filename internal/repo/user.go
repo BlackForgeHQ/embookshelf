@@ -99,7 +99,7 @@ func (r *UserRepo) List(ctx context.Context) ([]model.User, error) {
 
 // UpdatePassword replaces the stored hash. Callers verify the old password first.
 func (r *UserRepo) UpdatePassword(ctx context.Context, id, hash string) error {
-	const qPG = `UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1`
+	const qPG = `UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2`
 	const qSQLite = `UPDATE users SET password_hash = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?`
 	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), hash, id)
 	if err != nil {
@@ -118,7 +118,7 @@ func (r *UserRepo) UpdatePassword(ctx context.Context, id, hash string) error {
 // UpdateRole flips admin/user. The caller is responsible for preventing the
 // last admin from demoting themselves — enforced at the service layer.
 func (r *UserRepo) UpdateRole(ctx context.Context, id string, role model.Role) error {
-	const qPG = `UPDATE users SET role = $2, updated_at = now() WHERE id = $1`
+	const qPG = `UPDATE users SET role = $1, updated_at = now() WHERE id = $2`
 	const qSQLite = `UPDATE users SET role = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?`
 	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), string(role), id)
 	if err != nil {
@@ -139,7 +139,7 @@ func (r *UserRepo) UpdateRole(ctx context.Context, id string, role model.Role) e
 // `^[a-z0-9._-]+@kindle\.com$` shape — this method is shape-agnostic.
 // ADR-0021.
 func (r *UserRepo) UpdateKindleEmail(ctx context.Context, id, email string) error {
-	const qPG = `UPDATE users SET kindle_email = $2, updated_at = now() WHERE id = $1`
+	const qPG = `UPDATE users SET kindle_email = $1, updated_at = now() WHERE id = $2`
 	const qSQLite = `UPDATE users SET kindle_email = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?`
 	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), strings.TrimSpace(email), id)
 	if err != nil {
@@ -157,7 +157,7 @@ func (r *UserRepo) UpdateKindleEmail(ctx context.Context, id, email string) erro
 
 // UpdateName is used by a user to edit their own display name.
 func (r *UserRepo) UpdateName(ctx context.Context, id, name string) error {
-	const qPG = `UPDATE users SET name = $2, updated_at = now() WHERE id = $1`
+	const qPG = `UPDATE users SET name = $1, updated_at = now() WHERE id = $2`
 	const qSQLite = `UPDATE users SET name = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?`
 	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), strings.TrimSpace(name), id)
 	if err != nil {
@@ -244,8 +244,8 @@ func (r *UserRepo) CreateOIDCPending(ctx context.Context, email, name string, ro
 func (r *UserRepo) UpdateStatus(ctx context.Context, id string, status model.UserStatus) error {
 	const qPG = `
 		UPDATE users
-		SET status = $2, status_changed_at = now(), updated_at = now()
-		WHERE id = $1
+		SET status = $1, status_changed_at = now(), updated_at = now()
+		WHERE id = $2
 	`
 	const qSQLite = `
 		UPDATE users
