@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.17](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.16...v0.4.17) (2026-05-08)
+
+
+### Features
+
+* enhance email subsystem with hot-reload capability and configuration updates ([29ef67b](https://github.com/BlackForgeHQ/embookshelf/commit/29ef67b2c3c5de4ce055c0f2955846508215e3c7))
+* enhance README and PRD documentation with new features and improvements ([2d7c051](https://github.com/BlackForgeHQ/embookshelf/commit/2d7c05163955afefcd1b3d7742ce018cf31f5a74))
+* implement forward-auth middleware for reverse-proxy header authentication ([8a78018](https://github.com/BlackForgeHQ/embookshelf/commit/8a780188b572c9c8857195b9e9ebd27248809d8f))
+
 ## [0.4.16](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.15...v0.4.16) (2026-05-08)
 
 
