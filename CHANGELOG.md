@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.19](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.18...v0.4.19) (2026-05-09)
+
+
+### Bug Fixes
+
+* update GitHub Actions workflow to use client-id instead of app-id ([0a31357](https://github.com/BlackForgeHQ/embookshelf/commit/0a31357c816fbbb7e0794b2d237c74c1cedf2264))
+
 ## [0.4.18](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.17...v0.4.18) (2026-05-09)
 
 
