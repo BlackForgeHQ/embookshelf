@@ -1,6 +1,6 @@
 import { Link, createFileRoute } from "@tanstack/react-router"
 
-export const Route = createFileRoute("/login/pending")({
+export const Route = createFileRoute("/login_/pending")({
   component: PendingApproval,
 })
 
