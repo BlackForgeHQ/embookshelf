@@ -411,5 +411,3 @@ backlog. Near-term candidates:
   place; each new target is one Go file.
 - **SendGrid (or other API-based) email transport** — SMTP is live;
   swap is a `Sender` implementation.
-- **Smart / Magic shelf rule engine** — schema + sidebar visuals
-  shipped; the rule evaluator + editor still to build.
