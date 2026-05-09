@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.18](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.17...v0.4.18) (2026-05-09)
+
+
+### Features
+
+* add login pending route and update routing structure ([07aaeff](https://github.com/BlackForgeHQ/embookshelf/commit/07aaeff46d1d53d3d3af14e6c4558d27e1f92b6f))
+
+
+### Bug Fixes
+
+* correct positional parameters in user update queries ([909f6bf](https://github.com/BlackForgeHQ/embookshelf/commit/909f6bf65e1ca3f268dac4155d198bc8af846106))
+
 ## [0.4.17](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.16...v0.4.17) (2026-05-08)
 
 
