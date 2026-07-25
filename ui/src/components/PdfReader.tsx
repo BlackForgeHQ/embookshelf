@@ -47,132 +47,136 @@ export const PdfReader = forwardRef<PdfReaderHandle, Props>(
     { url, initialPage, onReady, onProgress, onError },
     ref
   ) {
-  const containerRef = useRef<HTMLDivElement | null>(null)
-  const [docInfo, setDocInfo] = useState<{
-    doc: PDFDocumentProxy
-    total: number
-  } | null>(null)
-  const [currentPage, setCurrentPage] = useState(initialPage ?? 1)
-  const initialScrollDone = useRef(false)
+    const containerRef = useRef<HTMLDivElement | null>(null)
+    const [docInfo, setDocInfo] = useState<{
+      doc: PDFDocumentProxy
+      total: number
+    } | null>(null)
+    const [currentPage, setCurrentPage] = useState(initialPage ?? 1)
+    const initialScrollDone = useRef(false)
 
-  useEffect(() => {
-    // Explicit `: boolean` widens the type so the linter doesn't
-    // narrow to literal-false — the cleanup closure mutates it.
-    // `as boolean` widens the inferred literal-false so the
-    // `if (cancelled)` guards below don't trip no-unnecessary-condition.
-    let cancelled = false as boolean
-    let loaded: PDFDocumentProxy | null = null
+    useEffect(() => {
+      // Explicit `: boolean` widens the type so the linter doesn't
+      // narrow to literal-false — the cleanup closure mutates it.
+      // `as boolean` widens the inferred literal-false so the
+      // `if (cancelled)` guards below don't trip no-unnecessary-condition.
+      let cancelled = false as boolean
+      let loaded: PDFDocumentProxy | null = null
 
-    ;(async () => {
-      try {
-        const loadingTask = pdfjsLib.getDocument({
-          url,
-          withCredentials: true,
-        })
-        const doc = await loadingTask.promise
-        if (cancelled) {
-          doc.destroy()
-          return
-        }
-        loaded = doc
-        setDocInfo({ doc, total: doc.numPages })
-        onReady?.({ totalPages: doc.numPages })
-      } catch (err) {
-        if (!cancelled) onError?.(err)
-      }
-    })()
-
-    return () => {
-      cancelled = true
-      loaded?.destroy()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url])
-
-  // Jump to initialPage once the container is mounted and doc is ready.
-  useEffect(() => {
-    if (!docInfo || initialScrollDone.current) return
-    const target = Math.max(1, Math.min(docInfo.total, initialPage ?? 1))
-    if (target > 1) {
-      // Schedule after the page-placeholder layout pass so scrollTop is valid.
-      requestAnimationFrame(() => scrollToPage(containerRef.current, target))
-    }
-    initialScrollDone.current = true
-  }, [docInfo, initialPage])
-
-  useImperativeHandle(
-    ref,
-    () => ({
-      next: () => {
-        if (!docInfo) return
-        const next = Math.min(docInfo.total, currentPage + 1)
-        scrollToPage(containerRef.current, next)
-      },
-      prev: () => {
-        const next = Math.max(1, currentPage - 1)
-        scrollToPage(containerRef.current, next)
-      },
-      goTo: (page: number) => {
-        if (!docInfo) return
-        const clamped = Math.max(1, Math.min(docInfo.total, page))
-        scrollToPage(containerRef.current, clamped)
-      },
-    }),
-    [docInfo, currentPage]
-  )
-
-  const pages = useMemo(() => {
-    if (!docInfo) return null
-    return Array.from({ length: docInfo.total }, (_, i) => i + 1)
-  }, [docInfo])
-
-  return (
-    <div
-      ref={containerRef}
-      onScroll={(e) => {
-        if (!docInfo) return
-        const host = e.currentTarget
-        const page = findVisiblePage(host, docInfo.total)
-        if (page !== currentPage) {
-          setCurrentPage(page)
-          onProgress?.({
-            page,
-            totalPages: docInfo.total,
-            percent: (page - 1) / Math.max(1, docInfo.total - 1),
+      ;(async () => {
+        try {
+          const loadingTask = pdfjsLib.getDocument({
+            url,
+            withCredentials: true,
           })
+          const doc = await loadingTask.promise
+          if (cancelled) {
+            void loadingTask.destroy()
+            return
+          }
+          loaded = doc
+          setDocInfo({ doc, total: doc.numPages })
+          onReady?.({ totalPages: doc.numPages })
+        } catch (err) {
+          if (!cancelled) onError?.(err)
         }
-      }}
-      style={{
-        width: "100%",
-        height: "100%",
-        overflow: "auto",
-        background: "var(--color-paper-2)",
-        padding: 24,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        gap: 16,
-      }}
-    >
-      {pages === null && (
-        <div className="t-small" style={{ marginTop: 40, fontStyle: "italic" }}>
-          Loading PDF…
-        </div>
-      )}
-      {pages &&
-        docInfo &&
-        pages.map((n) => (
-          <PdfPage
-            key={n}
-            doc={docInfo.doc}
-            pageNumber={n}
-            active={n >= currentPage - 1 && n <= currentPage + 1}
-            data-page={n}
-          />
-        ))}
-    </div>
-  )
-})
+      })()
+
+      return () => {
+        cancelled = true
+        void loaded?.loadingTask.destroy()
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [url])
+
+    // Jump to initialPage once the container is mounted and doc is ready.
+    useEffect(() => {
+      if (!docInfo || initialScrollDone.current) return
+      const target = Math.max(1, Math.min(docInfo.total, initialPage ?? 1))
+      if (target > 1) {
+        // Schedule after the page-placeholder layout pass so scrollTop is valid.
+        requestAnimationFrame(() => scrollToPage(containerRef.current, target))
+      }
+      initialScrollDone.current = true
+    }, [docInfo, initialPage])
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        next: () => {
+          if (!docInfo) return
+          const next = Math.min(docInfo.total, currentPage + 1)
+          scrollToPage(containerRef.current, next)
+        },
+        prev: () => {
+          const next = Math.max(1, currentPage - 1)
+          scrollToPage(containerRef.current, next)
+        },
+        goTo: (page: number) => {
+          if (!docInfo) return
+          const clamped = Math.max(1, Math.min(docInfo.total, page))
+          scrollToPage(containerRef.current, clamped)
+        },
+      }),
+      [docInfo, currentPage]
+    )
+
+    const pages = useMemo(() => {
+      if (!docInfo) return null
+      return Array.from({ length: docInfo.total }, (_, i) => i + 1)
+    }, [docInfo])
+
+    return (
+      <div
+        ref={containerRef}
+        onScroll={(e) => {
+          if (!docInfo) return
+          const host = e.currentTarget
+          const page = findVisiblePage(host, docInfo.total)
+          if (page !== currentPage) {
+            setCurrentPage(page)
+            onProgress?.({
+              page,
+              totalPages: docInfo.total,
+              percent: (page - 1) / Math.max(1, docInfo.total - 1),
+            })
+          }
+        }}
+        style={{
+          width: "100%",
+          height: "100%",
+          overflow: "auto",
+          background: "var(--color-paper-2)",
+          padding: 24,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 16,
+        }}
+      >
+        {pages === null && (
+          <div
+            className="t-small"
+            style={{ marginTop: 40, fontStyle: "italic" }}
+          >
+            Loading PDF…
+          </div>
+        )}
+        {pages &&
+          docInfo &&
+          pages.map((n) => (
+            <PdfPage
+              key={n}
+              doc={docInfo.doc}
+              pageNumber={n}
+              active={n >= currentPage - 1 && n <= currentPage + 1}
+              data-page={n}
+            />
+          ))}
+      </div>
+    )
+  }
+)
 
 // PdfPage lazy-renders a single page. The placeholder preserves the
 // approximate page height so the scroll container doesn't reflow when a

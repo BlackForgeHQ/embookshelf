@@ -58,7 +58,7 @@ export async function renderPdfPageOneJpeg(
     signal?.removeEventListener("abort", onAbort)
     if (doc) {
       try {
-        await doc.destroy()
+        await doc.loadingTask.destroy()
       } catch {
         // best-effort
       }

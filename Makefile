@@ -195,7 +195,7 @@ test-pg: ## Run repo tests against Postgres (requires dev PG container)
 	TEST_DATABASE_URL='postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable' \
 	go test ./internal/repo/...
 
-GOLANGCI_LINT_VERSION ?= v2.11.4
+GOLANGCI_LINT_VERSION ?= v2.12.2
 
 .PHONY: go-lint
 go-lint: ## Run golangci-lint (pinned version fetched via `go run` if not on PATH)

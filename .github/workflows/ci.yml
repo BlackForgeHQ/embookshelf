@@ -28,10 +28,11 @@ jobs:
 
       - uses: golangci/golangci-lint-action@v9
         with:
-          # v2.1.x is built against Go 1.24 and refuses to run against
-          # the Go 1.25 toolchain declared in go.mod. v2.11.x uses
-          # Go 1.25+. Bump on release cadence.
-          version: v2.11.4
+          # Keep in sync with GOLANGCI_LINT_VERSION in the Makefile.
+          # Older builds miscompile under newer Go toolchains (e.g.
+          # staticcheck under go1.26 lost the t.Fatal noreturn fact,
+          # causing false SA5011). Bump on release cadence.
+          version: v2.12.2
           args: --timeout=5m
 
       - name: actionlint
