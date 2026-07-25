@@ -9,37 +9,26 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as ResetRouteImport } from './routes/reset'
-import { Route as LoginRouteImport } from './routes/login'
-import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
-import { Route as AcceptInviteRouteImport } from './routes/accept-invite'
 import { Route as AppRouteImport } from './routes/_app'
+import { Route as AcceptInviteRouteImport } from './routes/accept-invite'
+import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as ResetRouteImport } from './routes/reset'
 import { Route as AppIndexRouteImport } from './routes/_app.index'
-import { Route as ReadIdRouteImport } from './routes/read.$id'
-import { Route as LoginPendingRouteImport } from './routes/login_.pending'
-import { Route as AppStatsRouteImport } from './routes/_app.stats'
-import { Route as AppSettingsRouteImport } from './routes/_app.settings'
-import { Route as AppNotebookRouteImport } from './routes/_app.notebook'
-import { Route as AppLibraryRouteImport } from './routes/_app.library'
-import { Route as AppBookdropRouteImport } from './routes/_app.bookdrop'
 import { Route as AppAccountRouteImport } from './routes/_app.account'
+import { Route as AppBookdropRouteImport } from './routes/_app.bookdrop'
+import { Route as AppLibraryRouteImport } from './routes/_app.library'
+import { Route as AppNotebookRouteImport } from './routes/_app.notebook'
+import { Route as AppSettingsRouteImport } from './routes/_app.settings'
+import { Route as AppStatsRouteImport } from './routes/_app.stats'
+import { Route as LoginPendingRouteImport } from './routes/login_.pending'
+import { Route as ReadIdRouteImport } from './routes/read.$id'
 import { Route as AppBookIdRouteImport } from './routes/_app.book.$id'
-import { Route as AppBookIdFindRouteImport } from './routes/_app.book.$id_.find'
 import { Route as AppBookIdEditRouteImport } from './routes/_app.book.$id_.edit'
+import { Route as AppBookIdFindRouteImport } from './routes/_app.book.$id_.find'
 
-const ResetRoute = ResetRouteImport.update({
-  id: '/reset',
-  path: '/reset',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LoginRoute = LoginRouteImport.update({
-  id: '/login',
-  path: '/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
-  id: '/forgot-password',
-  path: '/forgot-password',
+const AppRoute = AppRouteImport.update({
+  id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AcceptInviteRoute = AcceptInviteRouteImport.update({
@@ -47,8 +36,19 @@ const AcceptInviteRoute = AcceptInviteRouteImport.update({
   path: '/accept-invite',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppRoute = AppRouteImport.update({
-  id: '/_app',
+const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
+  id: '/forgot-password',
+  path: '/forgot-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ResetRoute = ResetRouteImport.update({
+  id: '/reset',
+  path: '/reset',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppIndexRoute = AppIndexRouteImport.update({
@@ -56,34 +56,9 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
-const ReadIdRoute = ReadIdRouteImport.update({
-  id: '/read/$id',
-  path: '/read/$id',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LoginPendingRoute = LoginPendingRouteImport.update({
-  id: '/login_/pending',
-  path: '/login/pending',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AppStatsRoute = AppStatsRouteImport.update({
-  id: '/stats',
-  path: '/stats',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppSettingsRoute = AppSettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppNotebookRoute = AppNotebookRouteImport.update({
-  id: '/notebook',
-  path: '/notebook',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppLibraryRoute = AppLibraryRouteImport.update({
-  id: '/library',
-  path: '/library',
+const AppAccountRoute = AppAccountRouteImport.update({
+  id: '/account',
+  path: '/account',
   getParentRoute: () => AppRoute,
 } as any)
 const AppBookdropRoute = AppBookdropRouteImport.update({
@@ -91,24 +66,49 @@ const AppBookdropRoute = AppBookdropRouteImport.update({
   path: '/bookdrop',
   getParentRoute: () => AppRoute,
 } as any)
-const AppAccountRoute = AppAccountRouteImport.update({
-  id: '/account',
-  path: '/account',
+const AppLibraryRoute = AppLibraryRouteImport.update({
+  id: '/library',
+  path: '/library',
   getParentRoute: () => AppRoute,
+} as any)
+const AppNotebookRoute = AppNotebookRouteImport.update({
+  id: '/notebook',
+  path: '/notebook',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSettingsRoute = AppSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppStatsRoute = AppStatsRouteImport.update({
+  id: '/stats',
+  path: '/stats',
+  getParentRoute: () => AppRoute,
+} as any)
+const LoginPendingRoute = LoginPendingRouteImport.update({
+  id: '/login_/pending',
+  path: '/login/pending',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReadIdRoute = ReadIdRouteImport.update({
+  id: '/read/$id',
+  path: '/read/$id',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AppBookIdRoute = AppBookIdRouteImport.update({
   id: '/book/$id',
   path: '/book/$id',
   getParentRoute: () => AppRoute,
 } as any)
-const AppBookIdFindRoute = AppBookIdFindRouteImport.update({
-  id: '/book/$id_/find',
-  path: '/book/$id/find',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppBookIdEditRoute = AppBookIdEditRouteImport.update({
   id: '/book/$id_/edit',
   path: '/book/$id/edit',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppBookIdFindRoute = AppBookIdFindRouteImport.update({
+  id: '/book/$id_/find',
+  path: '/book/$id/find',
   getParentRoute: () => AppRoute,
 } as any)
 
@@ -238,25 +238,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/reset': {
-      id: '/reset'
-      path: '/reset'
-      fullPath: '/reset'
-      preLoaderRoute: typeof ResetRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/forgot-password': {
-      id: '/forgot-password'
-      path: '/forgot-password'
-      fullPath: '/forgot-password'
-      preLoaderRoute: typeof ForgotPasswordRouteImport
+    '/_app': {
+      id: '/_app'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/accept-invite': {
@@ -266,11 +252,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AcceptInviteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app': {
-      id: '/_app'
-      path: ''
-      fullPath: '/'
-      preLoaderRoute: typeof AppRouteImport
+    '/forgot-password': {
+      id: '/forgot-password'
+      path: '/forgot-password'
+      fullPath: '/forgot-password'
+      preLoaderRoute: typeof ForgotPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reset': {
+      id: '/reset'
+      path: '/reset'
+      fullPath: '/reset'
+      preLoaderRoute: typeof ResetRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app/': {
@@ -280,46 +280,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/read/$id': {
-      id: '/read/$id'
-      path: '/read/$id'
-      fullPath: '/read/$id'
-      preLoaderRoute: typeof ReadIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login_/pending': {
-      id: '/login_/pending'
-      path: '/login/pending'
-      fullPath: '/login/pending'
-      preLoaderRoute: typeof LoginPendingRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/_app/stats': {
-      id: '/_app/stats'
-      path: '/stats'
-      fullPath: '/stats'
-      preLoaderRoute: typeof AppStatsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/settings': {
-      id: '/_app/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof AppSettingsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/notebook': {
-      id: '/_app/notebook'
-      path: '/notebook'
-      fullPath: '/notebook'
-      preLoaderRoute: typeof AppNotebookRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/library': {
-      id: '/_app/library'
-      path: '/library'
-      fullPath: '/library'
-      preLoaderRoute: typeof AppLibraryRouteImport
+    '/_app/account': {
+      id: '/_app/account'
+      path: '/account'
+      fullPath: '/account'
+      preLoaderRoute: typeof AppAccountRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/bookdrop': {
@@ -329,12 +294,47 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppBookdropRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/account': {
-      id: '/_app/account'
-      path: '/account'
-      fullPath: '/account'
-      preLoaderRoute: typeof AppAccountRouteImport
+    '/_app/library': {
+      id: '/_app/library'
+      path: '/library'
+      fullPath: '/library'
+      preLoaderRoute: typeof AppLibraryRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/_app/notebook': {
+      id: '/_app/notebook'
+      path: '/notebook'
+      fullPath: '/notebook'
+      preLoaderRoute: typeof AppNotebookRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings': {
+      id: '/_app/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/stats': {
+      id: '/_app/stats'
+      path: '/stats'
+      fullPath: '/stats'
+      preLoaderRoute: typeof AppStatsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/login_/pending': {
+      id: '/login_/pending'
+      path: '/login/pending'
+      fullPath: '/login/pending'
+      preLoaderRoute: typeof LoginPendingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/read/$id': {
+      id: '/read/$id'
+      path: '/read/$id'
+      fullPath: '/read/$id'
+      preLoaderRoute: typeof ReadIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_app/book/$id': {
       id: '/_app/book/$id'
@@ -343,18 +343,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppBookIdRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/book/$id_/find': {
-      id: '/_app/book/$id_/find'
-      path: '/book/$id/find'
-      fullPath: '/book/$id/find'
-      preLoaderRoute: typeof AppBookIdFindRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/book/$id_/edit': {
       id: '/_app/book/$id_/edit'
       path: '/book/$id/edit'
       fullPath: '/book/$id/edit'
       preLoaderRoute: typeof AppBookIdEditRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/book/$id_/find': {
+      id: '/_app/book/$id_/find'
+      path: '/book/$id/find'
+      fullPath: '/book/$id/find'
+      preLoaderRoute: typeof AppBookIdFindRouteImport
       parentRoute: typeof AppRoute
     }
   }
