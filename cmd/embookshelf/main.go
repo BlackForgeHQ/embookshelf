@@ -465,6 +465,7 @@ database must be empty; migrations are applied to it automatically.
 		BookDrop:      bdropSvc,
 		Progress:      progressSvc,
 		Enrich:        enrichSvc,
+		ProviderCfg:   providerCfgSvc,
 		Annotations:   annotationSvc,
 		Stats:         statsSvc,
 		ReadingStats:  readingStatsSvc,
