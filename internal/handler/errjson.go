@@ -10,16 +10,62 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// errorBody is the JSON shape every non-2xx response uses. Keeping it flat
-// (single `error` key) matches the TS `ApiError` type in
-// frontend/src/api/client.ts.
+// Error codes are the machine-readable half of the envelope: a client
+// branches on these, where the message is only fit for display. They are
+// a wire contract — renaming one breaks the UI's handling of that case.
+//
+// Declared as constants so a writer cannot typo one silently, and listed
+// in AllErrorCodes so tests can enumerate them.
+const (
+	// CodeEmailDisabled — the admin has not configured email delivery, so
+	// password reset, invites, and Send-to-Kindle are unavailable.
+	CodeEmailDisabled = "EMAIL_DISABLED"
+	// CodeKindleEmailUnset — the user has no kindle_email configured.
+	CodeKindleEmailUnset = "KINDLE_EMAIL_UNSET"
+	// CodeFormatNotSupported — the book's format is outside the
+	// Send-to-Kindle eligible set (ADR-0021).
+	CodeFormatNotSupported = "FORMAT_NOT_SUPPORTED"
+	// CodeEmailReloadFailed — the EMAIL row saved, but rebuilding the
+	// SMTP sender from it failed; the admin sees why inline.
+	CodeEmailReloadFailed = "EMAIL_RELOAD_FAILED"
+	// CodeSMTPError — a test send reached the SMTP server and it refused.
+	CodeSMTPError = "SMTP_ERROR"
+)
+
+// AllErrorCodes lists every declared code. Kept beside the constants so a
+// new code is one edit, and so tests can assert their shape.
+var AllErrorCodes = []string{
+	CodeEmailDisabled,
+	CodeKindleEmailUnset,
+	CodeFormatNotSupported,
+	CodeEmailReloadFailed,
+	CodeSMTPError,
+}
+
+// errorBody is the JSON shape every non-2xx response uses.
+//
+// It is flat by design, and that is a contract with the TS `ApiError`
+// type in ui/src/api/client.ts, which reads `error` as a string. Five
+// handlers used to nest `{code, message}` under `error` instead, so the
+// client assigned an object into a string-typed field — the code was
+// unreadable and the message rendered as "[object Object]" anywhere it
+// reached a toast. Code now travels beside the message rather than
+// displacing it, and is omitted entirely when absent, so the several
+// hundred existing flat responses are byte-identical.
 type errorBody struct {
 	Error string `json:"error"`
+	Code  string `json:"code,omitempty"`
 }
 
 // writeError sends a JSON error envelope with the given status.
 func writeError(c *gin.Context, status int, msg string) {
 	c.AbortWithStatusJSON(status, errorBody{Error: msg})
+}
+
+// writeErrorCode is writeError plus a machine-readable code for cases the
+// client needs to branch on rather than merely display.
+func writeErrorCode(c *gin.Context, status int, code, msg string) {
+	c.AbortWithStatusJSON(status, errorBody{Error: msg, Code: code})
 }
 
 // writeServerError logs the underlying error and returns a generic 500. The

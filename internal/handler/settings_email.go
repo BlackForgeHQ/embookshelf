@@ -129,9 +129,7 @@ func (h *Handler) SettingsEmailUpdate(c *gin.Context) {
 	if h.notifier != nil {
 		if err := h.notifier.Reload(c.Request.Context()); err != nil {
 			slog.Warn("email settings reload", "err", err)
-			c.JSON(http.StatusBadGateway, gin.H{
-				"error": gin.H{"code": "EMAIL_RELOAD_FAILED", "message": err.Error()},
-			})
+			writeErrorCode(c, http.StatusBadGateway, CodeEmailReloadFailed, err.Error())
 			return
 		}
 	}
@@ -194,7 +192,7 @@ func (h *Handler) SettingsEmailTest(c *gin.Context) {
 		HTML:    "<p>If you received this message your SMTP settings work.</p><p>— embookshelf</p>",
 	}
 	if err := sender.Send(ctx, msg); err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"code": "SMTP_ERROR", "message": err.Error()}})
+		writeErrorCode(c, http.StatusBadGateway, CodeSMTPError, err.Error())
 		return
 	}
 	c.Status(http.StatusNoContent)

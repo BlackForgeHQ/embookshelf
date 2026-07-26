@@ -25,7 +25,7 @@ func (h *Handler) SettingsMetadataGet(c *gin.Context) {
 	on, err := h.appSettings.GetBool(ctx, repo.SettingMetadataAutoEnrich)
 	if err != nil {
 		slog.Error("metadata settings get", "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "load metadata settings"})
+		writeError(c, http.StatusInternalServerError, "load metadata settings")
 		return
 	}
 	c.JSON(http.StatusOK, metadataSettingsDTO{AutoEnrich: on})
@@ -43,7 +43,7 @@ func (h *Handler) SettingsMetadataUpdate(c *gin.Context) {
 	ctx := c.Request.Context()
 	if err := h.appSettings.SetBool(ctx, repo.SettingMetadataAutoEnrich, body.AutoEnrich); err != nil {
 		slog.Error("metadata settings update", "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "save metadata settings"})
+		writeError(c, http.StatusInternalServerError, "save metadata settings")
 		return
 	}
 	c.JSON(http.StatusOK, body)

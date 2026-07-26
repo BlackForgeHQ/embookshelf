@@ -168,10 +168,6 @@ func (h *Handler) PasswordResetConfirm(c *gin.Context) {
 }
 
 func writeEmailDisabled(c *gin.Context) {
-	c.JSON(http.StatusServiceUnavailable, gin.H{
-		"error": gin.H{
-			"code":    "EMAIL_DISABLED",
-			"message": "email delivery is not configured by the admin",
-		},
-	})
+	writeErrorCode(c, http.StatusServiceUnavailable, CodeEmailDisabled,
+		"email delivery is not configured by the admin")
 }

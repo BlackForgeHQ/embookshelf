@@ -72,9 +72,8 @@ func (h *Handler) SendToKindle(c *gin.Context) {
 		if err == nil && fresh.KindleEmail != "" {
 			u = &fresh
 		} else {
-			c.JSON(http.StatusPreconditionFailed, gin.H{
-				"error": gin.H{"code": "KINDLE_EMAIL_UNSET", "message": "set your Kindle email in account settings first"},
-			})
+			writeErrorCode(c, http.StatusPreconditionFailed, CodeKindleEmailUnset,
+				"set your Kindle email in account settings first")
 			return
 		}
 	}
@@ -90,9 +89,8 @@ func (h *Handler) SendToKindle(c *gin.Context) {
 		return
 	}
 	if !service.IsKindleEligible(book.Format) {
-		c.JSON(http.StatusUnsupportedMediaType, gin.H{
-			"error": gin.H{"code": "FORMAT_NOT_SUPPORTED", "message": "Send-to-Kindle accepts EPUB and PDF only"},
-		})
+		writeErrorCode(c, http.StatusUnsupportedMediaType, CodeFormatNotSupported,
+			"Send-to-Kindle accepts EPUB and PDF only")
 		return
 	}
 

@@ -219,6 +219,12 @@ Opaque change token from a backend (S3 returns one; LocalFS leaves it empty). Us
 
 `scan.RelocateByHash` (or inline equivalent in `task.LibraryScan`); for a New walk entry, hashes the bytes and queries `Files.GetByContentHash` in the same library. On hit, updates the existing `files.location` to the new path — the rename safety net under ADR-0018. On miss, returns without side effect; scan is never an ingest path.
 
+### Error envelope
+
+The JSON shape every non-2xx API response uses: `{"error": "<display message>", "code": "<CODE>"}`, where `code` is omitted unless the case is one a client should branch on. `handler.writeError` and `writeErrorCode` are the only writers — no handler builds the shape by hand, which is what stops a bespoke variant reappearing.
+
+Flat by design, and that flatness is a contract with the TypeScript `ApiError` type. Five handlers used to nest `{code, message}` *under* `error`, so the client assigned an object into a string-typed field: the code was unreadable and the message rendered as `[object Object]` anywhere it reached a toast. Callers worked around it — the invites panel fetched email settings separately rather than branch on the `EMAIL_DISABLED` it was already being sent. Codes are Go constants listed in `AllErrorCodes` and mirrored as a TS union; messages are for display and free to change, codes are not.
+
 ### Event catalog
 
 `internal/sse`'s `Catalog`; the single declaration of every SSE event the server publishes. One typed payload struct per event, each naming itself (`EventName`) and stating its [[Audience]]. Emitters call `Hub.Publish(payload)` and never hand-marshal a map or type a name, so a field rename is a compile error rather than a silently-changed wire shape. Quirks that used to live at call sites — the `public:` prefix on shared-shelf slugs — are stamped in the payload instead.

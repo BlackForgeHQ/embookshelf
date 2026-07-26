@@ -198,14 +198,14 @@ func (h *Handler) BookDropPutCover(c *gin.Context) {
 		return
 	}
 	if item.HasCover {
-		c.JSON(http.StatusConflict, gin.H{"error": "cover already present"})
+		writeError(c, http.StatusConflict, "cover already present")
 		return
 	}
 	switch item.State {
 	case model.BookDropDiscovered, model.BookDropProcessing, model.BookDropReady:
 		// accept
 	default:
-		c.JSON(http.StatusConflict, gin.H{"error": "item state does not accept cover upload"})
+		writeError(c, http.StatusConflict, "item state does not accept cover upload")
 		return
 	}
 
@@ -215,7 +215,7 @@ func (h *Handler) BookDropPutCover(c *gin.Context) {
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "image too large"})
+			writeError(c, http.StatusRequestEntityTooLarge, "image too large")
 			return
 		}
 		writeServerError(c, "bookdrop read cover body", err)
@@ -223,7 +223,7 @@ func (h *Handler) BookDropPutCover(c *gin.Context) {
 	}
 	mime, ok := sniffCoverMime(raw)
 	if !ok {
-		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "expected PNG or JPEG"})
+		writeError(c, http.StatusUnsupportedMediaType, "expected PNG or JPEG")
 		return
 	}
 

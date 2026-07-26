@@ -23,7 +23,7 @@ func (h *Handler) SettingsProvidersList(c *gin.Context) {
 	infos, err := h.providerCfg.ListProviders(ctx)
 	if err != nil {
 		slog.Error("list providers", "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "list providers"})
+		writeError(c, http.StatusInternalServerError, "list providers")
 		return
 	}
 
@@ -51,16 +51,16 @@ type settingsProviderPatchReq struct {
 func (h *Handler) SettingsProviderUpdate(c *gin.Context) {
 	id := c.Param("id")
 	if id == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "id required"})
+		writeError(c, http.StatusBadRequest, "id required")
 		return
 	}
 	var req settingsProviderPatchReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		writeError(c, http.StatusBadRequest, "invalid body")
 		return
 	}
 	if req.Enabled == nil && req.Config == nil && req.Priority == nil && !req.PriorityClear {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "nothing to update"})
+		writeError(c, http.StatusBadRequest, "nothing to update")
 		return
 	}
 
@@ -68,43 +68,43 @@ func (h *Handler) SettingsProviderUpdate(c *gin.Context) {
 	if req.Config != nil {
 		if err := h.providerCfg.SetProviderConfig(ctx, id, req.Config); err != nil {
 			if errors.Is(err, service.ErrUnknownProvider) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "unknown provider"})
+				writeError(c, http.StatusNotFound, "unknown provider")
 				return
 			}
 			slog.Error("set provider config", "id", id, "err", err)
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeError(c, http.StatusBadRequest, err.Error())
 			return
 		}
 	}
 	if req.PriorityClear {
 		if err := h.providerCfg.SetProviderPriority(ctx, id, nil); err != nil {
 			if errors.Is(err, service.ErrUnknownProvider) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "unknown provider"})
+				writeError(c, http.StatusNotFound, "unknown provider")
 				return
 			}
 			slog.Error("clear provider priority", "id", id, "err", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "update provider"})
+			writeError(c, http.StatusInternalServerError, "update provider")
 			return
 		}
 	} else if req.Priority != nil {
 		if err := h.providerCfg.SetProviderPriority(ctx, id, req.Priority); err != nil {
 			if errors.Is(err, service.ErrUnknownProvider) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "unknown provider"})
+				writeError(c, http.StatusNotFound, "unknown provider")
 				return
 			}
 			slog.Error("set provider priority", "id", id, "err", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "update provider"})
+			writeError(c, http.StatusInternalServerError, "update provider")
 			return
 		}
 	}
 	if req.Enabled != nil {
 		if err := h.providerCfg.SetProviderEnabled(ctx, id, *req.Enabled); err != nil {
 			if errors.Is(err, service.ErrUnknownProvider) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "unknown provider"})
+				writeError(c, http.StatusNotFound, "unknown provider")
 				return
 			}
 			slog.Error("set provider enabled", "id", id, "err", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "update provider"})
+			writeError(c, http.StatusInternalServerError, "update provider")
 			return
 		}
 	}
@@ -114,7 +114,7 @@ func (h *Handler) SettingsProviderUpdate(c *gin.Context) {
 	infos, err := h.providerCfg.ListProviders(ctx)
 	if err != nil {
 		slog.Error("list providers after update", "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "list providers"})
+		writeError(c, http.StatusInternalServerError, "list providers")
 		return
 	}
 	out := make([]providerInfoDTO, 0, len(infos))
