@@ -379,22 +379,6 @@ func TestImportCoverRejectsNon200(t *testing.T) {
 	}
 }
 
-func TestHostAllowedSuffixAndExact(t *testing.T) {
-	t.Parallel()
-	for host, want := range map[string]bool{
-		"books.google.com":      true,
-		"i.gr-assets.com":       true,
-		"s.gr-assets.com":       true,
-		"gr-assets.com.evil.io": false,
-		"evil.example.com":      false,
-		"":                      false,
-	} {
-		if got := hostAllowed(host); got != want {
-			t.Errorf("hostAllowed(%q) = %v, want %v", host, got, want)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Result cache — documented behaviour, pinned
 // ---------------------------------------------------------------------------

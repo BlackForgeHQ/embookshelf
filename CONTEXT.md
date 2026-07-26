@@ -467,6 +467,12 @@ Split out of `EnrichmentService`, which had grown to six unrelated concerns behi
 
 Optional interfaces a `Provider` may implement. `Configurable.Configure(rawJSON)` accepts plaintext config from the settings UI; `SchemaProvider.ConfigSchema()` returns `[]ConfigField` describing inputs the admin UI should render (text / password / select / textarea). Password-kind fields drive the per-field encryption walk in `EnrichmentService.transformConfigFields`.
 
+### Cover host allow-list
+
+`service.AllowedCoverHosts` + `coverURLAllowed`; the gate every cover download passes. https only, host on the list (exact, or suffix for entries starting with `.`), and path under that entry's optional `Prefix` — the prefix exists so a host shared by many tenants cannot be used wholesale.
+
+Enforced on the caller's URL **and on every redirect target**, via `coverRedirectPolicy` installed as the fetch client's `CheckRedirect` (5 hops max). Validating only the first URL was a real hole: `CoverURL` arrives in the request body of `PUT /books/:id/metadata`, which is `authed` rather than admin-only, so any signed-in user could name an allow-listed host they control and have it redirect the server to a link-local or loopback address.
+
 ### Enrichment cache
 
 The in-process result cache inside `EnrichmentService`, keyed by normalized `(title|author|isbn)` with a 5-minute TTL. Exists to protect provider quota — Google Books allows roughly 100 requests per 100s per IP, and an admin tabbing between books burns that fast.

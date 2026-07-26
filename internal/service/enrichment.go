@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -141,10 +142,13 @@ func NewEnrichmentService(
 		settings:  settings,
 		books:     books,
 		covers:    covers,
-		http:      &http.Client{Timeout: 15 * time.Second},
-		cipher:    cipher,
-		cache:     make(map[string]cacheEntry),
-		cacheTTL:  enrichCacheTTL,
+		http: &http.Client{
+			Timeout:       15 * time.Second,
+			CheckRedirect: coverRedirectPolicy(),
+		},
+		cipher:   cipher,
+		cache:    make(map[string]cacheEntry),
+		cacheTTL: enrichCacheTTL,
 	}
 }
 
@@ -643,7 +647,15 @@ func mergeCategorySlices(existing, incoming []string) []string {
 // ".gr-assets.com" admits "i.gr-assets.com" and "s.gr-assets.com") —
 // useful for providers that fan covers across rotating subdomain CDNs
 // without making the allow-list a whack-a-mole exercise.
-var AllowedCoverHosts = map[string]struct{}{
+// coverHostRule narrows an allow-list entry. A zero rule admits any path
+// on the host; a non-empty Prefix admits only paths beginning with it,
+// which is what keeps a host shared by many tenants from being usable
+// wholesale.
+type coverHostRule struct {
+	Prefix string
+}
+
+var AllowedCoverHosts = map[string]coverHostRule{
 	// Google Books + OAuth-signed image servers.
 	"books.google.com":            {},
 	"books.googleusercontent.com": {},
@@ -654,8 +666,15 @@ var AllowedCoverHosts = map[string]struct{}{
 	"m.media-amazon.com":              {},
 	// DuckDuckGo (Wikipedia-sourced covers).
 	"duckduckgo.com": {},
-	// Hardcover — covers sit on their asset CDN or fallback GCS bucket.
-	"assets.hardcover.app":   {},
+	// Hardcover — covers sit on their asset CDN or a fallback GCS bucket.
+	"assets.hardcover.app": {},
+	// TODO: confirm Hardcover's bucket and set Prefix (e.g. "/hardcover/"),
+	// so this stops admitting every bucket on the shared GCS host. Left
+	// host-only because the URL comes verbatim from Hardcover's API and no
+	// sample exists in-repo to derive the path from; guessing would reject
+	// real covers silently, since a rejected cover is logged and swallowed.
+	// The redirect escape this entry used to open is closed independently by
+	// coverRedirectPolicy, which re-validates every hop.
 	"storage.googleapis.com": {},
 	// Goodreads CDNs. The search-results page serves the thumbnail
 	// from a handful of rotating subdomains under these roots.
@@ -663,19 +682,60 @@ var AllowedCoverHosts = map[string]struct{}{
 	".photo.goodreads.com": {},
 }
 
-// hostAllowed reports whether a URL host clears the allow-list. An
-// exact match wins first; otherwise any entry with a leading "." is
-// treated as a suffix match against the host.
-func hostAllowed(host string) bool {
-	if _, ok := AllowedCoverHosts[host]; ok {
-		return true
+// hostRule resolves a host against the allow-list. An exact match wins
+// first; otherwise any entry with a leading "." is treated as a suffix
+// match against the host.
+func hostRule(host string) (coverHostRule, bool) {
+	if r, ok := AllowedCoverHosts[host]; ok {
+		return r, true
 	}
-	for pattern := range AllowedCoverHosts {
-		if len(pattern) > 0 && pattern[0] == '.' && strings.HasSuffix(host, pattern) {
-			return true
+	for pattern, r := range AllowedCoverHosts {
+		if strings.HasPrefix(pattern, ".") && strings.HasSuffix(host, pattern) {
+			return r, true
 		}
 	}
-	return false
+	return coverHostRule{}, false
+}
+
+// coverURLAllowed reports whether a URL may be fetched as a cover: https
+// only, host on the allow-list, and path under that entry's prefix.
+//
+// Applied to the URL the caller supplied *and*, via coverRedirectPolicy, to
+// every redirect target. Validating only the first URL is what let an
+// allow-listed host bounce the fetch anywhere it liked.
+func coverURLAllowed(u *url.URL) bool {
+	if u == nil || u.Scheme != "https" {
+		return false
+	}
+	rule, ok := hostRule(u.Host)
+	if !ok {
+		return false
+	}
+	if rule.Prefix == "" {
+		return true
+	}
+	// Clean first so "/../tenant/" cannot masquerade as the prefix.
+	return strings.HasPrefix(path.Clean(u.Path)+"/", rule.Prefix)
+}
+
+// maxCoverRedirects caps the redirect chain. Amazon and Goodreads both
+// redirect in normal operation, so refusing outright would break real
+// covers; a handful of hops is ample and bounds the work one request can
+// cause.
+const maxCoverRedirects = 5
+
+// coverRedirectPolicy returns an http.Client CheckRedirect that holds the
+// allow-list across the whole chain rather than just the first URL.
+func coverRedirectPolicy() func(req *http.Request, via []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) >= maxCoverRedirects {
+			return fmt.Errorf("%w: more than %d redirects", ErrBadCoverURL, maxCoverRedirects)
+		}
+		if !coverURLAllowed(req.URL) {
+			return fmt.Errorf("%w: redirect to %q", ErrBadCoverURL, req.URL.Redacted())
+		}
+		return nil
+	}
 }
 
 // ErrBadCoverURL is returned when the URL fails the host/scheme/content checks.
@@ -692,18 +752,17 @@ const maxCoverBytes = 10 * 1024 * 1024
 // resolved MIME so the caller can surface it in a fragment response.
 func (s *EnrichmentService) ImportCoverFromURL(ctx context.Context, bookID, rawURL string) (string, error) {
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme != "https" {
-		slog.Warn("cover URL rejected: non-https or unparseable",
-			"book", bookID, "url", rawURL, "err", err)
+	if err != nil {
+		slog.Warn("cover URL rejected: unparseable", "book", bookID, "url", rawURL, "err", err)
 		return "", ErrBadCoverURL
 	}
-	if !hostAllowed(u.Host) {
+	if !coverURLAllowed(u) {
 		// Surface the host in the error so admins can add it to the
 		// allow-list after auditing. Logging too so the offending URL
 		// is findable in server logs without a repro.
-		slog.Warn("cover URL rejected: host not allow-listed",
+		slog.Warn("cover URL rejected: not allow-listed",
 			"book", bookID, "host", u.Host, "url", rawURL)
-		return "", fmt.Errorf("%w: host %q not in allow-list", ErrBadCoverURL, u.Host)
+		return "", fmt.Errorf("%w: %q not in allow-list", ErrBadCoverURL, u.Host)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
