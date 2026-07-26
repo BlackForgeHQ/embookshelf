@@ -21,14 +21,27 @@ import (
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sse"
 	"github.com/blackforge/embookshelf/internal/storage"
-	"github.com/blackforge/embookshelf/internal/task"
 )
 
-// Client is the minimal surface the rest of the app uses.
+// JobArgs is the payload of an enqueued job: a JSON-serializable
+// struct that names its own kind. Declaring it here rather than
+// reusing River's identical interface keeps the driver import out of
+// every caller. The concrete task.*Args types satisfy both.
+type JobArgs interface {
+	Kind() string
+}
+
+// Client is the minimal surface the rest of the app uses. One Enqueue
+// for every job type — the kind travels with the payload, so adding a
+// job does not widen this interface.
+//
+// Crash recovery differs by backend and callers should not depend on
+// which they got: the SQLite loop re-pends interrupted `running` rows
+// at boot, so a crashed job retries on the next tick, while River
+// leaves them to its own JobRescuer, which reclaims stuck jobs after a
+// timeout (default 1h). Both recover; only the latency differs.
 type Client interface {
-	EnqueueBookDrop(ctx context.Context, itemID string) error
-	EnqueueLibraryScan(ctx context.Context, libraryID string) error
-	EnqueueSendToKindle(ctx context.Context, bookID, userID string) error
+	Enqueue(ctx context.Context, args JobArgs) error
 	Stop(ctx context.Context) error
 }
 
@@ -83,25 +96,11 @@ func newRiver(ctx context.Context, d *db.DB, deps Deps) (*RiverClient, error) {
 	}
 
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &task.BookDropWorker{Deps: task.BookDropDeps{Svc: deps.BookDropSvc, Resolver: deps.Resolver}})
-	river.AddWorker(workers, &task.LibraryScanWorker{
-		Deps: task.LibraryScanDeps{
-			Lib:      deps.LibSvc,
-			LibStore: deps.LibStore,
-			Files:    deps.FileRepo,
-		},
-	})
-	// Notifier is always non-nil — its runtime state gates whether the
-	// send actually fires. Registering unconditionally lets admins
-	// hot-enable email without restart and have queued jobs picked up.
-	river.AddWorker(workers, &task.SendToKindleWorker{
-		Deps: task.SendToKindleDeps{
-			Notifier: deps.Notifier,
-			Books:    deps.Books,
-			Users:    deps.Users,
-			Hub:      deps.Hub,
-		},
-	})
+	for _, reg := range registry(deps) {
+		if err := reg.addToRiver(workers); err != nil {
+			return nil, fmt.Errorf("register %s worker: %w", reg.kind, err)
+		}
+	}
 
 	c, err := river.NewClient(driver, &river.Config{
 		Queues: map[string]river.QueueConfig{
@@ -120,21 +119,10 @@ func newRiver(ctx context.Context, d *db.DB, deps Deps) (*RiverClient, error) {
 	return rc, nil
 }
 
-// EnqueueBookDrop inserts a bookdrop.ingest job for the given item.
-func (r *RiverClient) EnqueueBookDrop(ctx context.Context, itemID string) error {
-	_, err := r.c.Insert(ctx, task.BookDropIngestArgs{ItemID: itemID}, nil)
-	return err
-}
-
-// EnqueueLibraryScan inserts a library.scan job for the given library.
-func (r *RiverClient) EnqueueLibraryScan(ctx context.Context, libraryID string) error {
-	_, err := r.c.Insert(ctx, task.LibraryScanArgs{LibraryID: libraryID}, nil)
-	return err
-}
-
-// EnqueueSendToKindle inserts a kindle.send job for the given book + user.
-func (r *RiverClient) EnqueueSendToKindle(ctx context.Context, bookID, userID string) error {
-	_, err := r.c.Insert(ctx, task.SendToKindleArgs{BookID: bookID, UserID: userID}, nil)
+// Enqueue inserts a job. River derives the kind from the args type, so
+// any registered JobArgs works without a per-job method here.
+func (r *RiverClient) Enqueue(ctx context.Context, args JobArgs) error {
+	_, err := r.c.Insert(ctx, args, nil)
 	return err
 }
 

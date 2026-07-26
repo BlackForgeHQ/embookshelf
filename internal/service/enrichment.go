@@ -205,20 +205,29 @@ func (s *EnrichmentService) transformConfigFields(
 	if err := json.Unmarshal(cfg, &obj); err != nil {
 		return nil, err
 	}
+	// Same slot transformer the typed settings rows use — provider
+	// config differs only in how its secret slots are discovered
+	// (declared at runtime by the provider's schema, not by struct
+	// field pointers).
+	keys := make([]string, 0, len(pw))
+	values := make([]string, 0, len(pw))
 	for key := range pw {
-		raw, ok := obj[key]
+		str, ok := obj[key].(string)
 		if !ok {
 			continue
 		}
-		str, ok := raw.(string)
-		if !ok {
-			continue
-		}
-		transformed, err := op(str)
-		if err != nil {
-			return nil, err
-		}
-		obj[key] = transformed
+		keys = append(keys, key)
+		values = append(values, str)
+	}
+	slots := make([]*string, len(values))
+	for i := range values {
+		slots[i] = &values[i]
+	}
+	if err := crypto.TransformSlots(op, slots); err != nil {
+		return nil, err
+	}
+	for i, key := range keys {
+		obj[key] = values[i]
 	}
 	return json.Marshal(obj)
 }

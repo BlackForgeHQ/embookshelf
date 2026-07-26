@@ -8,8 +8,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/hashing"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -170,14 +168,4 @@ func LibraryScan(ctx context.Context, args LibraryScanArgs, deps LibraryScanDeps
 		"missing", len(cs.Missing),
 	)
 	return nil
-}
-
-// LibraryScanWorker is the River adapter for LibraryScan.
-type LibraryScanWorker struct {
-	river.WorkerDefaults[LibraryScanArgs]
-	Deps LibraryScanDeps
-}
-
-func (w *LibraryScanWorker) Work(ctx context.Context, job *river.Job[LibraryScanArgs]) error {
-	return LibraryScan(ctx, job.Args, w.Deps)
 }

@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/riverqueue/river"
-
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sse"
@@ -89,14 +87,4 @@ func broadcastKindleEvent(hub *sse.Hub, userID, bookID, eventName, errMsg string
 		return
 	}
 	hub.Broadcast(sse.Event{Name: eventName, Data: string(data)})
-}
-
-// SendToKindleWorker is the River adapter.
-type SendToKindleWorker struct {
-	river.WorkerDefaults[SendToKindleArgs]
-	Deps SendToKindleDeps
-}
-
-func (w *SendToKindleWorker) Work(ctx context.Context, job *river.Job[SendToKindleArgs]) error {
-	return SendToKindle(ctx, job.Args, w.Deps)
 }

@@ -9,15 +9,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/blackforge/embookshelf/internal/crypto"
 	"github.com/blackforge/embookshelf/internal/email"
 	"github.com/blackforge/embookshelf/internal/layout"
 	"github.com/blackforge/embookshelf/internal/model"
@@ -71,8 +68,8 @@ var ErrKindleEmailUnset = errors.New("kindle email not set")
 // NotifierDeps bundles the static seams Notifier needs. Sender,
 // publicURL, and enabled flag live in runtime state so admins can
 // flip the email subsystem on/off without restarting. Reload reads
-// the EMAIL row through AppSettings + Cipher and rebuilds the
-// runtime under the mutex.
+// the EMAIL row through AppSettings — which decrypts the SMTP
+// password itself — and rebuilds the runtime under the mutex.
 type NotifierDeps struct {
 	Templates   *email.Templates
 	Resets      *repo.PasswordResetTokenRepo
@@ -80,7 +77,6 @@ type NotifierDeps struct {
 	Users       *repo.UserRepo
 	LibStore    LibraryStore
 	AppSettings *repo.AppSettingsRepo
-	Cipher      crypto.Cipher
 	// Now allows tests to pin time. Production passes time.Now.
 	Now func() time.Time
 }
@@ -117,7 +113,7 @@ func NewNotifier(deps NotifierDeps) *Notifier {
 // ErrEmailDisabled. A bad SMTP config also clears state and returns
 // the construction error so the admin sees why hot-enable failed.
 func (n *Notifier) Reload(ctx context.Context) error {
-	cfg, err := n.deps.AppSettings.GetEmail(ctx, n.deps.Cipher)
+	cfg, err := n.deps.AppSettings.GetEmail(ctx)
 	if err != nil {
 		return fmt.Errorf("load email settings: %w", err)
 	}
@@ -275,12 +271,7 @@ func (n *Notifier) SendToKindle(ctx context.Context, book model.Book, user model
 	if err != nil {
 		return fmt.Errorf("library handle: %w", err)
 	}
-	src, err := handle.BookSource(ctx, book)
-	if err != nil {
-		return fmt.Errorf("book source: %w", err)
-	}
-
-	reader, size, closer, err := openBookSource(ctx, handle, src)
+	reader, size, closer, err := handle.OpenBook(ctx, book)
 	if err != nil {
 		return fmt.Errorf("open book: %w", err)
 	}
@@ -376,33 +367,5 @@ func kindleContentType(format string) string {
 		return "application/pdf"
 	default:
 		return "application/octet-stream"
-	}
-}
-
-// openBookSource resolves a BookSource to an io.Reader + size for
-// attachment build. Local: os.Open the path. Stream: handle.Open the
-// key. Presign is refused — Send-to-Kindle needs the bytes locally to
-// build the attachment.
-func openBookSource(ctx context.Context, handle *LibraryHandle, src BookSource) (io.Reader, int64, io.Closer, error) {
-	switch src.Kind {
-	case BookDeliveryStream:
-		bytesSrc, err := handle.Open(ctx, src.Key)
-		if err != nil {
-			return nil, 0, nil, err
-		}
-		return io.NewSectionReader(bytesSrc, 0, bytesSrc.Size()), bytesSrc.Size(), bytesSrc, nil
-	case BookDeliveryLocal:
-		f, err := os.Open(src.Path)
-		if err != nil {
-			return nil, 0, nil, err
-		}
-		fi, err := f.Stat()
-		if err != nil {
-			_ = f.Close()
-			return nil, 0, nil, err
-		}
-		return f, fi.Size(), f, nil
-	default:
-		return nil, 0, nil, fmt.Errorf("unsupported book delivery for kindle: %v", src.Kind)
 	}
 }

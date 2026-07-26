@@ -8,8 +8,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/service"
 )
 
 // forwardAuthSettingsDTO is the admin-edit shape for the FORWARD_AUTH
@@ -86,16 +86,7 @@ func (h *Handler) SettingsForwardAuthUpdate(c *gin.Context) {
 		return
 	}
 	if h.fwdAuthHolder != nil {
-		runtime, rerr := auth.NewForwardAuthConfig(
-			saved.Enabled,
-			saved.TrustedProxyCIDRs,
-			saved.Headers.User,
-			saved.Headers.Email,
-			saved.Headers.Name,
-			saved.Headers.Groups,
-			saved.LogoutURL,
-			saved.HideLocalLogin,
-		)
+		runtime, rerr := service.NewForwardAuthRuntime(saved)
 		if rerr != nil {
 			writeServerError(c, "forward_auth runtime rebuild", rerr)
 			return

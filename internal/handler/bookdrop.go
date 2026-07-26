@@ -19,6 +19,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/task"
 )
 
 // bookdropDTO mirrors model.BookDropItem for the SPA. Filename is the
@@ -386,7 +387,7 @@ func (h *Handler) BookDropUpload(c *gin.Context) {
 		}
 
 		if h.queue != nil {
-			if err := h.queue.EnqueueBookDrop(c.Request.Context(), item.ID); err != nil {
+			if err := h.queue.Enqueue(c.Request.Context(), task.BookDropIngestArgs{ItemID: item.ID}); err != nil {
 				// The DB row exists — surface the failure but leave the
 				// row; the next watcher tick re-enqueues.
 				slog.Error("bookdrop upload river job", "item_id", item.ID, "err", err)

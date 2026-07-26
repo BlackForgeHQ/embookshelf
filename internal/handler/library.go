@@ -518,40 +518,14 @@ func (h *Handler) BookDelete(c *gin.Context) {
 // rooted under a configured library root — mirrors the serveBookFile
 // sandbox so a malformed books.path can't let delete escape the tree.
 func (h *Handler) deleteBookFile(c *gin.Context, path string) error {
-	absPath, err := filepath.Abs(path)
+	absPath, err := h.sandboxedBookPath(c, path)
 	if err != nil {
 		return err
 	}
-
-	roots := []string{}
-	if h.cfg.BookDropPath != "" {
-		if r, err := filepath.Abs(h.cfg.BookDropPath); err == nil {
-			roots = append(roots, r)
-		}
+	if err := os.Remove(absPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
-	if h.lib != nil {
-		if libs, err := h.lib.List(c.Request.Context()); err == nil {
-			for _, l := range libs {
-				if l.Path == "" {
-					continue
-				}
-				if r, err := filepath.Abs(l.Path); err == nil {
-					roots = append(roots, r)
-				}
-			}
-		}
-	}
-
-	sep := string(filepath.Separator)
-	for _, root := range roots {
-		if absPath == root || strings.HasPrefix(absPath, root+sep) {
-			if err := os.Remove(absPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-			return nil
-		}
-	}
-	return errors.New("path outside allowed roots")
+	return nil
 }
 
 // BookRemoveShelf takes a book off a shelf. No-op when the book isn't on

@@ -18,6 +18,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/queue"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/task"
 )
 
 // Watcher polls a directory and enqueues new files into the BookDrop pipeline.
@@ -98,7 +99,7 @@ func (w *Watcher) scan(ctx context.Context) {
 		if w.Queue == nil {
 			return nil
 		}
-		if err := w.Queue.EnqueueBookDrop(ctx, item.ID); err != nil {
+		if err := w.Queue.Enqueue(ctx, task.BookDropIngestArgs{ItemID: item.ID}); err != nil {
 			slog.Error("enqueue river job failed", "item_id", item.ID, "err", err)
 		}
 		return nil
@@ -119,7 +120,7 @@ func DiscoverOnStartup(ctx context.Context, bdropRepo *repo.BookDropRepo, q queu
 	}
 	for _, it := range items {
 		if it.State == "discovered" || it.State == "processing" {
-			if err := q.EnqueueBookDrop(ctx, it.ID); err != nil {
+			if err := q.Enqueue(ctx, task.BookDropIngestArgs{ItemID: it.ID}); err != nil {
 				slog.Warn("bookdrop re-enqueue failed", "id", it.ID, "err", err)
 			}
 		}

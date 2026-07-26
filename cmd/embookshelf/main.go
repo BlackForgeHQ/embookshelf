@@ -134,6 +134,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	// At-rest cipher for secrets in settings rows (SMTP password, OIDC
+	// client secrets, metadata provider keys). Unset KEK falls back to
+	// passthrough with a loud warning — secrets on disk stay plaintext
+	// but the server still boots. A malformed key is fatal so admins
+	// don't think encryption is on when it isn't. ADR-0010.
+	var secretCipher crypto.Cipher
+	if cfg.SecretKey != "" {
+		ac, err := crypto.NewAESGCM(cfg.SecretKey)
+		if err != nil {
+			slog.Error("EMBOOKSHELF_SECRET_KEY invalid — refusing to boot", "err", err)
+			os.Exit(1)
+		}
+		secretCipher = ac
+		slog.Info("secrets encryption enabled (AES-256-GCM)")
+	} else {
+		secretCipher = crypto.Noop{}
+		slog.Warn("EMBOOKSHELF_SECRET_KEY unset — settings secrets stored in plaintext. " +
+			"Set a base64-encoded 32-byte key for at-rest encryption.")
+	}
+
 	// Repositories.
 	libRepo := repo.NewLibraryRepo(dbh)
 	bookRepo := repo.NewBookRepo(dbh)
@@ -146,7 +166,7 @@ func main() {
 	statsRepo := repo.NewStatsRepo(dbh)
 	readingSessionRepo := repo.NewReadingSessionRepo(dbh)
 	deviceRepo := repo.NewDeviceRepo(dbh)
-	appSettingsRepo := repo.NewAppSettingsRepo(dbh)
+	appSettingsRepo := repo.NewAppSettingsRepo(dbh, secretCipher)
 	fileRepo := repo.NewFileRepo(dbh)
 
 	// SSE hub — shared between services that broadcast and the handler that serves /events.
@@ -205,24 +225,6 @@ func main() {
 	if err := providerSettingsRepo.SeedIfAbsent(ctx, defaults); err != nil {
 		slog.Warn("seed provider settings", "err", err)
 	}
-	// Build the at-rest cipher for provider secrets. Unset KEK falls
-	// back to passthrough with a loud warning — secrets on disk stay
-	// plaintext but the server still boots. A malformed key is fatal
-	// so admins don't think encryption is on when it isn't.
-	var secretCipher crypto.Cipher
-	if cfg.SecretKey != "" {
-		ac, err := crypto.NewAESGCM(cfg.SecretKey)
-		if err != nil {
-			slog.Error("EMBOOKSHELF_SECRET_KEY invalid — refusing to boot", "err", err)
-			os.Exit(1)
-		}
-		secretCipher = ac
-		slog.Info("secrets encryption enabled (AES-256-GCM)")
-	} else {
-		secretCipher = crypto.Noop{}
-		slog.Warn("EMBOOKSHELF_SECRET_KEY unset — provider secrets stored in plaintext. " +
-			"Set a base64-encoded 32-byte key for at-rest encryption.")
-	}
 	enrichSvc := service.NewEnrichmentService(providers, providerSettingsRepo, libRepo, bookRepo, covers, secretCipher)
 	// Push stored per-provider config (API keys, language, …) into the
 	// running provider instances. Failure here is non-fatal — providers
@@ -256,7 +258,7 @@ func main() {
 	libSvc.WithMetadataWriter(metadataWriter)
 	enrichSvc.WithMetadataWriter(metadataWriter)
 	deviceSvc := service.NewDeviceService(
-		deviceRepo, bookRepo,
+		deviceRepo, bookRepo, libStore,
 		service.NewRemarkableDriver(),
 	)
 
@@ -286,16 +288,7 @@ func main() {
 		slog.Error("forward_auth config invalid — refusing to start", "err", err)
 		os.Exit(1)
 	}
-	fwdAuthRuntime, err := auth.NewForwardAuthConfig(
-		fwdAuthCfgRow.Enabled,
-		fwdAuthCfgRow.TrustedProxyCIDRs,
-		fwdAuthCfgRow.Headers.User,
-		fwdAuthCfgRow.Headers.Email,
-		fwdAuthCfgRow.Headers.Name,
-		fwdAuthCfgRow.Headers.Groups,
-		fwdAuthCfgRow.LogoutURL,
-		fwdAuthCfgRow.HideLocalLogin,
-	)
+	fwdAuthRuntime, err := service.NewForwardAuthRuntime(fwdAuthCfgRow)
 	if err != nil {
 		slog.Error("forward_auth runtime config", "err", err)
 		os.Exit(1)
@@ -336,7 +329,6 @@ func main() {
 		Users:       userRepo,
 		LibStore:    libStore,
 		AppSettings: appSettingsRepo,
-		Cipher:      secretCipher,
 	})
 	if err := notifier.Reload(ctx); err != nil {
 		slog.Warn("email subsystem disabled — reload failed", "err", err)

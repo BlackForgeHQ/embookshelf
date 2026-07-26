@@ -16,8 +16,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/riverqueue/river"
-
 	"github.com/blackforge/embookshelf/internal/extractor"
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -175,16 +173,4 @@ func hashFile(_ context.Context, path string) ([]byte, error) {
 		return nil, err
 	}
 	return h.Sum(nil), nil
-}
-
-// BookDropWorker is the River adapter for BookDropIngest. River
-// constructs the worker once per process; the queue layer wires
-// Deps when registering it.
-type BookDropWorker struct {
-	river.WorkerDefaults[BookDropIngestArgs]
-	Deps BookDropDeps
-}
-
-func (w *BookDropWorker) Work(ctx context.Context, job *river.Job[BookDropIngestArgs]) error {
-	return BookDropIngest(ctx, job.Args, w.Deps)
 }

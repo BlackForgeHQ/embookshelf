@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/db"
-	"github.com/blackforge/embookshelf/internal/task"
 )
 
 // sqliteQueue persists jobs in a SQLite table and runs them in a
@@ -46,41 +45,9 @@ func newSQLiteQueue(ctx context.Context, d *db.DB, deps Deps) (*sqliteQueue, err
 		doneCh:   make(chan struct{}),
 	}
 
-	bdropDeps := task.BookDropDeps{Svc: deps.BookDropSvc, Resolver: deps.Resolver}
-	libDeps := task.LibraryScanDeps{
-		Lib:      deps.LibSvc,
-		LibStore: deps.LibStore,
-		Files:    deps.FileRepo,
-	}
-	kindleDeps := task.SendToKindleDeps{
-		Notifier: deps.Notifier,
-		Books:    deps.Books,
-		Users:    deps.Users,
-		Hub:      deps.Hub,
-	}
-
-	q.handlers = map[string]kindHandler{
-		(task.BookDropIngestArgs{}).Kind(): func(ctx context.Context, raw string) error {
-			var args task.BookDropIngestArgs
-			if err := json.Unmarshal([]byte(raw), &args); err != nil {
-				return fmt.Errorf("decode args: %w", err)
-			}
-			return task.BookDropIngest(ctx, args, bdropDeps)
-		},
-		(task.LibraryScanArgs{}).Kind(): func(ctx context.Context, raw string) error {
-			var args task.LibraryScanArgs
-			if err := json.Unmarshal([]byte(raw), &args); err != nil {
-				return fmt.Errorf("decode args: %w", err)
-			}
-			return task.LibraryScan(ctx, args, libDeps)
-		},
-		(task.SendToKindleArgs{}).Kind(): func(ctx context.Context, raw string) error {
-			var args task.SendToKindleArgs
-			if err := json.Unmarshal([]byte(raw), &args); err != nil {
-				return fmt.Errorf("decode args: %w", err)
-			}
-			return task.SendToKindle(ctx, args, kindleDeps)
-		},
+	q.handlers = make(map[string]kindHandler)
+	for _, reg := range registry(deps) {
+		q.handlers[reg.kind] = reg.sqliteHandler
 	}
 
 	// Restart recovery: any 'running' jobs left from a previous process
@@ -95,36 +62,17 @@ func newSQLiteQueue(ctx context.Context, d *db.DB, deps Deps) (*sqliteQueue, err
 	return q, nil
 }
 
-func (q *sqliteQueue) EnqueueBookDrop(ctx context.Context, itemID string) error {
-	args, err := json.Marshal(task.BookDropIngestArgs{ItemID: itemID})
+// Enqueue serializes the payload and inserts a pending row. The kind
+// comes from the args themselves, so this works for any registered job
+// without a method per type.
+func (q *sqliteQueue) Enqueue(ctx context.Context, args JobArgs) error {
+	payload, err := json.Marshal(args)
 	if err != nil {
 		return fmt.Errorf("encode args: %w", err)
 	}
 	_, err = q.db.SQL.ExecContext(ctx, `
 		INSERT INTO jobs (kind, args) VALUES (?, ?)
-	`, task.BookDropIngestArgs{}.Kind(), string(args))
-	return err
-}
-
-func (q *sqliteQueue) EnqueueLibraryScan(ctx context.Context, libraryID string) error {
-	args, err := json.Marshal(task.LibraryScanArgs{LibraryID: libraryID})
-	if err != nil {
-		return fmt.Errorf("encode args: %w", err)
-	}
-	_, err = q.db.SQL.ExecContext(ctx, `
-		INSERT INTO jobs (kind, args) VALUES (?, ?)
-	`, task.LibraryScanArgs{}.Kind(), string(args))
-	return err
-}
-
-func (q *sqliteQueue) EnqueueSendToKindle(ctx context.Context, bookID, userID string) error {
-	args, err := json.Marshal(task.SendToKindleArgs{BookID: bookID, UserID: userID})
-	if err != nil {
-		return fmt.Errorf("encode args: %w", err)
-	}
-	_, err = q.db.SQL.ExecContext(ctx, `
-		INSERT INTO jobs (kind, args) VALUES (?, ?)
-	`, task.SendToKindleArgs{}.Kind(), string(args))
+	`, args.Kind(), string(payload))
 	return err
 }
 

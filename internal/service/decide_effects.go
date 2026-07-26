@@ -61,7 +61,7 @@ func DecideEffects(trigger Trigger, handle *LibraryHandle, folderChanged bool) E
 		// reach here).
 		e.FolderRename = true
 	}
-	if handle.Library.BackendID == nil {
+	if !handle.IsBackendBacked() {
 		// In-file embed remains local-only — S3 still skips it per
 		// ADR-0001. Sidecar full-mirror carries the metadata on S3.
 		e.InFile = true

@@ -4,7 +4,6 @@ package repo
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -82,56 +81,33 @@ var ErrForwardAuthInvalidHeader = errors.New("forward_auth: invalid header name"
 // but does not parse as an http(s) URL.
 var ErrForwardAuthInvalidLogoutURL = errors.New("forward_auth: logoutUrl must be an http(s) URL")
 
+// forwardAuthSetting declares the FORWARD_AUTH row. No Secrets — the
+// trust gate is the CIDR allowlist, not a shared secret. Validation is
+// the same check boot runs, so admins cannot save a config that would
+// refuse the next restart.
+var forwardAuthSetting = Setting[ForwardAuthConfig]{
+	Key:       SettingForwardAuth,
+	Default:   DefaultForwardAuthConfig,
+	Normalize: normalizeForwardAuth,
+	Validate:  ValidateForwardAuth,
+}
+
 // GetForwardAuth loads the FORWARD_AUTH row. A missing row yields
 // DefaultForwardAuthConfig() and a nil error so first boot works
 // without a seed migration.
 func (r *AppSettingsRepo) GetForwardAuth(ctx context.Context) (ForwardAuthConfig, error) {
-	raw, err := r.GetRaw(ctx, SettingForwardAuth)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return DefaultForwardAuthConfig(), nil
-		}
-		return ForwardAuthConfig{}, err
-	}
-	cfg := DefaultForwardAuthConfig()
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return ForwardAuthConfig{}, fmt.Errorf("unmarshal forward_auth config: %w", err)
-	}
-	return cfg, nil
+	return forwardAuthSetting.Get(ctx, r)
 }
 
-// SetForwardAuth validates the config and upserts the FORWARD_AUTH
-// row. Validation is the same as boot validation — admins cannot
-// save a config that would refuse the next restart.
+// SetForwardAuth normalizes, validates, and upserts the FORWARD_AUTH row.
 func (r *AppSettingsRepo) SetForwardAuth(ctx context.Context, cfg ForwardAuthConfig) error {
-	cfg, err := normalizeForwardAuth(cfg)
-	if err != nil {
-		return err
-	}
-	if err := ValidateForwardAuth(cfg); err != nil {
-		return err
-	}
-	b, err := json.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-	return r.SetRaw(ctx, SettingForwardAuth, b)
+	return forwardAuthSetting.Set(ctx, r, cfg)
 }
 
 // SeedForwardAuthIfAbsent writes the default disabled row when none
-// exists. Mirrors SeedEmailIfAbsent so the admin settings UI has a
-// row to render on first boot.
+// exists, so the admin settings UI has a row to render on first boot.
 func (r *AppSettingsRepo) SeedForwardAuthIfAbsent(ctx context.Context) error {
-	if _, err := r.GetRaw(ctx, SettingForwardAuth); err == nil {
-		return nil
-	} else if !errors.Is(err, ErrNotFound) {
-		return err
-	}
-	b, err := json.Marshal(DefaultForwardAuthConfig())
-	if err != nil {
-		return err
-	}
-	return r.SetRaw(ctx, SettingForwardAuth, b)
+	return forwardAuthSetting.SeedIfAbsent(ctx, r)
 }
 
 // ValidateForwardAuth runs the same checks SetForwardAuth applies
@@ -188,7 +164,7 @@ func ValidateForwardAuth(cfg ForwardAuthConfig) error {
 	return nil
 }
 
-func normalizeForwardAuth(cfg ForwardAuthConfig) (ForwardAuthConfig, error) {
+func normalizeForwardAuth(cfg ForwardAuthConfig) ForwardAuthConfig {
 	out := cfg
 	out.LogoutURL = strings.TrimRight(strings.TrimSpace(cfg.LogoutURL), "/")
 	out.Headers.User = strings.TrimSpace(cfg.Headers.User)
@@ -207,7 +183,7 @@ func normalizeForwardAuth(cfg ForwardAuthConfig) (ForwardAuthConfig, error) {
 	if out.Enabled && out.Headers.User == "" {
 		out.Headers.User = DefaultForwardAuthConfig().Headers.User
 	}
-	return out, nil
+	return out
 }
 
 func checkLogoutURL(s string) error {

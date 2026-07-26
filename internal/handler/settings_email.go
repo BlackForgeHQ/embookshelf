@@ -66,7 +66,7 @@ func toEmailSettingsDTO(cfg repo.EmailConfig) emailSettingsDTO {
 // AES-GCM-encrypted at rest, but reading "yes a password is set" is
 // useful for the UI even on instances without a KEK.
 func (h *Handler) SettingsEmailGet(c *gin.Context) {
-	cfg, err := h.appSettings.GetEmail(c.Request.Context(), h.cipher)
+	cfg, err := h.appSettings.GetEmail(c.Request.Context())
 	if err != nil {
 		writeServerError(c, "email settings get", err)
 		return
@@ -96,7 +96,7 @@ func (h *Handler) SettingsEmailUpdate(c *gin.Context) {
 		}
 	}
 
-	current, err := h.appSettings.GetEmail(c.Request.Context(), h.cipher)
+	current, err := h.appSettings.GetEmail(c.Request.Context())
 	if err != nil {
 		writeServerError(c, "email settings load", err)
 		return
@@ -116,10 +116,8 @@ func (h *Handler) SettingsEmailUpdate(c *gin.Context) {
 		},
 		PublicURL: body.PublicURL,
 	}
-	if cfg.SMTP.Password == "" {
-		cfg.SMTP.Password = current.SMTP.Password
-	}
-	if err := h.appSettings.SetEmail(c.Request.Context(), h.cipher, cfg); err != nil {
+	cfg.SMTP.Password = resolveSecret(body.SMTP.Password, body.PasswordSet, current.SMTP.Password)
+	if err := h.appSettings.SetEmail(c.Request.Context(), cfg); err != nil {
 		writeServerError(c, "email settings save", err)
 		return
 	}
@@ -164,7 +162,7 @@ func (h *Handler) SettingsEmailTest(c *gin.Context) {
 		return
 	}
 
-	cfg, err := h.appSettings.GetEmail(c.Request.Context(), h.cipher)
+	cfg, err := h.appSettings.GetEmail(c.Request.Context())
 	if err != nil {
 		writeServerError(c, "email settings load for test", err)
 		return

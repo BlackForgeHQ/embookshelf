@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -145,43 +144,9 @@ func (s *storageSourceSeeker) Seek(offset int64, whence int) (int64, error) {
 // or one of the registered library_paths, then serves the bytes with the
 // given content type via c.File() (honors Range headers natively).
 func (h *Handler) serveLocalBookFile(c *gin.Context, path, mime string) error {
-	absPath, err := filepath.Abs(path)
+	absPath, err := h.sandboxedBookPath(c, path)
 	if err != nil {
-		return errors.New("bad path")
-	}
-
-	roots := []string{}
-	if h.cfg.BookDropPath != "" {
-		if r, err := filepath.Abs(h.cfg.BookDropPath); err == nil {
-			roots = append(roots, r)
-		}
-	}
-	if h.lib != nil {
-		if libs, err := h.lib.List(c.Request.Context()); err == nil {
-			for _, l := range libs {
-				if l.Path == "" {
-					continue
-				}
-				if r, err := filepath.Abs(l.Path); err == nil {
-					roots = append(roots, r)
-				}
-			}
-		}
-	}
-	if len(roots) == 0 {
-		return errors.New("no allowed roots configured")
-	}
-
-	sep := string(filepath.Separator)
-	allowed := false
-	for _, root := range roots {
-		if absPath == root || strings.HasPrefix(absPath, root+sep) {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		return errors.New("path outside allowed roots")
+		return err
 	}
 
 	c.Header("Content-Type", mime)

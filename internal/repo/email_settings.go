@@ -4,12 +4,7 @@ package repo
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"strings"
-
-	"github.com/blackforge/embookshelf/internal/crypto"
 )
 
 // SettingEmail keys the EMAIL row in app_settings. Stores a single
@@ -61,71 +56,43 @@ func DefaultEmailConfig() EmailConfig {
 	}
 }
 
-// GetEmail loads the EMAIL row, decrypts the SMTP password through
-// cipher, and returns a struct safe to hand to Notifier / Sender. A
-// missing row yields DefaultEmailConfig() and a nil error so first
-// boot works without a seed migration.
-func (r *AppSettingsRepo) GetEmail(ctx context.Context, cipher crypto.Cipher) (EmailConfig, error) {
-	raw, err := r.GetRaw(ctx, SettingEmail)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return DefaultEmailConfig(), nil
+// emailSetting declares the EMAIL row. SMTP.Password is the one secret;
+// host, username, and From stay plaintext so the row reads cleanly in
+// psql.
+var emailSetting = Setting[EmailConfig]{
+	Key:     SettingEmail,
+	Default: DefaultEmailConfig,
+	Normalize: func(cfg EmailConfig) EmailConfig {
+		cfg.SMTP.Host = strings.TrimSpace(cfg.SMTP.Host)
+		cfg.SMTP.Username = strings.TrimSpace(cfg.SMTP.Username)
+		cfg.From.Address = strings.TrimSpace(cfg.From.Address)
+		cfg.From.Name = strings.TrimSpace(cfg.From.Name)
+		cfg.PublicURL = strings.TrimRight(strings.TrimSpace(cfg.PublicURL), "/")
+		if cfg.SMTP.TLS == "" {
+			cfg.SMTP.TLS = "starttls"
 		}
-		return EmailConfig{}, err
-	}
-	cfg := DefaultEmailConfig()
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return EmailConfig{}, fmt.Errorf("unmarshal email config: %w", err)
-	}
-	if cfg.SMTP.Password != "" {
-		plain, err := cipher.Decrypt(cfg.SMTP.Password)
-		if err != nil {
-			return EmailConfig{}, fmt.Errorf("decrypt smtp password: %w", err)
-		}
-		cfg.SMTP.Password = plain
-	}
-	return cfg, nil
+		return cfg
+	},
+	Secrets: func(cfg *EmailConfig) []*string { return []*string{&cfg.SMTP.Password} },
 }
 
-// SetEmail validates the config, encrypts SMTP.Password via cipher,
-// and upserts the EMAIL row. The plaintext password is never written
-// to the row — callers may pass a sentinel empty string to clear it
-// or the same plaintext to refresh.
-func (r *AppSettingsRepo) SetEmail(ctx context.Context, cipher crypto.Cipher, cfg EmailConfig) error {
-	cfg.SMTP.Host = strings.TrimSpace(cfg.SMTP.Host)
-	cfg.SMTP.Username = strings.TrimSpace(cfg.SMTP.Username)
-	cfg.From.Address = strings.TrimSpace(cfg.From.Address)
-	cfg.From.Name = strings.TrimSpace(cfg.From.Name)
-	cfg.PublicURL = strings.TrimRight(strings.TrimSpace(cfg.PublicURL), "/")
-	if cfg.SMTP.TLS == "" {
-		cfg.SMTP.TLS = "starttls"
-	}
-	if cfg.SMTP.Password != "" {
-		ct, err := cipher.Encrypt(cfg.SMTP.Password)
-		if err != nil {
-			return fmt.Errorf("encrypt smtp password: %w", err)
-		}
-		cfg.SMTP.Password = ct
-	}
-	b, err := json.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-	return r.SetRaw(ctx, SettingEmail, b)
+// GetEmail loads the EMAIL row with the SMTP password decrypted — a
+// struct safe to hand to Notifier / Sender. A missing row yields
+// DefaultEmailConfig() and a nil error so first boot works without a
+// seed migration.
+func (r *AppSettingsRepo) GetEmail(ctx context.Context) (EmailConfig, error) {
+	return emailSetting.Get(ctx, r)
+}
+
+// SetEmail normalizes the config, encrypts SMTP.Password, and upserts
+// the EMAIL row. Callers pass an empty password to clear it or the
+// same plaintext to refresh.
+func (r *AppSettingsRepo) SetEmail(ctx context.Context, cfg EmailConfig) error {
+	return emailSetting.Set(ctx, r, cfg)
 }
 
 // SeedEmailIfAbsent writes a default empty/disabled EMAIL row when
-// none exists. Mirrors SeedOIDCIfAbsent so first-boot has a row to
-// edit in the settings UI.
+// none exists, so first boot has a row to edit in the settings UI.
 func (r *AppSettingsRepo) SeedEmailIfAbsent(ctx context.Context) error {
-	if _, err := r.GetRaw(ctx, SettingEmail); err == nil {
-		return nil
-	} else if !errors.Is(err, ErrNotFound) {
-		return err
-	}
-	b, err := json.Marshal(DefaultEmailConfig())
-	if err != nil {
-		return err
-	}
-	return r.SetRaw(ctx, SettingEmail, b)
+	return emailSetting.SeedIfAbsent(ctx, r)
 }

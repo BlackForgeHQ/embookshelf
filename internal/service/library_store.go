@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -62,9 +64,60 @@ type LibraryHandle struct {
 	// instead of an opaque "no placer" message.
 	PlacerErr error
 
-	files           *repo.FileRepo
+	files           bookFileLister
 	presignTTL      time.Duration
 	presignFallback string
+}
+
+// bookFileLister is the slice of FileRepo a handle actually needs to
+// find a book's bytes. Narrow so the delivery logic is testable
+// without a database.
+type bookFileLister interface {
+	ListByBook(ctx context.Context, bookID string) ([]model.File, error)
+}
+
+// IsBackendBacked reports whether this library's bytes live in a
+// Storage backend rather than on the local filesystem. Names the
+// question once so callers stop peeking at libraries.backend_id: the
+// in-file metadata embed (ADR-0001) and the folder-rename strategy
+// (ADR-0005) both branch on it.
+func (h *LibraryHandle) IsBackendBacked() bool {
+	return h.Library.BackendID != nil
+}
+
+// OpenBook returns the book's bytes, wherever they live. Callers that
+// want content — Send-to-Kindle, device push — use this and never
+// learn the delivery vocabulary; BookSource stays for the file-serve
+// handler, which genuinely needs a routing answer.
+//
+// Deliberately never presigns: a presigned URL is an answer for the
+// browser, useless to a caller that needs the bytes in-process.
+//
+// The returned Closer is always non-nil on success and must be closed.
+func (h *LibraryHandle) OpenBook(ctx context.Context, book model.Book) (io.Reader, int64, io.Closer, error) {
+	if h.Storage != nil && h.files != nil {
+		if f, err := primaryFile(ctx, h.files, book); err == nil {
+			src, oerr := h.Storage.Open(ctx, f.Location)
+			if oerr != nil {
+				return nil, 0, nil, fmt.Errorf("open %s: %w", f.Location, oerr)
+			}
+			return io.NewSectionReader(src, 0, src.Size()), src.Size(), src, nil
+		}
+	}
+
+	if book.Path == "" {
+		return nil, 0, nil, errors.New("book has no stored file to open")
+	}
+	file, err := os.Open(book.Path)
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("open book file: %w", err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, 0, nil, err
+	}
+	return file, info.Size(), file, nil
 }
 
 // SidecarKey returns the paired JSON sidecar storage key for a book
@@ -239,12 +292,20 @@ func (s *defaultLibraryStore) For(ctx context.Context, libraryID string) (*Libra
 		placerErr = errors.New("no placer builder configured")
 	}
 
+	// Assign through a nil check: a nil *repo.FileRepo stored in the
+	// interface field would be a non-nil interface, and every
+	// h.files == nil guard below would silently stop working.
+	var files bookFileLister
+	if s.deps.Files != nil {
+		files = s.deps.Files
+	}
+
 	return &LibraryHandle{
 		Library:         lib,
 		Storage:         store,
 		Placer:          placer,
 		PlacerErr:       placerErr,
-		files:           s.deps.Files,
+		files:           files,
 		presignTTL:      s.deps.PresignTTL,
 		presignFallback: s.deps.PresignFallback,
 	}, nil
@@ -254,7 +315,7 @@ func (s *defaultLibraryStore) For(ctx context.Context, libraryID string) (*Libra
 // format matches books.format. Falls back to the first row when no
 // format match exists; returns an error when there are no rows yet
 // (pre-files-backfill installs).
-func primaryFile(ctx context.Context, files *repo.FileRepo, book model.Book) (model.File, error) {
+func primaryFile(ctx context.Context, files bookFileLister, book model.Book) (model.File, error) {
 	list, err := files.ListByBook(ctx, book.ID)
 	if err != nil {
 		return model.File{}, err

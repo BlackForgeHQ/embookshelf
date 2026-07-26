@@ -55,6 +55,7 @@ type OIDCService struct {
 	users      *repo.UserRepo
 	sessions   *repo.SessionRepo
 	identities *repo.IdentityRepo
+	prov       *Provisioner
 
 	states *stateStore
 
@@ -79,6 +80,7 @@ func NewOIDCService(settings *repo.AppSettingsRepo, users *repo.UserRepo, sessio
 		users:      users,
 		sessions:   sessions,
 		identities: identities,
+		prov:       NewProvisioner(settings, users, identities),
 		states:     newStateStore(),
 	}
 }
@@ -299,24 +301,33 @@ func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent, sess
 		}, nil
 	}
 
-	provision, err := s.settings.GetOIDCAutoProvision(ctx)
+	res, err := s.prov.Provision(ctx, ExternalIdentity{
+		Provider: entry.ProviderSlug,
+		Issuer:   issuer,
+		Subject:  claims.Subject,
+		Email:    claims.Email,
+		Name:     claims.Name,
+	})
 	if err != nil {
 		return ExchangeOutcome{}, err
 	}
-	u, err := s.findOrProvisionUser(ctx, entry.ProviderSlug, issuer, claims, provision)
-	if err != nil {
-		if errors.Is(err, ErrOIDCPendingApproval) {
-			return ExchangeOutcome{Intent: IntentLogin, User: u}, ErrOIDCPendingApproval
-		}
-		return ExchangeOutcome{}, err
+	switch res.Status {
+	case ProvisionResolved:
+		// fall through to session create below
+	case ProvisionPendingApproval:
+		return ExchangeOutcome{Intent: IntentLogin, User: res.User}, ErrOIDCPendingApproval
+	case ProvisionEmailRequired:
+		return ExchangeOutcome{}, errors.New("OIDC provider did not return an email claim and email is required")
+	default: // ProvisionDenied, ProvisionNotAllowed
+		return ExchangeOutcome{}, ErrOIDCLoginNotAllowed
 	}
+	u := res.User
 	_ = s.users.SyncOIDCProfile(ctx, u.ID, claims.Name, claims.Picture)
 
 	sess, err := s.sessions.Create(ctx, u.ID, userAgent, SessionTTL)
 	if err != nil {
 		return ExchangeOutcome{}, err
 	}
-	_ = s.users.TouchLastSeen(ctx, u.ID, time.Now())
 	return ExchangeOutcome{Intent: IntentLogin, Session: sess, User: u}, nil
 }
 
@@ -699,110 +710,6 @@ func extractClaims(ctx context.Context, disc *cachedDiscovery, token *oauth2.Tok
 		out.Name = strings.TrimSpace(g + " " + f)
 	}
 	return out, nil
-}
-
-// -----------------------------------------------------------------------------
-// User provisioning
-// -----------------------------------------------------------------------------
-
-func (s *OIDCService) findOrProvisionUser(ctx context.Context, provider, issuer string, claims resolvedClaims, provision repo.OIDCAutoProvisionDetails) (model.User, error) {
-	// 1) Match by OIDC identity. Existing users still need to clear
-	//    the status gate — pending users have not been approved yet,
-	//    denied users have been explicitly refused.
-	if ident, err := s.identities.GetByIssuerSubject(ctx, issuer, claims.Subject); err == nil {
-		u, uerr := s.users.GetByID(ctx, ident.UserID)
-		if uerr != nil {
-			return model.User{}, uerr
-		}
-		_ = s.identities.TouchLastLogin(ctx, ident.ID)
-		switch u.Status {
-		case model.UserStatusActive:
-			return u, nil
-		case model.UserStatusPending:
-			return u, ErrOIDCPendingApproval
-		case model.UserStatusDenied:
-			return model.User{}, ErrOIDCLoginNotAllowed
-		default:
-			return u, nil
-		}
-	} else if !errors.Is(err, repo.ErrNotFound) {
-		return model.User{}, err
-	}
-
-	// 2) Match by email and auto-link. Gated by AllowLocalAccountLinking
-	//    when the matched user has no identities yet (a true cross-over
-	//    from local password to SSO). Once a user has at least one
-	//    identity, additional providers attach without the flag — they
-	//    came in via the same email-verified channel.
-	if claims.Email != "" {
-		existing, err := s.users.GetByEmail(ctx, claims.Email)
-		if err != nil && !errors.Is(err, repo.ErrNotFound) {
-			return model.User{}, err
-		}
-		if err == nil {
-			count, cerr := s.identities.CountByUser(ctx, existing.ID)
-			if cerr != nil {
-				return model.User{}, cerr
-			}
-			if !provision.AllowLocalAccountLinking && count == 0 {
-				return model.User{}, ErrOIDCLoginNotAllowed
-			}
-			if _, err := s.identities.RelinkProvider(ctx, existing.ID, provider, issuer, claims.Subject, claims.Email); err != nil {
-				return model.User{}, err
-			}
-			return existing, nil
-		}
-	}
-
-	// 3) Auto-provision.
-	if !provision.EnableAutoProvisioning {
-		n, err := s.users.Count(ctx)
-		if err != nil {
-			return model.User{}, err
-		}
-		if n > 0 {
-			return model.User{}, ErrOIDCLoginNotAllowed
-		}
-	}
-
-	role := model.RoleUser
-	if provision.DefaultRole == "admin" {
-		role = model.RoleAdmin
-	}
-	// First-user-becomes-admin shortcut bypasses approval — otherwise
-	// an admin-less instance with approval-required is unrecoverable.
-	firstUser := false
-	if n, err := s.users.Count(ctx); err == nil && n == 0 {
-		role = model.RoleAdmin
-		firstUser = true
-	}
-
-	if claims.Email == "" {
-		return model.User{}, errors.New("OIDC provider did not return an email claim and email is required")
-	}
-
-	pending := provision.RequireAdminApproval && !firstUser
-
-	var created model.User
-	var err error
-	if pending {
-		created, err = s.users.CreateOIDCPending(ctx, claims.Email, claims.Name, role)
-	} else {
-		created, err = s.users.CreateOIDC(ctx, claims.Email, claims.Name, role)
-	}
-	if err != nil {
-		return model.User{}, err
-	}
-	if _, err := s.identities.Insert(ctx, created.ID, provider, issuer, claims.Subject, claims.Email); err != nil {
-		// Identity insert failed after user create. Clean up so the
-		// orphan user doesn't block a future login by the same email.
-		_ = s.users.Delete(ctx, created.ID)
-		return model.User{}, err
-	}
-	if pending {
-		return created, ErrOIDCPendingApproval
-	}
-	return created, nil
 }
 
 // -----------------------------------------------------------------------------

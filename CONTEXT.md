@@ -6,6 +6,18 @@ This file complements `docs/ARCHITECTURE.md` (technical layout) and `docs/spec/`
 
 ---
 
+## Instance settings
+
+### Setting
+
+`repo.Setting[T]`; one typed `app_settings` row. `Get` / `Set` / `SeedIfAbsent` are implemented once; a domain declares only what differs — its key, defaults, and optionally Normalize, Validate, and Secrets. Four declarations today: EMAIL, FORWARD_AUTH, the three OIDC provider rows, and the auto-provision row. A missing row is never an error: `Get` returns the declared default, and a stored row is unmarshaled *onto* that default so partial JSON keeps its defaults.
+
+Declaring `Secrets` is how a row opts into at-rest encryption — it returns pointers to the secret fields, which the implementation runs through the [[Slot transformer]] on every write and reverses on every read. Callers only ever see plaintext. `AppSettingsRepo` holds the Cipher rather than taking it per call, so a new accessor cannot silently store a secret in plaintext (the gap that left OIDC client secrets unencrypted until the mechanism was unified).
+
+**Distinct** from `provider_settings` — a separate table whose secret keys are declared at runtime by each metadata provider, not by struct fields. It shares the Slot transformer but not `Setting[T]`.
+
+---
+
 ## Users & identity
 
 ### Identity
@@ -29,7 +41,7 @@ The act of attaching an identity to a user. Two ways it happens:
 
 ### Auto-link
 
-Login-time linking gated by the admin flag `AllowLocalAccountLinking`. When the OIDC callback returns an identity that doesn't match any row but the email claim matches a local user, the callback attaches the identity to that user instead of rejecting the login. Relies on the IdP-verified email — GitHub explicitly rejects unverified emails (`service/oidc.go:486`); Google and generic OIDC trust the `email_verified` claim.
+Login-time linking gated by the admin flag `AllowLocalAccountLinking`. When an External identity matches no row but its email claim matches a local user, the Provisioner attaches the identity to that user instead of rejecting the login. Status-gated on both auth surfaces: a pending or denied user never auto-links — the outcome is pending/denied, not a session. The flag gates only the first identity (local-password → SSO crossover); a user with at least one identity attaches further providers without it. Relies on the IdP-verified email — GitHub explicitly rejects unverified emails; Google and generic OIDC trust the `email_verified` claim.
 
 ### Lockout guard
 
@@ -38,6 +50,8 @@ The invariant enforced on every unlink: a user must end the operation with at le
 ### Provisioning
 
 Admin policy controlling whether an unknown External identity creates a new user. Three knobs in `oidc_auto_provision_details`: `EnableAutoProvisioning`, `RequireAdminApproval`, `DefaultRole`. Off by default after the first user; the first External-identity login on an empty instance (OIDC callback or first trusted-proxy header hit) is always admitted as admin to avoid an unrecoverable state. Same row, same knobs, both auth paths — the table name is historical, not OIDC-only.
+
+The policy has a single implementation: `service.Provisioner` (identity match → Auto-link → auto-provision, returning a semantic outcome — resolved / pending-approval / denied / not-allowed / email-required). The OIDC callback and Forward-auth are thin adapters that map outcomes to their own error vocabulary (landing-page redirect vs plain 401). Neither auth surface owns or duplicates the policy.
 
 ### Force-only mode
 
@@ -193,6 +207,12 @@ Opaque change token from a backend (S3 returns one; LocalFS leaves it empty). Us
 
 `scan.RelocateByHash` (or inline equivalent in `task.LibraryScan`); for a New walk entry, hashes the bytes and queries `Files.GetByContentHash` in the same library. On hit, updates the existing `files.location` to the new path — the rename safety net under ADR-0018. On miss, returns without side effect; scan is never an ingest path.
 
+### Job registry
+
+`queue.registry(deps)`; the single list of job kinds the binary knows. One `register[T](work)` entry per job builds both adapters' view of it — a typed River worker and a SQLite decode-and-dispatch handler — from the same declaration, and the per-job `Deps` structs are assembled once. Adding a job is one line: the `Client` interface does not widen (kind travels with the payload via `queue.JobArgs`), and no second registration site exists. Confines the River driver import to `internal/queue`; `internal/task` no longer imports it.
+
+Crash recovery is the one place the two adapters legitimately differ, and callers must not depend on which they got: the SQLite loop re-pends interrupted `running` rows at boot so a crashed job retries on the next tick, while River leaves them to its own JobRescuer (default 1h). Both recover; only the latency differs.
+
 ### Drainer
 
 `task.Drain[T]`; the loop shape used by boot-time backfills that read pending rows from a predicate query, do per-item work that may fail per item, and exit when the predicate is empty or no item in a batch made progress. Owns logging + the in-run skip set so closures stay focused on the work itself. Used by Files backfill (sha256 fill) and Covers backfill (legacy → hash-keyed). Distinct from a schema-bootstrap backfill (`migrator.BackfillStorageV2`), which runs once after `migrate.Up`, sentinel-gated, DB-only.
@@ -227,7 +247,19 @@ The worker pipeline that takes a staged file path, computes its hash, dispatches
 
 ### BookSource
 
-`service.BookSource`; a *delivery decision* for the file-serve handler: `{Kind: "local", Path}` (stream via `c.File()`) or `{Kind: "presign", URL, TTL}` (302 redirect). Built by `LibraryHandle.BookSource(ctx, book)`. **Distinct from `storage.Source`** — that's a byte-access primitive; this is a routing answer.
+`service.BookSource`; a *delivery decision* for the file-serve handler: `{Kind: "local", Path}` (stream via `c.File()`) or `{Kind: "presign", URL, TTL}` (302 redirect). Built by `LibraryHandle.BookSource(ctx, book)`. **Distinct from `storage.Source`** — that's a byte-access primitive; this is a routing answer. **Distinct from `OpenBook`** — only the file-serve handler wants a routing answer; every other caller wants bytes.
+
+### OpenBook
+
+`LibraryHandle.OpenBook(ctx, book) (io.Reader, int64, io.Closer, error)`; the way in-process callers get a book's bytes, wherever they live — storage-backed or legacy on-disk path. Send-to-Kindle and device push both use it, so neither knows the delivery vocabulary and both work identically on local and S3-backed libraries. Deliberately never presigns: a presigned URL answers "what do I tell the browser", which is useless to a caller that needs the bytes. Reaching around it with `os.Open(book.Path)` is what silently broke device push on S3 libraries.
+
+### Backend-backed
+
+`LibraryHandle.IsBackendBacked()`; whether a Library's bytes live in a Storage backend rather than the local filesystem. Named once so callers stop re-deriving it from `libraries.backend_id`. Two policies branch on it: the in-file metadata embed (local only, ADR-0001) and the folder-rename strategy (`os.Rename` vs copy + Pending orphan, ADR-0005).
+
+### Book file sandbox
+
+`handler.sandboxPath`; the allow-list gate every filesystem read or delete of a book file passes through. Roots are `BOOKDROP_PATH` plus every Library with a local path; a path must resolve inside one of them after cleaning. Fails closed — no configured roots admits nothing. Serving and deleting share the one implementation so a change to the rule cannot apply to one and miss the other.
 
 ### Placer
 
@@ -327,7 +359,11 @@ Candidate matches presented to the user for review before persisting. Streamed o
 
 ### Cipher
 
-`crypto.Cipher` interface with two implementations: `AESGCM` (prod, KEK from `EMBOOKSHELF_SECRET_KEY` base64-decoded 32 bytes) and `Noop` (dev fallback when env unset). Boot semantics are asymmetric: invalid key refuses startup; unset key warns and falls back to Noop. ADR-0010.
+`crypto.Cipher` interface with two implementations: `AESGCM` (prod, KEK from `EMBOOKSHELF_SECRET_KEY` base64-decoded 32 bytes) and `Noop` (dev fallback when env unset). Boot semantics are asymmetric: invalid key refuses startup; unset key warns and falls back to Noop. Ciphertexts carry an `enc:v1:` prefix so pre-encryption rows pass through unchanged and the next write upgrades them — no migration. ADR-0010.
+
+### Slot transformer
+
+`crypto.TransformSlots(op, slots)`; the one mechanism every secret-bearing persistence path shares. Applies Encrypt/Decrypt across a set of string slots, skipping empties and nil pointers, all-or-nothing on error so a half-encrypted value never reaches the DB. Callers differ only in how they enumerate slots: a Setting declares them as pointers to its secret struct fields; metadata provider config discovers them from the provider's `ConfigSchema()` at runtime.
 
 ### Configurable / SchemaProvider
 

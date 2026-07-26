@@ -6,27 +6,44 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/repo"
 )
+
+// deviceRows is the slice of DeviceRepo this service needs.
+type deviceRows interface {
+	ListForUser(ctx context.Context, userID string) ([]model.Device, error)
+	GetForUser(ctx context.Context, userID, id string) (model.Device, error)
+	Create(ctx context.Context, d model.Device) (model.Device, error)
+	Delete(ctx context.Context, userID, id string) error
+	MarkSendResult(ctx context.Context, userID, id string, sendErr error) error
+}
+
+// bookLookup is the slice of BookRepo this service needs.
+type bookLookup interface {
+	GetByID(ctx context.Context, userID, id string) (model.Book, error)
+}
 
 // DeviceService orchestrates pairing, listing, and pushing books to the
 // user's registered devices. Driver selection is by DeviceKind — add a new
 // driver, register it once here, and every handler/UI flow picks it up.
+//
+// Book bytes come from LibraryStore, never from the filesystem
+// directly, so pushing a book works the same on a local library and an
+// S3-backed one.
 type DeviceService struct {
-	devices *repo.DeviceRepo
-	books   *repo.BookRepo
-	drivers map[model.DeviceKind]DeviceDriver
+	devices  deviceRows
+	books    bookLookup
+	libStore LibraryStore
+	drivers  map[model.DeviceKind]DeviceDriver
 }
 
-func NewDeviceService(devices *repo.DeviceRepo, books *repo.BookRepo, drivers ...DeviceDriver) *DeviceService {
+func NewDeviceService(devices deviceRows, books bookLookup, libStore LibraryStore, drivers ...DeviceDriver) *DeviceService {
 	m := make(map[model.DeviceKind]DeviceDriver, len(drivers))
 	for _, d := range drivers {
 		m[d.Kind()] = d
 	}
-	return &DeviceService{devices: devices, books: books, drivers: m}
+	return &DeviceService{devices: devices, books: books, libStore: libStore, drivers: m}
 }
 
 // ErrUnsupportedKind is returned when the user asks to pair a kind we
@@ -61,10 +78,10 @@ func (s *DeviceService) Delete(ctx context.Context, userID, id string) error {
 	return s.devices.Delete(ctx, userID, id)
 }
 
-// Send pushes a book file to one of the user's registered devices. Reads
-// the book's on-disk file (must exist under a library path) and hands it
-// to the driver. Records the outcome on the device row so the UI can
-// surface last-success / last-error.
+// Send pushes a book file to one of the user's registered devices. The
+// bytes come through LibraryStore, so a book in an S3-backed library
+// pushes exactly like one on local disk. Records the outcome on the
+// device row so the UI can surface last-success / last-error.
 func (s *DeviceService) Send(ctx context.Context, userID, deviceID, bookID string) error {
 	dev, err := s.devices.GetForUser(ctx, userID, deviceID)
 	if err != nil {
@@ -79,26 +96,24 @@ func (s *DeviceService) Send(ctx context.Context, userID, deviceID, bookID strin
 	if err != nil {
 		return err
 	}
-	if book.Path == "" {
-		return errors.New("this book has no on-disk file to send")
+	if s.libStore == nil {
+		return errors.New("device service: no library store")
 	}
-
-	f, err := os.Open(book.Path)
+	handle, err := s.libStore.For(ctx, book.LibraryID)
 	if err != nil {
-		return fmt.Errorf("open book file: %w", err)
+		return fmt.Errorf("library handle: %w", err)
 	}
-	defer func() { _ = f.Close() }()
-
-	info, err := f.Stat()
+	reader, size, closer, err := handle.OpenBook(ctx, book)
 	if err != nil {
-		return err
+		return fmt.Errorf("open book: %w", err)
 	}
+	defer func() { _ = closer.Close() }()
 
-	sendErr := driver.Send(ctx, dev, f, BookMeta{
+	sendErr := driver.Send(ctx, dev, reader, BookMeta{
 		Title:  book.Title,
 		Author: book.Author,
 		Format: book.Format,
-		Size:   info.Size(),
+		Size:   size,
 	})
 	// Always record the outcome so the UI reflects it even on failure.
 	_ = s.devices.MarkSendResult(ctx, userID, deviceID, sendErr)

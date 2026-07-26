@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/blackforge/embookshelf/internal/crypto"
 	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/db/dberr"
 )
@@ -38,12 +39,20 @@ const (
 // AppSettingsRepo stores instance-wide configuration that admins can edit
 // from the UI at runtime. Values are JSONB so scalars, arrays, and objects
 // can share the one table.
+//
+// The repo holds the Cipher rather than taking it per call: secret
+// handling is a property of the row, declared once on its Setting, so
+// no accessor can be added that silently stores a secret in plaintext.
 type AppSettingsRepo struct {
-	db *db.DB
+	db     *db.DB
+	cipher crypto.Cipher
 }
 
-func NewAppSettingsRepo(d *db.DB) *AppSettingsRepo {
-	return &AppSettingsRepo{db: d}
+func NewAppSettingsRepo(d *db.DB, cipher crypto.Cipher) *AppSettingsRepo {
+	if cipher == nil {
+		cipher = crypto.Noop{}
+	}
+	return &AppSettingsRepo{db: d, cipher: cipher}
 }
 
 // ClaimMapping names the ID-token / userinfo claims we read for each
@@ -175,129 +184,103 @@ func (r *AppSettingsRepo) SetBool(ctx context.Context, name string, v bool) erro
 	return r.SetRaw(ctx, name, b)
 }
 
-// -------- per-provider accessors --------
+// -------- per-provider settings --------
+
+// genericOIDCSetting declares the custom-OIDC row. ClientSecret is the
+// only secret; the rest stays plaintext so the row is legible in psql.
+var genericOIDCSetting = Setting[GenericOIDCConfig]{
+	Key:     SettingOIDCGeneric,
+	Default: DefaultGenericOIDCConfig,
+	Normalize: func(c GenericOIDCConfig) GenericOIDCConfig {
+		c.ProviderName = strings.TrimSpace(c.ProviderName)
+		c.ClientID = strings.TrimSpace(c.ClientID)
+		c.IssuerURI = strings.TrimRight(strings.TrimSpace(c.IssuerURI), "/")
+		c.Scopes = strings.TrimSpace(c.Scopes)
+		return c
+	},
+	Secrets: func(c *GenericOIDCConfig) []*string { return []*string{&c.ClientSecret} },
+}
+
+// presetSetting builds the declaration for a built-in provider row
+// (Google, GitHub) — same shape, different key.
+func presetSetting(key string) Setting[OAuthPresetConfig] {
+	return Setting[OAuthPresetConfig]{
+		Key:     key,
+		Default: DefaultOAuthPresetConfig,
+		Normalize: func(c OAuthPresetConfig) OAuthPresetConfig {
+			c.ClientID = strings.TrimSpace(c.ClientID)
+			return c
+		},
+		Secrets: func(c *OAuthPresetConfig) []*string { return []*string{&c.ClientSecret} },
+	}
+}
+
+var (
+	googleSetting = presetSetting(SettingOIDCGoogle)
+	githubSetting = presetSetting(SettingOIDCGitHub)
+
+	autoProvisionSetting = Setting[OIDCAutoProvisionDetails]{
+		Key:     SettingOIDCAutoProvision,
+		Default: DefaultOIDCAutoProvisionDetails,
+		Normalize: func(ap OIDCAutoProvisionDetails) OIDCAutoProvisionDetails {
+			if ap.DefaultRole != "admin" && ap.DefaultRole != "user" {
+				ap.DefaultRole = "user"
+			}
+			return ap
+		},
+	}
+)
 
 func (r *AppSettingsRepo) GetGenericOIDC(ctx context.Context) (GenericOIDCConfig, error) {
-	raw, err := r.GetRaw(ctx, SettingOIDCGeneric)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return DefaultGenericOIDCConfig(), nil
-		}
-		return GenericOIDCConfig{}, err
-	}
-	c := DefaultGenericOIDCConfig()
-	if err := json.Unmarshal(raw, &c); err != nil {
-		return GenericOIDCConfig{}, err
-	}
-	return c, nil
+	return genericOIDCSetting.Get(ctx, r)
 }
 
 func (r *AppSettingsRepo) SetGenericOIDC(ctx context.Context, c GenericOIDCConfig) error {
-	c.ProviderName = strings.TrimSpace(c.ProviderName)
-	c.ClientID = strings.TrimSpace(c.ClientID)
-	c.IssuerURI = strings.TrimRight(strings.TrimSpace(c.IssuerURI), "/")
-	c.Scopes = strings.TrimSpace(c.Scopes)
-	b, err := json.Marshal(c)
-	if err != nil {
-		return err
-	}
-	return r.SetRaw(ctx, SettingOIDCGeneric, b)
+	return genericOIDCSetting.Set(ctx, r, c)
 }
 
 func (r *AppSettingsRepo) GetGoogle(ctx context.Context) (OAuthPresetConfig, error) {
-	return r.getPreset(ctx, SettingOIDCGoogle)
+	return googleSetting.Get(ctx, r)
 }
 
 func (r *AppSettingsRepo) SetGoogle(ctx context.Context, c OAuthPresetConfig) error {
-	return r.setPreset(ctx, SettingOIDCGoogle, c)
+	return googleSetting.Set(ctx, r, c)
 }
 
 func (r *AppSettingsRepo) GetGitHub(ctx context.Context) (OAuthPresetConfig, error) {
-	return r.getPreset(ctx, SettingOIDCGitHub)
+	return githubSetting.Get(ctx, r)
 }
 
 func (r *AppSettingsRepo) SetGitHub(ctx context.Context, c OAuthPresetConfig) error {
-	return r.setPreset(ctx, SettingOIDCGitHub, c)
-}
-
-func (r *AppSettingsRepo) getPreset(ctx context.Context, name string) (OAuthPresetConfig, error) {
-	raw, err := r.GetRaw(ctx, name)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return DefaultOAuthPresetConfig(), nil
-		}
-		return OAuthPresetConfig{}, err
-	}
-	var c OAuthPresetConfig
-	if err := json.Unmarshal(raw, &c); err != nil {
-		return OAuthPresetConfig{}, err
-	}
-	return c, nil
-}
-
-func (r *AppSettingsRepo) setPreset(ctx context.Context, name string, c OAuthPresetConfig) error {
-	c.ClientID = strings.TrimSpace(c.ClientID)
-	b, err := json.Marshal(c)
-	if err != nil {
-		return err
-	}
-	return r.SetRaw(ctx, name, b)
+	return githubSetting.Set(ctx, r, c)
 }
 
 func (r *AppSettingsRepo) GetOIDCAutoProvision(ctx context.Context) (OIDCAutoProvisionDetails, error) {
-	raw, err := r.GetRaw(ctx, SettingOIDCAutoProvision)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return DefaultOIDCAutoProvisionDetails(), nil
-		}
-		return OIDCAutoProvisionDetails{}, err
-	}
-	ap := DefaultOIDCAutoProvisionDetails()
-	if err := json.Unmarshal(raw, &ap); err != nil {
-		return OIDCAutoProvisionDetails{}, err
-	}
-	return ap, nil
+	return autoProvisionSetting.Get(ctx, r)
 }
 
 func (r *AppSettingsRepo) SetOIDCAutoProvision(ctx context.Context, ap OIDCAutoProvisionDetails) error {
-	if ap.DefaultRole != "admin" && ap.DefaultRole != "user" {
-		ap.DefaultRole = "user"
-	}
-	b, err := json.Marshal(ap)
-	if err != nil {
-		return err
-	}
-	return r.SetRaw(ctx, SettingOIDCAutoProvision, b)
+	return autoProvisionSetting.Set(ctx, r, ap)
 }
 
 // SeedOIDCIfAbsent writes defaults for any OIDC setting still missing
 // so the admin settings UI has sensible rows to render on first boot.
 func (r *AppSettingsRepo) SeedOIDCIfAbsent(ctx context.Context) error {
-	seed := func(key string, defaultValue any) error {
-		if _, err := r.GetRaw(ctx, key); err == nil {
-			return nil
-		} else if !errors.Is(err, ErrNotFound) {
-			return err
-		}
-		b, err := json.Marshal(defaultValue)
-		if err != nil {
-			return err
-		}
-		return r.SetRaw(ctx, key, b)
-	}
-	if err := seed(SettingOIDCGeneric, DefaultGenericOIDCConfig()); err != nil {
+	if err := genericOIDCSetting.SeedIfAbsent(ctx, r); err != nil {
 		return err
 	}
-	if err := seed(SettingOIDCGoogle, DefaultOAuthPresetConfig()); err != nil {
+	if err := googleSetting.SeedIfAbsent(ctx, r); err != nil {
 		return err
 	}
-	if err := seed(SettingOIDCGitHub, DefaultOAuthPresetConfig()); err != nil {
+	if err := githubSetting.SeedIfAbsent(ctx, r); err != nil {
 		return err
 	}
-	if err := seed(SettingOIDCAutoProvision, DefaultOIDCAutoProvisionDetails()); err != nil {
+	if err := autoProvisionSetting.SeedIfAbsent(ctx, r); err != nil {
 		return err
 	}
-	if err := seed(SettingOIDCForceOnlyMode, false); err != nil {
+	if _, err := r.GetRaw(ctx, SettingOIDCForceOnlyMode); errors.Is(err, ErrNotFound) {
+		return r.SetBool(ctx, SettingOIDCForceOnlyMode, false)
+	} else if err != nil {
 		return err
 	}
 	return nil

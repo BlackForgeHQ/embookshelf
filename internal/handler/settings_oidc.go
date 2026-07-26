@@ -308,20 +308,6 @@ func genericToDTO(c repo.GenericOIDCConfig) genericOIDCDTO {
 	}
 }
 
-// resolveSecret reconciles the three-state secret input the UI sends:
-//   - new value provided       → use it
-//   - empty + "set" still true → keep existing (admin just didn't retype it)
-//   - empty + "set" false      → explicit clear
-func resolveSecret(incoming string, setFlag bool, existing string) string {
-	if incoming != "" {
-		return incoming
-	}
-	if setFlag {
-		return existing
-	}
-	return ""
-}
-
 // buildRedirectURI derives the OIDC redirect URI from the current
 // request when APP_URL is not configured. Browsers compare this exact
 // string against the provider's registered list, so both ends must
