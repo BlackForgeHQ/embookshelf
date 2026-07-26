@@ -3,23 +3,21 @@
 package handler
 
 import (
+	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/task"
+	"github.com/blackforge/embookshelf/internal/service"
 )
 
 // bookdropDTO mirrors model.BookDropItem for the SPA. Filename is the
@@ -329,12 +327,11 @@ type bookdropUploadItem struct {
 // don't stomp each other. Unsupported formats are rejected per-file; one
 // bad file never fails the whole batch.
 func (h *Handler) BookDropUpload(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
+	if requireUserID(c) == "" {
 		return
 	}
 	if h.cfg.BookDropPath == "" {
-		writeError(c, http.StatusServiceUnavailable, "bookdrop is disabled (no BOOKDROP_PATH configured)")
+		writeError(c, http.StatusServiceUnavailable, service.ErrBookDropDisabled.Error())
 		return
 	}
 
@@ -352,101 +349,43 @@ func (h *Handler) BookDropUpload(c *gin.Context) {
 		return
 	}
 
-	if err := os.MkdirAll(h.cfg.BookDropPath, 0o755); err != nil {
-		writeServerError(c, "bookdrop mkdir", err)
-		return
-	}
-
+	// Per-file outcomes rather than one verdict for the batch: a client
+	// dragging in a folder gets told exactly which files landed.
 	results := make([]bookdropUploadItem, 0, len(form.File["files"]))
+	succeeded := 0
 	for _, fh := range form.File["files"] {
-		orig := filepath.Base(fh.Filename)
-		entry := bookdropUploadItem{Filename: orig}
-
-		if !fileproc.IsSupported(orig) {
+		entry := bookdropUploadItem{Filename: filepath.Base(fh.Filename)}
+		item, err := h.acceptUpload(c.Request.Context(), fh)
+		switch {
+		case err == nil:
+			dto := toBookDropDTO(item)
+			entry.Item = &dto
+			succeeded++
+		case errors.Is(err, service.ErrUnsupportedFormat):
 			entry.Error = "unsupported format"
-			results = append(results, entry)
-			continue
-		}
-
-		dest, err := saveUniqueUpload(h.cfg.BookDropPath, orig, fh)
-		if err != nil {
-			slog.Warn("bookdrop upload save", "filename", orig, "err", err)
+		default:
+			slog.Warn("bookdrop upload", "filename", entry.Filename, "err", err)
 			entry.Error = "could not save file"
-			results = append(results, entry)
-			continue
 		}
-
-		format := fileproc.FormatForExt(filepath.Ext(dest))
-		item, _, err := h.bookdrop.Enqueue(c.Request.Context(), dest, format, fh.Size)
-		if err != nil {
-			_ = os.Remove(dest)
-			slog.Warn("bookdrop upload enqueue", "filename", orig, "err", err)
-			entry.Error = "could not enqueue"
-			results = append(results, entry)
-			continue
-		}
-
-		if h.queue != nil {
-			if err := h.queue.Enqueue(c.Request.Context(), task.BookDropIngestArgs{ItemID: item.ID}); err != nil {
-				// The DB row exists — surface the failure but leave the
-				// row; the next watcher tick re-enqueues.
-				slog.Error("bookdrop upload river job", "item_id", item.ID, "err", err)
-			}
-		}
-
-		dto := toBookDropDTO(item)
-		entry.Item = &dto
 		results = append(results, entry)
 	}
 
 	status := http.StatusCreated
-	succeeded := 0
-	for _, r := range results {
-		if r.Item != nil {
-			succeeded++
-		}
-	}
 	if succeeded == 0 {
 		status = http.StatusBadRequest
 	}
 	c.JSON(status, gin.H{"results": results})
 }
 
-// saveUniqueUpload copies the uploaded file into dir under a non-colliding
-// basename. The uniqueness strategy is `<base>-<unix-nano>.<ext>` — readable
-// and monotonic, good enough under the low concurrency this ingest sees.
-func saveUniqueUpload(dir, originalName string, fh *multipart.FileHeader) (string, error) {
-	// Break up the filename into base + ext, strip leading dots so a
-	// ".epub" upload doesn't become a hidden file.
-	name := strings.TrimLeft(originalName, ".")
-	if name == "" {
-		name = "upload"
-	}
-	ext := strings.ToLower(filepath.Ext(name))
-	base := strings.TrimSuffix(name, ext)
-	stamp := time.Now().UnixNano()
-	candidate := filepath.Join(dir, fmt.Sprintf("%s-%d%s", base, stamp, ext))
-
+// acceptUpload streams one multipart part into the staging directory via the
+// service, which owns the wipe lock, the naming, and the worker handoff.
+func (h *Handler) acceptUpload(ctx context.Context, fh *multipart.FileHeader) (model.BookDropItem, error) {
 	src, err := fh.Open()
 	if err != nil {
-		return "", err
+		return model.BookDropItem{}, err
 	}
 	defer func() { _ = src.Close() }()
-
-	dst, err := os.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return "", err
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		_ = dst.Close()
-		_ = os.Remove(candidate)
-		return "", err
-	}
-	if err := dst.Close(); err != nil {
-		_ = os.Remove(candidate)
-		return "", err
-	}
-	return candidate, nil
+	return h.bookdrop.Accept(ctx, fh.Filename, src)
 }
 
 // BookDropClearProcessed drops every bookdrop row in a terminal state

@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/queue"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -26,7 +25,6 @@ type Watcher struct {
 	Path     string
 	Interval time.Duration
 	Svc      *service.BookDropService
-	Queue    queue.Client
 }
 
 // Run blocks until ctx is canceled. On each tick it walks the configured path
@@ -63,14 +61,6 @@ func (w *Watcher) Run(ctx context.Context) {
 }
 
 func (w *Watcher) scan(ctx context.Context) {
-	// Hold the wipe RLock for the duration of the scan so a wipe can't
-	// race a fresh enqueue against an in-progress delete. Wipe holds the
-	// write-lock; this RLock blocks until wipe finishes (seconds at most).
-	if w.Svc != nil {
-		l := w.Svc.IngestLock()
-		l.Lock()
-		defer l.Unlock()
-	}
 	err := filepath.WalkDir(w.Path, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// Skip unreadable entries — don't abort the whole scan.
@@ -79,28 +69,13 @@ func (w *Watcher) scan(ctx context.Context) {
 		if d.IsDir() {
 			return nil
 		}
-		if !fileproc.IsSupported(path) {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-
-		format := fileproc.FormatForExt(filepath.Ext(path))
-		item, created, err := w.Svc.Enqueue(ctx, path, format, info.Size())
-		if err != nil {
-			slog.Warn("bookdrop enqueue failed", "path", path, "err", err)
-			return nil
-		}
-		if !created {
-			return nil // already tracked
-		}
-		if w.Queue == nil {
-			return nil
-		}
-		if err := w.Queue.Enqueue(ctx, task.BookDropIngestArgs{ItemID: item.ID}); err != nil {
-			slog.Error("enqueue river job failed", "item_id", item.ID, "err", err)
+		// Intake owns the rest: the supported-format gate, the stat, the
+		// row, and the worker handoff — all under the wipe lock, taken per
+		// file so a wipe isn't blocked for the length of the walk.
+		if _, _, err := w.Svc.Intake(ctx, path); err != nil {
+			if !errors.Is(err, service.ErrUnsupportedFormat) {
+				slog.Warn("bookdrop intake failed", "path", path, "err", err)
+			}
 		}
 		return nil
 	})

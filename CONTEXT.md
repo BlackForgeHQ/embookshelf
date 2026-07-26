@@ -213,6 +213,14 @@ Read path (ingest): file embedded → OPF (if present) → JSON, each layer over
 
 Pre-approval staging area; files land here before being approved into a Library. Each file becomes a row in `bookdrop_items` with extracted metadata + cover. Approving creates the `books` row and the `files` row.
 
+### Intake
+
+Registering a file into BookDrop. One seam, `BookDropService.Intake` (a file already in the staging directory — the watcher's path) and `Accept` (bytes arriving over HTTP, which must be written first). Both validate the format, record the size from disk, insert the `bookdrop_items` row, and hand the item to the worker pool.
+
+Both hold the wipe read-lock across the *whole* sequence, which is the invariant the seam exists to protect: a row must not be inserted for bytes a Wipe BookDrop is deleting. Taken per file rather than per scan, so a wipe waits for one intake rather than for an entire directory walk. Uploads previously bypassed the lock entirely and could leave a row pointing at a file the wipe had already removed.
+
+A client-supplied filename is a suggestion only — reduced to its base, de-dotted, and stamped — so the bytes always land directly in the staging directory whatever the name contains.
+
 ### Files row
 
 One entry in the `files` table per physical artifact tied to a `book_id`. Carries `location` (relative to `library.root`), `size`, `mtime`, `etag`, `content_hash` (sha256), `format`.

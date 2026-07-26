@@ -44,11 +44,19 @@ type BookDropService struct {
 	// targets. Empty disables Wipe (no path configured = nothing to wipe).
 	bookdropPath string
 
-	// wipeMu serialises Wipe against the watcher's enqueue path so a tick
-	// fired mid-wipe can't insert a 'processing' row pointing at bytes
-	// about to vanish. Wipe takes the write-lock, watcher takes the
-	// read-lock around its scan iteration.
+	// wipeMu serialises Wipe against the intake paths so an upload or a
+	// watcher tick fired mid-wipe can't insert a row pointing at bytes
+	// about to vanish. Wipe takes the write-lock; Intake and Accept take
+	// the read-lock for the whole write-and-insert sequence.
 	wipeMu sync.RWMutex
+
+	// intake overrides the insert seam used by Intake and Accept. nil
+	// means "use bdrop"; tests set it to a fake so the intake sequence
+	// runs against a temp dir with no database.
+	intake bookdropInserter
+	// dispatch hands a freshly-tracked item to the worker pool. nil means
+	// no pool is wired — the row is still written.
+	dispatch IngestDispatcher
 }
 
 func NewBookDropService(
@@ -85,31 +93,12 @@ func (s *BookDropService) WithBookDropPath(path string) *BookDropService {
 	return s
 }
 
-// IngestLock returns the read-side of the wipe mutex. The watcher holds
-// it while iterating + enqueueing so a wipe in progress can't race a
-// fresh 'processing' row against a delete.
-func (s *BookDropService) IngestLock() sync.Locker {
-	return s.wipeMu.RLocker()
-}
-
 func (s *BookDropService) List(ctx context.Context) ([]model.BookDropItem, error) {
 	return s.bdrop.List(ctx)
 }
 
 func (s *BookDropService) Get(ctx context.Context, id string) (model.BookDropItem, error) {
 	return s.bdrop.GetByID(ctx, id)
-}
-
-func (s *BookDropService) Enqueue(ctx context.Context, path, format string, size int64) (model.BookDropItem, bool, error) {
-	item, err := s.bdrop.Insert(ctx, path, format, size)
-	if err != nil {
-		if errors.Is(err, repo.ErrAlreadyExists) {
-			return item, false, nil
-		}
-		return item, false, err
-	}
-	s.broadcast(item.ID)
-	return item, true, nil
 }
 
 func (s *BookDropService) BeginProcessing(ctx context.Context, id string) error {

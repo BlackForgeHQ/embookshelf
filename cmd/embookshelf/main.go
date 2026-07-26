@@ -392,6 +392,13 @@ database must be empty; migrations are applied to it automatically.
 		}
 	}()
 
+	// Close the intake loop: the service inserts the row and hands the item
+	// straight to the worker pool. Wired after queue.New because the queue
+	// takes bdropSvc as a dependency, so the two can only be joined here.
+	bdropSvc.WithIngestDispatcher(func(ctx context.Context, itemID string) error {
+		return q.Enqueue(ctx, task.BookDropIngestArgs{ItemID: itemID})
+	})
+
 	// Requeue anything still mid-flight from a previous process.
 	ingest.DiscoverOnStartup(ctx, bdropRepo, q)
 
@@ -443,7 +450,6 @@ database must be empty; migrations are applied to it automatically.
 		Path:     cfg.BookDropPath,
 		Interval: cfg.BookDropInterval,
 		Svc:      bdropSvc,
-		Queue:    q,
 	}
 	go watcher.Run(ctx)
 
