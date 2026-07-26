@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { toast } from "sonner"
@@ -19,6 +19,7 @@ import type {
   EpubTocEntry,
 } from "@/components/EpubReader"
 import type { PdfProgress, PdfReaderHandle } from "@/components/PdfReader"
+import { useReadingPosition } from "@/hooks/useReadingPosition"
 import {
   annotationKind,
   bookAnnotationsQueryKey,
@@ -38,6 +39,19 @@ import { Button } from "@/components/ui/button"
 export const Route = createFileRoute("/read/$id")({
   component: Reader,
 })
+
+/**
+ * How long a reading position is held before it is written. Page turns
+ * land every few seconds, so a short window keeps the server roughly in
+ * step without a request per turn.
+ */
+const PROGRESS_DEBOUNCE_MS = 600
+/**
+ * Audio timeupdate fires several times a second, so it gets a much longer
+ * window. The cost of the longer wait is paid back by flushing on pause and
+ * on exit, which is when a listening session actually ends.
+ */
+const AUDIO_PROGRESS_DEBOUNCE_MS = 5000
 
 type TocItem = { label: string; href: string }
 
@@ -133,9 +147,9 @@ function ReaderShell({ book }: { book: BookDetail }) {
   const epubRef = useRef<EpubReaderHandle>(null)
   const pdfRef = useRef<PdfReaderHandle>(null)
 
-  const progressMut = useMutation({
-    mutationFn: (args: { progress: number; resumeCfi: string }) =>
-      updateProgress(book.id, args.progress, args.resumeCfi),
+  const { queue: queueProgress, flush: flushProgress } = useReadingPosition({
+    save: (progress, token) => void updateProgress(book.id, progress, token),
+    debounceMs: PROGRESS_DEBOUNCE_MS,
   })
 
   // Annotations for this book — drives the side panel AND the EPUB
@@ -216,41 +230,6 @@ function ReaderShell({ book }: { book: BookDetail }) {
       .map((a) => ({ cfiRange: a.locator!, color: "oklch(0.92 0.07 85)" }))
   }, [book.format, annotations.data])
 
-  // Debounce + latest-wins: reader events fire every page turn; we hold
-  // the newest tick for 600 ms and ship it, plus force a flush on unmount
-  // so a short reading session still records progress.
-  const pendingRef = useRef<{ progress: number; resumeCfi: string } | null>(
-    null
-  )
-  const timerRef = useRef<number | null>(null)
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) window.clearTimeout(timerRef.current)
-      if (pendingRef.current) {
-        // Fire-and-forget — the component is already unmounting.
-        void updateProgress(
-          book.id,
-          pendingRef.current.progress,
-          pendingRef.current.resumeCfi
-        )
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const queueProgress = (progress: number, cfi: string) => {
-    pendingRef.current = { progress, resumeCfi: cfi }
-    if (timerRef.current) window.clearTimeout(timerRef.current)
-    timerRef.current = window.setTimeout(() => {
-      const snapshot = pendingRef.current
-      pendingRef.current = null
-      timerRef.current = null
-      if (snapshot) {
-        progressMut.mutate(snapshot)
-      }
-    }, 600)
-  }
-
   const onEpubProgress = (p: EpubProgress) => {
     setPercent(p.percent)
     setCfiState(p.cfi)
@@ -268,7 +247,12 @@ function ReaderShell({ book }: { book: BookDetail }) {
     setTypePanelOpen(false)
   }
 
-  const exit = () => void navigate({ to: "/book/$id", params: { id: book.id } })
+  const exit = () => {
+    // Write the position before unmounting rather than relying on the
+    // unmount backstop, which fires mid-teardown.
+    flushProgress()
+    void navigate({ to: "/book/$id", params: { id: book.id } })
+  }
 
   // Derived footer values — keep both reader shapes on one code path.
   const footerPageLabel =
@@ -827,9 +811,9 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
   const [total, setTotal] = useState<number>(0)
   const comicRef = useRef<ComicReaderHandle>(null)
 
-  const progressMut = useMutation({
-    mutationFn: (args: { progress: number; resumeCfi: string }) =>
-      updateProgress(book.id, args.progress, args.resumeCfi),
+  const { queue: queueProgress, flush: flushProgress } = useReadingPosition({
+    save: (progress, token) => void updateProgress(book.id, progress, token),
+    debounceMs: PROGRESS_DEBOUNCE_MS,
   })
 
   const bookmarkMut = useMutation({
@@ -853,44 +837,18 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
       toast.error((err as unknown as ApiError).message || "Bookmark failed"),
   })
 
-  // Progress persistence: same debounce shape as ReaderShell so a quick
-  // session still records the last page on unmount.
-  const pendingRef = useRef<{ progress: number; resumeCfi: string } | null>(
-    null
-  )
-  const timerRef = useRef<number | null>(null)
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) window.clearTimeout(timerRef.current)
-      if (pendingRef.current) {
-        void updateProgress(
-          book.id,
-          pendingRef.current.progress,
-          pendingRef.current.resumeCfi
-        )
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const queueProgress = (progress: number, locator: string) => {
-    pendingRef.current = { progress, resumeCfi: locator }
-    if (timerRef.current) window.clearTimeout(timerRef.current)
-    timerRef.current = window.setTimeout(() => {
-      const snapshot = pendingRef.current
-      pendingRef.current = null
-      timerRef.current = null
-      if (snapshot) progressMut.mutate(snapshot)
-    }, 600)
-  }
-
   const onComicProgress = (p: ComicProgress) => {
     setPage(p.page)
     setTotal(p.totalPages)
     queueProgress(p.percent, `page:${p.page}`)
   }
 
-  const exit = () => void navigate({ to: "/book/$id", params: { id: book.id } })
+  const exit = () => {
+    // Write the position before unmounting rather than relying on the
+    // unmount backstop, which fires mid-teardown.
+    flushProgress()
+    void navigate({ to: "/book/$id", params: { id: book.id } })
+  }
   const percent = total <= 1 ? 1 : page / Math.max(1, total - 1)
 
   return (
@@ -1104,9 +1062,9 @@ function AudioReaderShell({ book }: { book: BookDetail }) {
   const [chaptersOpen, setChaptersOpen] = useState(false)
   const audioRef = useRef<AudioReaderHandle>(null)
 
-  const progressMut = useMutation({
-    mutationFn: (args: { progress: number; resumeCfi: string }) =>
-      updateProgress(book.id, args.progress, args.resumeCfi),
+  const { queue: queueProgress, flush: flushProgress } = useReadingPosition({
+    save: (progress, token) => void updateProgress(book.id, progress, token),
+    debounceMs: AUDIO_PROGRESS_DEBOUNCE_MS,
   })
 
   const bookmarkMut = useMutation({
@@ -1130,42 +1088,6 @@ function AudioReaderShell({ book }: { book: BookDetail }) {
       toast.error((err as unknown as ApiError).message || "Bookmark failed"),
   })
 
-  // Same debounced-persist shape the other shells use, plus an
-  // additional save-on-pause path so a quick listening session that
-  // ends with the user just hitting pause still records position.
-  const pendingRef = useRef<{ progress: number; resumeCfi: string } | null>(
-    null
-  )
-  const timerRef = useRef<number | null>(null)
-  const flush = () => {
-    if (timerRef.current) window.clearTimeout(timerRef.current)
-    timerRef.current = null
-    const snap = pendingRef.current
-    pendingRef.current = null
-    if (snap) progressMut.mutate(snap)
-  }
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) window.clearTimeout(timerRef.current)
-      if (pendingRef.current) {
-        void updateProgress(
-          book.id,
-          pendingRef.current.progress,
-          pendingRef.current.resumeCfi
-        )
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const queueProgress = (progress: number, locator: string) => {
-    pendingRef.current = { progress, resumeCfi: locator }
-    if (timerRef.current) window.clearTimeout(timerRef.current)
-    timerRef.current = window.setTimeout(() => {
-      flush()
-    }, 5000) // longer debounce: time updates fire several times a second
-  }
-
   const onAudioProgress = (p: AudioProgress) => {
     setSeconds(p.seconds)
     setDuration(p.duration)
@@ -1173,14 +1095,14 @@ function AudioReaderShell({ book }: { book: BookDetail }) {
   }
 
   const exit = () => {
-    flush()
+    flushProgress()
     void navigate({ to: "/book/$id", params: { id: book.id } })
   }
 
-  const togglePlay = () => {
-    audioRef.current?.toggle()
-    setPlaying((v) => !v)
-  }
+  // No optimistic state update and no flush here: toggling the element makes
+  // it fire play/pause, and onPlayingChange owns both. Keeping one path means
+  // an in-page press and a headphone press behave identically.
+  const togglePlay = () => audioRef.current?.toggle()
 
   const percent = duration > 0 ? seconds / duration : 0
 
@@ -1485,6 +1407,16 @@ function AudioReaderShell({ book }: { book: BookDetail }) {
         onReady={({ duration: d }) => setDuration(d)}
         onProgress={onAudioProgress}
         onChapterChange={(i) => setChapterIndex(i)}
+        // Play state comes from the element, never from whoever pressed the
+        // button: a headphone or lock-screen pause goes straight to the
+        // media element via the Media Session handlers, so an optimistic
+        // toggle here would leave the on-screen button showing the wrong
+        // state until the next in-page interaction.
+        onPlayingChange={(v) => {
+          setPlaying(v)
+          // Pausing from anywhere is the end of a listening session.
+          if (!v) flushProgress()
+        }}
       />
     </div>
   )

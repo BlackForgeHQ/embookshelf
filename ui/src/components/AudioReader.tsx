@@ -36,6 +36,11 @@ type Props = {
   onReady?: (meta: { duration: number }) => void
   onProgress?: (p: AudioProgress) => void
   onChapterChange?: (chapterIndex: number) => void
+  // Reports the element's real play state. Emitted from the element's own
+  // play/pause events rather than from whoever called toggle(), so playback
+  // started or stopped from outside the page — a headphone button, the lock
+  // screen, a media key, or the browser pausing us — still reaches the shell.
+  onPlayingChange?: (playing: boolean) => void
   onError?: (err: unknown) => void
 }
 
@@ -58,6 +63,7 @@ export const AudioReader = forwardRef<AudioReaderHandle, Props>(
       onReady,
       onProgress,
       onChapterChange,
+      onPlayingChange,
       onError,
     },
     ref
@@ -72,6 +78,8 @@ export const AudioReader = forwardRef<AudioReaderHandle, Props>(
     onProgressRef.current = onProgress
     const onChapterChangeRef = useRef(onChapterChange)
     onChapterChangeRef.current = onChapterChange
+    const onPlayingChangeRef = useRef(onPlayingChange)
+    onPlayingChangeRef.current = onPlayingChange
 
     useImperativeHandle(
       ref,
@@ -204,6 +212,9 @@ export const AudioReader = forwardRef<AudioReaderHandle, Props>(
             }
           }
         }}
+        onPlay={() => onPlayingChangeRef.current?.(true)}
+        onPause={() => onPlayingChangeRef.current?.(false)}
+        onEnded={() => onPlayingChangeRef.current?.(false)}
         onError={(e) => onError?.(new Error(`Audio error: ${e.type}`))}
         style={{ display: "none" }}
       />
