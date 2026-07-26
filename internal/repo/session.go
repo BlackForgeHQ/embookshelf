@@ -103,6 +103,23 @@ func (r *SessionRepo) Delete(ctx context.Context, id string) error {
 	return err
 }
 
+// DeleteForUser removes every session belonging to a user and reports how
+// many went. Called after a password changes — by reset or by the account
+// page — so that a session established with the old password stops working,
+// which is the whole point of resetting a compromised account.
+func (r *SessionRepo) DeleteForUser(ctx context.Context, userID string) (int64, error) {
+	const q = `DELETE FROM sessions WHERE user_id = $1`
+	res, err := r.db.SQL.ExecContext(ctx, q, userID)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+	return n, nil
+}
+
 // PurgeExpired removes all expired sessions; called opportunistically at boot.
 func (r *SessionRepo) PurgeExpired(ctx context.Context) (int64, error) {
 	const q = `DELETE FROM sessions WHERE expires_at <= now()`

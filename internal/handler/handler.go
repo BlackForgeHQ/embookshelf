@@ -49,13 +49,13 @@ type Handler struct {
 	// Email subsystem seams. notifier is always non-nil — its runtime
 	// state holds whether SMTP is wired. emailEnabled() consults
 	// notifier.Enabled() so admin edits to the EMAIL row hot-reload
-	// without a restart. resetRepo + inviteRepo + users back the token
+	// without a restart. resets + inviteRepo + users back the token
 	// flows; cipher + emailTpl back the admin "send test email"
 	// endpoint and any handler-side render. ADR-0020.
 	users      *repo.UserRepo
 	books      *repo.BookRepo
 	notifier   *service.Notifier
-	resetRepo  *repo.PasswordResetTokenRepo
+	resets     *service.PasswordResetService
 	inviteRepo *repo.UserInviteRepo
 	cipher     crypto.Cipher
 	emailTpl   *email.Templates
@@ -102,7 +102,7 @@ type Deps struct {
 	Users      *repo.UserRepo
 	Books      *repo.BookRepo
 	Notifier   *service.Notifier
-	ResetRepo  *repo.PasswordResetTokenRepo
+	Resets     *service.PasswordResetService
 	InviteRepo *repo.UserInviteRepo
 	Cipher     crypto.Cipher
 	EmailTpl   *email.Templates
@@ -132,7 +132,7 @@ func New(d Deps) *Handler {
 		users:         d.Users,
 		books:         d.Books,
 		notifier:      d.Notifier,
-		resetRepo:     d.ResetRepo,
+		resets:        d.Resets,
 		inviteRepo:    d.InviteRepo,
 		cipher:        d.Cipher,
 		emailTpl:      d.EmailTpl,

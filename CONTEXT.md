@@ -57,6 +57,18 @@ The act of attaching an identity to a user. Two ways it happens:
 
 Login-time linking gated by the admin flag `AllowLocalAccountLinking`. When an External identity matches no row but its email claim matches a local user, the Provisioner attaches the identity to that user instead of rejecting the login. Status-gated on both auth surfaces: a pending or denied user never auto-links — the outcome is pending/denied, not a session. The flag gates only the first identity (local-password → SSO crossover); a user with at least one identity attaches further providers without it. Relies on the IdP-verified email — GitHub explicitly rejects unverified emails; Google and generic OIDC trust the `email_verified` claim.
 
+### Password reset lifecycle
+
+`service.PasswordResetService`; the seam owning who may request a reset link, what a link proves, and what spending one does. Three steps — `Request`, `Verify`, `Confirm` — over narrow interfaces (user store, token store, session evictor, issuer), so the whole lifecycle is exercisable without a database or an SMTP server.
+
+Enumeration-opaque by construction (ADR-0020): `Request` returns nil for every skipped case — unknown address, OIDC-only account with no local password, rate-limited — and the HTTP layer answers 202 unconditionally. A returned error is for the log only and must never reach the wire. `Verify` collapses unknown, expired and already-spent into a single "invalid".
+
+`Confirm`'s step order is load-bearing: hash the new password **before** consuming the token, so a password that fails policy costs the user nothing and the link still works on the retry. Consuming first left a user who typed something too short with an error *and* a dead link, blocked from asking for another by the 5-minute rate limit.
+
+### Session eviction
+
+Dropping every session belonging to a user, via `SessionRepo.DeleteForUser`. Runs after a password changes — by reset or from the account page — because a session established with the old password would otherwise outlive it, which defeats the reason people reset a compromised account. Deliberately signs out the caller too. **Distinct** from logout (one session, by id) and from `PurgeExpired` (a sweeper, not a security action). **Not** run by Set-initial-password: an OIDC-only user setting their first password has no old credential to invalidate, and evicting would sign them out mid-flow.
+
 ### Lockout guard
 
 The invariant enforced on every unlink: a user must end the operation with at least one usable credential — either a password or a remaining linked identity. A user with no password and exactly one linked identity must set a password before that identity can be removed. Enforced at the SQL layer in a single statement so the check and the delete are race-free.

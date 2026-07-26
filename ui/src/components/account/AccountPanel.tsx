@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate, useSearch } from "@tanstack/react-router"
 import { toast } from "sonner"
 
@@ -37,6 +37,7 @@ const LINK_ERROR_MESSAGES: Record<string, string> = {
 
 export function AccountPanel() {
   const navigate = useNavigate({ from: "/account" })
+  const queryClient = useQueryClient()
   const search = useSearch({ from: "/_app/account" })
 
   // Toast and clear redirect-back signals from the OIDC link callback.
@@ -88,13 +89,20 @@ export function AccountPanel() {
     onSuccess: () => setEditing(false),
   })
 
+  // Changing the password evicts every session for the user, including this
+  // one — that is the point, so a password changed after a scare signs out
+  // whatever device the user is not holding. The tab we're in is now
+  // unauthenticated, so send it to the login screen rather than letting the
+  // next request 401.
   const pwMut = useApiMutation(changePassword, {
-    successToast: "Password updated.",
+    successToast: "Password updated. Sign in again with your new password.",
     onSuccess: () => {
       setPwOpen(false)
       setPwCurrent("")
       setPwNext("")
       setPwConfirm("")
+      queryClient.setQueryData(meQueryKey, null)
+      void navigate({ to: "/login", replace: true })
     },
   })
 

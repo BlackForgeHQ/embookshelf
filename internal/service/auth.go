@@ -185,7 +185,16 @@ func (s *AuthService) SetInitialPassword(ctx context.Context, userID, next strin
 	if err != nil {
 		return err
 	}
-	return s.users.UpdatePassword(ctx, userID, hash)
+	if err := s.users.UpdatePassword(ctx, userID, hash); err != nil {
+		return err
+	}
+	// Every session was established with the old password; none of them
+	// should outlive it. This logs out the caller too, which is the
+	// intended cost — a user changing their password after a scare wants
+	// every device signed out, including whichever one they are not
+	// holding.
+	evictSessions(ctx, s.sessions, userID, "password change")
+	return nil
 }
 
 // ChangePassword verifies the current password and replaces the hash.

@@ -361,6 +361,7 @@ database must be empty; migrations are applied to it automatically.
 		LibStore:    libStore,
 		AppSettings: appSettingsRepo,
 	})
+	resetSvc := service.NewPasswordResetService(userRepo, resetRepo, sessionRepo, notifier)
 	if err := notifier.Reload(ctx); err != nil {
 		slog.Warn("email subsystem disabled — reload failed", "err", err)
 	} else if !notifier.Enabled() {
@@ -473,7 +474,7 @@ database must be empty; migrations are applied to it automatically.
 		Users:         userRepo,
 		Books:         bookRepo,
 		Notifier:      notifier,
-		ResetRepo:     resetRepo,
+		Resets:        resetSvc,
 		InviteRepo:    inviteRepo,
 		Cipher:        secretCipher,
 		EmailTpl:      emailTpl,
