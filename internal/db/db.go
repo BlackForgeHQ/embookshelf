@@ -2,9 +2,15 @@
 
 // Package db owns database connection setup and dialect identity for the
 // app. It exposes a single `*DB` value that wraps a `database/sql.DB` for
-// repo queries plus a `pgxpool.Pool` for the queue's River driver. The
-// SQLite branch is wired in Plan 2; today this package only supports
-// Postgres URLs but already returns a typed Dialect so callers can branch.
+// repo queries plus a `pgxpool.Pool` for the queue's River driver.
+//
+// Postgres is the only backend the server runs on (ADR-0023). SQLite is
+// still recognized and openable, but for one caller only: `embookshelf
+// import-sqlite`, which reads an old library and writes it into Postgres.
+// `cmd/embookshelf` refuses a sqlite:// DSN before opening it, so nothing
+// that serves requests reaches the SQLite path. Retire `openSQLite`,
+// `sqliteDSN`, and the driver registration in sqlite_driver.go together
+// with the importer.
 package db
 
 import (

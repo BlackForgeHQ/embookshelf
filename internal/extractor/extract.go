@@ -90,7 +90,7 @@ func Extract(
 		CoverBytes:  meta.CoverBytes,
 		CoverMime:   meta.CoverMime,
 	}
-	if isAudioFormat(format) {
+	if fileproc.IsAudioFormat(format) {
 		out.DurationSeconds = meta.DurationSeconds
 		out.Narrator = meta.Narrator
 	}
@@ -148,14 +148,4 @@ func layerSidecar(m fileproc.Metadata, s sidecar.Sidecar) fileproc.Metadata {
 		m.ISBN = s.ISBN
 	}
 	return m
-}
-
-// isAudioFormat reports whether the given books.format slug names an
-// audio file the AudioProcessor extracts metadata from.
-func isAudioFormat(f string) bool {
-	switch f {
-	case "MP3", "M4B":
-		return true
-	}
-	return false
 }

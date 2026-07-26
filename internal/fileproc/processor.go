@@ -119,3 +119,20 @@ func IsSupported(path string) bool {
 	}
 	return false
 }
+
+// IsAudioFormat reports whether a books.format value denotes an
+// audiobook. Audio books take a different ingest path — duration and
+// narrator come from tag metadata rather than a text extractor — so
+// several packages need to ask this question.
+//
+// It lives here because format dispatch is this package's job, and
+// because the answer was previously copied verbatim into three packages,
+// which meant adding a format was three edits that nothing forced to
+// agree.
+func IsAudioFormat(format string) bool {
+	switch format {
+	case "MP3", "M4B":
+		return true
+	}
+	return false
+}

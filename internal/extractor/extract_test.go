@@ -81,15 +81,3 @@ func TestLayerSidecar_EmptySidecarLeavesFieldsAlone(t *testing.T) {
 		t.Errorf("Language=%q want en", out.Language)
 	}
 }
-
-func TestIsAudioFormat(t *testing.T) {
-	cases := map[string]bool{
-		"MP3": true, "M4B": true,
-		"EPUB": false, "PDF": false, "CBZ": false, "": false,
-	}
-	for f, want := range cases {
-		if got := isAudioFormat(f); got != want {
-			t.Errorf("isAudioFormat(%q)=%v want %v", f, got, want)
-		}
-	}
-}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/coverstore"
+	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/sse"
@@ -54,7 +55,6 @@ func NewBookDropService(
 	bdrop *repo.BookDropRepo,
 	libs *repo.LibraryRepo,
 	books *repo.BookRepo,
-	_ *repo.AppSettingsRepo, // retained for signature compatibility; unused after naming-pattern removal
 	covers *coverstore.Store,
 	hub *sse.Hub,
 	files *repo.FileRepo,
@@ -312,7 +312,7 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 	// .narrator, .chapters). Approve just copies the bookdrop fields onto the
 	// books row — no Source open, no second processor pass. Failure is logged
 	// but never fatal.
-	if isAudioFormat(created.Format) {
+	if fileproc.IsAudioFormat(created.Format) {
 		if item.DurationSeconds != nil || item.Narrator != "" || len(item.Chapters) > 0 {
 			if err := s.books.UpdateAudio(ctx, created.ID,
 				item.DurationSeconds, item.Narrator, item.Chapters,
@@ -331,16 +331,6 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 	}
 	s.broadcast(item.ID)
 	return created, nil
-}
-
-// isAudioFormat reports whether a books.format value names an audio file
-// the AudioProcessor can extract metadata from.
-func isAudioFormat(f string) bool {
-	switch f {
-	case "MP3", "M4B":
-		return true
-	}
-	return false
 }
 
 // promoteBookDropCover hashes the staged cover, moves it under the

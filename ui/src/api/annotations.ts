@@ -83,25 +83,6 @@ export const createAnnotation = defineMutation({
   ],
 })
 
-export const patchAnnotation = defineMutation({
-  fn: async (args: {
-    id: string
-    body: PatchAnnotationInput
-  }): Promise<Annotation> => {
-    const { annotation } = await api<{ annotation: Annotation }>(
-      `/api/v1/annotations/${args.id}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify(args.body),
-      }
-    )
-    return annotation
-  },
-  // Caller must include the bookId-scoped key when known; we can't
-  // recover bookId from the annotation id alone, so the recent feed
-  // is the only universally invalidated cache here.
-  invalidates: [recentAnnotationsQueryKey],
-})
 
 export const deleteAnnotation = defineMutation({
   fn: (args: { id: string; bookId: string }): Promise<void> =>

@@ -41,14 +41,6 @@ export const PROVIDER_LABELS: Record<string, string> = {
   duckduckgo: "DuckDuckGo",
 }
 
-export function formatProviderList(ids: ReadonlyArray<string>): string {
-  const labels = ids.map((id) => PROVIDER_LABELS[id] ?? id)
-  // `a` / `a or b` fall through Array.prototype.join cleanly, avoiding
-  // a stack of index accesses that noUncheckedIndexedAccess flags.
-  if (labels.length <= 2) return labels.join(" or ")
-  const last = labels.at(-1)!
-  return `${labels.slice(0, -1).join(", ")}, or ${last}`
-}
 
 export type EnrichQuery = {
   title?: string
@@ -85,9 +77,6 @@ export const removeCover = defineMutation({
     api<void>(`/api/v1/books/${bookId}/cover`, { method: "DELETE" }),
   invalidates: (bookId) => [bookQueryKey(bookId), booksQueryKey()],
 })
-
-export const enrichQueryKey = (bookId: string, q: EnrichQuery) =>
-  ["enrich", bookId, q] as const
 
 // StreamEvent frames sent by the SSE-based fetch endpoint. The `done`
 // frame is the terminator — callers should close the EventSource after

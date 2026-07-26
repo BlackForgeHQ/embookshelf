@@ -137,7 +137,7 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 	// Audio formats: persist duration / narrator on the bookdrop row so
 	// Approve doesn't need a re-extract pass post-Place. Non-audio
 	// extraction leaves DurationSeconds nil, so we skip the UPDATE.
-	if isAudioFormat(item.Format) {
+	if fileproc.IsAudioFormat(item.Format) {
 		if err := deps.Svc.SetAudio(ctx, itemID, res.DurationSeconds, res.Narrator, nil); err != nil {
 			slog.Warn("bookdrop set audio failed", "item_id", itemID, "err", err)
 			// Non-fatal: text metadata is already recorded. Approve
@@ -145,16 +145,6 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 		}
 	}
 	return nil
-}
-
-// isAudioFormat reports whether a books.format / bookdrop_items.format
-// value names an audio file the AudioProcessor extracts metadata from.
-func isAudioFormat(f string) bool {
-	switch f {
-	case "MP3", "M4B":
-		return true
-	}
-	return false
 }
 
 // hashFile streams item.Path through sha256 and returns the digest.

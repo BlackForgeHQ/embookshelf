@@ -62,15 +62,6 @@ export type Shelf = {
   createdAt: string
 }
 
-// PUBLIC_SLUG_PREFIX mirrors internal/service/shelf.go. Kept here so
-// the sidebar / realtime layer can identify public shelves without a
-// dedicated server roundtrip.
-export const PUBLIC_SLUG_PREFIX = "public:"
-
-export function isPublicShelfSlug(slug: string): boolean {
-  return slug.startsWith(PUBLIC_SLUG_PREFIX)
-}
-
 // Mirrors internal/handler/library.go bookDTO. Progress is 0..1 on the wire.
 export type Book = {
   id: string

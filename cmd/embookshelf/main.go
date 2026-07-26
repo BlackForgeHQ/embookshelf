@@ -225,7 +225,7 @@ database must be empty; migrations are applied to it automatically.
 		PresignTTL:      cfg.PresignTTL,
 		PresignFallback: cfg.PresignFallback,
 	})
-	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, bookRepo, appSettingsRepo, covers, hub, fileRepo).
+	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, bookRepo, covers, hub, fileRepo).
 		WithLibraryStore(libStore).
 		WithBookDropPath(cfg.BookDropPath)
 	progressSvc := service.NewProgressService(progressRepo, readingSessionRepo)

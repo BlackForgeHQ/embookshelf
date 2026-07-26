@@ -219,6 +219,10 @@ Opaque change token from a backend (S3 returns one; LocalFS leaves it empty). Us
 
 `scan.RelocateByHash` (or inline equivalent in `task.LibraryScan`); for a New walk entry, hashes the bytes and queries `Files.GetByContentHash` in the same library. On hit, updates the existing `files.location` to the new path — the rename safety net under ADR-0018. On miss, returns without side effect; scan is never an ingest path.
 
+### Audio format
+
+`fileproc.IsAudioFormat`; whether a `books.format` value denotes an audiobook (`MP3`, `M4B`). Audio takes a different ingest path — duration and narrator come from tag metadata rather than a text extractor — so the service, task, and extractor packages all ask this. It lives in `fileproc` because format dispatch is that package's job and all three already import it; previously the same four lines were copied into each, so adding a format meant three edits nothing forced to agree.
+
 ### Column-order coupling
 
 The hazard that survives in `internal/repo`: several positionally ordered lists that must agree by hand — a `*Cols` constant's SELECT order, its `scan*` function's `Scan` destinations, and for `books` a 39-column `UPDATE` against its argument slice. ADR-0023 removed the *dialect* axis of this duplication; the *column-position* axis is untouched.
