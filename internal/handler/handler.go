@@ -67,77 +67,167 @@ type Handler struct {
 	fwdAuth       auth.ForwardAuthResolver
 }
 
-type Deps struct {
-	Cfg      config.Config
-	Static   embed.FS
-	Version  string
-	Commit   string
-	Lib      *service.LibraryService
-	Shelf    *service.ShelfService
-	Auth     *service.AuthService
-	BookDrop *service.BookDropService
-	Progress *service.ProgressService
-	Enrich   *service.EnrichmentService
-	// ProviderCfg is the provider_settings admin surface, split out of
-	// Enrich (the fan-out path never touches it).
-	ProviderCfg  *service.ProviderSettingsService
-	Annotations  *service.AnnotationService
-	Stats        *service.StatsService
-	ReadingStats *service.ReadingSessionService
-	Devices      *service.DeviceService
-	OIDC         *service.OIDCService
-	Identities   *repo.IdentityRepo
-	Search       *service.SearchService
-	AppSettings  *repo.AppSettingsRepo
-	Covers       *coverstore.Store
-	Hub          *sse.Hub
-	Queue        queue.Client
-	// LibStore powers the presign-vs-local decision in serveBookFile
-	// and any other library-aware lookup. Optional — omitting it falls
-	// back to local c.File() serving for every book.
+// The Handler's dependencies are split by whether the code actually
+// tolerates their absence.
+//
+// Required seams are constructor arguments — Platform, Library,
+// Discovery, Account and Email each take theirs positionally, so leaving
+// one out is a compile error at the composition root. This exists
+// because it did not: ProviderCfg was declared on a 31-field Deps struct
+// and never assigned, and the zero value sailed through to a nil
+// dereference on every provider settings request.
+//
+// Options holds the seams that genuinely may be nil. Every one of them is
+// nil-guarded at its use site, and that guard is a deliberate degrade —
+// no storage backend configured, no OIDC provider set up, no worker pool.
+
+// Platform carries process-level facts and the two fan-out primitives
+// every surface can reach for.
+type PlatformDeps struct {
+	cfg     config.Config
+	static  embed.FS
+	version string
+	commit  string
+	hub     *sse.Hub
+}
+
+// NewPlatform builds the platform group.
+func NewPlatformDeps(cfg config.Config, static embed.FS, version, commit string, hub *sse.Hub) PlatformDeps {
+	return PlatformDeps{cfg: cfg, static: static, version: version, commit: commit, hub: hub}
+}
+
+// Library carries the book-and-shelf surfaces: the catalog, its
+// containers, the ingest staging area and per-user reading position.
+type LibraryDeps struct {
+	lib      *service.LibraryService
+	shelf    *service.ShelfService
+	books    *repo.BookRepo
+	bookdrop *service.BookDropService
+	progress *service.ProgressService
+}
+
+// NewLibrary builds the library group.
+func NewLibraryDeps(
+	lib *service.LibraryService,
+	shelf *service.ShelfService,
+	books *repo.BookRepo,
+	bookdrop *service.BookDropService,
+	progress *service.ProgressService,
+) LibraryDeps {
+	return LibraryDeps{lib: lib, shelf: shelf, books: books, bookdrop: bookdrop, progress: progress}
+}
+
+// Discovery carries the surfaces that find, describe or measure books
+// rather than storing them.
+type DiscoveryDeps struct {
+	enrich       *service.EnrichmentService
+	providerCfg  *service.ProviderSettingsService
+	search       *service.SearchService
+	stats        *service.StatsService
+	readingStats *service.ReadingSessionService
+	annotations  *service.AnnotationService
+}
+
+// NewDiscovery builds the discovery group.
+func NewDiscoveryDeps(
+	enrich *service.EnrichmentService,
+	providerCfg *service.ProviderSettingsService,
+	search *service.SearchService,
+	stats *service.StatsService,
+	readingStats *service.ReadingSessionService,
+	annotations *service.AnnotationService,
+) DiscoveryDeps {
+	return DiscoveryDeps{
+		enrich: enrich, providerCfg: providerCfg, search: search,
+		stats: stats, readingStats: readingStats, annotations: annotations,
+	}
+}
+
+// Account carries identity, instance settings and the user's own
+// devices.
+type AccountDeps struct {
+	auth        *service.AuthService
+	users       *repo.UserRepo
+	devices     *service.DeviceService
+	appSettings *repo.AppSettingsRepo
+}
+
+// NewAccount builds the account group.
+func NewAccountDeps(
+	auth *service.AuthService,
+	users *repo.UserRepo,
+	devices *service.DeviceService,
+	appSettings *repo.AppSettingsRepo,
+) AccountDeps {
+	return AccountDeps{auth: auth, users: users, devices: devices, appSettings: appSettings}
+}
+
+// Email carries the delivery subsystem (ADR-0020). Notifier is always
+// non-nil; whether email is actually on is runtime state it holds, which
+// emailEnabled() consults so admin edits hot-reload without a restart.
+type EmailDeps struct {
+	notifier   *service.Notifier
+	resets     *service.PasswordResetService
+	inviteRepo *repo.UserInviteRepo
+	cipher     crypto.Cipher
+	emailTpl   *email.Templates
+}
+
+// NewEmail builds the email group.
+func NewEmailDeps(
+	notifier *service.Notifier,
+	resets *service.PasswordResetService,
+	inviteRepo *repo.UserInviteRepo,
+	cipher crypto.Cipher,
+	emailTpl *email.Templates,
+) EmailDeps {
+	return EmailDeps{notifier: notifier, resets: resets, inviteRepo: inviteRepo, cipher: cipher, emailTpl: emailTpl}
+}
+
+// Options are the seams that may legitimately be absent. Each is
+// nil-guarded where it is used, and nil selects a documented fallback
+// rather than an error.
+type Options struct {
+	// LibStore powers the file-serve path's presign-vs-local decision.
+	// nil on installs with no storage backend configured — serveBookFile
+	// falls back to local serving.
 	LibStore service.LibraryStore
-	// Email subsystem seams. Notifier is always wired; its runtime
-	// state determines whether email features are enabled. Disabled
-	// handlers return 503 EMAIL_DISABLED via emailEnabled(). ADR-0020.
-	Users      *repo.UserRepo
-	Books      *repo.BookRepo
-	Notifier   *service.Notifier
-	Resets     *service.PasswordResetService
-	InviteRepo *repo.UserInviteRepo
-	Cipher     crypto.Cipher
-	EmailTpl   *email.Templates
-	// Forward-auth (ADR-0022). FwdAuthHolder is hot-swappable; when
-	// nil or pointing at a disabled config the middleware falls
-	// through to RequireAuth on every request.
+	// OIDC and Identities are nil until an admin configures a provider.
+	OIDC       *service.OIDCService
+	Identities *repo.IdentityRepo
+	// Covers is the pre-approval cover store; nil disables cover serving.
+	Covers *coverstore.Store
+	// Queue is the worker pool. nil means jobs are not dispatched.
+	Queue queue.Client
+	// FwdAuthHolder carries the runtime CIDR/header config, atomically
+	// swappable so settings saves hot-reload. FwdAuth is the resolver the
+	// middleware invokes on a trusted-IP hit. Both nil disables
+	// forward-auth and every request falls through to RequireAuth.
+	// ADR-0022.
 	FwdAuthHolder *auth.ForwardAuthHolder
 	FwdAuth       auth.ForwardAuthResolver
 }
 
-func New(d Deps) *Handler {
+// New assembles the Handler. The five required groups are positional, so
+// a seam added to any of them fails the build until the composition root
+// supplies it.
+func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailDeps, opts Options) *Handler {
 	return &Handler{
-		cfg: d.Cfg, static: d.Static,
-		version: d.Version, commit: d.Commit,
-		lib: d.Lib, shelf: d.Shelf, auth: d.Auth,
-		bookdrop: d.BookDrop, progress: d.Progress, enrich: d.Enrich, providerCfg: d.ProviderCfg,
-		annotations: d.Annotations, stats: d.Stats,
-		readingStats: d.ReadingStats,
-		devices:      d.Devices,
-		oidc:         d.OIDC,
-		identities:   d.Identities,
-		search:       d.Search,
-		appSettings:  d.AppSettings,
-		covers:       d.Covers,
-		hub:          d.Hub, queue: d.Queue,
-		libStore:      d.LibStore,
-		users:         d.Users,
-		books:         d.Books,
-		notifier:      d.Notifier,
-		resets:        d.Resets,
-		inviteRepo:    d.InviteRepo,
-		cipher:        d.Cipher,
-		emailTpl:      d.EmailTpl,
-		fwdAuthHolder: d.FwdAuthHolder,
-		fwdAuth:       d.FwdAuth,
+		cfg: p.cfg, static: p.static, version: p.version, commit: p.commit, hub: p.hub,
+
+		lib: l.lib, shelf: l.shelf, books: l.books, bookdrop: l.bookdrop, progress: l.progress,
+
+		enrich: d.enrich, providerCfg: d.providerCfg, search: d.search,
+		stats: d.stats, readingStats: d.readingStats, annotations: d.annotations,
+
+		auth: a.auth, users: a.users, devices: a.devices, appSettings: a.appSettings,
+
+		notifier: e.notifier, resets: e.resets, inviteRepo: e.inviteRepo,
+		cipher: e.cipher, emailTpl: e.emailTpl,
+
+		libStore: opts.LibStore, oidc: opts.OIDC, identities: opts.Identities,
+		covers: opts.Covers, queue: opts.Queue,
+		fwdAuthHolder: opts.FwdAuthHolder, fwdAuth: opts.FwdAuth,
 	}
 }
 

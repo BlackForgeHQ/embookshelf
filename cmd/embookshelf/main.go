@@ -453,41 +453,27 @@ database must be empty; migrations are applied to it automatically.
 	}
 	go watcher.Run(ctx)
 
-	// HTTP.
-	h := handler.New(handler.Deps{
-		Cfg:           cfg,
-		Static:        staticfs.FS,
-		Version:       version,
-		Commit:        commit,
-		Lib:           libSvc,
-		Shelf:         shelfSvc,
-		Auth:          authSvc,
-		BookDrop:      bdropSvc,
-		Progress:      progressSvc,
-		Enrich:        enrichSvc,
-		ProviderCfg:   providerCfgSvc,
-		Annotations:   annotationSvc,
-		Stats:         statsSvc,
-		ReadingStats:  readingStatsSvc,
-		Devices:       deviceSvc,
-		OIDC:          oidcSvc,
-		Identities:    identityRepo,
-		Search:        searchSvc,
-		AppSettings:   appSettingsRepo,
-		Covers:        covers,
-		Hub:           hub,
-		Queue:         q,
-		LibStore:      libStore,
-		Users:         userRepo,
-		Books:         bookRepo,
-		Notifier:      notifier,
-		Resets:        resetSvc,
-		InviteRepo:    inviteRepo,
-		Cipher:        secretCipher,
-		EmailTpl:      emailTpl,
-		FwdAuthHolder: fwdAuthHolder,
-		FwdAuth:       fwdAuthSvc,
-	})
+	// HTTP. The five required groups are positional — adding a seam to
+	// any of them breaks the build here until it is supplied.
+	h := handler.New(
+		handler.NewPlatformDeps(cfg, staticfs.FS, version, commit, hub),
+		handler.NewLibraryDeps(libSvc, shelfSvc, bookRepo, bdropSvc, progressSvc),
+		handler.NewDiscoveryDeps(
+			enrichSvc, providerCfgSvc, searchSvc,
+			statsSvc, readingStatsSvc, annotationSvc,
+		),
+		handler.NewAccountDeps(authSvc, userRepo, deviceSvc, appSettingsRepo),
+		handler.NewEmailDeps(notifier, resetSvc, inviteRepo, secretCipher, emailTpl),
+		handler.Options{
+			LibStore:      libStore,
+			OIDC:          oidcSvc,
+			Identities:    identityRepo,
+			Covers:        covers,
+			Queue:         q,
+			FwdAuthHolder: fwdAuthHolder,
+			FwdAuth:       fwdAuthSvc,
+		},
+	)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),

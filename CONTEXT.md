@@ -341,6 +341,14 @@ The worker pipeline that takes a staged file path, computes its hash, dispatches
 
 `LibraryHandle.IsBackendBacked()`; whether a Library's bytes live in a Storage backend rather than the local filesystem. Named once so callers stop re-deriving it from `libraries.backend_id`. Two policies branch on it: the in-file metadata embed (local only, ADR-0001) and the folder-rename strategy (`os.Rename` vs copy + Pending orphan, ADR-0005).
 
+### Handler dependency groups
+
+`handler.PlatformDeps` / `LibraryDeps` / `DiscoveryDeps` / `AccountDeps` / `EmailDeps`; the seams a Handler cannot work without, split by surface and supplied through constructors so omitting one is a compile error at the composition root. **Distinct** from the domain Library — `LibraryDeps` is wiring, not a collection of books.
+
+`handler.Options` holds the complement: seams that may legitimately be nil, each nil-guarded at its use site where nil selects a documented fallback (no storage backend → local file serving; no OIDC provider configured; no worker pool; forward-auth disabled → every request falls through to `RequireAuth`).
+
+The split exists because a 31-field `Deps` struct made every seam optional by construction, and one of them — the provider settings surface — shipped unassigned and nil-dereferenced on every request to it. Required-vs-optional was already a real distinction in the code, expressed only as the presence or absence of a nil check; this moves it into the type system.
+
 ### Book file sandbox
 
 `handler.sandboxPath`; the allow-list gate every filesystem read or delete of a book file passes through. Roots are `BOOKDROP_PATH` plus every Library with a local path; a path must resolve inside one of them after cleaning. Fails closed — no configured roots admits nothing. Serving and deleting share the one implementation so a change to the rule cannot apply to one and miss the other.
