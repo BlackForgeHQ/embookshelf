@@ -219,6 +219,14 @@ Opaque change token from a backend (S3 returns one; LocalFS leaves it empty). Us
 
 `scan.RelocateByHash` (or inline equivalent in `task.LibraryScan`); for a New walk entry, hashes the bytes and queries `Files.GetByContentHash` in the same library. On hit, updates the existing `files.location` to the new path — the rename safety net under ADR-0018. On miss, returns without side effect; scan is never an ingest path.
 
+### Column-order coupling
+
+The hazard that survives in `internal/repo`: several positionally ordered lists that must agree by hand — a `*Cols` constant's SELECT order, its `scan*` function's `Scan` destinations, and for `books` a 39-column `UPDATE` against its argument slice. ADR-0023 removed the *dialect* axis of this duplication; the *column-position* axis is untouched.
+
+A count mismatch fails loudly at runtime. Swapping two **same-type adjacent** columns in one list does not: it compiles, it runs, and every row silently gets those fields crossed. `909f6bf` fixed exactly this in five `UserRepo` methods, and `TouchLastSeen` still numbers `$2` before `$1` on purpose so its `(id, at)` argument order works — correct, and a trap for anyone tidying it, especially since every caller discards its error.
+
+Guarded by round-trip tests in `book_test.go` and `user_test.go`: every field gets a value distinct from every other field of its type, so a crossing surfaces as a mismatch. The 15 lock flags alternate rather than being uniform, which catches any adjacent swap. Both tests were verified by deliberately introducing a crossing and confirming they fail — a positional test that passes proves nothing until you have seen it fail for the right reason.
+
 ### Error envelope
 
 The JSON shape every non-2xx API response uses: `{"error": "<display message>", "code": "<CODE>"}`, where `code` is omitted unless the case is one a client should branch on. `handler.writeError` and `writeErrorCode` are the only writers — no handler builds the shape by hand, which is what stops a bespoke variant reappearing.
