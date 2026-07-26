@@ -32,8 +32,15 @@ var ErrTargetNotEmpty = errors.New("target database is not empty")
 
 // tableOrder lists the tables to copy in foreign-key-safe order. It is
 // deliberately explicit rather than derived: a reviewer can check the
-// order, and a table added to the schema without being considered here
-// shows up as a gap rather than a runtime surprise.
+// order, and the parent-before-child sequence is the whole reason the
+// import can run in one pass.
+//
+// Explicit also means hand-maintained, which is a hazard on a one-shot
+// data migration — a table added to the schema and forgotten here would
+// be skipped with no error and exit code 0, i.e. silent data loss. Two
+// things guard that: excludedTables below declares every table
+// deliberately left out, and Run reports anything it recognises as
+// neither. A test asserts the union covers the live schema.
 var tableOrder = []string{
 	"app_settings",
 	"provider_settings",
@@ -61,6 +68,36 @@ var tableOrder = []string{
 // reported rather than silently dropped.
 const jobsTable = "jobs"
 
+// excludedTables names every table deliberately not imported, and why.
+// The reason is the point: without it, a future reader cannot tell a
+// considered omission from a forgotten one, which is exactly the
+// ambiguity that makes a hand-maintained tableOrder risky.
+var excludedTables = map[string]string{
+	jobsTable:           "SQLite-only polling queue; River owns its own tables on Postgres, so queued work cannot transfer",
+	"schema_migrations": "the migrator's own bookkeeping, rebuilt by migrating the target",
+	"library_paths":     "dropped by migration 000018; libraries.path replaced it",
+}
+
+// excludedPrefixes covers table families owned by a dependency rather
+// than by this schema.
+var excludedPrefixes = map[string]string{
+	"river_": "River's own queue tables, created by its migrator on the target",
+}
+
+// isExcluded reports whether a table is deliberately not imported, and
+// the reason if so.
+func isExcluded(table string) (string, bool) {
+	if why, ok := excludedTables[table]; ok {
+		return why, true
+	}
+	for prefix, why := range excludedPrefixes {
+		if strings.HasPrefix(table, prefix) {
+			return why, true
+		}
+	}
+	return "", false
+}
+
 // Report describes what an import moved.
 type Report struct {
 	// Rows maps table name to the number of rows copied. Tables absent
@@ -75,6 +112,14 @@ type Report struct {
 	// default, so an old database can hold rows Postgres will not accept.
 	// Non-empty means data was intentionally left behind.
 	Orphans map[string]int
+	// UnknownTables lists tables present in the source that this build
+	// neither imports nor deliberately excludes — almost always a table
+	// added to the schema without a tableOrder entry, or a source newer
+	// than the binary reading it.
+	//
+	// Reported rather than silently skipped: the failure mode this
+	// guards is a user's rows staying behind with an exit code of 0.
+	UnknownTables []string
 }
 
 // TotalOrphans is the number of rows dropped as orphans across all tables.
@@ -112,6 +157,12 @@ func Run(ctx context.Context, src, dst *sql.DB) (Report, error) {
 	if err == nil {
 		rep.SkippedJobs = skipped
 	}
+
+	unknown, err := unknownSourceTables(ctx, src)
+	if err != nil {
+		return rep, fmt.Errorf("inspect source tables: %w", err)
+	}
+	rep.UnknownTables = unknown
 
 	tx, err := dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -406,4 +457,49 @@ func parseSQLiteTime(s string) (time.Time, error) {
 		}
 	}
 	return time.Time{}, fmt.Errorf("cannot parse %q as a timestamp", s)
+}
+
+// unknownSourceTables lists tables in the SQLite source that this build
+// neither copies nor deliberately excludes.
+//
+// It reads the source rather than the target because the source is what
+// holds the user's data: a table the binary has never heard of is data
+// that will not survive the migration, and the operator should be told
+// which one rather than discovering the gap later.
+func unknownSourceTables(ctx context.Context, src *sql.DB) ([]string, error) {
+	known := make(map[string]bool, len(tableOrder))
+	for _, t := range tableOrder {
+		known[t] = true
+	}
+
+	rows, err := src.QueryContext(ctx, `
+		SELECT name FROM sqlite_master
+		WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+		ORDER BY name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var unknown []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		if known[name] {
+			continue
+		}
+		if _, excluded := isExcluded(name); excluded {
+			continue
+		}
+		// FTS5 shadow tables belong to books_fts, which is itself an
+		// index rather than user data.
+		if strings.HasPrefix(name, "books_fts") {
+			continue
+		}
+		unknown = append(unknown, name)
+	}
+	return unknown, rows.Err()
 }

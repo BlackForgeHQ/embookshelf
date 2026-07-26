@@ -261,3 +261,120 @@ func TestImportEmptySourceIsNotAnError(t *testing.T) {
 		t.Errorf("Total = %d, want 0", rep.Total())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// tableOrder ↔ schema parity
+// ---------------------------------------------------------------------------
+
+// The guard on a hand-maintained list: every table in the live schema
+// must be either imported or explicitly excluded with a reason. Add a
+// table to a migration and forget tableOrder, and this fails — instead
+// of the importer silently leaving that data behind at exit code 0.
+func TestTableOrderCoversTheLiveSchema(t *testing.T) {
+	d := repotest.New(t)
+	ctx := context.Background()
+
+	rows, err := d.SQL.QueryContext(ctx, `
+		SELECT table_name FROM information_schema.tables
+		WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'
+		ORDER BY table_name
+	`)
+	if err != nil {
+		t.Fatalf("list schema tables: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	imported := map[string]bool{}
+	for _, tbl := range sqliteimport.TableOrderForTest() {
+		imported[tbl] = true
+	}
+
+	var missing []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if imported[name] {
+			continue
+		}
+		if _, excluded := sqliteimport.IsExcludedForTest(name); excluded {
+			continue
+		}
+		missing = append(missing, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+
+	if len(missing) > 0 {
+		t.Errorf(`these tables exist in the schema but are neither imported nor excluded: %v
+
+Add each to tableOrder (in foreign-key-safe order) so import-sqlite
+carries the data, or to excludedTables with the reason it should not.
+Leaving it unlisted means an operator's rows stay behind silently.`, missing)
+	}
+}
+
+// Every exclusion must say why. An entry without a reason is
+// indistinguishable from a forgotten table to the next reader.
+func TestEveryExclusionCarriesAReason(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"jobs", "schema_migrations", "library_paths", "river_job"} {
+		why, excluded := sqliteimport.IsExcludedForTest(name)
+		if !excluded {
+			t.Errorf("%q should be a declared exclusion", name)
+			continue
+		}
+		if len(why) < 20 {
+			t.Errorf("exclusion %q has reason %q — too terse to settle 'deliberate or forgotten?'", name, why)
+		}
+	}
+
+	if _, excluded := sqliteimport.IsExcludedForTest("books"); excluded {
+		t.Error("books is imported and must not be listed as excluded")
+	}
+}
+
+// An unrecognised table in the source is reported, not skipped quietly.
+func TestImportReportsUnknownSourceTables(t *testing.T) {
+	src, dst := pair(t)
+	seedSQLite(t, src)
+
+	if _, err := src.ExecContext(context.Background(),
+		`CREATE TABLE reading_streaks (id TEXT PRIMARY KEY, days INTEGER)`); err != nil {
+		t.Fatalf("create unknown table: %v", err)
+	}
+
+	rep, err := sqliteimport.Run(context.Background(), src, dst)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, name := range rep.UnknownTables {
+		if name == "reading_streaks" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("UnknownTables = %v, want it to name reading_streaks — "+
+			"an unlisted table is data left behind and must be surfaced", rep.UnknownTables)
+	}
+}
+
+// A clean source has nothing unknown; otherwise the warning would cry
+// wolf on every import and get ignored.
+func TestImportReportsNoUnknownTablesForACurrentSource(t *testing.T) {
+	src, dst := pair(t)
+	seedSQLite(t, src)
+
+	rep, err := sqliteimport.Run(context.Background(), src, dst)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(rep.UnknownTables) != 0 {
+		t.Errorf("UnknownTables = %v, want empty for a current-schema source", rep.UnknownTables)
+	}
+}

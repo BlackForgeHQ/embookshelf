@@ -141,6 +141,19 @@ func printReport(rep sqliteimport.Report) {
 	}
 	fmt.Printf("\nimported %d row(s) across %d table(s).\n", rep.Total(), len(rep.Rows))
 
+	if len(rep.UnknownTables) > 0 {
+		sort.Strings(rep.UnknownTables)
+		fmt.Fprintf(os.Stderr, `
+WARNING: %d table(s) in the source were NOT imported because this build
+         does not recognise them: %s
+
+         Their rows are still in the SQLite file, but they will not be
+         in Postgres. This usually means the source came from a newer
+         release than this binary. Check for a newer embookshelf before
+         relying on the imported library.
+`, len(rep.UnknownTables), strings.Join(rep.UnknownTables, ", "))
+	}
+
 	if n := rep.TotalOrphans(); n > 0 {
 		tables := make([]string, 0, len(rep.Orphans))
 		for t := range rep.Orphans {
