@@ -35,7 +35,7 @@ func newTestLibStore(lr *repo.LibraryRepo, fs storage.Storage) service.LibrarySt
 // File keys are therefore absolute paths like "<tmpDir>/<name>".
 func newTestDeps(t *testing.T) (task.FilesBackfillDeps, *repo.LibraryRepo) {
 	t.Helper()
-	d := repotest.NewWithDialect(t, "sqlite")
+	d := repotest.New(t)
 	// Root the storage at "/" — same as production. joinKey will build
 	// keys like "/tmp/.../filename.epub" which LocalFS resolves correctly.
 	fs, err := local.New("/")
@@ -101,7 +101,7 @@ func TestRunFilesBackfill_nilDeps(t *testing.T) {
 	}
 
 	// nil Files
-	d := repotest.NewWithDialect(t, "sqlite")
+	d := repotest.New(t)
 	fs, _ := local.New("/")
 	lr := repo.NewLibraryRepo(d)
 	if err := task.RunFilesBackfill(ctx, task.FilesBackfillDeps{

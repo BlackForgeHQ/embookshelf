@@ -50,32 +50,17 @@ func (r *FileRepo) Insert(ctx context.Context, f model.File) (model.File, error)
 		contentHash = f.ContentHash
 	}
 
-	const qPG = `
+	const q = `
 		INSERT INTO files (id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
 	`
-	const qSQLite = `
-		INSERT INTO files (id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		RETURNING id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
-	`
 
-	// mtime and last_scanned: pass as time.Time on PG (pgx handles TIMESTAMPTZ),
-	// pass as ISO-8601 string on SQLite.
-	var mtimeVal, lastScannedVal any
-	if r.db.Dialect == db.DialectSQLite {
-		mtimeVal = f.Mtime.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
-		lastScannedVal = f.LastScanned.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
-	} else {
-		mtimeVal = f.Mtime
-		lastScannedVal = f.LastScanned
-	}
-
+	// mtime and last_scanned: passed as time.Time (pgx handles TIMESTAMPTZ).
 	row := r.db.SQL.QueryRowContext(ctx,
-		db.SelectQ(r.db.Dialect, qPG, qSQLite),
+		q,
 		id, f.LibraryID, bookID, f.Location, f.Size,
-		mtimeVal, etag, contentHash, f.Format, lastScannedVal,
+		f.Mtime, etag, contentHash, f.Format, f.LastScanned,
 	)
 	result, err := r.scanFile(row)
 	if err != nil {
@@ -90,17 +75,12 @@ func (r *FileRepo) Insert(ctx context.Context, f model.File) (model.File, error)
 // GetByLocation returns the file at (library_id, location). Returns
 // ErrNotFound when missing.
 func (r *FileRepo) GetByLocation(ctx context.Context, libraryID, location string) (model.File, error) {
-	const qPG = `
+	const q = `
 		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
 		FROM files
 		WHERE library_id = $1 AND location = $2
 	`
-	const qSQLite = `
-		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
-		FROM files
-		WHERE library_id = ? AND location = ?
-	`
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), libraryID, location)
+	row := r.db.SQL.QueryRowContext(ctx, q, libraryID, location)
 	f, err := r.scanFile(row)
 	if err != nil {
 		if dberr.IsNotFound(err) {
@@ -115,17 +95,12 @@ func (r *FileRepo) GetByLocation(ctx context.Context, libraryID, location string
 // Used for duplicate detection at scan time. An empty slice (not nil) is
 // returned when no rows match.
 func (r *FileRepo) GetByContentHash(ctx context.Context, hash []byte) ([]model.File, error) {
-	const qPG = `
+	const q = `
 		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
 		FROM files
 		WHERE content_hash = $1
 	`
-	const qSQLite = `
-		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
-		FROM files
-		WHERE content_hash = ?
-	`
-	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), hash)
+	rows, err := r.db.SQL.QueryContext(ctx, q, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -145,11 +120,10 @@ func (r *FileRepo) GetByContentHash(ctx context.Context, hash []byte) ([]model.F
 // ExistsByLocation answers whether there is already a file at this
 // (library_id, location) key without fetching the full row.
 func (r *FileRepo) ExistsByLocation(ctx context.Context, libraryID, location string) (bool, error) {
-	const qPG = `SELECT count(*) FROM files WHERE library_id = $1 AND location = $2`
-	const qSQLite = `SELECT count(*) FROM files WHERE library_id = ? AND location = ?`
+	const q = `SELECT count(*) FROM files WHERE library_id = $1 AND location = $2`
 	var n int
 	err := r.db.SQL.QueryRowContext(ctx,
-		db.SelectQ(r.db.Dialect, qPG, qSQLite),
+		q,
 		libraryID, location,
 	).Scan(&n)
 	return n > 0, err
@@ -158,35 +132,15 @@ func (r *FileRepo) ExistsByLocation(ctx context.Context, libraryID, location str
 // SetContentHash records the hash, size, and mtime once a file has been
 // scanned. Used by the boot-time backfill worker.
 func (r *FileRepo) SetContentHash(ctx context.Context, fileID string, hash []byte, size int64, mtime time.Time) error {
-	const qPG = `
+	const q = `
 		UPDATE files
 		SET content_hash = $2,
 		    size         = $3,
 		    mtime        = $4
 		WHERE id = $1
 	`
-	const qSQLite = `
-		UPDATE files
-		SET content_hash = ?,
-		    size         = ?,
-		    mtime        = ?
-		WHERE id = ?
-	`
 
-	var mtimeVal any
-	if r.db.Dialect == db.DialectSQLite {
-		mtimeVal = mtime.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
-	} else {
-		mtimeVal = mtime
-	}
-
-	var res sql.Result
-	var err error
-	if r.db.Dialect == db.DialectSQLite {
-		res, err = r.db.SQL.ExecContext(ctx, qSQLite, hash, size, mtimeVal, fileID)
-	} else {
-		res, err = r.db.SQL.ExecContext(ctx, qPG, fileID, hash, size, mtimeVal)
-	}
+	res, err := r.db.SQL.ExecContext(ctx, q, fileID, hash, size, mtime)
 	if err != nil {
 		return err
 	}
@@ -203,21 +157,14 @@ func (r *FileRepo) SetContentHash(ctx context.Context, fileID string, hash []byt
 // ListPendingHash returns up to batchSize files whose content_hash is
 // still NULL. Used by the backfill worker to drain the queue.
 func (r *FileRepo) ListPendingHash(ctx context.Context, batchSize int) ([]model.File, error) {
-	const qPG = `
+	const q = `
 		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
 		FROM files
 		WHERE content_hash IS NULL
 		ORDER BY id
 		LIMIT $1
 	`
-	const qSQLite = `
-		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
-		FROM files
-		WHERE content_hash IS NULL
-		ORDER BY id
-		LIMIT ?
-	`
-	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), batchSize)
+	rows, err := r.db.SQL.QueryContext(ctx, q, batchSize)
 	if err != nil {
 		return nil, err
 	}
@@ -237,9 +184,8 @@ func (r *FileRepo) ListPendingHash(ctx context.Context, batchSize int) ([]model.
 // MarkScanned bumps last_scanned to now without changing the hash. Used
 // by the scan worker to record that a file was inspected.
 func (r *FileRepo) MarkScanned(ctx context.Context, fileID string) error {
-	const qPG = `UPDATE files SET last_scanned = now() WHERE id = $1`
-	const qSQLite = `UPDATE files SET last_scanned = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?`
-	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), fileID)
+	const q = `UPDATE files SET last_scanned = now() WHERE id = $1`
+	res, err := r.db.SQL.ExecContext(ctx, q, fileID)
 	if err != nil {
 		return err
 	}
@@ -257,23 +203,9 @@ func (r *FileRepo) MarkScanned(ctx context.Context, fileID string) error {
 // Idempotent: re-marking with a later 'when' is allowed (overwrite);
 // re-marking with the same 'when' is a no-op.
 func (r *FileRepo) MarkMissing(ctx context.Context, fileID string, when time.Time) error {
-	const qPG = `UPDATE files SET missing_since = $2 WHERE id = $1`
-	const qSQLite = `UPDATE files SET missing_since = ? WHERE id = ?`
+	const q = `UPDATE files SET missing_since = $2 WHERE id = $1`
 
-	var whenVal any
-	if r.db.Dialect == db.DialectSQLite {
-		whenVal = when.UTC().Format(time.RFC3339Nano)
-	} else {
-		whenVal = when
-	}
-
-	var res sql.Result
-	var err error
-	if r.db.Dialect == db.DialectSQLite {
-		res, err = r.db.SQL.ExecContext(ctx, qSQLite, whenVal, fileID)
-	} else {
-		res, err = r.db.SQL.ExecContext(ctx, qPG, fileID, whenVal)
-	}
+	res, err := r.db.SQL.ExecContext(ctx, q, fileID, when)
 	if err != nil {
 		return err
 	}
@@ -290,10 +222,9 @@ func (r *FileRepo) MarkMissing(ctx context.Context, fileID string, when time.Tim
 // ClearMissing flips missing_since back to NULL when a previously
 // missing file reappears.
 func (r *FileRepo) ClearMissing(ctx context.Context, fileID string) error {
-	const qPG = `UPDATE files SET missing_since = NULL WHERE id = $1`
-	const qSQLite = `UPDATE files SET missing_since = NULL WHERE id = ?`
+	const q = `UPDATE files SET missing_since = NULL WHERE id = $1`
 
-	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), fileID)
+	res, err := r.db.SQL.ExecContext(ctx, q, fileID)
 	if err != nil {
 		return err
 	}
@@ -313,17 +244,9 @@ func (r *FileRepo) ClearMissing(ctx context.Context, fileID string) error {
 func (r *FileRepo) DeleteMissingOlderThan(ctx context.Context, ttl time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-ttl)
 
-	const qPG = `DELETE FROM files WHERE missing_since IS NOT NULL AND missing_since < $1`
-	const qSQLite = `DELETE FROM files WHERE missing_since IS NOT NULL AND missing_since < ?`
+	const q = `DELETE FROM files WHERE missing_since IS NOT NULL AND missing_since < $1`
 
-	var cutoffVal any
-	if r.db.Dialect == db.DialectSQLite {
-		cutoffVal = cutoff.UTC().Format(time.RFC3339Nano)
-	} else {
-		cutoffVal = cutoff
-	}
-
-	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), cutoffVal)
+	res, err := r.db.SQL.ExecContext(ctx, q, cutoff)
 	if err != nil {
 		return 0, err
 	}
@@ -337,19 +260,13 @@ func (r *FileRepo) DeleteMissingOlderThan(ctx context.Context, ttl time.Duration
 // ListByLibrary returns every files row for libraryID (including
 // missing ones). Used by the scan worker to diff against the live walk.
 func (r *FileRepo) ListByLibrary(ctx context.Context, libraryID string) ([]model.File, error) {
-	const qPG = `
+	const q = `
 		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
 		FROM files
 		WHERE library_id = $1
 		ORDER BY location
 	`
-	const qSQLite = `
-		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
-		FROM files
-		WHERE library_id = ?
-		ORDER BY location
-	`
-	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), libraryID)
+	rows, err := r.db.SQL.QueryContext(ctx, q, libraryID)
 	if err != nil {
 		return nil, err
 	}
@@ -369,19 +286,13 @@ func (r *FileRepo) ListByLibrary(ctx context.Context, libraryID string) ([]model
 // ListByBook returns all files rows for bookID ordered by id.
 // Returns an empty slice (not nil) when no rows match.
 func (r *FileRepo) ListByBook(ctx context.Context, bookID string) ([]model.File, error) {
-	const qPG = `
+	const q = `
 		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
 		FROM files
 		WHERE book_id = $1
 		ORDER BY id
 	`
-	const qSQLite = `
-		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
-		FROM files
-		WHERE book_id = ?
-		ORDER BY id
-	`
-	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), bookID)
+	rows, err := r.db.SQL.QueryContext(ctx, q, bookID)
 	if err != nil {
 		return nil, err
 	}
@@ -402,16 +313,9 @@ func (r *FileRepo) ListByBook(ctx context.Context, bookID string) ([]model.File,
 // library. Used by hash-based reattach when a file is renamed.
 // Returns ErrFileLocationTaken on (library_id, location) conflict.
 func (r *FileRepo) UpdateLocation(ctx context.Context, fileID, newLocation string) error {
-	const qPG = `UPDATE files SET location = $2 WHERE id = $1`
-	const qSQLite = `UPDATE files SET location = ? WHERE id = ?`
+	const q = `UPDATE files SET location = $2 WHERE id = $1`
 
-	var res sql.Result
-	var err error
-	if r.db.Dialect == db.DialectSQLite {
-		res, err = r.db.SQL.ExecContext(ctx, qSQLite, newLocation, fileID)
-	} else {
-		res, err = r.db.SQL.ExecContext(ctx, qPG, fileID, newLocation)
-	}
+	res, err := r.db.SQL.ExecContext(ctx, q, fileID, newLocation)
 	if err != nil {
 		if ok, _ := dberr.IsUniqueViolation(err); ok {
 			return ErrFileLocationTaken
@@ -471,7 +375,7 @@ func (r *FileRepo) scanFile(s scanner) (model.File, error) {
 		}
 	}
 
-	// Nullable content_hash — BYTEA on PG, BLOB on SQLite, both map to []byte.
+	// Nullable content_hash — BYTEA, maps to []byte.
 	if contentHashAny != nil {
 		switch v := contentHashAny.(type) {
 		case []byte:
@@ -481,18 +385,18 @@ func (r *FileRepo) scanFile(s scanner) (model.File, error) {
 		}
 	}
 
-	// mtime: non-nullable TIMESTAMPTZ (PG) / TEXT ISO-8601 (SQLite)
-	if err := db.ScanTime(r.db.Dialect, mtimeAny, &f.Mtime); err != nil {
+	// mtime: non-nullable TIMESTAMPTZ
+	if err := db.ScanTime(mtimeAny, &f.Mtime); err != nil {
 		return f, fmt.Errorf("scan mtime: %w", err)
 	}
 
 	// last_scanned: non-nullable
-	if err := db.ScanTime(r.db.Dialect, lastScannedAny, &f.LastScanned); err != nil {
+	if err := db.ScanTime(lastScannedAny, &f.LastScanned); err != nil {
 		return f, fmt.Errorf("scan last_scanned: %w", err)
 	}
 
 	// missing_since: nullable
-	if err := db.ScanNullTime(r.db.Dialect, missingSinceAny, &f.MissingSince); err != nil {
+	if err := db.ScanNullTime(missingSinceAny, &f.MissingSince); err != nil {
 		return f, fmt.Errorf("scan missing_since: %w", err)
 	}
 

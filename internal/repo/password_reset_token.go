@@ -35,19 +35,11 @@ type PasswordResetToken struct {
 // token (32 bytes); expiry is the absolute deadline. The plaintext
 // is the caller's responsibility to mail and forget.
 func (r *PasswordResetTokenRepo) Create(ctx context.Context, hash []byte, userID string, expiresAt time.Time) error {
-	const qPG = `
+	const q = `
 		INSERT INTO password_reset_tokens (token_hash, user_id, expires_at)
 		VALUES ($1, $2, $3)
 	`
-	const qSQLite = `
-		INSERT INTO password_reset_tokens (token_hash, user_id, expires_at)
-		VALUES (?, ?, ?)
-	`
-	if r.db.Dialect == db.DialectSQLite {
-		_, err := r.db.SQL.ExecContext(ctx, qSQLite, hash, userID, expiresAt.UTC().Format(time.RFC3339Nano))
-		return err
-	}
-	_, err := r.db.SQL.ExecContext(ctx, qPG, hash, userID, expiresAt.UTC())
+	_, err := r.db.SQL.ExecContext(ctx, q, hash, userID, expiresAt.UTC())
 	return err
 }
 
@@ -58,7 +50,7 @@ func (r *PasswordResetTokenRepo) Create(ctx context.Context, hash []byte, userID
 // path is one statement so a concurrent double-submit can only land
 // once.
 func (r *PasswordResetTokenRepo) Consume(ctx context.Context, hash []byte, now time.Time) (PasswordResetToken, error) {
-	const qPG = `
+	const q = `
 		UPDATE password_reset_tokens
 		SET used_at = $2
 		WHERE token_hash = $1
@@ -66,40 +58,26 @@ func (r *PasswordResetTokenRepo) Consume(ctx context.Context, hash []byte, now t
 		  AND expires_at > $2
 		RETURNING user_id, created_at, expires_at, used_at
 	`
-	const qSQLite = `
-		UPDATE password_reset_tokens
-		SET used_at = ?
-		WHERE token_hash = ?
-		  AND used_at IS NULL
-		  AND expires_at > ?
-		RETURNING user_id, created_at, expires_at, used_at
-	`
 	var (
 		t          PasswordResetToken
 		createdAny any
 		expiresAny any
 		usedAny    any
-		nowISO     = now.UTC().Format(time.RFC3339Nano)
 	)
-	var row interface{ Scan(...any) error }
-	if r.db.Dialect == db.DialectSQLite {
-		row = r.db.SQL.QueryRowContext(ctx, qSQLite, nowISO, hash, nowISO)
-	} else {
-		row = r.db.SQL.QueryRowContext(ctx, qPG, hash, now.UTC())
-	}
+	row := r.db.SQL.QueryRowContext(ctx, q, hash, now.UTC())
 	if err := row.Scan(&t.UserID, &createdAny, &expiresAny, &usedAny); err != nil {
 		if dberr.IsNotFound(err) {
 			return PasswordResetToken{}, ErrNotFound
 		}
 		return PasswordResetToken{}, err
 	}
-	if err := db.ScanTime(r.db.Dialect, createdAny, &t.CreatedAt); err != nil {
+	if err := db.ScanTime(createdAny, &t.CreatedAt); err != nil {
 		return PasswordResetToken{}, fmt.Errorf("scan created_at: %w", err)
 	}
-	if err := db.ScanTime(r.db.Dialect, expiresAny, &t.ExpiresAt); err != nil {
+	if err := db.ScanTime(expiresAny, &t.ExpiresAt); err != nil {
 		return PasswordResetToken{}, fmt.Errorf("scan expires_at: %w", err)
 	}
-	if err := db.ScanNullTime(r.db.Dialect, usedAny, &t.UsedAt); err != nil {
+	if err := db.ScanNullTime(usedAny, &t.UsedAt); err != nil {
 		return PasswordResetToken{}, fmt.Errorf("scan used_at: %w", err)
 	}
 	return t, nil
@@ -110,15 +88,10 @@ func (r *PasswordResetTokenRepo) Consume(ctx context.Context, hash []byte, now t
 // "link expired" before the user types a new password. Read-only —
 // does not mark used.
 func (r *PasswordResetTokenRepo) Verify(ctx context.Context, hash []byte, now time.Time) (PasswordResetToken, error) {
-	const qPG = `
+	const q = `
 		SELECT user_id, created_at, expires_at, used_at
 		FROM password_reset_tokens
 		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2
-	`
-	const qSQLite = `
-		SELECT user_id, created_at, expires_at, used_at
-		FROM password_reset_tokens
-		WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
 	`
 	var (
 		t          PasswordResetToken
@@ -126,25 +99,20 @@ func (r *PasswordResetTokenRepo) Verify(ctx context.Context, hash []byte, now ti
 		expiresAny any
 		usedAny    any
 	)
-	var row interface{ Scan(...any) error }
-	if r.db.Dialect == db.DialectSQLite {
-		row = r.db.SQL.QueryRowContext(ctx, qSQLite, hash, now.UTC().Format(time.RFC3339Nano))
-	} else {
-		row = r.db.SQL.QueryRowContext(ctx, qPG, hash, now.UTC())
-	}
+	row := r.db.SQL.QueryRowContext(ctx, q, hash, now.UTC())
 	if err := row.Scan(&t.UserID, &createdAny, &expiresAny, &usedAny); err != nil {
 		if dberr.IsNotFound(err) {
 			return PasswordResetToken{}, ErrNotFound
 		}
 		return PasswordResetToken{}, err
 	}
-	if err := db.ScanTime(r.db.Dialect, createdAny, &t.CreatedAt); err != nil {
+	if err := db.ScanTime(createdAny, &t.CreatedAt); err != nil {
 		return PasswordResetToken{}, err
 	}
-	if err := db.ScanTime(r.db.Dialect, expiresAny, &t.ExpiresAt); err != nil {
+	if err := db.ScanTime(expiresAny, &t.ExpiresAt); err != nil {
 		return PasswordResetToken{}, err
 	}
-	if err := db.ScanNullTime(r.db.Dialect, usedAny, &t.UsedAt); err != nil {
+	if err := db.ScanNullTime(usedAny, &t.UsedAt); err != nil {
 		return PasswordResetToken{}, err
 	}
 	return t, nil
@@ -155,33 +123,20 @@ func (r *PasswordResetTokenRepo) Verify(ctx context.Context, hash []byte, now ti
 // minutes" rate limit so a noisy attacker can't spam a target's
 // inbox.
 func (r *PasswordResetTokenRepo) CountRecentForUser(ctx context.Context, userID string, since time.Time) (int, error) {
-	const qPG = `
+	const q = `
 		SELECT count(*) FROM password_reset_tokens
 		WHERE user_id = $1 AND created_at >= $2
 	`
-	const qSQLite = `
-		SELECT count(*) FROM password_reset_tokens
-		WHERE user_id = ? AND created_at >= ?
-	`
 	var n int
-	if r.db.Dialect == db.DialectSQLite {
-		err := r.db.SQL.QueryRowContext(ctx, qSQLite, userID, since.UTC().Format(time.RFC3339Nano)).Scan(&n)
-		return n, err
-	}
-	err := r.db.SQL.QueryRowContext(ctx, qPG, userID, since.UTC()).Scan(&n)
+	err := r.db.SQL.QueryRowContext(ctx, q, userID, since.UTC()).Scan(&n)
 	return n, err
 }
 
 // PurgeExpired drops every row whose expiry is past. Hourly sweeper
 // fodder; the audit value of an expired-and-unused row decays fast.
 func (r *PasswordResetTokenRepo) PurgeExpired(ctx context.Context, now time.Time) (int64, error) {
-	const qPG = `DELETE FROM password_reset_tokens WHERE expires_at < $1`
-	const qSQLite = `DELETE FROM password_reset_tokens WHERE expires_at < ?`
-	var arg any = now.UTC()
-	if r.db.Dialect == db.DialectSQLite {
-		arg = now.UTC().Format(time.RFC3339Nano)
-	}
-	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), arg)
+	const q = `DELETE FROM password_reset_tokens WHERE expires_at < $1`
+	res, err := r.db.SQL.ExecContext(ctx, q, now.UTC())
 	if err != nil {
 		return 0, err
 	}

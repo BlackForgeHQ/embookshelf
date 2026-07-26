@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package queue wraps the River client (Postgres) and a homegrown
-// polling worker (SQLite) so callers see a single Client interface.
-// Keeps the service layer free of driver imports and makes the
-// per-dialect implementation choice invisible to the rest of the app.
+// Package queue is the background-job seam over River. Callers see a
+// two-method Client and never import a driver; a job registry declares
+// each kind once and derives River's typed-worker plumbing from it.
+// Postgres is the only supported database (ADR-0023).
 package queue
 
 import (
@@ -35,11 +35,8 @@ type JobArgs interface {
 // for every job type — the kind travels with the payload, so adding a
 // job does not widen this interface.
 //
-// Crash recovery differs by backend and callers should not depend on
-// which they got: the SQLite loop re-pends interrupted `running` rows
-// at boot, so a crashed job retries on the next tick, while River
-// leaves them to its own JobRescuer, which reclaims stuck jobs after a
-// timeout (default 1h). Both recover; only the latency differs.
+// Crash recovery is River's JobRescuer, which reclaims jobs left
+// `running` by a killed process after a timeout (default 1h).
 type Client interface {
 	Enqueue(ctx context.Context, args JobArgs) error
 	Stop(ctx context.Context) error
@@ -60,17 +57,13 @@ type Deps struct {
 	Hub         *sse.Hub
 }
 
-// New constructs a Client appropriate for the dialect of d:
-// Postgres → River-backed; SQLite → polling worker.
+// New constructs the River-backed Client. Postgres is the only supported
+// database (ADR-0023); the SQLite polling worker is gone.
 func New(ctx context.Context, d *db.DB, deps Deps) (Client, error) {
-	switch d.Dialect {
-	case db.DialectPostgres:
-		return newRiver(ctx, d, deps)
-	case db.DialectSQLite:
-		return newSQLiteQueue(ctx, d, deps)
-	default:
-		return nil, fmt.Errorf("queue: unknown dialect %q", d.Dialect)
+	if d.Dialect != db.DialectPostgres {
+		return nil, fmt.Errorf("queue: unsupported dialect %q — embookshelf requires Postgres", d.Dialect)
 	}
+	return newRiver(ctx, d, deps)
 }
 
 // RiverClient implements Client against river's *river.Client.

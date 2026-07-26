@@ -181,19 +181,32 @@ up-otlp: obs-up ## Same as `up` but exports OTLP from backend AND browser to gra
 	$(MAKE) --no-print-directory ui-dev & \
 	wait
 
+TEST_PG_DSN ?= postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable
+
 .PHONY: test
-test: ## Run Go tests
-	go test ./...
+test: test-db ## Run Go tests (starts the dev Postgres if needed)
+	TEST_DATABASE_URL='$(TEST_PG_DSN)' go test ./...
 
-.PHONY: test-sqlite
-test-sqlite: ## Run repo tests against SQLite
-	REPOTEST_DIALECT=sqlite go test ./internal/repo/...
-
-.PHONY: test-pg
-test-pg: ## Run repo tests against Postgres (requires dev PG container)
-	REPOTEST_DIALECT=postgres \
-	TEST_DATABASE_URL='postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable' \
-	go test ./internal/repo/...
+# Repo tests need a real Postgres — they refuse to skip, because a
+# skipped integration test is an unrun one (ADR-0023).
+.PHONY: test-db
+test-db: ## Start the dev Postgres and wait for it to accept connections
+	@if ! docker compose -f compose.dev.yml ps postgres --status running -q >/dev/null 2>&1 \
+	   || [ -z "$$(docker compose -f compose.dev.yml ps postgres --status running -q 2>/dev/null)" ]; then \
+		echo "starting postgres (compose.dev.yml) …"; \
+		docker compose -f compose.dev.yml up -d postgres >/dev/null 2>&1 || { \
+			echo ""; \
+			echo "error: could not start Postgres, which repo tests require."; \
+			echo "  Start one yourself and re-run with:"; \
+			echo "    make test TEST_PG_DSN='postgres://…'"; \
+			exit 1; \
+		}; \
+	fi
+	@for i in $$(seq 1 30); do \
+		docker compose -f compose.dev.yml exec -T postgres pg_isready -U embookshelf >/dev/null 2>&1 && exit 0; \
+		sleep 1; \
+	done; \
+	echo "error: Postgres did not become ready in 30s"; exit 1
 
 GOLANGCI_LINT_VERSION ?= v2.12.2
 

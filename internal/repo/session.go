@@ -21,52 +21,26 @@ func NewSessionRepo(d *db.DB) *SessionRepo {
 }
 
 func (r *SessionRepo) Create(ctx context.Context, userID, userAgent string, ttl time.Duration) (model.Session, error) {
-	// SQLite doesn't support interval arithmetic, so we compute the expiry app-side.
-	const qPG = `
+	const q = `
 		INSERT INTO sessions (user_id, expires_at, user_agent)
 		VALUES ($1, now() + $2::interval, $3)
 		RETURNING id, user_id, expires_at, user_agent, created_at, last_used_at
 	`
-	const qSQLite = `
-		INSERT INTO sessions (id, user_id, expires_at, user_agent)
-		VALUES (?, ?, ?, ?)
-		RETURNING id, user_id, expires_at, user_agent, created_at, last_used_at
-	`
 	var s model.Session
 	var expiresAny, createdAny, lastUsedAny any
-	if r.db.Dialect == db.DialectSQLite {
-		id := db.NewID()
-		expiresAt := time.Now().UTC().Add(ttl).Format(time.RFC3339Nano)
-		err := r.db.SQL.QueryRowContext(ctx, qSQLite, id, userID, expiresAt, userAgent).Scan(
-			&s.ID, &s.UserID, &expiresAny, &s.UserAgent, &createdAny, &lastUsedAny,
-		)
-		if err != nil {
-			return s, err
-		}
-		if err := db.ScanTime(r.db.Dialect, expiresAny, &s.ExpiresAt); err != nil {
-			return s, fmt.Errorf("scan expires_at: %w", err)
-		}
-		if err := db.ScanTime(r.db.Dialect, createdAny, &s.CreatedAt); err != nil {
-			return s, fmt.Errorf("scan created_at: %w", err)
-		}
-		if err := db.ScanTime(r.db.Dialect, lastUsedAny, &s.LastUsedAt); err != nil {
-			return s, fmt.Errorf("scan last_used_at: %w", err)
-		}
-		return s, nil
-	}
-	err := r.db.SQL.QueryRowContext(ctx, qPG, userID, ttl.String(), userAgent).Scan(
+	err := r.db.SQL.QueryRowContext(ctx, q, userID, ttl.String(), userAgent).Scan(
 		&s.ID, &s.UserID, &expiresAny, &s.UserAgent, &createdAny, &lastUsedAny,
 	)
 	if err != nil {
 		return s, err
 	}
-	if err := db.ScanTime(r.db.Dialect, expiresAny, &s.ExpiresAt); err != nil {
+	if err := db.ScanTime(expiresAny, &s.ExpiresAt); err != nil {
 		return s, fmt.Errorf("scan expires_at: %w", err)
 	}
-	if err := db.ScanTime(r.db.Dialect, createdAny, &s.CreatedAt); err != nil {
+	if err := db.ScanTime(createdAny, &s.CreatedAt); err != nil {
 		return s, fmt.Errorf("scan created_at: %w", err)
 	}
-	if err := db.ScanTime(r.db.Dialect, lastUsedAny, &s.LastUsedAt); err != nil {
+	if err := db.ScanTime(lastUsedAny, &s.LastUsedAt); err != nil {
 		return s, fmt.Errorf("scan last_used_at: %w", err)
 	}
 	return s, nil
@@ -76,44 +50,35 @@ func (r *SessionRepo) Create(ctx context.Context, userID, userAgent string, ttl 
 // not expired, and updates last_used_at to slide the session forward. Expired
 // or missing rows return ErrNotFound.
 func (r *SessionRepo) GetActive(ctx context.Context, id string) (model.Session, model.User, error) {
-	// SQLite doesn't support UPDATE ... RETURNING with now() comparison in
-	// WHERE, so we use two statements wrapped in a transaction.
-	const qPG = `
+	const q = `
 		UPDATE sessions
 		SET last_used_at = now()
 		WHERE id = $1 AND expires_at > now()
 		RETURNING id, user_id, expires_at, user_agent, created_at, last_used_at
 	`
-	const qSQLite = `
-		UPDATE sessions
-		SET last_used_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-		WHERE id = ? AND expires_at > (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-		RETURNING id, user_id, expires_at, user_agent, created_at, last_used_at
-	`
 
 	var s model.Session
 	var expiresAny, createdAny, lastUsedAny any
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), id)
+	row := r.db.SQL.QueryRowContext(ctx, q, id)
 	if err := row.Scan(&s.ID, &s.UserID, &expiresAny, &s.UserAgent, &createdAny, &lastUsedAny); err != nil {
 		if dberr.IsNotFound(err) {
 			return s, model.User{}, ErrNotFound
 		}
 		return s, model.User{}, err
 	}
-	if err := db.ScanTime(r.db.Dialect, expiresAny, &s.ExpiresAt); err != nil {
+	if err := db.ScanTime(expiresAny, &s.ExpiresAt); err != nil {
 		return s, model.User{}, fmt.Errorf("scan expires_at: %w", err)
 	}
-	if err := db.ScanTime(r.db.Dialect, createdAny, &s.CreatedAt); err != nil {
+	if err := db.ScanTime(createdAny, &s.CreatedAt); err != nil {
 		return s, model.User{}, fmt.Errorf("scan created_at: %w", err)
 	}
-	if err := db.ScanTime(r.db.Dialect, lastUsedAny, &s.LastUsedAt); err != nil {
+	if err := db.ScanTime(lastUsedAny, &s.LastUsedAt); err != nil {
 		return s, model.User{}, fmt.Errorf("scan last_used_at: %w", err)
 	}
 
-	const uqPG = `SELECT ` + userCols + ` FROM users WHERE id = $1`
-	const uqSQLite = `SELECT ` + userCols + ` FROM users WHERE id = ?`
-	userRow := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, uqPG, uqSQLite), s.UserID)
-	u, err := scanUser(r.db.Dialect, userRow)
+	const uq = `SELECT ` + userCols + ` FROM users WHERE id = $1`
+	userRow := r.db.SQL.QueryRowContext(ctx, uq, s.UserID)
+	u, err := scanUser(userRow)
 	if err != nil {
 		return s, u, err
 	}
@@ -122,38 +87,26 @@ func (r *SessionRepo) GetActive(ctx context.Context, id string) (model.Session, 
 
 // Extend pushes the session's expires_at forward.
 func (r *SessionRepo) Extend(ctx context.Context, id string, ttl time.Duration) error {
-	const qPG = `
+	const q = `
 		UPDATE sessions
 		SET expires_at = now() + $2::interval
 		WHERE id = $1
 	`
-	const qSQLite = `
-		UPDATE sessions
-		SET expires_at = ?
-		WHERE id = ?
-	`
-	if r.db.Dialect == db.DialectSQLite {
-		expiresAt := time.Now().UTC().Add(ttl).Format(time.RFC3339Nano)
-		_, err := r.db.SQL.ExecContext(ctx, qSQLite, expiresAt, id)
-		return err
-	}
-	_, err := r.db.SQL.ExecContext(ctx, qPG, id, ttl.String())
+	_, err := r.db.SQL.ExecContext(ctx, q, id, ttl.String())
 	return err
 }
 
 // Delete removes a single session (used by logout).
 func (r *SessionRepo) Delete(ctx context.Context, id string) error {
-	const qPG = `DELETE FROM sessions WHERE id = $1`
-	const qSQLite = `DELETE FROM sessions WHERE id = ?`
-	_, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), id)
+	const q = `DELETE FROM sessions WHERE id = $1`
+	_, err := r.db.SQL.ExecContext(ctx, q, id)
 	return err
 }
 
 // PurgeExpired removes all expired sessions; called opportunistically at boot.
 func (r *SessionRepo) PurgeExpired(ctx context.Context) (int64, error) {
-	const qPG = `DELETE FROM sessions WHERE expires_at <= now()`
-	const qSQLite = `DELETE FROM sessions WHERE expires_at <= (strftime('%Y-%m-%dT%H:%M:%fZ','now'))`
-	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite))
+	const q = `DELETE FROM sessions WHERE expires_at <= now()`
+	res, err := r.db.SQL.ExecContext(ctx, q)
 	if err != nil {
 		return 0, err
 	}

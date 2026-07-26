@@ -4,22 +4,18 @@ package queue
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 
 	"github.com/riverqueue/river"
 
 	"github.com/blackforge/embookshelf/internal/task"
 )
 
-// registration is one job type, expressed once. Both backends consume
-// the same entry: River wants a typed worker registered against its
-// generic machinery, the SQLite loop wants a decode-and-dispatch
-// closure keyed by kind. Neither is written per job by hand.
+// registration is one job type, expressed once. It still earns its keep
+// with a single backend: the kind, the args type, and the work function
+// are declared together in one place, and River's typed-worker plumbing
+// is derived rather than hand-written per job.
 type registration struct {
 	kind string
-	// sqliteHandler decodes a stored JSON payload and runs the job.
-	sqliteHandler kindHandler
 	// addToRiver registers the typed worker with River's registry.
 	addToRiver func(*river.Workers) error
 }
@@ -37,18 +33,11 @@ func (w *riverWorker[T]) Work(ctx context.Context, job *river.Job[T]) error {
 
 // register builds a registration from a job's args type and the
 // function that works it. The args type supplies its own kind, so a
-// registration cannot disagree with the payload it decodes.
+// registration cannot disagree with the payload it names.
 func register[T JobArgs](work func(context.Context, T) error) registration {
 	var zero T
 	return registration{
 		kind: zero.Kind(),
-		sqliteHandler: func(ctx context.Context, raw string) error {
-			var args T
-			if err := json.Unmarshal([]byte(raw), &args); err != nil {
-				return fmt.Errorf("decode args: %w", err)
-			}
-			return work(ctx, args)
-		},
 		addToRiver: func(w *river.Workers) error {
 			return river.AddWorkerSafely(w, &riverWorker[T]{work: work})
 		},

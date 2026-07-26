@@ -24,24 +24,18 @@ func NewUserRepo(d *db.DB) *UserRepo {
 const userCols = `id, email, password_hash, name, role, avatar_url, status, status_changed_at, created_at, updated_at, last_seen_at, kindle_email`
 
 func (r *UserRepo) GetByEmail(ctx context.Context, email string) (model.User, error) {
-	const qPG = `
+	const q = `
 		SELECT ` + userCols + `
 		FROM users
 		WHERE lower(email) = lower($1)
 	`
-	const qSQLite = `
-		SELECT ` + userCols + `
-		FROM users
-		WHERE lower(email) = lower(?)
-	`
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), strings.TrimSpace(email))
+	row := r.db.SQL.QueryRowContext(ctx, q, strings.TrimSpace(email))
 	return r.scanUser(row)
 }
 
 func (r *UserRepo) GetByID(ctx context.Context, id string) (model.User, error) {
-	const qPG = `SELECT ` + userCols + ` FROM users WHERE id = $1`
-	const qSQLite = `SELECT ` + userCols + ` FROM users WHERE id = ?`
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), id)
+	const q = `SELECT ` + userCols + ` FROM users WHERE id = $1`
+	row := r.db.SQL.QueryRowContext(ctx, q, id)
 	return r.scanUser(row)
 }
 
@@ -53,27 +47,18 @@ func (r *UserRepo) Count(ctx context.Context) (int, error) {
 
 func (r *UserRepo) Create(ctx context.Context, email, name, hash string, role model.Role) (model.User, error) {
 	id := db.NewID()
-	const qPG = `
+	const q = `
 		INSERT INTO users (id, email, name, password_hash, role)
 		VALUES ($1, lower($2), $3, $4, $5)
 		RETURNING ` + userCols
-	const qSQLite = `
-		INSERT INTO users (id, email, name, password_hash, role)
-		VALUES (?, lower(?), ?, ?, ?)
-		RETURNING ` + userCols
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite),
+	row := r.db.SQL.QueryRowContext(ctx, q,
 		id, strings.TrimSpace(email), strings.TrimSpace(name), hash, string(role))
 	return r.scanUser(row)
 }
 
 func (r *UserRepo) TouchLastSeen(ctx context.Context, id string, at time.Time) error {
-	const qPG = `UPDATE users SET last_seen_at = $2 WHERE id = $1`
-	const qSQLite = `UPDATE users SET last_seen_at = ? WHERE id = ?`
-	if r.db.Dialect == db.DialectSQLite {
-		_, err := r.db.SQL.ExecContext(ctx, qSQLite, at.UTC().Format(time.RFC3339Nano), id)
-		return err
-	}
-	_, err := r.db.SQL.ExecContext(ctx, qPG, id, at)
+	const q = `UPDATE users SET last_seen_at = $2 WHERE id = $1`
+	_, err := r.db.SQL.ExecContext(ctx, q, id, at)
 	return err
 }
 
@@ -101,9 +86,8 @@ func (r *UserRepo) List(ctx context.Context) ([]model.User, error) {
 
 // UpdatePassword replaces the stored hash. Callers verify the old password first.
 func (r *UserRepo) UpdatePassword(ctx context.Context, id, hash string) error {
-	const qPG = `UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2`
-	const qSQLite = `UPDATE users SET password_hash = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?`
-	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), hash, id)
+	const q = `UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2`
+	res, err := r.db.SQL.ExecContext(ctx, q, hash, id)
 	if err != nil {
 		return err
 	}
@@ -120,9 +104,8 @@ func (r *UserRepo) UpdatePassword(ctx context.Context, id, hash string) error {
 // UpdateRole flips admin/user. The caller is responsible for preventing the
 // last admin from demoting themselves — enforced at the service layer.
 func (r *UserRepo) UpdateRole(ctx context.Context, id string, role model.Role) error {
-	const qPG = `UPDATE users SET role = $1, updated_at = now() WHERE id = $2`
-	const qSQLite = `UPDATE users SET role = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?`
-	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), string(role), id)
+	const q = `UPDATE users SET role = $1, updated_at = now() WHERE id = $2`
+	res, err := r.db.SQL.ExecContext(ctx, q, string(role), id)
 	if err != nil {
 		return err
 	}
@@ -141,9 +124,8 @@ func (r *UserRepo) UpdateRole(ctx context.Context, id string, role model.Role) e
 // `^[a-z0-9._-]+@kindle\.com$` shape — this method is shape-agnostic.
 // ADR-0021.
 func (r *UserRepo) UpdateKindleEmail(ctx context.Context, id, email string) error {
-	const qPG = `UPDATE users SET kindle_email = $1, updated_at = now() WHERE id = $2`
-	const qSQLite = `UPDATE users SET kindle_email = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?`
-	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), strings.TrimSpace(email), id)
+	const q = `UPDATE users SET kindle_email = $1, updated_at = now() WHERE id = $2`
+	res, err := r.db.SQL.ExecContext(ctx, q, strings.TrimSpace(email), id)
 	if err != nil {
 		return err
 	}
@@ -159,9 +141,8 @@ func (r *UserRepo) UpdateKindleEmail(ctx context.Context, id, email string) erro
 
 // UpdateName is used by a user to edit their own display name.
 func (r *UserRepo) UpdateName(ctx context.Context, id, name string) error {
-	const qPG = `UPDATE users SET name = $1, updated_at = now() WHERE id = $2`
-	const qSQLite = `UPDATE users SET name = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?`
-	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), strings.TrimSpace(name), id)
+	const q = `UPDATE users SET name = $1, updated_at = now() WHERE id = $2`
+	res, err := r.db.SQL.ExecContext(ctx, q, strings.TrimSpace(name), id)
 	if err != nil {
 		return err
 	}
@@ -176,9 +157,8 @@ func (r *UserRepo) UpdateName(ctx context.Context, id, name string) error {
 }
 
 func (r *UserRepo) Delete(ctx context.Context, id string) error {
-	const qPG = `DELETE FROM users WHERE id = $1`
-	const qSQLite = `DELETE FROM users WHERE id = ?`
-	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), id)
+	const q = `DELETE FROM users WHERE id = $1`
+	res, err := r.db.SQL.ExecContext(ctx, q, id)
 	if err != nil {
 		return err
 	}
@@ -197,12 +177,9 @@ func (r *UserRepo) Delete(ctx context.Context, id string) error {
 // admins do not count — only an active admin can sign in and recover the
 // instance, so the guard tracks active admins specifically.
 func (r *UserRepo) CountByRole(ctx context.Context, role model.Role) (int, error) {
-	const qPG = `SELECT count(*) FROM users WHERE role = $1 AND status = 'active'`
-	const qSQLite = `SELECT count(*) FROM users WHERE role = ? AND status = 'active'`
+	const q = `SELECT count(*) FROM users WHERE role = $1 AND status = 'active'`
 	var n int
-	err := r.db.SQL.QueryRowContext(ctx,
-		db.SelectQ(r.db.Dialect, qPG, qSQLite),
-		string(role)).Scan(&n)
+	err := r.db.SQL.QueryRowContext(ctx, q, string(role)).Scan(&n)
 	return n, err
 }
 
@@ -211,15 +188,11 @@ func (r *UserRepo) CountByRole(ctx context.Context, role model.Role) (int, error
 // the service layer; the users row only carries the profile fields.
 func (r *UserRepo) CreateOIDC(ctx context.Context, email, name string, role model.Role) (model.User, error) {
 	id := db.NewID()
-	const qPG = `
+	const q = `
 		INSERT INTO users (id, email, name, password_hash, role)
 		VALUES ($1, lower($2), $3, NULL, $4)
 		RETURNING ` + userCols
-	const qSQLite = `
-		INSERT INTO users (id, email, name, password_hash, role)
-		VALUES (?, lower(?), ?, NULL, ?)
-		RETURNING ` + userCols
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite),
+	row := r.db.SQL.QueryRowContext(ctx, q,
 		id, strings.TrimSpace(email), strings.TrimSpace(name), string(role))
 	return r.scanUser(row)
 }
@@ -228,15 +201,11 @@ func (r *UserRepo) CreateOIDC(ctx context.Context, email, name string, role mode
 // status='pending' so they cannot log in until an admin approves them.
 func (r *UserRepo) CreateOIDCPending(ctx context.Context, email, name string, role model.Role) (model.User, error) {
 	id := db.NewID()
-	const qPG = `
+	const q = `
 		INSERT INTO users (id, email, name, password_hash, role, status, status_changed_at)
 		VALUES ($1, lower($2), $3, NULL, $4, 'pending', now())
 		RETURNING ` + userCols
-	const qSQLite = `
-		INSERT INTO users (id, email, name, password_hash, role, status, status_changed_at)
-		VALUES (?, lower(?), ?, NULL, ?, 'pending', (strftime('%Y-%m-%dT%H:%M:%fZ','now')))
-		RETURNING ` + userCols
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite),
+	row := r.db.SQL.QueryRowContext(ctx, q,
 		id, strings.TrimSpace(email), strings.TrimSpace(name), string(role))
 	return r.scanUser(row)
 }
@@ -244,17 +213,12 @@ func (r *UserRepo) CreateOIDCPending(ctx context.Context, email, name string, ro
 // UpdateStatus flips the approval status. The caller (service) enforces
 // guards (last admin, self-target) before calling this.
 func (r *UserRepo) UpdateStatus(ctx context.Context, id string, status model.UserStatus) error {
-	const qPG = `
+	const q = `
 		UPDATE users
 		SET status = $1, status_changed_at = now(), updated_at = now()
 		WHERE id = $2
 	`
-	const qSQLite = `
-		UPDATE users
-		SET status = ?, status_changed_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')), updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-		WHERE id = ?
-	`
-	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), string(status), id)
+	res, err := r.db.SQL.ExecContext(ctx, q, string(status), id)
 	if err != nil {
 		return err
 	}
@@ -272,7 +236,7 @@ func (r *UserRepo) UpdateStatus(ctx context.Context, id string, status model.Use
 // login. Empty strings in `name` or `avatarURL` leave the column untouched so
 // a provider that stops supplying a claim doesn't wipe out a user-edited name.
 func (r *UserRepo) SyncOIDCProfile(ctx context.Context, userID, name, avatarURL string) error {
-	const qPG = `
+	const q = `
 		UPDATE users
 		SET
 		    name       = CASE WHEN $2 = '' THEN name       ELSE $2 END,
@@ -280,31 +244,19 @@ func (r *UserRepo) SyncOIDCProfile(ctx context.Context, userID, name, avatarURL 
 		    updated_at = now()
 		WHERE id = $1
 	`
-	const qSQLite = `
-		UPDATE users
-		SET
-		    name       = CASE WHEN ? = '' THEN name       ELSE ? END,
-		    avatar_url = CASE WHEN ? = '' THEN avatar_url ELSE ? END,
-		    updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-		WHERE id = ?
-	`
 	n := strings.TrimSpace(name)
 	a := strings.TrimSpace(avatarURL)
-	if r.db.Dialect == db.DialectSQLite {
-		_, err := r.db.SQL.ExecContext(ctx, qSQLite, n, n, a, a, userID)
-		return err
-	}
-	_, err := r.db.SQL.ExecContext(ctx, qPG, userID, n, a)
+	_, err := r.db.SQL.ExecContext(ctx, q, userID, n, a)
 	return err
 }
 
 func (r *UserRepo) scanUser(s scanner) (model.User, error) {
-	return scanUser(r.db.Dialect, s)
+	return scanUser(s)
 }
 
 // scanUser is the package-level scanner used by both UserRepo and SessionRepo
 // (which needs to re-hydrate the user after fetching an active session).
-func scanUser(d db.Dialect, s scanner) (model.User, error) {
+func scanUser(s scanner) (model.User, error) {
 	var (
 		u                model.User
 		role             string
@@ -333,16 +285,16 @@ func scanUser(d db.Dialect, s scanner) (model.User, error) {
 	}
 	u.Role = model.Role(role)
 	u.Status = model.UserStatus(status)
-	if err := db.ScanNullTime(d, statusChangedAny, &u.StatusChangedAt); err != nil {
+	if err := db.ScanNullTime(statusChangedAny, &u.StatusChangedAt); err != nil {
 		return u, fmt.Errorf("scan status_changed_at: %w", err)
 	}
-	if err := db.ScanTime(d, createdAny, &u.CreatedAt); err != nil {
+	if err := db.ScanTime(createdAny, &u.CreatedAt); err != nil {
 		return u, fmt.Errorf("scan created_at: %w", err)
 	}
-	if err := db.ScanTime(d, updatedAny, &u.UpdatedAt); err != nil {
+	if err := db.ScanTime(updatedAny, &u.UpdatedAt); err != nil {
 		return u, fmt.Errorf("scan updated_at: %w", err)
 	}
-	if err := db.ScanNullTime(d, lastSeenAny, &u.LastSeenAt); err != nil {
+	if err := db.ScanNullTime(lastSeenAny, &u.LastSeenAt); err != nil {
 		return u, fmt.Errorf("scan last_seen_at: %w", err)
 	}
 	return u, nil

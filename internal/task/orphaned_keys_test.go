@@ -56,7 +56,7 @@ func (f *fakeStore) Open(context.Context, string) (storage.Source, error) {
 // touches rows whose eligible_at has passed and removes them after a
 // successful Delete.
 func TestRunOrphanedKeysOnce_DrainsDueRows(t *testing.T) {
-	d := repotest.NewWithDialect(t, "sqlite")
+	d := repotest.New(t)
 	libRepo := repo.NewLibraryRepo(d)
 	orphans := repo.NewPendingOrphanRepo(d)
 	ctx := context.Background()
@@ -67,7 +67,7 @@ func TestRunOrphanedKeysOnce_DrainsDueRows(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	bookID := "b1"
+	bookID := "bbbbbbbb-0001-4001-8001-000000000001"
 	rows := []repo.PendingOrphanInsert{
 		{LibraryID: lib.ID, Key: "Old/file.epub", EligibleAt: now.Add(-time.Hour), Reason: repo.ReasonOrphanRename, BookID: &bookID},
 		{LibraryID: lib.ID, Key: "Old/cover.jpg", EligibleAt: now.Add(-time.Hour), Reason: repo.ReasonOrphanRename, BookID: &bookID},
@@ -108,13 +108,13 @@ func TestRunOrphanedKeysOnce_DrainsDueRows(t *testing.T) {
 // TestRunOrphanedKeysOnce_NotFoundIsSuccess verifies that a missing
 // key is treated as a successful delete (the desired state — gone).
 func TestRunOrphanedKeysOnce_NotFoundIsSuccess(t *testing.T) {
-	d := repotest.NewWithDialect(t, "sqlite")
+	d := repotest.New(t)
 	libRepo := repo.NewLibraryRepo(d)
 	orphans := repo.NewPendingOrphanRepo(d)
 	ctx := context.Background()
 	lib, _ := libRepo.CreateLibrary(ctx, "x", "x", "/tmp/x", nil)
 	now := time.Now().UTC()
-	bookID := "b1"
+	bookID := "bbbbbbbb-0001-4001-8001-000000000001"
 	if err := orphans.Insert(ctx, []repo.PendingOrphanInsert{
 		{LibraryID: lib.ID, Key: "missing.epub", EligibleAt: now.Add(-time.Minute), Reason: repo.ReasonOrphanRename, BookID: &bookID},
 	}); err != nil {

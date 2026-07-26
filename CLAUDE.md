@@ -20,9 +20,9 @@ make e2e              # Playwright (needs `make up`)
 
 ## Key decisions
 
-- **Dual dialect, no ORM**: every SQL is hand-written; pair Postgres + SQLite trees in `internal/migrator/migrations/{postgres,sqlite}/` and route via `internal/db.SelectQ(d, pgSQL, sqliteSQL)`. Never add a Postgres-only migration without its SQLite sibling.
+- **Postgres only, no ORM** (ADR-0023): embookshelf is a Postgres application. SQL stays hand-written; no ORM. The dual-dialect machinery is gone: `db.SelectQ`, `db.ValueStringSlice`, FTS5 search and the polling queue are deleted, and `db.ScanTime`/`ScanNullTime`/`ScanStringSlice` are Postgres-only (no dialect argument). Don't add new dialect branches or SQLite migrations; write Postgres-only. What survives for the importer only: `db.DetectDialect`, the SQLite open path, `internal/migrator/migrations/sqlite/`, and `internal/sqliteimport/`. Existing installs migrate via `embookshelf import-sqlite --from <file.db>`, the one remaining reason the binary links a SQLite driver.
 - **Sidecar write-back (ADR-0001)**: metadata edits go to DB + JSON sidecar + (when supported) embedded in the file. `scan/reattach.go` reads sidecars on rescan to preserve user edits across renames.
-- **Pluggable storage**: book bytes always flow through `storage.Storage`. SQLite + S3 is refused at boot.
+- **Pluggable storage**: book bytes always flow through `storage.Storage`. Backends are loaded from `storage_backends` rows at boot by `internal/storageloader`.
 - **Encrypted secrets (ADR-0010)**: provider API keys, cookies, OIDC client secrets use AES-256-GCM when `EMBOOKSHELF_SECRET_KEY` is set.
 - **SPA embed**: Vite → `ui/dist/` → `sync-dist.ts` copies to `internal/staticfs/dist/` → `//go:embed all:dist`. Both `internal/staticfs/dist/` and `ui/src/routeTree.gen.ts` are generated — don't edit by hand.
 

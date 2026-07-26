@@ -25,14 +25,10 @@ import (
 // backend IDs to Storage instances; the first backend found is also the
 // default (used by libraries without a backend_id assignment).
 //
-// Refuses to start when any S3 backend is present with a SQLite
-// database, per spec §10 (multi-instance S3 requires Postgres for
-// reliable job coordination).
-//
 // When the storage_backends table is empty (pre-Plan-B deployments),
 // the resolver's default falls back to a LocalFS rooted at "/" so
 // existing single-library installs keep booting unchanged.
-func LoadStorageBackends(ctx context.Context, backendRepo *repo.StorageBackendRepo, dialect config.Dialect) (storage.Resolver, error) {
+func LoadStorageBackends(ctx context.Context, backendRepo *repo.StorageBackendRepo) (storage.Resolver, error) {
 	rows, err := backendRepo.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list storage backends: %w", err)
@@ -40,7 +36,6 @@ func LoadStorageBackends(ctx context.Context, backendRepo *repo.StorageBackendRe
 
 	backends := make(map[string]storage.Storage, len(rows))
 	var defaultStore storage.Storage
-	var hasS3 bool
 
 	for _, row := range rows {
 		store, err := buildBackend(ctx, row)
@@ -51,15 +46,6 @@ func LoadStorageBackends(ctx context.Context, backendRepo *repo.StorageBackendRe
 		if defaultStore == nil {
 			defaultStore = store
 		}
-		if row.Kind == "s3" {
-			hasS3 = true
-		}
-	}
-
-	// Spec §10: SQLite + S3 is an unsupported combination. S3 requires
-	// Postgres for reliable distributed coordination (River queue).
-	if hasS3 && dialect == config.DialectSQLite {
-		return nil, errors.New("storage: SQLite cannot host S3 backends — switch to Postgres (spec §10)")
 	}
 
 	// Legacy fallback: single-library installs that predate the Plan-B

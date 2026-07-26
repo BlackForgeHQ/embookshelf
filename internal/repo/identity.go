@@ -37,18 +37,16 @@ const identityCols = `id, user_id, provider, issuer, subject, email, linked_at, 
 // GetByIssuerSubject finds an identity by the IdP-attested pair. The
 // uniqueness constraint guarantees at most one row.
 func (r *IdentityRepo) GetByIssuerSubject(ctx context.Context, issuer, subject string) (model.Identity, error) {
-	const qPG = `SELECT ` + identityCols + ` FROM user_identities WHERE issuer = $1 AND subject = $2`
-	const qSQLite = `SELECT ` + identityCols + ` FROM user_identities WHERE issuer = ? AND subject = ?`
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), issuer, subject)
+	const q = `SELECT ` + identityCols + ` FROM user_identities WHERE issuer = $1 AND subject = $2`
+	row := r.db.SQL.QueryRowContext(ctx, q, issuer, subject)
 	return r.scan(row)
 }
 
 // ListByUser returns every identity linked to the user, ordered by
 // linked_at ASC so the UI shows them in the order they were attached.
 func (r *IdentityRepo) ListByUser(ctx context.Context, userID string) ([]model.Identity, error) {
-	const qPG = `SELECT ` + identityCols + ` FROM user_identities WHERE user_id = $1 ORDER BY linked_at ASC`
-	const qSQLite = `SELECT ` + identityCols + ` FROM user_identities WHERE user_id = ? ORDER BY linked_at ASC`
-	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID)
+	const q = `SELECT ` + identityCols + ` FROM user_identities WHERE user_id = $1 ORDER BY linked_at ASC`
+	rows, err := r.db.SQL.QueryContext(ctx, q, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -66,10 +64,9 @@ func (r *IdentityRepo) ListByUser(ctx context.Context, userID string) ([]model.I
 
 // CountByUser returns how many identities are linked to a user.
 func (r *IdentityRepo) CountByUser(ctx context.Context, userID string) (int, error) {
-	const qPG = `SELECT count(*) FROM user_identities WHERE user_id = $1`
-	const qSQLite = `SELECT count(*) FROM user_identities WHERE user_id = ?`
+	const q = `SELECT count(*) FROM user_identities WHERE user_id = $1`
 	var n int
-	err := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID).Scan(&n)
+	err := r.db.SQL.QueryRowContext(ctx, q, userID).Scan(&n)
 	return n, err
 }
 
@@ -80,18 +77,14 @@ func (r *IdentityRepo) CountByUser(ctx context.Context, userID string) (int, err
 // slug. The handler maps both to 409.
 func (r *IdentityRepo) Insert(ctx context.Context, userID, provider, issuer, subject, email string) (model.Identity, error) {
 	id := db.NewID()
-	now := timeForDialect(r.db.Dialect, time.Now().UTC())
-	const qPG = `
+	now := time.Now().UTC()
+	const q = `
 		INSERT INTO user_identities (id, user_id, provider, issuer, subject, email, linked_at, last_login_at)
 		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7, $8)
 		RETURNING ` + identityCols
-	const qSQLite = `
-		INSERT INTO user_identities (id, user_id, provider, issuer, subject, email, linked_at, last_login_at)
-		VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?)
-		RETURNING ` + identityCols
 
 	provider = strings.TrimSpace(provider)
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite),
+	row := r.db.SQL.QueryRowContext(ctx, q,
 		id, userID, provider, issuer, subject, strings.TrimSpace(email),
 		now, now,
 	)
@@ -116,23 +109,16 @@ func (r *IdentityRepo) Insert(ctx context.Context, userID, provider, issuer, sub
 // user_id. Otherwise insert a new row owned by userID. Used by the
 // auto-link path on `service/oidc.go` Exchange.
 func (r *IdentityRepo) Upsert(ctx context.Context, userID, provider, issuer, subject, email string) (model.Identity, error) {
-	now := timeForDialect(r.db.Dialect, time.Now().UTC())
+	now := time.Now().UTC()
 	id := db.NewID()
-	const qPG = `
+	const q = `
 		INSERT INTO user_identities (id, user_id, provider, issuer, subject, email, linked_at, last_login_at)
 		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7, $8)
 		ON CONFLICT (issuer, subject) DO UPDATE
 		SET email         = COALESCE(EXCLUDED.email, user_identities.email),
 		    last_login_at = EXCLUDED.last_login_at
 		RETURNING ` + identityCols
-	const qSQLite = `
-		INSERT INTO user_identities (id, user_id, provider, issuer, subject, email, linked_at, last_login_at)
-		VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?)
-		ON CONFLICT (issuer, subject) DO UPDATE
-		SET email         = COALESCE(excluded.email, user_identities.email),
-		    last_login_at = excluded.last_login_at
-		RETURNING ` + identityCols
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite),
+	row := r.db.SQL.QueryRowContext(ctx, q,
 		id, userID, strings.TrimSpace(provider), issuer, subject, strings.TrimSpace(email),
 		now, now,
 	)
@@ -147,8 +133,8 @@ func (r *IdentityRepo) Upsert(ctx context.Context, userID, provider, issuer, sub
 // provider) so the operation is race-free.
 func (r *IdentityRepo) RelinkProvider(ctx context.Context, userID, provider, issuer, subject, email string) (model.Identity, error) {
 	id := db.NewID()
-	now := timeForDialect(r.db.Dialect, time.Now().UTC())
-	const qPG = `
+	now := time.Now().UTC()
+	const q = `
 		INSERT INTO user_identities (id, user_id, provider, issuer, subject, email, linked_at, last_login_at)
 		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7, $8)
 		ON CONFLICT (user_id, provider) DO UPDATE
@@ -157,16 +143,7 @@ func (r *IdentityRepo) RelinkProvider(ctx context.Context, userID, provider, iss
 		    email         = COALESCE(EXCLUDED.email, user_identities.email),
 		    last_login_at = EXCLUDED.last_login_at
 		RETURNING ` + identityCols
-	const qSQLite = `
-		INSERT INTO user_identities (id, user_id, provider, issuer, subject, email, linked_at, last_login_at)
-		VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?)
-		ON CONFLICT (user_id, provider) DO UPDATE
-		SET issuer        = excluded.issuer,
-		    subject       = excluded.subject,
-		    email         = COALESCE(excluded.email, user_identities.email),
-		    last_login_at = excluded.last_login_at
-		RETURNING ` + identityCols
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite),
+	row := r.db.SQL.QueryRowContext(ctx, q,
 		id, userID, strings.TrimSpace(provider), issuer, subject, strings.TrimSpace(email),
 		now, now,
 	)
@@ -176,25 +153,10 @@ func (r *IdentityRepo) RelinkProvider(ctx context.Context, userID, provider, iss
 // TouchLastLogin bumps last_login_at for an existing identity. Used
 // by the login callback after a successful (issuer, subject) lookup.
 func (r *IdentityRepo) TouchLastLogin(ctx context.Context, id string) error {
-	now := timeForDialect(r.db.Dialect, time.Now().UTC())
-	const qPG = `UPDATE user_identities SET last_login_at = $2 WHERE id = $1`
-	const qSQLite = `UPDATE user_identities SET last_login_at = ? WHERE id = ?`
-	if r.db.Dialect == db.DialectSQLite {
-		_, err := r.db.SQL.ExecContext(ctx, qSQLite, now, id)
-		return err
-	}
-	_, err := r.db.SQL.ExecContext(ctx, qPG, id, now)
+	now := time.Now().UTC()
+	const q = `UPDATE user_identities SET last_login_at = $2 WHERE id = $1`
+	_, err := r.db.SQL.ExecContext(ctx, q, id, now)
 	return err
-}
-
-// timeForDialect returns the dialect-appropriate parameter value for
-// a TIMESTAMPTZ / TEXT timestamp column. PG accepts time.Time
-// directly via the pgx codec; SQLite expects RFC3339Nano TEXT.
-func timeForDialect(d db.Dialect, t time.Time) any {
-	if d == db.DialectSQLite {
-		return t.UTC().Format(time.RFC3339Nano)
-	}
-	return t
 }
 
 // DeleteWithGuard removes the identity row for (userID, provider) but
@@ -214,9 +176,8 @@ func (r *IdentityRepo) DeleteWithGuard(ctx context.Context, userID, provider str
 	// guard atomically so the gap between (1) and (3) cannot lock a
 	// user out.
 	const qExists = `SELECT 1 FROM user_identities WHERE user_id = $1 AND provider = $2`
-	const qExistsSQLite = `SELECT 1 FROM user_identities WHERE user_id = ? AND provider = ?`
 	var one int
-	err := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qExists, qExistsSQLite), userID, provider).Scan(&one)
+	err := r.db.SQL.QueryRowContext(ctx, qExists, userID, provider).Scan(&one)
 	if err != nil {
 		if dberr.IsNotFound(err) {
 			return false, ErrNotFound
@@ -224,7 +185,7 @@ func (r *IdentityRepo) DeleteWithGuard(ctx context.Context, userID, provider str
 		return false, err
 	}
 
-	const qDelPG = `
+	const qDel = `
 		DELETE FROM user_identities
 		WHERE user_id = $1 AND provider = $2
 		  AND (
@@ -233,28 +194,9 @@ func (r *IdentityRepo) DeleteWithGuard(ctx context.Context, userID, provider str
 		      OR (SELECT count(*) FROM user_identities WHERE user_id = $1) > 1
 		  )
 	`
-	const qDelSQLite = `
-		DELETE FROM user_identities
-		WHERE user_id = ? AND provider = ?
-		  AND (
-		      (SELECT password_hash FROM users WHERE id = ?) IS NOT NULL
-		      AND (SELECT password_hash FROM users WHERE id = ?) <> ''
-		      OR (SELECT count(*) FROM user_identities WHERE user_id = ?) > 1
-		  )
-	`
-	var res interface{ RowsAffected() (int64, error) }
-	if r.db.Dialect == db.DialectSQLite {
-		r2, err := r.db.SQL.ExecContext(ctx, qDelSQLite, userID, provider, userID, userID, userID)
-		if err != nil {
-			return false, err
-		}
-		res = r2
-	} else {
-		r2, err := r.db.SQL.ExecContext(ctx, qDelPG, userID, provider)
-		if err != nil {
-			return false, err
-		}
-		res = r2
+	res, err := r.db.SQL.ExecContext(ctx, qDel, userID, provider)
+	if err != nil {
+		return false, err
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
@@ -282,10 +224,10 @@ func (r *IdentityRepo) scan(s scanner) (model.Identity, error) {
 		}
 		return i, err
 	}
-	if err := db.ScanTime(r.db.Dialect, linkedAtAny, &i.LinkedAt); err != nil {
+	if err := db.ScanTime(linkedAtAny, &i.LinkedAt); err != nil {
 		return i, fmt.Errorf("scan linked_at: %w", err)
 	}
-	if err := db.ScanNullTime(r.db.Dialect, lastLoginAtAny, &i.LastLoginAt); err != nil {
+	if err := db.ScanNullTime(lastLoginAtAny, &i.LastLoginAt); err != nil {
 		return i, fmt.Errorf("scan last_login_at: %w", err)
 	}
 	return i, nil

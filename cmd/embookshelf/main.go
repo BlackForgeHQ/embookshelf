@@ -55,6 +55,22 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
+	// Subcommands run and exit; no argument means "serve".
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "import-sqlite":
+			os.Exit(importSQLiteCmd(os.Args[2:]))
+		case "-h", "--help", "help":
+			fmt.Fprintf(os.Stderr, `embookshelf %s (%s)
+
+Usage:
+  embookshelf                      serve (default)
+  embookshelf import-sqlite ...    import an existing SQLite library into Postgres
+`, version, commit)
+			os.Exit(0)
+		}
+	}
+
 	// Default to release mode (silences debug logs, skips trusted-proxy
 	// warnings). Set GIN_MODE=debug to opt back into route logs.
 	if os.Getenv("GIN_MODE") == "" {
@@ -96,6 +112,25 @@ func main() {
 		slog.Info("OpenTelemetry enabled", "endpoint", cfg.OTELEndpoint, "protocol", cfg.OTELProtocol, "service", cfg.OTELServiceName)
 	}
 
+	// Refuse a SQLite DSN before opening it (ADR-0023). Detecting from the
+	// string rather than the handle avoids creating an empty database file
+	// on the way to rejecting it.
+	if dialect, derr := db.DetectDialect(cfg.DatabaseURL); derr == nil && dialect == db.DialectSQLite {
+		slog.Error("SQLite is no longer supported — embookshelf requires Postgres")
+		fmt.Fprintf(os.Stderr, `
+DATABASE_URL points at SQLite, which this version cannot serve (ADR-0023).
+
+Migrate the library into Postgres with:
+
+  DATABASE_URL='postgres://user:pass@host:5432/embookshelf' \
+    embookshelf import-sqlite --from <path to your .db file>
+
+Then set DATABASE_URL to that Postgres DSN and start again. The target
+database must be empty; migrations are applied to it automatically.
+`)
+		os.Exit(1)
+	}
+
 	dbh, err := db.Open(ctx, cfg)
 	if err != nil {
 		slog.Error("db connect", "err", err)
@@ -124,11 +159,7 @@ func main() {
 		slog.Info("storage backends reconciled from env", "updated", n)
 	}
 
-	storageResolver, err := storageloader.LoadStorageBackends(
-		ctx,
-		bootBackendRepo,
-		config.Dialect(string(dbh.Dialect)),
-	)
+	storageResolver, err := storageloader.LoadStorageBackends(ctx, bootBackendRepo)
 	if err != nil {
 		slog.Error("storage backends", "err", err)
 		os.Exit(1)
@@ -181,7 +212,6 @@ func main() {
 		Backends: backendRepo,
 		SharedS3: cfg.SharedS3,
 		Resolver: storageResolver,
-		Dialect:  config.Dialect(string(dbh.Dialect)),
 		DataPath: cfg.DataPath,
 	})
 	shelfSvc := service.NewShelfService(shelfRepo, hub)
@@ -490,10 +520,16 @@ func main() {
 // It opens a dedicated *sql.DB for migrations and closes it at the end via
 // m.Close() (the golang-migrate postgres driver closes the sql.DB it owns).
 // This keeps the shared dbh.SQL alive for the rest of the application.
+// runAppMigrations brings d up to the current schema. Used by boot and
+// by `import-sqlite` — the dedicated-connection dance below is load
+// bearing, so both paths must go through here rather than reaching for
+// migrator.New directly.
 func runAppMigrations(d *db.DB) error {
 	// Open a short-lived, dedicated connection for the migrator so that
 	// m.Close() (which golang-migrate's Postgres driver calls sql.DB.Close on)
-	// does not close the shared application pool.
+	// does not close the shared application pool. Skipping this deadlocks
+	// db.Close(): the migrator keeps a pool connection checked out and
+	// pgxpool.Close waits for it forever.
 	migDB, err := d.OpenMigrationDB()
 	if err != nil {
 		return fmt.Errorf("migration db: %w", err)

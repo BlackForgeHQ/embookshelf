@@ -31,8 +31,8 @@ func NewStorageBackendRepo(d *db.DB) *StorageBackendRepo {
 }
 
 // Create inserts a new storage backend row and returns the persisted record.
-// The id is generated app-side so the same INSERT works on both PG (UUID col)
-// and SQLite (TEXT col).
+// The id is generated app-side rather than relying on a column default so the
+// value is known before the round-trip completes.
 func (r *StorageBackendRepo) Create(ctx context.Context, kind string, config map[string]any) (model.StorageBackend, error) {
 	id := db.NewID()
 
@@ -41,39 +41,26 @@ func (r *StorageBackendRepo) Create(ctx context.Context, kind string, config map
 		return model.StorageBackend{}, fmt.Errorf("encode config: %w", err)
 	}
 
-	// On Postgres the config column is JSONB; we cast the parameter explicitly
-	// so the driver does not have to guess the target OID.
-	const qPG = `
+	// The config column is JSONB; we cast the parameter explicitly so the
+	// driver does not have to guess the target OID.
+	const q = `
 		INSERT INTO storage_backends (id, kind, config)
 		VALUES ($1, $2, $3::jsonb)
 		RETURNING id, kind, config, created_at
 	`
-	const qSQLite = `
-		INSERT INTO storage_backends (id, kind, config)
-		VALUES (?, ?, ?)
-		RETURNING id, kind, config, created_at
-	`
 
-	row := r.db.SQL.QueryRowContext(ctx,
-		db.SelectQ(r.db.Dialect, qPG, qSQLite),
-		id, kind, string(cfgJSON),
-	)
+	row := r.db.SQL.QueryRowContext(ctx, q, id, kind, string(cfgJSON))
 	return r.scanBackend(row)
 }
 
 // Get returns the backend with the given id. Returns ErrNotFound when missing.
 func (r *StorageBackendRepo) Get(ctx context.Context, id string) (model.StorageBackend, error) {
-	const qPG = `
+	const q = `
 		SELECT id, kind, config, created_at
 		FROM storage_backends
 		WHERE id = $1
 	`
-	const qSQLite = `
-		SELECT id, kind, config, created_at
-		FROM storage_backends
-		WHERE id = ?
-	`
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), id)
+	row := r.db.SQL.QueryRowContext(ctx, q, id)
 	b, err := r.scanBackend(row)
 	if err != nil {
 		if dberr.IsNotFound(err) {
@@ -115,16 +102,8 @@ func (r *StorageBackendRepo) UpdateConfig(ctx context.Context, id string, config
 	if err != nil {
 		return fmt.Errorf("encode config: %w", err)
 	}
-	const qPG = `UPDATE storage_backends SET config = $2::jsonb WHERE id = $1`
-	const qSQLite = `UPDATE storage_backends SET config = ? WHERE id = ?`
-	var args []any
-	switch r.db.Dialect {
-	case db.DialectSQLite:
-		args = []any{string(cfgJSON), id}
-	default:
-		args = []any{id, string(cfgJSON)}
-	}
-	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), args...)
+	const q = `UPDATE storage_backends SET config = $2::jsonb WHERE id = $1`
+	res, err := r.db.SQL.ExecContext(ctx, q, id, string(cfgJSON))
 	if err != nil {
 		return err
 	}
@@ -141,9 +120,8 @@ func (r *StorageBackendRepo) UpdateConfig(ctx context.Context, id string, config
 // Delete removes the backend. Returns ErrStorageBackendInUse when any
 // library still references it (FK ON DELETE RESTRICT).
 func (r *StorageBackendRepo) Delete(ctx context.Context, id string) error {
-	const qPG = `DELETE FROM storage_backends WHERE id = $1`
-	const qSQLite = `DELETE FROM storage_backends WHERE id = ?`
-	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), id)
+	const q = `DELETE FROM storage_backends WHERE id = $1`
+	res, err := r.db.SQL.ExecContext(ctx, q, id)
 	if err != nil {
 		if dberr.IsForeignKeyViolation(err) {
 			return ErrStorageBackendInUse
@@ -176,8 +154,8 @@ func (r *StorageBackendRepo) scanBackend(s scanner) (model.StorageBackend, error
 		return b, err
 	}
 
-	// Decode JSON config. Postgres JSONB arrives as []byte, SQLite TEXT arrives
-	// as string. Both are valid JSON.
+	// Decode JSON config. A JSONB column normally arrives as []byte, but the
+	// driver may hand it over as a string; both are valid JSON.
 	var raw []byte
 	switch v := configRaw.(type) {
 	case []byte:
@@ -191,7 +169,7 @@ func (r *StorageBackendRepo) scanBackend(s scanner) (model.StorageBackend, error
 		return b, fmt.Errorf("decode config: %w", err)
 	}
 
-	if err := db.ScanTime(r.db.Dialect, createdAny, &b.CreatedAt); err != nil {
+	if err := db.ScanTime(createdAny, &b.CreatedAt); err != nil {
 		return b, fmt.Errorf("scan created_at: %w", err)
 	}
 	return b, nil

@@ -60,6 +60,12 @@ func Up(m *migrate.Migrate) error {
 	return nil
 }
 
+// subpathFor picks the migration tree. The SQLite tree survives only to
+// serve `import-sqlite`: an operator upgrading from an old release has a
+// source database at an older schema, and it must be brought forward
+// before its rows can map onto the current Postgres schema. Nothing that
+// serves requests migrates SQLite. Retire the tree with the importer
+// (ADR-0023).
 func subpathFor(d db.Dialect) (string, error) {
 	switch d {
 	case db.DialectPostgres:

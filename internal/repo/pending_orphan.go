@@ -46,22 +46,7 @@ func (r *PendingOrphanRepo) Insert(ctx context.Context, rows []PendingOrphanInse
 	if len(rows) == 0 {
 		return nil
 	}
-	switch r.db.Dialect {
-	case db.DialectSQLite:
-		return r.insertSQLite(ctx, rows)
-	default:
-		return r.insertPG(ctx, rows)
-	}
-}
-
-func (r *PendingOrphanRepo) insertPG(ctx context.Context, rows []PendingOrphanInsert) error {
-	q, args := buildPendingOrphanInsertPG(rows)
-	_, err := r.db.SQL.ExecContext(ctx, q, args...)
-	return err
-}
-
-func (r *PendingOrphanRepo) insertSQLite(ctx context.Context, rows []PendingOrphanInsert) error {
-	q, args := buildPendingOrphanInsertSQLite(rows)
+	q, args := buildPendingOrphanInsert(rows)
 	_, err := r.db.SQL.ExecContext(ctx, q, args...)
 	return err
 }
@@ -70,24 +55,16 @@ func (r *PendingOrphanRepo) insertSQLite(ctx context.Context, rows []PendingOrph
 // PendingOrphanRepo.Insert. Used by the BookRepo rename-folder tx so
 // orphan inserts commit (or roll back) atomically with the
 // files+books updates.
-func insertPendingOrphansInTx(ctx context.Context, tx *sql.Tx, dialect db.Dialect, rows []PendingOrphanInsert) error {
+func insertPendingOrphansInTx(ctx context.Context, tx *sql.Tx, rows []PendingOrphanInsert) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	var (
-		q    string
-		args []any
-	)
-	if dialect == db.DialectSQLite {
-		q, args = buildPendingOrphanInsertSQLite(rows)
-	} else {
-		q, args = buildPendingOrphanInsertPG(rows)
-	}
+	q, args := buildPendingOrphanInsert(rows)
 	_, err := tx.ExecContext(ctx, q, args...)
 	return err
 }
 
-func buildPendingOrphanInsertPG(rows []PendingOrphanInsert) (string, []any) {
+func buildPendingOrphanInsert(rows []PendingOrphanInsert) (string, []any) {
 	placeholders := make([]string, 0, len(rows))
 	args := make([]any, 0, len(rows)*5)
 	for i, row := range rows {
@@ -106,54 +83,20 @@ func buildPendingOrphanInsertPG(rows []PendingOrphanInsert) (string, []any) {
 	return q, args
 }
 
-func buildPendingOrphanInsertSQLite(rows []PendingOrphanInsert) (string, []any) {
-	placeholders := make([]string, 0, len(rows))
-	args := make([]any, 0, len(rows)*5)
-	for _, row := range rows {
-		placeholders = append(placeholders, "(?, ?, ?, ?, ?)")
-		args = append(args,
-			row.LibraryID,
-			row.Key,
-			row.EligibleAt.UTC().Format(time.RFC3339Nano),
-			row.Reason,
-			row.BookID,
-		)
-	}
-	q := `
-		INSERT INTO pending_orphans (library_id, key, eligible_at, reason, book_id)
-		VALUES ` + strings.Join(placeholders, ", ") + `
-		ON CONFLICT (library_id, key) DO NOTHING
-	`
-	return q, args
-}
-
 // SelectDue returns up to limit rows whose EligibleAt has passed,
 // ordered by EligibleAt ASC. Used by the sweeper to pull a batch
 // of work each tick.
 func (r *PendingOrphanRepo) SelectDue(ctx context.Context, now time.Time, limit int) ([]model.PendingOrphan, error) {
-	const qPG = `
+	const q = `
 		SELECT id, library_id, key, eligible_at, reason, book_id, created_at
 		FROM pending_orphans
 		WHERE eligible_at <= $1
 		ORDER BY eligible_at ASC
 		LIMIT $2
 	`
-	const qSQLite = `
-		SELECT id, library_id, key, eligible_at, reason, book_id, created_at
-		FROM pending_orphans
-		WHERE eligible_at <= ?
-		ORDER BY eligible_at ASC
-		LIMIT ?
-	`
-	var nowArg any
-	if r.db.Dialect == db.DialectSQLite {
-		nowArg = now.UTC().Format(time.RFC3339Nano)
-	} else {
-		nowArg = now
-	}
 	rows, err := r.db.SQL.QueryContext(ctx,
-		db.SelectQ(r.db.Dialect, qPG, qSQLite),
-		nowArg, limit,
+		q,
+		now, limit,
 	)
 	if err != nil {
 		return nil, err
@@ -171,10 +114,10 @@ func (r *PendingOrphanRepo) SelectDue(ctx context.Context, now time.Time, limit 
 		if err := rows.Scan(&po.ID, &po.LibraryID, &po.Key, &eligibleAny, &po.Reason, &bookIDNullSt, &createdAny); err != nil {
 			return nil, err
 		}
-		if err := db.ScanTime(r.db.Dialect, eligibleAny, &po.EligibleAt); err != nil {
+		if err := db.ScanTime(eligibleAny, &po.EligibleAt); err != nil {
 			return nil, fmt.Errorf("scan eligible_at: %w", err)
 		}
-		if err := db.ScanTime(r.db.Dialect, createdAny, &po.CreatedAt); err != nil {
+		if err := db.ScanTime(createdAny, &po.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan created_at: %w", err)
 		}
 		po.BookID = bookIDNullSt
@@ -188,8 +131,7 @@ func (r *PendingOrphanRepo) SelectDue(ctx context.Context, now time.Time, limit 
 // Deleting a non-existent id is not an error — concurrent sweepers
 // or operator deletes can race; the absence is the desired state.
 func (r *PendingOrphanRepo) Delete(ctx context.Context, id int64) error {
-	const qPG = `DELETE FROM pending_orphans WHERE id = $1`
-	const qSQLite = `DELETE FROM pending_orphans WHERE id = ?`
-	_, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), id)
+	const q = `DELETE FROM pending_orphans WHERE id = $1`
+	_, err := r.db.SQL.ExecContext(ctx, q, id)
 	return err
 }

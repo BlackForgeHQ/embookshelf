@@ -75,8 +75,8 @@ const libColsReturning = `
 // root for s3 libraries is empty (the backend has the prefix encoded);
 // root for local libraries equals path.
 //
-// UUID is generated app-side via db.NewID() so the same INSERT works on
-// both Postgres (UUID column) and SQLite (TEXT column).
+// UUID is generated app-side via db.NewID() rather than by a column
+// default, so the INSERT can RETURNING the row it just wrote.
 func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug, path string, backendID *string) (model.Library, error) {
 	id := db.NewID()
 	// root mirrors path for local libraries; empty for s3 libraries (the
@@ -85,17 +85,12 @@ func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug, path string
 	if backendID != nil {
 		root = ""
 	}
-	const qPG = `
+	const q = `
 		INSERT INTO libraries (id, name, slug, path, backend_id, root)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING ` + libColsReturning
 
-	const qSQLite = `
-		INSERT INTO libraries (id, name, slug, path, backend_id, root)
-		VALUES (?, ?, ?, ?, ?, ?)
-		RETURNING ` + libColsReturning
-
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite),
+	row := r.db.SQL.QueryRowContext(ctx, q,
 		id, name, slug, path, backendID, root)
 	l, err := r.scanLibrary(row)
 	if err != nil {
@@ -137,17 +132,12 @@ func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
 // GetByID returns a single library row. Used by scan flows that need
 // the current path without a full listing.
 func (r *LibraryRepo) GetByID(ctx context.Context, id string) (model.Library, error) {
-	const qPG = `
+	const q = `
 		SELECT ` + libCols + `
 		FROM libraries l
 		WHERE l.id = $1
 	`
-	const qSQLite = `
-		SELECT ` + libCols + `
-		FROM libraries l
-		WHERE l.id = ?
-	`
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), id)
+	row := r.db.SQL.QueryRowContext(ctx, q, id)
 	l, err := r.scanLibrary(row)
 	if err != nil {
 		if dberr.IsNotFound(err) {
@@ -161,27 +151,14 @@ func (r *LibraryRepo) GetByID(ctx context.Context, id string) (model.Library, er
 // TouchScan stamps the last-scan aggregate on a library row after a
 // filesystem walk completes. Used by the library-scan worker.
 func (r *LibraryRepo) TouchScan(ctx context.Context, id string, fileCount, discovered int) error {
-	const qPG = `
+	const q = `
 		UPDATE libraries
 		SET last_scanned_at = now(),
 		    file_count       = $2,
 		    discovered_count = $3
 		WHERE id = $1
 	`
-	const qSQLite = `
-		UPDATE libraries
-		SET last_scanned_at = CURRENT_TIMESTAMP,
-		    file_count       = ?,
-		    discovered_count = ?
-		WHERE id = ?
-	`
-	var res sql.Result
-	var err error
-	if r.db.Dialect == db.DialectSQLite {
-		res, err = r.db.SQL.ExecContext(ctx, qSQLite, fileCount, discovered, id)
-	} else {
-		res, err = r.db.SQL.ExecContext(ctx, qPG, id, fileCount, discovered)
-	}
+	res, err := r.db.SQL.ExecContext(ctx, q, id, fileCount, discovered)
 	if err != nil {
 		return err
 	}
@@ -208,10 +185,10 @@ func (r *LibraryRepo) scanLibrary(s scanner) (model.Library, error) {
 	if err != nil {
 		return l, err
 	}
-	if err := db.ScanNullTime(r.db.Dialect, lastScannedAny, &l.LastScannedAt); err != nil {
+	if err := db.ScanNullTime(lastScannedAny, &l.LastScannedAt); err != nil {
 		return l, fmt.Errorf("scan last_scanned_at: %w", err)
 	}
-	if err := db.ScanTime(r.db.Dialect, createdAny, &l.CreatedAt); err != nil {
+	if err := db.ScanTime(createdAny, &l.CreatedAt); err != nil {
 		return l, fmt.Errorf("scan created_at: %w", err)
 	}
 	if backendID.Valid {
@@ -237,9 +214,8 @@ func (r *LibraryRepo) DeleteLibrary(ctx context.Context, id string) ([]string, e
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	const qBooksPG = `SELECT id FROM books WHERE library_id = $1`
-	const qBooksSQLite = `SELECT id FROM books WHERE library_id = ?`
-	rows, err := tx.QueryContext(ctx, db.SelectQ(r.db.Dialect, qBooksPG, qBooksSQLite), id)
+	const qBooks = `SELECT id FROM books WHERE library_id = $1`
+	rows, err := tx.QueryContext(ctx, qBooks, id)
 	if err != nil {
 		return nil, err
 	}
@@ -257,9 +233,8 @@ func (r *LibraryRepo) DeleteLibrary(ctx context.Context, id string) ([]string, e
 		return nil, err
 	}
 
-	const qDelPG = `DELETE FROM libraries WHERE id = $1`
-	const qDelSQLite = `DELETE FROM libraries WHERE id = ?`
-	res, err := tx.ExecContext(ctx, db.SelectQ(r.db.Dialect, qDelPG, qDelSQLite), id)
+	const qDel = `DELETE FROM libraries WHERE id = $1`
+	res, err := tx.ExecContext(ctx, qDel, id)
 	if err != nil {
 		return nil, err
 	}
@@ -288,8 +263,7 @@ type SuggestLibrary struct {
 // there is no per-user filter here — adopt one if/when library
 // visibility becomes user-scoped.
 func (r *LibraryRepo) SearchSuggest(ctx context.Context, q string, limit int) ([]SuggestLibrary, error) {
-	// ILIKE is Postgres-specific; SQLite's LIKE is case-insensitive for ASCII
-	// by default (the project's SQLite pragma does not override that).
+	// ILIKE gives the case-insensitive match the autocomplete needs.
 	const qPG = `
 		SELECT l.id, l.name, l.slug
 		FROM libraries l
@@ -297,14 +271,7 @@ func (r *LibraryRepo) SearchSuggest(ctx context.Context, q string, limit int) ([
 		ORDER BY l.name ASC
 		LIMIT $2
 	`
-	const qSQLite = `
-		SELECT l.id, l.name, l.slug
-		FROM libraries l
-		WHERE l.name LIKE '%' || ? || '%'
-		ORDER BY l.name ASC
-		LIMIT ?
-	`
-	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), q, limit)
+	rows, err := r.db.SQL.QueryContext(ctx, qPG, q, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -324,19 +291,13 @@ func (r *LibraryRepo) SearchSuggest(ctx context.Context, q string, limit int) ([
 // library by joining through the backend_id FK. Returns ErrNotFound when the
 // library either does not exist or has no backend_id set yet.
 func (r *LibraryRepo) LibraryBackend(ctx context.Context, libraryID string) (model.StorageBackend, error) {
-	const qPG = `
+	const q = `
 		SELECT sb.id, sb.kind, sb.config, sb.created_at
 		FROM libraries l
 		JOIN storage_backends sb ON sb.id = l.backend_id
 		WHERE l.id = $1
 	`
-	const qSQLite = `
-		SELECT sb.id, sb.kind, sb.config, sb.created_at
-		FROM libraries l
-		JOIN storage_backends sb ON sb.id = l.backend_id
-		WHERE l.id = ?
-	`
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), libraryID)
+	row := r.db.SQL.QueryRowContext(ctx, q, libraryID)
 
 	// Re-use the same scan logic as StorageBackendRepo to avoid duplication.
 	var b model.StorageBackend
@@ -360,7 +321,7 @@ func (r *LibraryRepo) LibraryBackend(ctx context.Context, libraryID string) (mod
 	if err := json.Unmarshal(raw, &b.Config); err != nil {
 		return model.StorageBackend{}, fmt.Errorf("decode config: %w", err)
 	}
-	if err := db.ScanTime(r.db.Dialect, createdAny, &b.CreatedAt); err != nil {
+	if err := db.ScanTime(createdAny, &b.CreatedAt); err != nil {
 		return model.StorageBackend{}, fmt.Errorf("scan created_at: %w", err)
 	}
 	return b, nil
@@ -370,19 +331,12 @@ func (r *LibraryRepo) LibraryBackend(ctx context.Context, libraryID string) (mod
 // backend_id FK column. Pass an empty string to clear the association.
 // Used by StorageBackendRepo tests and the library-update handler.
 func (r *LibraryRepo) SetBackendID(ctx context.Context, libraryID, backendID string) error {
-	const qPG = `UPDATE libraries SET backend_id = $2 WHERE id = $1`
-	const qSQLite = `UPDATE libraries SET backend_id = ? WHERE id = ?`
+	const q = `UPDATE libraries SET backend_id = $2 WHERE id = $1`
 	var nilableBackend any
 	if backendID != "" {
 		nilableBackend = backendID
 	}
-	var res sql.Result
-	var err error
-	if r.db.Dialect == db.DialectSQLite {
-		res, err = r.db.SQL.ExecContext(ctx, qSQLite, nilableBackend, libraryID)
-	} else {
-		res, err = r.db.SQL.ExecContext(ctx, qPG, libraryID, nilableBackend)
-	}
+	res, err := r.db.SQL.ExecContext(ctx, q, libraryID, nilableBackend)
 	if err != nil {
 		return err
 	}

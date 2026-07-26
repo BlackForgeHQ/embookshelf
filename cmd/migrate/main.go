@@ -76,8 +76,14 @@ func main() {
 		if err := migrator.Up(m); err != nil {
 			fatal("up: %v", err)
 		}
-		if err := migrator.BackfillStorageV2(ctx, d); err != nil {
-			fatal("storage_v2 backfill: %v", err)
+		// The storage_v2 backfill is Postgres-only SQL (ADR-0023). A
+		// SQLite target here is an importer source being brought forward
+		// so `import-sqlite` can read it — schema only. Its rows land in
+		// Postgres, which runs the backfill on first boot.
+		if d.Dialect == db.DialectPostgres {
+			if err := migrator.BackfillStorageV2(ctx, d); err != nil {
+				fatal("storage_v2 backfill: %v", err)
+			}
 		}
 		fmt.Println("ok")
 	case "down":

@@ -15,11 +15,10 @@ import (
 // TestLoadStorageBackends_EmptyTable verifies that an empty storage_backends
 // table returns a resolver whose default is LocalFS at "/" (legacy fallback).
 func TestLoadStorageBackends_EmptyTable(t *testing.T) {
-	t.Setenv("REPOTEST_DIALECT", "sqlite")
 	d := repotest.New(t)
 	backendRepo := repo.NewStorageBackendRepo(d)
 
-	resolver, err := storageloader.LoadStorageBackends(context.Background(), backendRepo, config.DialectSQLite)
+	resolver, err := storageloader.LoadStorageBackends(context.Background(), backendRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -36,7 +35,6 @@ func TestLoadStorageBackends_EmptyTable(t *testing.T) {
 // TestLoadStorageBackends_LocalRow verifies a local backend row is built and
 // the resolver routes by its id.
 func TestLoadStorageBackends_LocalRow(t *testing.T) {
-	t.Setenv("REPOTEST_DIALECT", "sqlite")
 	d := repotest.New(t)
 	backendRepo := repo.NewStorageBackendRepo(d)
 
@@ -46,7 +44,7 @@ func TestLoadStorageBackends_LocalRow(t *testing.T) {
 		t.Fatalf("create backend row: %v", err)
 	}
 
-	resolver, err := storageloader.LoadStorageBackends(context.Background(), backendRepo, config.DialectSQLite)
+	resolver, err := storageloader.LoadStorageBackends(context.Background(), backendRepo)
 	if err != nil {
 		t.Fatalf("LoadStorageBackends: %v", err)
 	}
@@ -65,7 +63,6 @@ func TestLoadStorageBackends_LocalRow(t *testing.T) {
 // constructed rooted at "/" so callers can pass absolute paths as keys.
 // Per-library rooting belongs to S3 (per-bucket-prefix), not local FS.
 func TestLoadStorageBackends_LocalIgnoresConfigRoot(t *testing.T) {
-	t.Setenv("REPOTEST_DIALECT", "sqlite")
 	d := repotest.New(t)
 	backendRepo := repo.NewStorageBackendRepo(d)
 
@@ -81,7 +78,7 @@ func TestLoadStorageBackends_LocalIgnoresConfigRoot(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create backend row %v: %v", cfg, err)
 		}
-		resolver, err := storageloader.LoadStorageBackends(context.Background(), backendRepo, config.DialectSQLite)
+		resolver, err := storageloader.LoadStorageBackends(context.Background(), backendRepo)
 		if err != nil {
 			t.Fatalf("LoadStorageBackends with config %v: %v", cfg, err)
 		}
@@ -102,7 +99,6 @@ func TestLoadStorageBackends_LocalIgnoresConfigRoot(t *testing.T) {
 // TestReconcileSharedS3 verifies env-derived S3 fields are pushed into
 // pre-existing rows while preserving per-library prefix.
 func TestReconcileSharedS3(t *testing.T) {
-	t.Setenv("REPOTEST_DIALECT", "sqlite")
 	d := repotest.New(t)
 	backendRepo := repo.NewStorageBackendRepo(d)
 	ctx := context.Background()
@@ -167,7 +163,6 @@ func TestReconcileSharedS3(t *testing.T) {
 
 // TestReconcileSharedS3_Unconfigured ensures empty env doesn't wipe rows.
 func TestReconcileSharedS3_Unconfigured(t *testing.T) {
-	t.Setenv("REPOTEST_DIALECT", "sqlite")
 	d := repotest.New(t)
 	backendRepo := repo.NewStorageBackendRepo(d)
 	ctx := context.Background()
@@ -197,36 +192,4 @@ func TestReconcileSharedS3_Unconfigured(t *testing.T) {
 	if got.Config["bucket"] != "kept" {
 		t.Errorf("bucket=%v want kept (must not be wiped)", got.Config["bucket"])
 	}
-}
-
-// TestLoadStorageBackends_SQLiteWithS3Errors verifies that having an S3 row
-// with SQLite dialect returns an error (either "switch to Postgres" or a
-// connection error — both mean the combination is rejected).
-//
-// NOTE: s3.New() is called before the SQLite guard so the test will see a
-// connection error from the AWS SDK rather than the guard message. That's
-// acceptable — any error means the boot is rejected.
-func TestLoadStorageBackends_SQLiteWithS3Errors(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping S3 connectivity test in short mode")
-	}
-	t.Setenv("REPOTEST_DIALECT", "sqlite")
-	d := repotest.New(t)
-	backendRepo := repo.NewStorageBackendRepo(d)
-
-	// Insert a minimal S3 row. s3.New will fail to connect (no real S3),
-	// which is also a rejection of the combination.
-	_, err := d.SQL.ExecContext(context.Background(),
-		`INSERT INTO storage_backends (id, kind, config, created_at)
-		 VALUES ('test-s3-id', 's3', '{"bucket":"test-bucket"}',
-		         strftime('%Y-%m-%dT%H:%M:%fZ','now'))`)
-	if err != nil {
-		t.Fatalf("insert S3 row: %v", err)
-	}
-
-	_, err = storageloader.LoadStorageBackends(context.Background(), backendRepo, config.DialectSQLite)
-	if err == nil {
-		t.Fatal("expected error for SQLite+S3 combination")
-	}
-	t.Logf("got expected error (SQLite+S3 rejected): %v", err)
 }

@@ -30,9 +30,7 @@ const annotationCols = `
 
 // annotationReturning is annotationCols stripped of the `a.` alias —
 // used by INSERT ... RETURNING and UPDATE ... RETURNING where there's
-// no FROM clause to alias the table. SQLite refuses DML inside a CTE
-// (a Postgres-only extension), so we can't keep the `a.` prefix by
-// wrapping the write in `WITH inserted AS (...) SELECT ... FROM inserted a`.
+// no FROM clause to alias the table.
 const annotationReturning = `
     id, user_id, book_id, locator,
     selected_text, note, color,
@@ -43,19 +41,13 @@ const annotationReturning = `
 // ordered by creation time ascending so the client list reads like a
 // chronological reading log.
 func (r *AnnotationRepo) ListForBook(ctx context.Context, userID, bookID string) ([]model.Annotation, error) {
-	const qPG = `
+	const q = `
         SELECT ` + annotationCols + `
         FROM annotations a
         WHERE a.user_id = $1 AND a.book_id = $2
         ORDER BY a.created_at ASC
     `
-	const qSQLite = `
-        SELECT ` + annotationCols + `
-        FROM annotations a
-        WHERE a.user_id = ? AND a.book_id = ?
-        ORDER BY a.created_at ASC
-    `
-	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID, bookID)
+	rows, err := r.db.SQL.QueryContext(ctx, q, userID, bookID)
 	if err != nil {
 		return nil, err
 	}
@@ -69,21 +61,14 @@ func (r *AnnotationRepo) ListRecent(ctx context.Context, userID string, limit in
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
-	const qPG = `
+	const q = `
         SELECT ` + annotationCols + `
         FROM annotations a
         WHERE a.user_id = $1
         ORDER BY a.created_at DESC
         LIMIT $2
     `
-	const qSQLite = `
-        SELECT ` + annotationCols + `
-        FROM annotations a
-        WHERE a.user_id = ?
-        ORDER BY a.created_at DESC
-        LIMIT ?
-    `
-	rows, err := r.db.SQL.QueryContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID, limit)
+	rows, err := r.db.SQL.QueryContext(ctx, q, userID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -95,40 +80,28 @@ func (r *AnnotationRepo) ListRecent(ctx context.Context, userID string, limit in
 // expected to pass the session user's id so a user can't PATCH/DELETE
 // another user's row even if they guess the uuid.
 func (r *AnnotationRepo) Get(ctx context.Context, userID, id string) (model.Annotation, error) {
-	const qPG = `
+	const q = `
         SELECT ` + annotationCols + `
         FROM annotations a
         WHERE a.user_id = $1 AND a.id = $2
     `
-	const qSQLite = `
-        SELECT ` + annotationCols + `
-        FROM annotations a
-        WHERE a.user_id = ? AND a.id = ?
-    `
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID, id)
+	row := r.db.SQL.QueryRowContext(ctx, q, userID, id)
 	return r.scanAnnotation(row)
 }
 
 // Create inserts a new annotation and returns the hydrated row.
-// UUID is generated app-side via db.NewID() so the same INSERT works on
-// both Postgres (UUID column) and SQLite (TEXT column).
+// UUID is generated app-side via db.NewID() so the id is known to the
+// caller before the round-trip completes.
 func (r *AnnotationRepo) Create(ctx context.Context, a model.Annotation) (model.Annotation, error) {
 	if a.Color == "" {
 		a.Color = "accent"
 	}
 	id := db.NewID()
-	// Bare INSERT … RETURNING works on both engines (Postgres and
-	// SQLite 3.35+). A CTE wrapper with INSERT inside is a Postgres
-	// extension that SQLite rejects with a syntax error.
-	const qPG = `
+	const q = `
         INSERT INTO annotations (id, user_id, book_id, locator, selected_text, note, color)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING ` + annotationReturning
-	const qSQLite = `
-        INSERT INTO annotations (id, user_id, book_id, locator, selected_text, note, color)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        RETURNING ` + annotationReturning
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite),
+	row := r.db.SQL.QueryRowContext(ctx, q,
 		id, a.UserID, a.BookID, a.Locator, a.SelectedText, a.Note, a.Color)
 	return r.scanAnnotation(row)
 }
@@ -143,13 +116,6 @@ func (r *AnnotationRepo) Update(ctx context.Context, userID, id string, note, se
 		return r.Get(ctx, userID, id)
 	}
 
-	if r.db.Dialect == db.DialectSQLite {
-		return r.updateSQLite(ctx, userID, id, note, selectedText, color)
-	}
-	return r.updatePG(ctx, userID, id, note, selectedText, color)
-}
-
-func (r *AnnotationRepo) updatePG(ctx context.Context, userID, id string, note, selectedText, color *string) (model.Annotation, error) {
 	var (
 		sets []string
 		args = []any{userID, id}
@@ -180,48 +146,13 @@ func (r *AnnotationRepo) updatePG(ctx context.Context, userID, id string, note, 
 	return a, err
 }
 
-func (r *AnnotationRepo) updateSQLite(ctx context.Context, userID, id string, note, selectedText, color *string) (model.Annotation, error) {
-	var (
-		sets []string
-		args []any
-	)
-	if note != nil {
-		args = append(args, *note)
-		sets = append(sets, "note = ?")
-	}
-	if selectedText != nil {
-		args = append(args, *selectedText)
-		sets = append(sets, "selected_text = ?")
-	}
-	if color != nil {
-		args = append(args, *color)
-		sets = append(sets, "color = ?")
-	}
-	args = append(args, userID, id)
-
-	query := `
-        UPDATE annotations
-        SET ` + strings.Join(sets, ", ") + `, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-        WHERE user_id = ? AND id = ?
-        RETURNING ` + annotationReturning
-	row := r.db.SQL.QueryRowContext(ctx, query, args...)
-	a, err := r.scanAnnotation(row)
-	if dberr.IsNotFound(err) {
-		return model.Annotation{}, ErrNotFound
-	}
-	return a, err
-}
-
 // Delete removes one annotation. Scoping by user_id prevents a user
 // from deleting someone else's row even if they fish the uuid out.
 func (r *AnnotationRepo) Delete(ctx context.Context, userID, id string) error {
-	const qPG = `
+	const q = `
         DELETE FROM annotations WHERE user_id = $1 AND id = $2
     `
-	const qSQLite = `
-        DELETE FROM annotations WHERE user_id = ? AND id = ?
-    `
-	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), userID, id)
+	res, err := r.db.SQL.ExecContext(ctx, q, userID, id)
 	if err != nil {
 		return err
 	}
@@ -254,10 +185,10 @@ func (r *AnnotationRepo) scanAnnotation(s scanner) (model.Annotation, error) {
 	if err != nil {
 		return model.Annotation{}, err
 	}
-	if err := db.ScanTime(r.db.Dialect, createdAny, &a.CreatedAt); err != nil {
+	if err := db.ScanTime(createdAny, &a.CreatedAt); err != nil {
 		return model.Annotation{}, fmt.Errorf("scan created_at: %w", err)
 	}
-	if err := db.ScanTime(r.db.Dialect, updatedAny, &a.UpdatedAt); err != nil {
+	if err := db.ScanTime(updatedAny, &a.UpdatedAt); err != nil {
 		return model.Annotation{}, fmt.Errorf("scan updated_at: %w", err)
 	}
 	return a, nil

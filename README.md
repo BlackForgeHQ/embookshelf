@@ -1,7 +1,7 @@
 # embookshelf
 
 Self-hosted, multi-user digital library — Go backend + React SPA
-(TanStack Start + shadcn/ui) + Postgres or SQLite, with optional
+(TanStack Start + shadcn/ui) + Postgres, with optional
 S3-backed storage. EPUB, PDF, comic (CBZ), and audiobook (MP3/M4B)
 readers; full-text search; per-user shelves + smart shelves +
 annotations; metadata enrichment across six providers; live BookDrop
@@ -12,17 +12,39 @@ e-readers. Ships as a single binary with the UI embedded.
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the technical shape
 and [docs/prd.md](docs/prd.md) for the product intent + roadmap.
 
-> **2026-04 update:** SQLite is now the default backend. If you were relying on the bare-default `postgres://localhost:5432/embookshelf` connection (i.e. running without `DATABASE_URL` set), update your config to set `DATABASE_URL` explicitly to your Postgres DSN.
+> **2026-07 update — SQLite is no longer supported.** embookshelf is a
+> Postgres-only application ([ADR-0023](docs/adr/0023-postgres-only.md)).
+> This release **refuses to boot** on a `sqlite://` DSN. Migrate your
+> library in one command:
+>
+> ```bash
+> DATABASE_URL='postgres://user:pass@host:5432/embookshelf' \
+>   embookshelf import-sqlite --from ./data/embookshelf.db
+> ```
+>
+> The target Postgres database must be empty; migrations are applied to
+> it automatically. Queued background jobs don't transfer — re-trigger a
+> library scan afterwards.
 
 ## Quickstart
 
-### Single-user / self-hosted (SQLite, default)
+### Single-user / self-hosted
+
+Postgres is required. The smallest setup is the bundled compose file:
 
 ```bash
-docker run --rm -p 6060:6060 -v $(pwd)/data:/data ghcr.io/blackforgehq/embookshelf:latest
+docker compose -f compose.prod.yml up -d
 ```
 
-Open http://localhost:6060 and create your admin user. The library lives at `./data/embookshelf.db`. No external database required.
+Open http://localhost:6060 and create your admin user.
+
+To point at an existing Postgres instead, set `DATABASE_URL`:
+
+```bash
+docker run --rm -p 6060:6060 -v $(pwd)/data:/data \
+  -e DATABASE_URL='postgres://user:pass@host:5432/embookshelf' \
+  ghcr.io/blackforgehq/embookshelf:latest
+```
 
 ### Multi-user / production (Postgres)
 
@@ -49,10 +71,10 @@ internal/                  Go backend — 27 packages tiered into Core / IO / Cr
                             fileproc, extractor, sidecar, scan, ingest,
                             auth, config, crypto, db, queue, task, search,
                             sse, opds, provider, staticfs, telemetry, …)
-internal/migrator/         Parallel SQL trees: migrations/postgres/ + migrations/sqlite/
+internal/migrator/         migrations/postgres/ (+ migrations/sqlite/, kept only for import-sqlite)
 internal/staticfs/dist/    Embedded SPA shell (written by the UI build)
 ui/                        TanStack Start SPA (Vite + React 19 + Tailwind v4 + shadcn/ui)
-docs/                      ARCHITECTURE.md, prd.md, adr/, spec/, superpowers/
+docs/                      architecture.md, PRD.md, adr/, spec/, ops/, agents/, research/
 e2e/                       Playwright tests (separate Node project)
 scripts/seed.sql           Dev seed (admin@local / changeme)
 ```
@@ -128,9 +150,8 @@ there is no Node/Bun runtime in production.
 - Multi-library model with **one root per library**, fixed at creation.
   Each library targets a backend — local FS or S3 (per-library `kind`).
   Per-user shelf CRUD, book-to-shelf toggle, full-text search
-  (tsvector over title + author + series + description on Postgres,
-  FTS5 with bm25 ranking on SQLite), sort, format + shelf + library
-  filters, plus a global ⌘K command palette.
+  (tsvector over title + author + series + description), sort,
+  format + shelf + library filters, plus a global ⌘K command palette.
 - **Smart shelves** — rule-based auto-populated shelves alongside
   hand-curated ones, both styled with an accent picker.
 - **Readers** — EPUB (epub.js, paginated, TOC, CFI resume), PDF
@@ -275,11 +296,10 @@ preferences, device sync, sign out).
 - **Notifications** — sonner toasts for every mutation (library
   create, rescan, role change, OIDC save, OIDC test, library
   delete, …). No stale inline banners.
-- **Dual queue** — Postgres installs use [River](https://riverqueue.com)
-  (4 workers, exactly-once via shared transactions, dashboard
-  available); SQLite installs use a single-goroutine 1s-tick polling
-  worker. Both implement the same `queue.Client` interface so the
-  service layer is dialect-blind. Postgres River migrations apply
+- **Job queue** — [River](https://riverqueue.com) (4 workers,
+  exactly-once via shared transactions, dashboard available) behind a
+  one-method `queue.Client`; a job registry declares each kind once.
+  River migrations apply
   alongside the app schema when `MIGRATE_ON_START=true`.
 - **Pluggable storage** — every read/write of book bytes goes through
   `storage.Storage`. Local backends use POSIX FS; S3 backends
@@ -288,8 +308,7 @@ preferences, device sync, sign out).
   (`EMBOOKSHELF_PRESIGN_FALLBACK`). Edit-time folder renames on S3
   are copy + deferred delete with a grace window
   (`EMBOOKSHELF_S3_RENAME_GRACE`, ADR-0005) so already-issued
-  presigned URLs don't 404 mid-download. SQLite + S3 is refused at
-  boot.
+  presigned URLs don't 404 mid-download.
 - **OpenTelemetry** — server traces / metrics / logs export via OTLP
   when `OTEL_ENABLED=true`; browser SDK gates on
   `VITE_OTEL_ENABLED=true`.
@@ -352,7 +371,7 @@ live in [internal/config/config.go](internal/config/config.go).
 
 | Var | Default | Notes |
 | --- | --- | --- |
-| `DATABASE_URL` | `sqlite://./data/embookshelf.db` | Database connection. SQLite by default; set to a `postgres://…` DSN to use Postgres instead |
+| `DATABASE_URL` | `postgres://localhost:5432/embookshelf` | Postgres connection. Postgres is required (ADR-0023); a `sqlite://` DSN refuses to boot and points at `import-sqlite` |
 | `EMBOOKSHELF_PORT` | `6060` | HTTP listen port |
 | `ALLOWED_ORIGINS` | `*` | CORS / CSRF allow-list for `Origin`/`Referer` |
 | `APP_URL` | _(unset, falls back to request origin)_ | Public origin; feeds the OIDC redirect URI |

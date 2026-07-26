@@ -70,7 +70,7 @@ so the session cookie the Go server issues rides along.
 |-------|-----------|---------|
 | **Runtime** | Go | 1.25 |
 | **HTTP Router** | Gin ([gin-gonic/gin](https://github.com/gin-gonic/gin)) | 1.x |
-| **Database** | PostgreSQL 16+ (multi-user) or SQLite via modernc.org/sqlite (single-user, default) | 16+ / — |
+| **Database** | PostgreSQL — the only supported backend (ADR-0023) | 16+ |
 | **DB Driver** | pgx | v5 |
 | **Migrations** | [golang-migrate/migrate](https://github.com/golang-migrate/migrate) | 4.x |
 | **Sessions** | Hand-rolled `sessions` table (see §4.5) | — |
@@ -103,11 +103,17 @@ for end-to-end browser coverage under [e2e/](../e2e/) — see
 are wired with **Vitest** + **@testing-library/react** (`bun run test`
 inside `ui/`).
 
-### Database backends
+### Database backend
 
-embookshelf runs against either Postgres or SQLite, selected by `DATABASE_URL`. The same binary, same UI, and same feature set work on both backends — including bookdrop ingest and library scans, which run on River (Postgres) or a single-goroutine polling worker (SQLite) behind a shared `queue.Client` interface. Postgres is recommended for multi-user / multi-writer installs (River supports horizontal scaling and dashboards). SQLite is the zero-dependency default and serves single-user installs end-to-end.
+embookshelf runs against Postgres, named by `DATABASE_URL`. It is the only
+supported runtime database — see
+[ADR-0023](./adr/0023-postgres-only.md). A `sqlite://` DSN refuses to boot
+with a message pointing at `embookshelf import-sqlite`, the one-shot
+importer that moves an existing SQLite library into Postgres (§6.2).
 
-Design rationale and per-dialect implementation notes live in [`docs/superpowers/specs/2026-04-28-sqlite-support-design.md`](superpowers/specs/2026-04-28-sqlite-support-design.md).
+SQLite was a supported backend until 2026-07; the dual-dialect design
+spec from that era (`docs/superpowers/specs/2026-04-28-sqlite-support-design.md`)
+is historical and superseded by ADR-0023, not current design guidance.
 
 ---
 
@@ -142,14 +148,13 @@ The backend has 27 packages. Tiered by role:
   `router.go` (route assembly + SPA fallback), `handler.go`
   (`Handler` + `Deps`), `errjson.go` (JSON error envelope).
 - `service/` — Business logic. ~20 services (see §4.1).
-- `repo/` — Hand-written SQL via pgx (Postgres) and `database/sql`
-  (SQLite). Dialect-aware: `internal/db.SelectQ(d, pgSQL, sqliteSQL)`
-  picks the right query string.
+- `repo/` — Hand-written SQL via pgx. Single dialect: one Postgres
+  query text per statement (ADR-0023).
 - `model/` — Domain structs and shared enums (`Role`, `DeviceKind`,
   `EditableMetadata`, etc.).
-- `migrator/` — Embedded `golang-migrate` wrapper.
-  `migrations/postgres/` and `migrations/sqlite/` carry parallel
-  SQL files with the same numbering; `migrator.go` selects by dialect.
+- `migrator/` — Embedded `golang-migrate` wrapper. `migrations/postgres/`
+  is the live schema. `migrations/sqlite/` survives only to bring an old
+  source database forward before `import-sqlite` reads it (ADR-0023).
 
 **IO (storage + format)**
 - `storage/` — Backend-agnostic blob interface (`Storage`, capability
@@ -189,15 +194,18 @@ The backend has 27 packages. Tiered by role:
   (`storage.go`).
 - `crypto/` — AES-256-GCM helpers for provider secret encryption at
   rest (ADR-0010).
-- `db/` — `*sql.DB` wrapper with dialect detection
-  (`DialectPostgres` / `DialectSQLite`), shared scan helpers, custom
-  SQLite driver registration with FTS5 + `unicode61` tokenizer.
-- `queue/` — `Client` interface with River-backed (Postgres) and
-  polling-worker (SQLite) implementations. See §4.4.
+- `db/` — `*sql.DB` wrapper over the pgx pool, DSN detection (a
+  `sqlite://` DSN is recognized only to refuse it), shared scan helpers.
+  `sqlite_driver.go` registers `modernc.org/sqlite` for the importer's
+  read-only path and nothing else.
+- `queue/` — One-method `Client` interface over River. `registry.go`
+  declares each job type once (kind + args + work fn) and derives
+  River's typed-worker plumbing from it. See §4.4.
 - `task/` — Job kinds + workers (`BookDropWorker`,
   `LibraryScanWorker`, `ScanImportWorker`).
-- `search/` — FTS5 query escape helper for the SQLite path; Postgres
-  uses `websearch_to_tsquery` directly. See §4.8.
+- `sqliteimport/` — Read-only SQLite → Postgres importer behind
+  `embookshelf import-sqlite`. Deletable when the deprecation window
+  closes (ADR-0023).
 - `sse/` — Fan-out hub for the `/events` endpoint.
 - `opds/` — Atom/XML feed types + builder.
 - `provider/` — External metadata sources + catalog + resilient
@@ -287,10 +295,8 @@ Handler → Service → Repository → PostgreSQL
   `lock_merge.go`), `Placer` (write-target path resolver,
   `placer.go`), `ScanImport` (decision-driven side-effect runner,
   `scan_import.go` + `decide_effects.go`).
-- **Repositories** — Hand-written SQL via pgx (Postgres) and
-  `database/sql` (SQLite); dialect-aware via `internal/db.SelectQ`.
-  `sqlc.yaml` + `internal/repo/queries/*.sql` staged for a future
-  typed-query pass.
+- **Repositories** — Hand-written SQL via pgx, one Postgres query text
+  per statement (ADR-0023).
 - **DTOs** — Request/response structs live alongside handlers
   (`userDTO`, `libraryDTO`, `bookDTO`, `bookDetailDTO`, `shelfDTO`,
   `bookdropDTO`, `enrichMatchDTO`, `deviceDTO`, `annotationDTO`,
@@ -374,24 +380,19 @@ provider matches into the persisted record.
 
 ### 4.4 Async Task System
 
-Background work runs through `queue.Client`, a single interface with
-two dialect-specific implementations selected at boot:
+Background work runs through `queue.Client`, backed by River
+(`riverqueue/river` over `riverpgxv5`). Schema applied at boot via
+`rivermigrate`. 4 max workers on the default queue. Horizontal scale +
+River's own dashboard come along. Crash recovery is River's JobRescuer,
+which reclaims jobs left `running` by a killed process.
 
-- **Postgres → River.** `riverqueue/river` over `riverpgxv5`. Schema
-  applied at boot via `rivermigrate`. 4 max workers per the default
-  queue. Horizontal scale + River's own dashboard come along.
-- **SQLite → polling worker.** `queue/sqlite.go` runs one goroutine
-  that polls a `jobs` table on a 1s ticker, claims rows with an
-  atomic `UPDATE`, dispatches by kind to a registered handler, and
-  records success/failure. Polling beats LISTEN/NOTIFY here —
-  SQLite has no LISTEN/NOTIFY, single-user installs rarely have
-  many pending rows, and a 1s tick is cheap.
+`Client` is deliberately one method wide — `Enqueue(ctx, args)` plus
+`Stop` — because the kind travels with the payload, so adding a job type
+does not widen the interface. `queue/registry.go` declares each job once
+(kind + args type + work function) and derives River's typed-worker
+registration from it; `internal/task/` never imports river.
 
-Both implementations satisfy the same `Client` interface
-(`EnqueueBookDrop`, `EnqueueLibraryScan`, `EnqueueScanImport`,
-`Stop`) so the service layer is unaware of the choice.
-
-`internal/task/` contains per-kind workers shared by both backends:
+`internal/task/` contains the per-kind workers:
 
 - `BookDropWorker` (`bookdrop.ingest`) — runs the `fileproc` pipeline,
   stores the cover, transitions the queue row.
@@ -553,10 +554,6 @@ EMBOOKSHELF_S3_RENAME_GRACE` (default `max(2 × PresignTTL, 1h)`); a
 sweeper deletes after the window so already-issued presigned URLs
 don't 404 mid-download.
 
-**SQLite + S3 is refused at boot.** `storageloader` errors out when
-any `kind=s3` backend appears with `DialectSQLite`. S3 requires
-Postgres for reliable distributed coordination through River.
-
 ### 4.8 Search
 
 A single `/api/v1/search` endpoint backs the global command palette
@@ -565,22 +562,13 @@ A single `/api/v1/search` endpoint backs the global command palette
 the same query layer. Cross-entity: results include books, shelves,
 libraries, and authors.
 
-Two engines, one API, picked by dialect:
+One engine: **`tsvector` + GIN.** `books` carries a `tsv` generated
+column (title || author || description) with a GIN index. Queries use
+`websearch_to_tsquery` so the user-facing query string is Postgres'
+battle-tested mini-syntax (quoted phrases, `or`, `-`).
 
-- **Postgres → `tsvector` + GIN.** `books` carries a `tsv` generated
-  column (title || author || description) with a GIN index. Queries
-  use `websearch_to_tsquery` so the user-facing query string is
-  Postgres' battle-tested mini-syntax (quoted phrases, `or`, `-`).
-- **SQLite → FTS5.** Custom driver registration in
-  `internal/db/sqlite_driver.go` enables FTS5 with the
-  `unicode61 remove_diacritics 2` tokenizer. Library repos query an
-  FTS5 contentless table mirrored from `books`; user input is
-  sanitized via `internal/search.EscapeFTS5Query` (lowercased,
-  letter/digit/`'`/`-` only, joined as implicit AND with `*`
-  prefix-match).
-
-The shared `SearchService` does the cross-entity fan-out and merge;
-ranking is per-engine native (ts_rank for Postgres, bm25 for FTS5).
+`SearchService` does the cross-entity fan-out and merge; ranking is
+`ts_rank`.
 
 ---
 
@@ -880,10 +868,8 @@ retry budget left.
 
 ### 6.1 Core Domain Entities
 
-Schema is at migration `000032`. Parallel SQL trees live under
-`internal/migrator/migrations/postgres/` and
-`internal/migrator/migrations/sqlite/` with the same numbering;
-`migrator.go` selects by dialect.
+Schema is at migration `000032`. Paired up/down SQL files live under
+`internal/migrator/migrations/postgres/`.
 
 The catalog backbone:
 
@@ -926,9 +912,8 @@ Other tables, grouped by role:
 - **System.** `app_settings` (singleton k/v config — instance name,
   signup-open flag, default library), `oidc_settings`
   (DB-backed OIDC config replacing env vars).
-- **Queue.** Postgres: River's `river_*` tables created by
-  `rivermigrate` on boot. SQLite: `jobs` table managed by
-  `internal/queue/sqlite.go`.
+- **Queue.** River's `river_*` tables, created by `rivermigrate` on
+  boot.
 
 Removed since the previous edition: file-naming pattern config
 (`000028`, ADR rationale: book-per-folder makes patterns redundant)
@@ -941,39 +926,57 @@ Genuinely future tables (no migration yet):
   preferences for cross-device parity).
 - `email_providers` (Send-to-Kindle blocked on SMTP).
 
-Postgres-specific features used across the schema (SQLite path uses
-the equivalents listed):
+Postgres features used across the schema:
 
-- `jsonb` (Postgres) / `TEXT CHECK (json_valid(...))` (SQLite) for
-  flexible config payloads.
-- `tsvector` + GIN indexes (Postgres) / FTS5 contentless tables
-  (SQLite) for search — see §4.8.
+- `jsonb` for flexible config payloads.
+- `tsvector` + GIN indexes for search — see §4.8.
+- `text[]` for tag lists and other repeated scalars.
 - Partial indexes (`WHERE deleted_at IS NULL`) for soft-deleted rows.
-- `gen_random_uuid()` (Postgres pgcrypto) / `uuid.NewString()` from
-  Go (SQLite) for primary keys; both columns accept the 36-char
-  hyphenated form so the same INSERT shape works on either backend.
+- `uuid` primary keys. Repos generate ids in Go via `db.NewID()` rather
+  than leaning on the `gen_random_uuid()` default, so the caller knows
+  the id without a `RETURNING` round-trip.
 
 ### 6.2 Database Management
 
-- **golang-migrate/migrate** manages schema evolution. Two parallel
-  trees of paired up/down SQL files live under
-  `internal/migrator/migrations/postgres/` and
-  `internal/migrator/migrations/sqlite/` with matching numbering.
-  Drivers: `pgx/v5` for Postgres, `modernc.org/sqlite` (pure-Go) for
-  SQLite.
+- **golang-migrate/migrate** manages schema evolution. Paired up/down
+  SQL files live under `internal/migrator/migrations/postgres/`.
+  Driver: `pgx/v5`.
 - Migrations are idempotent where practical (`CREATE ... IF NOT EXISTS`,
   `ADD COLUMN IF NOT EXISTS`).
 - Released migrations are never modified; new migrations are created for changes.
-- The app embeds both trees (`//go:embed migrations/postgres/*.sql`
-  and `migrations/sqlite/*.sql`) and runs the dialect-appropriate
-  set on boot by default. Opt out with `MIGRATE_ON_START=false` if
-  migrations are managed externally via `go run ./cmd/migrate up`.
+- The app embeds `migrations/` (`//go:embed all:migrations`) and runs the
+  Postgres tree on boot by default. Opt out with `MIGRATE_ON_START=false`
+  if migrations are managed externally via `go run ./cmd/migrate up`.
 - River's own schema migrations are applied separately by
-  `rivermigrate` inside `queue.New` (Postgres only). The SQLite
-  queue's `jobs` table ships in the regular migration stream.
-- `sqlc` is staged via `sqlc.yaml` + `internal/repo/queries/*.sql` for
-  a future typed-query pass; current repos use hand-written
-  `pgx`/`database/sql` keyed by `db.SelectQ`.
+  `rivermigrate` inside `queue.New`.
+- A second tree, `internal/migrator/migrations/sqlite/`, is embedded but
+  never served. It exists so `embookshelf import-sqlite` can bring an
+  old source database forward to the current schema before reading it —
+  an operator may upgrade from any old release in one hop. CI job
+  `migrations-sanity-sqlite-importer` keeps it honest. Both the tree and
+  the `modernc.org/sqlite` driver go when the importer is retired
+  (ADR-0023).
+
+#### Migrating an existing SQLite install
+
+```
+DATABASE_URL='postgres://…/embookshelf' \
+  embookshelf import-sqlite --from ./data/embookshelf.db
+```
+
+`internal/sqliteimport` copies tables in foreign-key-safe order,
+asking Postgres for each column's type and converting the two encodings
+that genuinely differ: JSON-text arrays become `text[]`, RFC3339 TEXT
+timestamps become `timestamptz`. Notable behaviour:
+
+- **The target must be empty.** Importing onto a populated database
+  would interleave two libraries, so it refuses instead of merging.
+  Migrations are applied to the target automatically.
+- **Orphan rows are skipped and reported.** SQLite runs with
+  `PRAGMA foreign_keys` off by default, so a long-lived source database
+  can hold rows whose parent no longer exists — Postgres rejects them.
+- **Queued jobs do not transfer.** The old `jobs` table has no River
+  equivalent; pending work must be re-triggered after the import.
 
 ---
 
@@ -1323,9 +1326,9 @@ sourced from a `.env` file in development). Authoritative source:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DATABASE_URL` | `sqlite://./data/embookshelf.db` | Connection DSN. SQLite by default; `postgres://…` for Postgres. |
-| `DATABASE_MAX_CONNS` | `20` | pgxpool max connections (Postgres only) |
-| `DATABASE_MIN_CONNS` | `5` | pgxpool min idle connections (Postgres only) |
+| `DATABASE_URL` | `postgres://localhost:5432/embookshelf` | Postgres connection DSN. A `sqlite://` DSN refuses to boot and names `embookshelf import-sqlite` (ADR-0023). |
+| `DATABASE_MAX_CONNS` | `20` | pgxpool max connections |
+| `DATABASE_MIN_CONNS` | `5` | pgxpool min idle connections |
 
 ### BookDrop + filesystem
 
@@ -1398,15 +1401,15 @@ Settings UI, not via env.
 | **Tailwind via `@tailwindcss/vite`** | First-class Vite integration, no CLI watcher side-process, no generated stylesheet side-car. The earlier standalone-CLI workaround (to avoid the `@tailwindcss/node` loader colliding with Start's prerender on `h3-v2`/`rou3` aliases) is no longer needed under the current plugin + SPA-mode combo. See §9.4. |
 | **shadcn/ui (radix-mira) over rolling our own primitives** | Forms, menus, dialogs, tabs, and toasts get battle-tested keyboard nav + ARIA + focus management + dark-mode support for free via [radix-ui](https://www.radix-ui.com) and [sonner](https://sonner.emilkowal.ski/). The editorial "built like a printed book" layer (`.cover`, `.chip`, `.shelf-plank`, Source Serif 4 typography scale) lives alongside the shadcn tokens in `styles.css`, so the custom voice survives the adoption. Components land under `components/ui/` via `bunx shadcn add` and are owned/forkable source. |
 | **Bun over npm + node** | Bun's installer is ~10× faster than npm on a cold cache, it runs TS scripts (`sync-dist.ts`) directly without a compile step, and the Docker build stage is a single `oven/bun:1` image. The production binary has no JS runtime, so bun is a build-time-only dependency. |
-| **PostgreSQL for multi-user installs; SQLite as the default** | SQLite is the zero-dependency default for single-user self-hosted installs. Postgres is required for multi-writer deployments where `jsonb`, `tsvector` full-text search, and River (job queue) earn the operational overhead. |
-| **sqlc-staged over ORM** | Typed, compile-time-checked SQL keeps the query surface explicit and avoids N+1 surprises; hand-written pgx today, `sqlc.yaml` + `internal/repo/queries/*.sql` staged for when schema stabilizes. |
+| **PostgreSQL only (ADR-0023)** | SQLite was the zero-dependency default for single-user installs, but every SQL statement had to be written twice and the features that matter — `jsonb`, `tsvector` search, River's transactional queue, concurrent writes — are Postgres-only, so SQLite installs got degraded substitutes of each. Postgres is now required: a `sqlite://` DSN refuses to boot and names the one-shot importer, `embookshelf import-sqlite` (§6.2). The `modernc.org/sqlite` driver registration and the SQLite migration tree survive for the importer alone. |
+| **Hand-written SQL, no ORM (ADR-0023)** | Explicit query surface, no N+1 surprises. The dual-dialect burden was the main argument for adopting a query layer (bun was evaluated); dropping SQLite removes it, so hand-written pgx stays on merit. sqlc remains unstaged — it generates per engine, which suited the old two-dialect world poorly and is unnecessary in a one-dialect one. |
 | **golang-migrate over goose/dbmate** | Paired `.up.sql`/`.down.sql` files are unambiguous; the library is small, pgx-friendly, and can be embedded into the app binary so a single artifact can run its own migrations in any environment. |
 | **Gin over chi/echo** | Rich built-in middleware (logger, recovery, CORS via `gin-contrib`), well-known binding/validation story, ergonomic `gin.Context` for streaming responses. Survived the Templ→React and React→shadcn/bun UI migrations unchanged. |
-| **River for Postgres, polling worker for SQLite** | One `queue.Client` interface, two implementations. River gives Postgres installs exactly-once semantics inside the same transaction as the enqueueing mutation, plus horizontal scale and a dashboard. SQLite single-user installs run a 1s-tick polling goroutine — no LISTEN/NOTIFY available, fewest moving parts. The service layer is dialect-blind. |
-| **Pluggable storage (`local` + `s3`) per library** | Self-hosters need both: laptop installs want a folder, multi-user / cloud installs want object storage. Capability bitset (`CapPresign`, `CapStorageClass`, …) lets code paths gate cleanly without leaking backend type-asserts everywhere. SQLite + S3 is refused at boot — without Postgres you don't get the distributed-coordination primitives River provides. |
+| **River for background jobs (ADR-0023)** | River gives exactly-once semantics inside the same transaction as the enqueueing mutation, plus horizontal scale and a dashboard. The `queue.Client` interface survives the collapse to one backend at one method wide: the kind travels with the payload, and `queue/registry.go` declares each job once so River's typed-worker plumbing is derived rather than hand-written. The service layer never imports river. |
+| **Pluggable storage (`local` + `s3`) per library** | Self-hosters need both: laptop installs want a folder, multi-user / cloud installs want object storage. Capability bitset (`CapPresign`, `CapStorageClass`, …) lets code paths gate cleanly without leaking backend type-asserts everywhere. |
 | **Stream by default, presign opt-in** | Streaming through the app server always works; presigning saves bandwidth + CPU but requires bucket-side CORS and TTL care. Make the safe choice the default; gate the optimization behind `EMBOOKSHELF_PRESIGN_FALLBACK=presign`. |
 | **S3 rename = copy + deferred delete with grace window (ADR-0005)** | Edit-time folder renames must not break already-issued presigned URLs. Old keys land in `pending_orphans` until `EMBOOKSHELF_S3_RENAME_GRACE` elapses; a sweeper deletes after. Never atomic, but never racy either. |
-| **FTS5 vs `tsvector` behind one search API (§4.8)** | Same `SearchService` interface, dialect-specific engines. Postgres installs get `websearch_to_tsquery` for free; SQLite installs get FTS5 + bm25 ranking via a custom driver registration that turns on `unicode61 remove_diacritics 2`. |
+| **`tsvector` search in the database (§4.8)** | A generated `tsv` column plus a GIN index gives cross-entity ranked search with no extra service to run, and `websearch_to_tsquery` means the user-facing query syntax is Postgres' well-worn one rather than something we invent. Dropping SQLite (ADR-0023) removed the parallel FTS5 engine that used to sit behind the same `SearchService`. |
 | **Provider catalog in the binary (ADR-0008)** | Provider list, rate-limit defaults, and config schemas ship in the binary, not the DB. New providers are one catalog entry + one `Build` switch arm; rate limits don't need a migration; admins can't enable a provider the binary doesn't ship a driver for. |
 | **Provider secrets AES-256-GCM at rest (ADR-0010)** | Provider API keys + cookies + OIDC client secrets live in `provider_settings_config` / `oidc_settings` encrypted under `EMBOOKSHELF_SECRET_KEY`. Plaintext allowed in dev so local hacking has no ceremony, but the server logs a warning at boot to keep the fact visible. |
 | **ISBN priority chain over fan-out merge (ADR-0011)** | Free-text search merges every provider so the user picks; ISBN is canonical so the first authoritative answer wins. Ordered chain (Hardcover → Google → OpenLibrary → Amazon → Goodreads/DDG) stops on first non-empty match. |

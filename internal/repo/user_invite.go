@@ -42,19 +42,11 @@ type UserInvite struct {
 // Create inserts a row keyed by sha256(token). expiresAt is the
 // absolute deadline; the handler picks 7d typical.
 func (r *UserInviteRepo) Create(ctx context.Context, hash []byte, email string, role model.Role, invitedBy string, expiresAt time.Time) error {
-	const qPG = `
+	const q = `
 		INSERT INTO user_invites (token_hash, email, role, invited_by, expires_at)
 		VALUES ($1, lower($2), $3, $4, $5)
 	`
-	const qSQLite = `
-		INSERT INTO user_invites (token_hash, email, role, invited_by, expires_at)
-		VALUES (?, lower(?), ?, ?, ?)
-	`
-	if r.db.Dialect == db.DialectSQLite {
-		_, err := r.db.SQL.ExecContext(ctx, qSQLite, hash, strings.TrimSpace(email), string(role), invitedBy, expiresAt.UTC().Format(time.RFC3339Nano))
-		return err
-	}
-	_, err := r.db.SQL.ExecContext(ctx, qPG, hash, strings.TrimSpace(email), string(role), invitedBy, expiresAt.UTC())
+	_, err := r.db.SQL.ExecContext(ctx, q, hash, strings.TrimSpace(email), string(role), invitedBy, expiresAt.UTC())
 	return err
 }
 
@@ -62,50 +54,24 @@ func (r *UserInviteRepo) Create(ctx context.Context, hash []byte, email string, 
 // when missing, expired, or already accepted — handler returns 410
 // regardless to avoid leaking status to a guesser.
 func (r *UserInviteRepo) GetByHash(ctx context.Context, hash []byte, now time.Time) (UserInvite, error) {
-	const qPG = `
+	const q = `
 		SELECT token_hash, email, role, invited_by, created_at, expires_at, accepted_at, user_id
 		FROM user_invites
 		WHERE token_hash = $1 AND accepted_at IS NULL AND expires_at > $2
 	`
-	const qSQLite = `
-		SELECT token_hash, email, role, invited_by, created_at, expires_at, accepted_at, user_id
-		FROM user_invites
-		WHERE token_hash = ? AND accepted_at IS NULL AND expires_at > ?
-	`
-	var row interface{ Scan(...any) error }
-	if r.db.Dialect == db.DialectSQLite {
-		row = r.db.SQL.QueryRowContext(ctx, qSQLite, hash, now.UTC().Format(time.RFC3339Nano))
-	} else {
-		row = r.db.SQL.QueryRowContext(ctx, qPG, hash, now.UTC())
-	}
+	row := r.db.SQL.QueryRowContext(ctx, q, hash, now.UTC())
 	return r.scan(row)
 }
 
 // MarkAccepted seals the invite to the new users row. One statement
 // guards against double-accept if two tabs race the form.
 func (r *UserInviteRepo) MarkAccepted(ctx context.Context, hash []byte, userID string, now time.Time) error {
-	const qPG = `
+	const q = `
 		UPDATE user_invites
 		SET accepted_at = $2, user_id = $3
 		WHERE token_hash = $1 AND accepted_at IS NULL AND expires_at > $2
 	`
-	const qSQLite = `
-		UPDATE user_invites
-		SET accepted_at = ?, user_id = ?
-		WHERE token_hash = ? AND accepted_at IS NULL AND expires_at > ?
-	`
-	var (
-		res interface {
-			RowsAffected() (int64, error)
-		}
-		err error
-	)
-	if r.db.Dialect == db.DialectSQLite {
-		nowISO := now.UTC().Format(time.RFC3339Nano)
-		res, err = r.db.SQL.ExecContext(ctx, qSQLite, nowISO, userID, hash, nowISO)
-	} else {
-		res, err = r.db.SQL.ExecContext(ctx, qPG, hash, now.UTC(), userID)
-	}
+	res, err := r.db.SQL.ExecContext(ctx, q, hash, now.UTC(), userID)
 	if err != nil {
 		return err
 	}
@@ -122,30 +88,13 @@ func (r *UserInviteRepo) MarkAccepted(ctx context.Context, hash []byte, userID s
 // ListPending returns every unaccepted, unexpired invite ordered by
 // most-recent-first. Drives the admin invites panel.
 func (r *UserInviteRepo) ListPending(ctx context.Context, now time.Time) ([]UserInvite, error) {
-	const qPG = `
+	const q = `
 		SELECT token_hash, email, role, invited_by, created_at, expires_at, accepted_at, user_id
 		FROM user_invites
 		WHERE accepted_at IS NULL AND expires_at > $1
 		ORDER BY created_at DESC
 	`
-	const qSQLite = `
-		SELECT token_hash, email, role, invited_by, created_at, expires_at, accepted_at, user_id
-		FROM user_invites
-		WHERE accepted_at IS NULL AND expires_at > ?
-		ORDER BY created_at DESC
-	`
-	var rows interface {
-		Next() bool
-		Scan(...any) error
-		Close() error
-		Err() error
-	}
-	var err error
-	if r.db.Dialect == db.DialectSQLite {
-		rows, err = r.db.SQL.QueryContext(ctx, qSQLite, now.UTC().Format(time.RFC3339Nano))
-	} else {
-		rows, err = r.db.SQL.QueryContext(ctx, qPG, now.UTC())
-	}
+	rows, err := r.db.SQL.QueryContext(ctx, q, now.UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -165,22 +114,16 @@ func (r *UserInviteRepo) ListPending(ctx context.Context, now time.Time) ([]User
 // Revoke deletes a pending invite. Idempotent — no-op if the hash is
 // gone (already accepted, already revoked).
 func (r *UserInviteRepo) Revoke(ctx context.Context, hash []byte) error {
-	const qPG = `DELETE FROM user_invites WHERE token_hash = $1 AND accepted_at IS NULL`
-	const qSQLite = `DELETE FROM user_invites WHERE token_hash = ? AND accepted_at IS NULL`
-	_, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), hash)
+	const q = `DELETE FROM user_invites WHERE token_hash = $1 AND accepted_at IS NULL`
+	_, err := r.db.SQL.ExecContext(ctx, q, hash)
 	return err
 }
 
 // PurgeExpired drops rows whose expiry is past and which never
 // accepted. Sweeper fodder.
 func (r *UserInviteRepo) PurgeExpired(ctx context.Context, now time.Time) (int64, error) {
-	const qPG = `DELETE FROM user_invites WHERE expires_at < $1 AND accepted_at IS NULL`
-	const qSQLite = `DELETE FROM user_invites WHERE expires_at < ? AND accepted_at IS NULL`
-	var arg any = now.UTC()
-	if r.db.Dialect == db.DialectSQLite {
-		arg = now.UTC().Format(time.RFC3339Nano)
-	}
-	res, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), arg)
+	const q = `DELETE FROM user_invites WHERE expires_at < $1 AND accepted_at IS NULL`
+	res, err := r.db.SQL.ExecContext(ctx, q, now.UTC())
 	if err != nil {
 		return 0, err
 	}
@@ -204,13 +147,13 @@ func (r *UserInviteRepo) scan(s scanner) (UserInvite, error) {
 	}
 	inv.Role = model.Role(role)
 	inv.UserID = userID
-	if err := db.ScanTime(r.db.Dialect, createdAny, &inv.CreatedAt); err != nil {
+	if err := db.ScanTime(createdAny, &inv.CreatedAt); err != nil {
 		return UserInvite{}, fmt.Errorf("scan created_at: %w", err)
 	}
-	if err := db.ScanTime(r.db.Dialect, expiresAny, &inv.ExpiresAt); err != nil {
+	if err := db.ScanTime(expiresAny, &inv.ExpiresAt); err != nil {
 		return UserInvite{}, fmt.Errorf("scan expires_at: %w", err)
 	}
-	if err := db.ScanNullTime(r.db.Dialect, acceptedAny, &inv.AcceptedAt); err != nil {
+	if err := db.ScanNullTime(acceptedAny, &inv.AcceptedAt); err != nil {
 		return UserInvite{}, fmt.Errorf("scan accepted_at: %w", err)
 	}
 	return inv, nil

@@ -4,85 +4,59 @@ package repotest
 
 import (
 	"context"
-	"os"
 	"testing"
 )
 
-func TestNew_SQLite_freshSchemaPerCall(t *testing.T) {
-	t.Setenv("REPOTEST_DIALECT", "sqlite")
-
+// Each New(t) must land in its own schema, or tests would see each
+// other's rows and pass or fail depending on ordering.
+func TestNew_freshSchemaPerCall(t *testing.T) {
+	ctx := context.Background()
 	d1 := New(t)
 	d2 := New(t)
 
-	ctx := context.Background()
-
-	// Inserting a row in d1 must not be visible from d2 — they are
-	// separate temp files.
 	if _, err := d1.SQL.ExecContext(ctx,
-		`INSERT INTO libraries (id, name, slug, path) VALUES (?, ?, ?, ?)`,
-		"lib-a", "A", "a", "/tmp/a"); err != nil {
-		t.Fatalf("insert d1: %v", err)
+		`INSERT INTO libraries (id, name, slug, path) VALUES ($1, $2, $3, $4)`,
+		"aaaaaaaa-0001-4001-8001-000000000001", "A", "a", "/tmp/a"); err != nil {
+		t.Fatalf("insert into first schema: %v", err)
 	}
 
 	var n int
 	if err := d2.SQL.QueryRowContext(ctx, `SELECT count(*) FROM libraries`).Scan(&n); err != nil {
-		t.Fatalf("count d2: %v", err)
+		t.Fatalf("count in second schema: %v", err)
 	}
 	if n != 0 {
-		t.Fatalf("d2 saw %d libraries; want 0 (per-call isolation broken)", n)
+		t.Fatalf("second schema saw %d libraries, want 0 — per-call isolation is broken", n)
 	}
 }
 
-func TestNew_SQLite_migrationsApplied(t *testing.T) {
-	t.Setenv("REPOTEST_DIALECT", "sqlite")
+func TestNew_migrationsApplied(t *testing.T) {
 	d := New(t)
 	ctx := context.Background()
 
-	// books_fts must exist (FTS5 trigger from Plan 2A's migration tree).
-	var name string
-	err := d.SQL.QueryRowContext(ctx,
-		`SELECT name FROM sqlite_master WHERE type='table' AND name='books_fts'`).Scan(&name)
-	if err != nil {
-		t.Fatalf("books_fts not present after migration: %v", err)
+	// A late-migration column: proves the whole tree ran, not just the init.
+	var exists bool
+	if err := d.SQL.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = current_schema()
+			  AND table_name = 'shelves' AND column_name = 'icon'
+		)`).Scan(&exists); err != nil {
+		t.Fatalf("inspect schema: %v", err)
+	}
+	if !exists {
+		t.Fatal("shelves.icon missing — migrations did not fully apply")
 	}
 }
 
-func TestNew_unrecognizedDialect_skips(t *testing.T) {
-	t.Setenv("REPOTEST_DIALECT", "mongo")
-	subRan := false
-	t.Run("inner", func(t *testing.T) {
-		_ = New(t)
-		subRan = true
-		t.Fatal("New() returned for an unrecognized dialect; expected Skipf")
-	})
-	if subRan {
-		t.Fatal("New() did not skip for unrecognized dialect")
-	}
-}
-
-func TestNewWithDialect_overridesEnv(t *testing.T) {
-	t.Setenv("REPOTEST_DIALECT", "mongo") // would skip if New were used
-	d := NewWithDialect(t, "sqlite")
-	if d == nil {
-		t.Fatal("NewWithDialect returned nil for sqlite")
-	}
+// The importer's source database is the one remaining SQLite path.
+func TestNewSQLiteSource_migrationsApplied(t *testing.T) {
+	d := NewSQLiteSource(t)
 	if d.Dialect != "sqlite" {
-		t.Fatalf("dialect=%q want sqlite", d.Dialect)
+		t.Fatalf("dialect = %q, want sqlite", d.Dialect)
 	}
-}
-
-func TestNewPostgres_live(t *testing.T) {
-	if os.Getenv("TEST_DATABASE_URL") == "" {
-		t.Skip("TEST_DATABASE_URL not set")
-	}
-	d := NewWithDialect(t, "postgres")
-	ctx := context.Background()
-	var n int
-	if err := d.SQL.QueryRowContext(ctx, `SELECT count(*) FROM libraries`).Scan(&n); err != nil {
-		t.Fatalf("query: %v", err)
-	}
-	// fresh schema → 0 libraries
-	if n != 0 {
-		t.Fatalf("got %d libraries, want 0", n)
+	var name string
+	if err := d.SQL.QueryRowContext(context.Background(),
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='books_fts'`).Scan(&name); err != nil {
+		t.Fatalf("books_fts not present after migration: %v", err)
 	}
 }

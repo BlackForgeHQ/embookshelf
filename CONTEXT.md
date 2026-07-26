@@ -6,6 +6,18 @@ This file complements `docs/ARCHITECTURE.md` (technical layout) and `docs/spec/`
 
 ---
 
+## Database
+
+### SQLite import
+
+`embookshelf import-sqlite --from <file.db>`; the one-shot migration off the retired SQLite backend (ADR-0023). Reads a SQLite library and writes it into the Postgres database named by `DATABASE_URL`, translating the two encodings that genuinely differ — JSON-text arrays become `text[]`, RFC3339 TEXT becomes `timestamptz`. Refuses a non-empty target rather than interleaving two libraries, and runs in one transaction so a failure leaves Postgres untouched.
+
+Two classes of data deliberately do not transfer, both reported at the end rather than dropped silently: queued jobs (the SQLite polling queue and River don't share a table — re-trigger a Library scan afterwards) and **orphan rows**. SQLite runs with `PRAGMA foreign_keys` off by default, so an older database can hold rows whose parent is gone; Postgres rejects them, so each is skipped via a per-row savepoint and counted.
+
+This importer is the only reason two SQLite artifacts survive: the `modernc.org/sqlite` driver registration, and the SQLite migration tree (an operator can upgrade straight from an old release, so an old source database must be migrated forward before its rows map onto the current schema). Both are marked for deletion with the importer.
+
+---
+
 ## Instance settings
 
 ### Setting
@@ -209,9 +221,9 @@ Opaque change token from a backend (S3 returns one; LocalFS leaves it empty). Us
 
 ### Job registry
 
-`queue.registry(deps)`; the single list of job kinds the binary knows. One `register[T](work)` entry per job builds both adapters' view of it — a typed River worker and a SQLite decode-and-dispatch handler — from the same declaration, and the per-job `Deps` structs are assembled once. Adding a job is one line: the `Client` interface does not widen (kind travels with the payload via `queue.JobArgs`), and no second registration site exists. Confines the River driver import to `internal/queue`; `internal/task` no longer imports it.
+`queue.registry(deps)`; the single list of job kinds the binary knows. One `register[T](work)` entry per job declares the kind, the args type, and the work function together, and derives River's typed-worker plumbing from them; the per-job `Deps` structs are assembled once. Adding a job is one line: the `Client` interface does not widen (kind travels with the payload via `queue.JobArgs`), and no second registration site exists. Confines the River driver import to `internal/queue`; `internal/task` does not import it.
 
-Crash recovery is the one place the two adapters legitimately differ, and callers must not depend on which they got: the SQLite loop re-pends interrupted `running` rows at boot so a crashed job retries on the next tick, while River leaves them to its own JobRescuer (default 1h). Both recover; only the latency differs.
+Crash recovery is River's JobRescuer, which reclaims jobs left `running` by a killed process after a timeout (default 1h). The SQLite polling backend that used to sit behind this same interface is gone (ADR-0023).
 
 ### Drainer
 

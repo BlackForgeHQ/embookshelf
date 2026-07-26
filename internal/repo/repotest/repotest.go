@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package repotest provides per-test database setup for repo-level
-// integration tests. Call New(t) to receive a fully-migrated *db.DB
-// pointed at an isolated database. The dialect is selected by the
-// REPOTEST_DIALECT env var (default "sqlite").
+// integration tests. Call New(t) to receive a fully-migrated *db.DB.
 //
-//	SQLite: each call returns a fresh tempfile DB (full isolation).
-//	Postgres: each call creates a uniquely-named schema in the
-//	          DSN named by TEST_DATABASE_URL, sets search_path to it,
-//	          and drops the schema on Cleanup.
+// embookshelf is Postgres-only (ADR-0023), so there is no dialect to
+// choose: each New(t) creates a uniquely-named schema in the database
+// named by TEST_DATABASE_URL, sets search_path to it, and drops the
+// schema on Cleanup.
 //
-// Use NewWithDialect when a single test wants to exercise both backends
-// (e.g. a t.Run-per-dialect matrix test) without depending on the env var.
+// A missing TEST_DATABASE_URL is a hard failure rather than a skip. A
+// skipped integration test is an unrun one, and three tests silently
+// covering only SQLite is how the drift ADR-0023 describes went
+// unnoticed. `make test` starts the compose.dev.yml service and sets the
+// variable.
+//
+// NewSQLiteSource exists solely to build a source database for the
+// `import-sqlite` tests and goes away with the importer.
 package repotest
 
 import (
@@ -28,31 +32,21 @@ import (
 	"github.com/blackforge/embookshelf/internal/migrator"
 )
 
-// New returns a *db.DB for the dialect named by REPOTEST_DIALECT
-// (default "sqlite").
+// New returns a migrated Postgres *db.DB in its own schema.
 func New(t *testing.T) *db.DB {
 	t.Helper()
-	dialect := os.Getenv("REPOTEST_DIALECT")
-	if dialect == "" {
-		dialect = "sqlite"
-	}
-	return NewWithDialect(t, dialect)
+	return newPostgres(t)
 }
 
-// NewWithDialect returns a *db.DB for an explicit dialect, ignoring
-// REPOTEST_DIALECT. Use this in matrix tests that iterate over both
-// backends in a single go test invocation.
-func NewWithDialect(t *testing.T, dialect string) *db.DB {
+// NewSQLiteSource returns a migrated SQLite database in a temp file.
+//
+// This is not a dialect option — it exists only so the `import-sqlite`
+// tests have a realistic source to read, and it should be deleted along
+// with the importer once the deprecation window closes. Production code
+// must never open SQLite.
+func NewSQLiteSource(t *testing.T) *db.DB {
 	t.Helper()
-	switch dialect {
-	case "sqlite":
-		return newSQLite(t)
-	case "postgres":
-		return newPostgres(t)
-	default:
-		t.Skipf("REPOTEST_DIALECT=%q not recognized (want sqlite or postgres)", dialect)
-		return nil
-	}
+	return newSQLite(t)
 }
 
 func newSQLite(t *testing.T) *db.DB {
@@ -78,16 +72,28 @@ func newPostgres(t *testing.T) *db.DB {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("REPOTEST_DIALECT=postgres requires TEST_DATABASE_URL")
+		t.Fatal(`TEST_DATABASE_URL is not set — repo tests need Postgres.
+
+Run "make test", which starts the compose.dev.yml service, or start one
+yourself and export the DSN:
+
+  docker compose -f compose.dev.yml up -d postgres
+  export TEST_DATABASE_URL='postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable'`)
 	}
 
 	suffix := randomHex(t, 8)
 	schema := "repotest_" + suffix
 
 	cfg := config.Config{
-		DatabaseURL:      dsn,
-		DatabaseMaxConns: 4,
-		DatabaseMinConns: 1,
+		DatabaseURL: dsn,
+		// One connection per test database, not four. Every test in every
+		// package now opens its own pool against the same server, and the
+		// default max_connections of 100 is reachable when packages run in
+		// parallel — the symptom is an intermittent "pg ping: context
+		// deadline exceeded". SetMaxOpenConns(1) below already limits us
+		// to one in-flight query, so a larger pool bought nothing.
+		DatabaseMaxConns: 1,
+		DatabaseMinConns: 0,
 	}
 	ctx := context.Background()
 	d, err := db.Open(ctx, cfg)

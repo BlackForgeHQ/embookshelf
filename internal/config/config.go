@@ -98,8 +98,11 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		Port:             envInt("EMBOOKSHELF_PORT", 6060),
-		DatabaseURL:      envStr("DATABASE_URL", "sqlite://./data/embookshelf.db"),
+		Port: envInt("EMBOOKSHELF_PORT", 6060),
+		// Postgres-only since ADR-0023. A bare default that pointed at a
+		// SQLite file would now refuse to boot, so the default names a
+		// local Postgres instead.
+		DatabaseURL:      envStr("DATABASE_URL", "postgres://localhost:5432/embookshelf"),
 		DatabaseMaxConns: int32(envInt("DATABASE_MAX_CONNS", 20)),
 		DatabaseMinConns: int32(envInt("DATABASE_MIN_CONNS", 5)),
 		AllowedOrigins:   strings.Split(envStr("ALLOWED_ORIGINS", "*"), ","),

@@ -42,10 +42,6 @@ type LibraryServiceDeps struct {
 	// Resolver is used during purge to iterate and delete objects under the
 	// library's backend prefix. May be nil — purge is skipped when nil.
 	Resolver storage.Resolver
-	// Dialect is the DB dialect (postgres | sqlite). Used to guard s3
-	// library creation on SQLite installs where storageloader refuses to
-	// build s3 backends.
-	Dialect config.Dialect
 	// DataPath is the root under which managed local-library folders
 	// live. Per ADR 0002, kind=local libraries derive their filesystem
 	// path as `${DataPath}/libraries/{slug}/`. Required for local
@@ -102,9 +98,6 @@ func (s *LibraryService) Create(ctx context.Context, name string, kind LibraryKi
 		return s.repo.CreateLibrary(ctx, name, slug, path, nil)
 
 	case LibraryKindS3:
-		if s.deps.Dialect == config.DialectSQLite {
-			return model.Library{}, errors.New("s3 libraries are not supported on SQLite installs")
-		}
 		if !s.deps.SharedS3.Configured() {
 			return model.Library{}, ErrS3NotConfigured
 		}

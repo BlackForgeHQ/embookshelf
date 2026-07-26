@@ -72,7 +72,7 @@ func (r *StatsRepo) TopAuthors(ctx context.Context, limit int) ([]StatsBucket, e
 	if limit <= 0 {
 		limit = 10
 	}
-	const qPG = `
+	const q = `
 		SELECT COALESCE(NULLIF(author, ''), 'Unknown'), COUNT(*)
 		FROM books
 		WHERE deleted_at IS NULL
@@ -80,24 +80,16 @@ func (r *StatsRepo) TopAuthors(ctx context.Context, limit int) ([]StatsBucket, e
 		ORDER BY 2 DESC, 1
 		LIMIT $1
 	`
-	const qSQLite = `
-		SELECT COALESCE(NULLIF(author, ''), 'Unknown'), COUNT(*)
-		FROM books
-		WHERE deleted_at IS NULL
-		GROUP BY 1
-		ORDER BY 2 DESC, 1
-		LIMIT ?
-	`
-	return r.query(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), limit)
+	return r.query(ctx, q, limit)
 }
 
-// TopTags walks the tags[] columns (via UNNEST on PG, json_each on SQLite)
-// and returns the N most-used tag labels.
+// TopTags walks the tags[] columns via UNNEST and returns the N
+// most-used tag labels.
 func (r *StatsRepo) TopTags(ctx context.Context, limit int) ([]StatsBucket, error) {
 	if limit <= 0 {
 		limit = 15
 	}
-	const qPG = `
+	const q = `
 		SELECT tag, COUNT(*)
 		FROM books, UNNEST(tags) AS tag
 		WHERE deleted_at IS NULL
@@ -105,15 +97,7 @@ func (r *StatsRepo) TopTags(ctx context.Context, limit int) ([]StatsBucket, erro
 		ORDER BY 2 DESC, tag
 		LIMIT $1
 	`
-	const qSQLite = `
-		SELECT j.value AS tag, COUNT(*)
-		FROM books, json_each(tags) AS j
-		WHERE deleted_at IS NULL
-		GROUP BY j.value
-		ORDER BY 2 DESC, j.value
-		LIMIT ?
-	`
-	return r.query(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), limit)
+	return r.query(ctx, q, limit)
 }
 
 type StatsYearBucket struct {
@@ -181,56 +165,35 @@ func (r *StatsRepo) RatingDistribution(ctx context.Context) ([]StatsRatingBucket
 // UserProgressCounts returns a (reading, finished) pair for the user.
 // "Reading" = progress 1..99; "Finished" = progress >= 100.
 func (r *StatsRepo) UserProgressCounts(ctx context.Context, userID string) (reading, finished int, _ error) {
-	// PG uses aggregate FILTER; SQLite uses SUM(CASE WHEN ...).
-	const qPG = `
+	// COUNT(*) FILTER returns 0 (not NULL) over an empty row set, so both
+	// columns scan straight into int.
+	const q = `
 		SELECT
 			COUNT(*) FILTER (WHERE progress BETWEEN 1 AND 99),
 			COUNT(*) FILTER (WHERE progress >= 100)
 		FROM user_book_progress
 		WHERE user_id = $1
 	`
-	// COALESCE wraps SUM because SQLite returns NULL for SUM over an empty
-	// row set, which doesn't scan into int. PG's COUNT(*) FILTER returns 0.
-	const qSQLite = `
-		SELECT
-			COALESCE(SUM(CASE WHEN progress BETWEEN 1 AND 99 THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN progress >= 100 THEN 1 ELSE 0 END), 0)
-		FROM user_book_progress
-		WHERE user_id = ?
-	`
-	err := r.db.SQL.QueryRowContext(ctx,
-		db.SelectQ(r.db.Dialect, qPG, qSQLite),
-		userID).Scan(&reading, &finished)
+	err := r.db.SQL.QueryRowContext(ctx, q, userID).Scan(&reading, &finished)
 	return reading, finished, err
 }
 
 // UserAnnotationCount returns the user's total annotation count.
 func (r *StatsRepo) UserAnnotationCount(ctx context.Context, userID string) (int, error) {
-	const qPG = `SELECT COUNT(*) FROM annotations WHERE user_id = $1`
-	const qSQLite = `SELECT COUNT(*) FROM annotations WHERE user_id = ?`
+	const q = `SELECT COUNT(*) FROM annotations WHERE user_id = $1`
 	var n int
-	err := r.db.SQL.QueryRowContext(ctx,
-		db.SelectQ(r.db.Dialect, qPG, qSQLite),
-		userID).Scan(&n)
+	err := r.db.SQL.QueryRowContext(ctx, q, userID).Scan(&n)
 	return n, err
 }
 
 // UserShelfCounts returns (total, smart) shelf counts for the user.
 func (r *StatsRepo) UserShelfCounts(ctx context.Context, userID string) (total, smart int, _ error) {
-	// PG uses aggregate FILTER; SQLite uses SUM(CASE WHEN ...).
-	const qPG = `
+	const q = `
 		SELECT COUNT(*), COUNT(*) FILTER (WHERE is_smart)
 		FROM shelves
 		WHERE user_id = $1
 	`
-	const qSQLite = `
-		SELECT COUNT(*), COALESCE(SUM(CASE WHEN is_smart = 1 THEN 1 ELSE 0 END), 0)
-		FROM shelves
-		WHERE user_id = ?
-	`
-	err := r.db.SQL.QueryRowContext(ctx,
-		db.SelectQ(r.db.Dialect, qPG, qSQLite),
-		userID).Scan(&total, &smart)
+	err := r.db.SQL.QueryRowContext(ctx, q, userID).Scan(&total, &smart)
 	return total, smart, err
 }
 

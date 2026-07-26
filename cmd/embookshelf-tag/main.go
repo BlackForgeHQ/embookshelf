@@ -59,7 +59,7 @@ func main() {
 	fileRepo := repo.NewFileRepo(dbh)
 	progressRepo := repo.NewProgressRepo(dbh)
 
-	resolver, err := storageloader.LoadStorageBackends(ctx, backendRepo, config.Dialect(string(dbh.Dialect)))
+	resolver, err := storageloader.LoadStorageBackends(ctx, backendRepo)
 	if err != nil {
 		fail("storage", err)
 	}

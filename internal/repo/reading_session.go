@@ -4,8 +4,6 @@ package repo
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
@@ -33,8 +31,10 @@ func (r *ReadingSessionRepo) RecordTick(
 	percent int,
 	mergeWindow time.Duration,
 ) error {
-	// PG path: single CTE round trip with interval arithmetic.
-	const qPG = `
+	// A single CTE round trip: extend the latest session when its last
+	// tick landed inside mergeWindow, otherwise start a new one. Doing it
+	// in one statement keeps concurrent ticks from tearing.
+	const q = `
 		WITH latest AS (
 			SELECT id, ended_at
 			FROM reading_sessions
@@ -55,93 +55,8 @@ func (r *ReadingSessionRepo) RecordTick(
 		SELECT $1, $2, $3, $3
 		WHERE NOT EXISTS (SELECT 1 FROM extended)
 	`
-	if r.db.Dialect == db.DialectSQLite {
-		return r.recordTickSQLite(ctx, userID, bookID, percent, mergeWindow)
-	}
-	_, err := r.db.SQL.ExecContext(ctx, qPG, userID, bookID, percent, intervalLiteral(mergeWindow))
+	_, err := r.db.SQL.ExecContext(ctx, q, userID, bookID, percent, intervalLiteral(mergeWindow))
 	return err
-}
-
-// recordTickSQLite is the SQLite equivalent of the PG single-statement CTE
-// chain. SQLite rejects DML inside a CTE (Postgres-only extension), so the
-// extend-or-insert decision happens app-side inside a transaction:
-//
-//  1. SELECT the latest session for (user, book).
-//  2. If its ended_at is within mergeWindow → UPDATE that row.
-//  3. Otherwise → INSERT a new row with a pre-generated UUID.
-//
-// Wrapped in a tx so a concurrent tick from another goroutine can't drop
-// us into a torn state. RecordTick is already documented as best-effort,
-// so any error rolls back and surfaces to the caller.
-func (r *ReadingSessionRepo) recordTickSQLite(
-	ctx context.Context,
-	userID, bookID string,
-	percent int,
-	mergeWindow time.Duration,
-) error {
-	secs := int(mergeWindow.Seconds())
-	if secs <= 0 {
-		secs = 1
-	}
-	modifier := fmt.Sprintf("-%d seconds", secs)
-
-	tx, err := r.db.SQL.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var (
-		latestID string
-		// String scan because SQLite stores timestamps as TEXT.
-		latestEndedAt string
-	)
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, ended_at
-		FROM reading_sessions
-		WHERE user_id = ? AND book_id = ?
-		ORDER BY ended_at DESC
-		LIMIT 1
-	`, userID, bookID).Scan(&latestID, &latestEndedAt)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("select latest: %w", err)
-	}
-
-	if latestID != "" {
-		// Did the latest tick land inside mergeWindow? Push the cutoff
-		// computation to SQLite so its clock is the authority — no
-		// app/DB drift.
-		var withinWindow int
-		err = tx.QueryRowContext(ctx, `
-			SELECT CASE
-				WHEN ? >= datetime('now', ?) THEN 1 ELSE 0
-			END
-		`, latestEndedAt, modifier).Scan(&withinWindow)
-		if err != nil {
-			return fmt.Errorf("window check: %w", err)
-		}
-		if withinWindow == 1 {
-			_, err = tx.ExecContext(ctx, `
-				UPDATE reading_sessions
-				SET ended_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-				    end_progress = ?
-				WHERE id = ?
-			`, percent, latestID)
-			if err != nil {
-				return fmt.Errorf("extend session: %w", err)
-			}
-			return tx.Commit()
-		}
-	}
-
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO reading_sessions (id, user_id, book_id, start_progress, end_progress)
-		VALUES (?, ?, ?, ?, ?)
-	`, db.NewID(), userID, bookID, percent, percent)
-	if err != nil {
-		return fmt.Errorf("insert session: %w", err)
-	}
-	return tx.Commit()
 }
 
 // Heatmap returns minute-per-day totals for the last `days` days,
@@ -153,13 +68,6 @@ func (r *ReadingSessionRepo) Heatmap(ctx context.Context, userID string, days in
 		days = 84
 	}
 
-	if r.db.Dialect == db.DialectSQLite {
-		return r.heatmapSQLite(ctx, userID, days)
-	}
-	return r.heatmapPG(ctx, userID, days)
-}
-
-func (r *ReadingSessionRepo) heatmapPG(ctx context.Context, userID string, days int) ([]int, error) {
 	rows, err := r.db.SQL.QueryContext(ctx, `
 		WITH day_series AS (
 			SELECT generate_series(
@@ -199,49 +107,6 @@ func (r *ReadingSessionRepo) heatmapPG(ctx context.Context, userID string, days 
 	return out, rows.Err()
 }
 
-func (r *ReadingSessionRepo) heatmapSQLite(ctx context.Context, userID string, days int) ([]int, error) {
-	// Query minutes grouped by date for the window.
-	rows, err := r.db.SQL.QueryContext(ctx, `
-		SELECT date(started_at) AS day,
-		       MAX(1,
-		           CAST(CEIL((julianday(ended_at) - julianday(started_at)) * 86400 / 60.0) AS INTEGER)
-		       ) AS minutes
-		FROM reading_sessions
-		WHERE user_id = ?
-		  AND started_at >= date('now', ? || ' days')
-		GROUP BY date(started_at)
-		ORDER BY day ASC
-	`, userID, fmt.Sprintf("-%d", days-1))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	// Build a day→minutes map.
-	byDay := make(map[string]int, days)
-	for rows.Next() {
-		var dayStr string
-		var m int
-		if err := rows.Scan(&dayStr, &m); err != nil {
-			return nil, err
-		}
-		byDay[dayStr] = m
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	// Fill the full window oldest→newest with 0 for missing days.
-	now := time.Now().UTC().Truncate(24 * time.Hour)
-	out := make([]int, days)
-	for i := 0; i < days; i++ {
-		d := now.AddDate(0, 0, -(days - 1 - i))
-		key := d.Format("2006-01-02")
-		out[i] = byDay[key]
-	}
-	return out, nil
-}
-
 // MinutesInWindow sums session durations for the last N days.
 // Mirrors the heatmap's "one minute minimum" rounding so short sessions
 // aren't invisible in the headline figure either.
@@ -249,7 +114,7 @@ func (r *ReadingSessionRepo) MinutesInWindow(ctx context.Context, userID string,
 	if days <= 0 {
 		days = 7
 	}
-	const qPG = `
+	const q = `
 		SELECT COALESCE(
 			CEIL(SUM(EXTRACT(EPOCH FROM (ended_at - started_at)) / 60.0))::int,
 			0
@@ -258,23 +123,8 @@ func (r *ReadingSessionRepo) MinutesInWindow(ctx context.Context, userID string,
 		WHERE user_id = $1
 		  AND started_at >= CURRENT_DATE - ($2::int - 1) * INTERVAL '1 day'
 	`
-	const qSQLite = `
-		SELECT COALESCE(
-			CAST(CEIL(SUM((julianday(ended_at) - julianday(started_at)) * 86400 / 60.0)) AS INTEGER),
-			0
-		)
-		FROM reading_sessions
-		WHERE user_id = ?
-		  AND started_at >= date('now', ? || ' days')
-	`
 	var m *int
-	var err error
-	if r.db.Dialect == db.DialectSQLite {
-		err = r.db.SQL.QueryRowContext(ctx, qSQLite,
-			userID, fmt.Sprintf("-%d", days-1)).Scan(&m)
-	} else {
-		err = r.db.SQL.QueryRowContext(ctx, qPG, userID, days).Scan(&m)
-	}
+	err := r.db.SQL.QueryRowContext(ctx, q, userID, days).Scan(&m)
 	if err != nil {
 		return 0, err
 	}
@@ -291,22 +141,14 @@ func (r *ReadingSessionRepo) CurrentStreak(ctx context.Context, userID string) (
 	// Pull the distinct dates with activity (newest first) and walk
 	// them in Go — clearer than a gap-detection window function, and
 	// the list is at most ~366 rows for a year.
-	const qPG = `
+	const q = `
 		SELECT DISTINCT DATE(started_at) AS day
 		FROM reading_sessions
 		WHERE user_id = $1
 		  AND started_at >= CURRENT_DATE - INTERVAL '400 days'
 		ORDER BY day DESC
 	`
-	const qSQLite = `
-		SELECT DISTINCT date(started_at) AS day
-		FROM reading_sessions
-		WHERE user_id = ?
-		  AND started_at >= date('now', '-400 days')
-		ORDER BY day DESC
-	`
-	rows, err := r.db.SQL.QueryContext(ctx,
-		db.SelectQ(r.db.Dialect, qPG, qSQLite), userID)
+	rows, err := r.db.SQL.QueryContext(ctx, q, userID)
 	if err != nil {
 		return 0, err
 	}
@@ -318,7 +160,8 @@ func (r *ReadingSessionRepo) CurrentStreak(ctx context.Context, userID string) (
 		if err := rows.Scan(&dayAny); err != nil {
 			return 0, err
 		}
-		// PG returns time.Time for DATE columns; SQLite returns a string "YYYY-MM-DD".
+		// DATE columns normally arrive as time.Time, but accept the
+		// "YYYY-MM-DD" string form too in case the driver hands one over.
 		var d time.Time
 		switch v := dayAny.(type) {
 		case time.Time:
@@ -366,19 +209,13 @@ func (r *ReadingSessionRepo) CurrentStreak(ctx context.Context, userID string) (
 // subtitle ("you've been reading for N hours this quarter across K
 // sessions"). Quarter-scoping is applied by passing days=90.
 func (r *ReadingSessionRepo) TotalMinutes(ctx context.Context, userID string) (int, error) {
-	const qPG = `
+	const q = `
 		SELECT CEIL(SUM(EXTRACT(EPOCH FROM (ended_at - started_at)) / 60.0))::int
 		FROM reading_sessions
 		WHERE user_id = $1
 	`
-	const qSQLite = `
-		SELECT CAST(CEIL(SUM((julianday(ended_at) - julianday(started_at)) * 86400 / 60.0)) AS INTEGER)
-		FROM reading_sessions
-		WHERE user_id = ?
-	`
 	var m *int
-	err := r.db.SQL.QueryRowContext(ctx,
-		db.SelectQ(r.db.Dialect, qPG, qSQLite), userID).Scan(&m)
+	err := r.db.SQL.QueryRowContext(ctx, q, userID).Scan(&m)
 	if err != nil {
 		return 0, err
 	}
@@ -394,26 +231,14 @@ func (r *ReadingSessionRepo) CountSessions(ctx context.Context, userID string, d
 	if days <= 0 {
 		days = 90
 	}
-	const qPG = `
+	const q = `
 		SELECT COUNT(*)
 		FROM reading_sessions
 		WHERE user_id = $1
 		  AND started_at >= CURRENT_DATE - ($2::int - 1) * INTERVAL '1 day'
 	`
-	const qSQLite = `
-		SELECT COUNT(*)
-		FROM reading_sessions
-		WHERE user_id = ?
-		  AND started_at >= date('now', ? || ' days')
-	`
 	var n int
-	var err error
-	if r.db.Dialect == db.DialectSQLite {
-		err = r.db.SQL.QueryRowContext(ctx, qSQLite,
-			userID, fmt.Sprintf("-%d", days-1)).Scan(&n)
-	} else {
-		err = r.db.SQL.QueryRowContext(ctx, qPG, userID, days).Scan(&n)
-	}
+	err := r.db.SQL.QueryRowContext(ctx, q, userID, days).Scan(&n)
 	return n, err
 }
 

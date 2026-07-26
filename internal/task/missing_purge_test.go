@@ -16,7 +16,7 @@ import (
 // newPurgeTestRepo creates a FileRepo wired to a fresh SQLite DB (migrated).
 func newPurgeTestRepo(t *testing.T) (*repo.FileRepo, *repo.LibraryRepo) {
 	t.Helper()
-	d := repotest.NewWithDialect(t, "sqlite")
+	d := repotest.New(t)
 	return repo.NewFileRepo(d), repo.NewLibraryRepo(d)
 }
 

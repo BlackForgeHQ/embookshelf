@@ -21,7 +21,7 @@ import (
 // DB and a coverstore rooted at a temp directory.
 func newCoversBackfillDeps(t *testing.T) (task.CoversBackfillDeps, *repo.LibraryRepo, *repo.BookRepo, string) {
 	t.Helper()
-	d := repotest.NewWithDialect(t, "sqlite")
+	d := repotest.New(t)
 	coverRoot := t.TempDir()
 	cs := coverstore.New(coverRoot)
 	lr := repo.NewLibraryRepo(d)

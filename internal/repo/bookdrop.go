@@ -33,17 +33,12 @@ var ErrAlreadyExists = errors.New("already exists")
 
 func (r *BookDropRepo) Insert(ctx context.Context, path, format string, size int64) (model.BookDropItem, error) {
 	id := db.NewID()
-	const qPG = `
+	const q = `
 		INSERT INTO bookdrop_items (id, path, file_size, format)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (path) DO NOTHING
 		RETURNING ` + bdCols
-	const qSQLite = `
-		INSERT INTO bookdrop_items (id, path, file_size, format)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT (path) DO NOTHING
-		RETURNING ` + bdCols
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), id, path, size, format)
+	row := r.db.SQL.QueryRowContext(ctx, q, id, path, size, format)
 	item, err := r.scanBookDrop(row)
 	if errors.Is(err, ErrNotFound) {
 		// ON CONFLICT DO NOTHING returned no rows — row already existed, fetch it.
@@ -57,16 +52,14 @@ func (r *BookDropRepo) Insert(ctx context.Context, path, format string, size int
 }
 
 func (r *BookDropRepo) GetByID(ctx context.Context, id string) (model.BookDropItem, error) {
-	const qPG = `SELECT ` + bdCols + ` FROM bookdrop_items WHERE id = $1`
-	const qSQLite = `SELECT ` + bdCols + ` FROM bookdrop_items WHERE id = ?`
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), id)
+	const q = `SELECT ` + bdCols + ` FROM bookdrop_items WHERE id = $1`
+	row := r.db.SQL.QueryRowContext(ctx, q, id)
 	return r.scanBookDrop(row)
 }
 
 func (r *BookDropRepo) GetByPath(ctx context.Context, path string) (model.BookDropItem, error) {
-	const qPG = `SELECT ` + bdCols + ` FROM bookdrop_items WHERE path = $1`
-	const qSQLite = `SELECT ` + bdCols + ` FROM bookdrop_items WHERE path = ?`
-	row := r.db.SQL.QueryRowContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), path)
+	const q = `SELECT ` + bdCols + ` FROM bookdrop_items WHERE path = $1`
+	row := r.db.SQL.QueryRowContext(ctx, q, path)
 	return r.scanBookDrop(row)
 }
 
@@ -85,28 +78,19 @@ func (r *BookDropRepo) List(ctx context.Context) ([]model.BookDropItem, error) {
 }
 
 func (r *BookDropRepo) SetState(ctx context.Context, id string, state model.BookDropState, progress int, errorMsg string) error {
-	const qPG = `
+	const q = `
 		UPDATE bookdrop_items
 		SET state = $2, progress = $3, error_msg = $4, updated_at = now()
 		WHERE id = $1
 	`
-	const qSQLite = `
-		UPDATE bookdrop_items
-		SET state = ?, progress = ?, error_msg = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-		WHERE id = ?
-	`
-	if r.db.Dialect == db.DialectSQLite {
-		_, err := r.db.SQL.ExecContext(ctx, qSQLite, string(state), progress, errorMsg, id)
-		return err
-	}
-	_, err := r.db.SQL.ExecContext(ctx, qPG, id, string(state), progress, errorMsg)
+	_, err := r.db.SQL.ExecContext(ctx, q, id, string(state), progress, errorMsg)
 	return err
 }
 
 // SetMetadata records metadata extracted by the fileproc worker and flips the
 // item into 'ready' state. cover_mime is empty when no cover was extracted.
 func (r *BookDropRepo) SetMetadata(ctx context.Context, id, title, author, description, language, isbn string, hasCover bool, coverMime string) error {
-	const qPG = `
+	const q = `
 		UPDATE bookdrop_items
 		SET title = $2, author = $3, description = $4, language = $5,
 		    isbn = $6, has_cover = $7, cover_mime = $8,
@@ -114,19 +98,7 @@ func (r *BookDropRepo) SetMetadata(ctx context.Context, id, title, author, descr
 		    updated_at = now()
 		WHERE id = $1
 	`
-	const qSQLite = `
-		UPDATE bookdrop_items
-		SET title = ?, author = ?, description = ?, language = ?,
-		    isbn = ?, has_cover = ?, cover_mime = ?,
-		    state = 'ready', progress = 100, error_msg = '',
-		    updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-		WHERE id = ?
-	`
-	if r.db.Dialect == db.DialectSQLite {
-		_, err := r.db.SQL.ExecContext(ctx, qSQLite, title, author, description, language, isbn, hasCover, coverMime, id)
-		return err
-	}
-	_, err := r.db.SQL.ExecContext(ctx, qPG, id, title, author, description, language, isbn, hasCover, coverMime)
+	_, err := r.db.SQL.ExecContext(ctx, q, id, title, author, description, language, isbn, hasCover, coverMime)
 	return err
 }
 
@@ -135,21 +107,12 @@ func (r *BookDropRepo) SetMetadata(ctx context.Context, id, title, author, descr
 // upload path (BookDropPutCover); ingest's SetMetadata already covers
 // the worker-side path.
 func (r *BookDropRepo) SetCoverPresence(ctx context.Context, id string, hasCover bool, coverMime string) error {
-	const qPG = `
+	const q = `
 		UPDATE bookdrop_items
 		SET has_cover = $2, cover_mime = $3, updated_at = now()
 		WHERE id = $1
 	`
-	const qSQLite = `
-		UPDATE bookdrop_items
-		SET has_cover = ?, cover_mime = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-		WHERE id = ?
-	`
-	if r.db.Dialect == db.DialectSQLite {
-		_, err := r.db.SQL.ExecContext(ctx, qSQLite, hasCover, coverMime, id)
-		return err
-	}
-	_, err := r.db.SQL.ExecContext(ctx, qPG, id, hasCover, coverMime)
+	_, err := r.db.SQL.ExecContext(ctx, q, id, hasCover, coverMime)
 	return err
 }
 
@@ -236,29 +199,19 @@ func (r *BookDropRepo) ListNonProcessing(ctx context.Context) ([]struct {
 // DeleteByID removes a single bookdrop row by id. Used by Wipe's orphan
 // sweep — the service layer decides who to delete after stat'ing paths.
 func (r *BookDropRepo) DeleteByID(ctx context.Context, id string) error {
-	const qPG = `DELETE FROM bookdrop_items WHERE id = $1`
-	const qSQLite = `DELETE FROM bookdrop_items WHERE id = ?`
-	_, err := r.db.SQL.ExecContext(ctx, db.SelectQ(r.db.Dialect, qPG, qSQLite), id)
+	const q = `DELETE FROM bookdrop_items WHERE id = $1`
+	_, err := r.db.SQL.ExecContext(ctx, q, id)
 	return err
 }
 
 // MarkImported links the bookdrop item to the newly-created book row.
 func (r *BookDropRepo) MarkImported(ctx context.Context, id, bookID string) error {
-	const qPG = `
+	const q = `
 		UPDATE bookdrop_items
 		SET state = 'imported', progress = 100, book_id = $2, updated_at = now()
 		WHERE id = $1
 	`
-	const qSQLite = `
-		UPDATE bookdrop_items
-		SET state = 'imported', progress = 100, book_id = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-		WHERE id = ?
-	`
-	if r.db.Dialect == db.DialectSQLite {
-		_, err := r.db.SQL.ExecContext(ctx, qSQLite, bookID, id)
-		return err
-	}
-	_, err := r.db.SQL.ExecContext(ctx, qPG, id, bookID)
+	_, err := r.db.SQL.ExecContext(ctx, q, id, bookID)
 	return err
 }
 
@@ -284,17 +237,17 @@ func (r *BookDropRepo) scanBookDrop(s scanner) (model.BookDropItem, error) {
 		return item, err
 	}
 	item.State = model.BookDropState(state)
-	if err := db.ScanTime(r.db.Dialect, discoveredAny, &item.DiscoveredAt); err != nil {
+	if err := db.ScanTime(discoveredAny, &item.DiscoveredAt); err != nil {
 		return item, fmt.Errorf("scan discovered_at: %w", err)
 	}
-	if err := db.ScanTime(r.db.Dialect, updatedAny, &item.UpdatedAt); err != nil {
+	if err := db.ScanTime(updatedAny, &item.UpdatedAt); err != nil {
 		return item, fmt.Errorf("scan updated_at: %w", err)
 	}
 	if v, ok := durationAny.(int64); ok {
 		n := int(v)
 		item.DurationSeconds = &n
 	}
-	// chapters: TEXT JSON on SQLite, JSONB on PG. NULL → nil slice.
+	// chapters: JSONB. NULL → nil slice.
 	if chaptersAny != nil {
 		var raw []byte
 		switch v := chaptersAny.(type) {
@@ -332,25 +285,13 @@ func (r *BookDropRepo) SetAudio(
 		}
 		chaptersVal = string(b)
 	}
-	const qPG = `
+	const q = `
 		UPDATE bookdrop_items
 		SET duration_seconds = $2, narrator = $3, chapters = $4,
 		    updated_at = now()
 		WHERE id = $1
 	`
-	const qSQLite = `
-		UPDATE bookdrop_items
-		SET duration_seconds = ?, narrator = ?, chapters = ?,
-		    updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-		WHERE id = ?
-	`
-	var res sql.Result
-	var err error
-	if r.db.Dialect == db.DialectSQLite {
-		res, err = r.db.SQL.ExecContext(ctx, qSQLite, durationSeconds, narrator, chaptersVal, itemID)
-	} else {
-		res, err = r.db.SQL.ExecContext(ctx, qPG, itemID, durationSeconds, narrator, chaptersVal)
-	}
+	res, err := r.db.SQL.ExecContext(ctx, q, itemID, durationSeconds, narrator, chaptersVal)
 	if err != nil {
 		return err
 	}
@@ -365,25 +306,14 @@ func (r *BookDropRepo) SetAudio(
 }
 
 // SetContentHash records the sha256 computed during ingest.
-// PG and SQLite both bind []byte natively to BYTEA / BLOB.
+// []byte binds natively to BYTEA.
 func (r *BookDropRepo) SetContentHash(ctx context.Context, itemID string, hash []byte) error {
-	const qPG = `
+	const q = `
 		UPDATE bookdrop_items
 		SET content_hash = $2, updated_at = now()
 		WHERE id = $1
 	`
-	const qSQLite = `
-		UPDATE bookdrop_items
-		SET content_hash = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-		WHERE id = ?
-	`
-	var res sql.Result
-	var err error
-	if r.db.Dialect == db.DialectSQLite {
-		res, err = r.db.SQL.ExecContext(ctx, qSQLite, hash, itemID)
-	} else {
-		res, err = r.db.SQL.ExecContext(ctx, qPG, itemID, hash)
-	}
+	res, err := r.db.SQL.ExecContext(ctx, q, itemID, hash)
 	if err != nil {
 		return err
 	}

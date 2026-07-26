@@ -265,6 +265,17 @@ func openSQLiteMigrationDB(dsn string) (*sql.DB, error) {
 	return mig, nil
 }
 
+// SQLitePath returns the resolved database file path for a SQLite
+// connection, or "" on Postgres. Exposed so the deprecation warning can
+// name the exact file an operator should hand to `import-sqlite`
+// (ADR-0023) instead of echoing back the raw DATABASE_URL.
+func (db *DB) SQLitePath() string {
+	if db == nil || db.Dialect != DialectSQLite {
+		return ""
+	}
+	return db.dsn
+}
+
 // Close releases all underlying handles. Safe to call multiple times.
 func (db *DB) Close() error {
 	if db == nil {

@@ -3,20 +3,9 @@
 package db
 
 import (
-	"encoding/json"
 	"testing"
+	"time"
 )
-
-func TestSelectQ(t *testing.T) {
-	const pg = "SELECT $1"
-	const sq = "SELECT ?"
-	if got := SelectQ(DialectPostgres, pg, sq); got != pg {
-		t.Fatalf("PG: got %q want %q", got, pg)
-	}
-	if got := SelectQ(DialectSQLite, pg, sq); got != sq {
-		t.Fatalf("SQLite: got %q want %q", got, sq)
-	}
-}
 
 func TestNewID(t *testing.T) {
 	id := NewID()
@@ -28,60 +17,62 @@ func TestNewID(t *testing.T) {
 	}
 }
 
-func TestValueStringSlice(t *testing.T) {
-	in := []string{"sci-fi", "drama"}
+func TestScanTime(t *testing.T) {
+	want := time.Date(2024, 3, 1, 12, 30, 0, 0, time.UTC)
 
-	// PG: returns the slice unchanged; pgx codec handles encoding.
-	pgVal, err := ValueStringSlice(DialectPostgres, in)
-	if err != nil {
-		t.Fatalf("PG ValueStringSlice: %v", err)
+	var got time.Time
+	if err := ScanTime(want, &got); err != nil {
+		t.Fatalf("ScanTime: %v", err)
 	}
-	pgSlice, ok := pgVal.([]string)
-	if !ok {
-		t.Fatalf("PG: got %T, want []string", pgVal)
-	}
-	if len(pgSlice) != 2 || pgSlice[0] != "sci-fi" {
-		t.Fatalf("PG: got %v, want [sci-fi drama]", pgSlice)
+	if !got.Equal(want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 
-	// SQLite: returns a JSON-encoded string.
-	sqliteVal, err := ValueStringSlice(DialectSQLite, in)
-	if err != nil {
-		t.Fatalf("SQLite ValueStringSlice: %v", err)
-	}
-	sqliteStr, ok := sqliteVal.(string)
-	if !ok {
-		t.Fatalf("SQLite: got %T, want string", sqliteVal)
-	}
-	var roundTrip []string
-	if err := json.Unmarshal([]byte(sqliteStr), &roundTrip); err != nil {
-		t.Fatalf("SQLite roundtrip unmarshal: %v", err)
-	}
-	if len(roundTrip) != 2 || roundTrip[0] != "sci-fi" {
-		t.Fatalf("SQLite roundtrip: got %v, want [sci-fi drama]", roundTrip)
+	// NULL into a non-nullable destination is an error.
+	if err := ScanTime(nil, &got); err == nil {
+		t.Fatal("ScanTime(nil): want error, got nil")
 	}
 
-	// Empty slice: SQLite produces "[]", not "null".
-	emptyVal, err := ValueStringSlice(DialectSQLite, nil)
-	if err != nil {
-		t.Fatalf("SQLite ValueStringSlice(nil): %v", err)
+	// Anything other than a time.Time is a driver/codec bug.
+	if err := ScanTime("2024-03-01T12:30:00Z", &got); err == nil {
+		t.Fatal("ScanTime(string): want error, got nil")
 	}
-	if emptyVal.(string) != "[]" {
-		t.Fatalf("SQLite empty: got %q want []", emptyVal)
+
+	if err := ScanTime(want, nil); err == nil {
+		t.Fatal("ScanTime(nil dst): want error, got nil")
+	}
+}
+
+func TestScanNullTime(t *testing.T) {
+	want := time.Date(2024, 3, 1, 12, 30, 0, 0, time.UTC)
+
+	var got *time.Time
+	if err := ScanNullTime(want, &got); err != nil {
+		t.Fatalf("ScanNullTime: %v", err)
+	}
+	if got == nil || !got.Equal(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+
+	if err := ScanNullTime(nil, &got); err != nil {
+		t.Fatalf("ScanNullTime(nil): %v", err)
+	}
+	if got != nil {
+		t.Fatalf("got %v, want nil", got)
 	}
 }
 
 func TestScanStringSlice(t *testing.T) {
-	// PG: src will be []string already (pgx codec). Just copy.
-	var pgDst []string
-	if err := ScanStringSlice(DialectPostgres, []string{"a", "b"}, &pgDst); err != nil {
-		t.Fatalf("PG ScanStringSlice: %v", err)
+	// The pgx codec can hand us a ready-made []string. Just copy it.
+	var dst []string
+	if err := ScanStringSlice([]string{"a", "b"}, &dst); err != nil {
+		t.Fatalf("ScanStringSlice: %v", err)
 	}
-	if len(pgDst) != 2 || pgDst[0] != "a" {
-		t.Fatalf("PG: got %v, want [a b]", pgDst)
+	if len(dst) != 2 || dst[0] != "a" {
+		t.Fatalf("got %v, want [a b]", dst)
 	}
 
-	// PG: pgx stdlib delivers TEXT[] as a literal string when the scan
+	// pgx stdlib delivers TEXT[] as a literal string when the scan
 	// destination is `any`. Confirm we parse the literal form.
 	cases := []struct {
 		in   string
@@ -96,43 +87,40 @@ func TestScanStringSlice(t *testing.T) {
 	}
 	for _, tc := range cases {
 		var got []string
-		if err := ScanStringSlice(DialectPostgres, tc.in, &got); err != nil {
-			t.Fatalf("PG literal %q: %v", tc.in, err)
+		if err := ScanStringSlice(tc.in, &got); err != nil {
+			t.Fatalf("literal %q: %v", tc.in, err)
 		}
 		if len(got) != len(tc.want) {
-			t.Fatalf("PG literal %q: got %v, want %v", tc.in, got, tc.want)
+			t.Fatalf("literal %q: got %v, want %v", tc.in, got, tc.want)
 		}
 		for i := range got {
 			if got[i] != tc.want[i] {
-				t.Fatalf("PG literal %q: got %v, want %v", tc.in, got, tc.want)
+				t.Fatalf("literal %q: got %v, want %v", tc.in, got, tc.want)
 			}
 		}
 	}
 
-	// SQLite: src is a string holding JSON.
-	var sqliteDst []string
-	if err := ScanStringSlice(DialectSQLite, `["x","y","z"]`, &sqliteDst); err != nil {
-		t.Fatalf("SQLite ScanStringSlice: %v", err)
+	// The []byte form of the same literal parses identically.
+	var byteDst []string
+	if err := ScanStringSlice([]byte("{x,y}"), &byteDst); err != nil {
+		t.Fatalf("[]byte literal: %v", err)
 	}
-	if len(sqliteDst) != 3 || sqliteDst[2] != "z" {
-		t.Fatalf("SQLite: got %v, want [x y z]", sqliteDst)
-	}
-
-	// SQLite empty: "[]" decodes to empty slice.
-	var emptyDst []string
-	if err := ScanStringSlice(DialectSQLite, "[]", &emptyDst); err != nil {
-		t.Fatalf("SQLite empty ScanStringSlice: %v", err)
-	}
-	if len(emptyDst) != 0 {
-		t.Fatalf("SQLite empty: got %v, want []", emptyDst)
+	if len(byteDst) != 2 || byteDst[1] != "y" {
+		t.Fatalf("[]byte literal: got %v, want [x y]", byteDst)
 	}
 
-	// SQLite nil src: empty slice, no error.
+	// NULL src: nil slice, no error.
 	var nilDst []string
-	if err := ScanStringSlice(DialectSQLite, nil, &nilDst); err != nil {
-		t.Fatalf("SQLite nil src: %v", err)
+	if err := ScanStringSlice(nil, &nilDst); err != nil {
+		t.Fatalf("nil src: %v", err)
 	}
 	if len(nilDst) != 0 {
-		t.Fatalf("SQLite nil src: got %v, want []", nilDst)
+		t.Fatalf("nil src: got %v, want []", nilDst)
+	}
+
+	// Malformed literal is an error, not a silent empty slice.
+	var badDst []string
+	if err := ScanStringSlice("not-an-array", &badDst); err == nil {
+		t.Fatal("malformed literal: want error, got nil")
 	}
 }
