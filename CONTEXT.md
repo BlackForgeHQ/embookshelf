@@ -67,6 +67,18 @@ Admin policy controlling whether an unknown External identity creates a new user
 
 The policy has a single implementation: `service.Provisioner` (identity match → Auto-link → auto-provision, returning a semantic outcome — resolved / pending-approval / denied / not-allowed / email-required). The OIDC callback and Forward-auth are thin adapters that map outcomes to their own error vocabulary (landing-page redirect vs plain 401). Neither auth surface owns or duplicates the policy.
 
+### OIDC provider registry
+
+`OIDCService.providers`; the slug → operations map built once at construction. Each entry pairs a provider's authorize-URL builder with its callback exchange, because both dispatch on the same slug and previously did so in separate `switch` statements that had to stay in step by hand. Adding a provider is one entry in `newProviderRegistry`; nothing else in the file switches on a slug.
+
+Shaped as a struct of funcs rather than an interface, matching the [[Job registry]]: the per-provider work already exists as methods, so a registration is a pair of method values and no bodies move. GitHub is the odd one — not an OIDC provider at all, so it has no discovery document and its issuer is the `githubIssuer` constant rather than something the exchange reports.
+
+### OIDC state
+
+`service.stateStore`; the in-process map tying an authorize redirect to the callback that returns. Holds the PKCE verifier, the nonce, the provider slug, and the exact `redirect_uri` sent to the IdP (the callback must replay it to the token endpoint, and it varies with request origin when `APP_URL` is unset). A state is single-use — `take` deletes it, so a replayed callback finds nothing — and entries older than `stateTTL` (5 min) are reaped on write rather than on a timer.
+
+**Process-local, which makes login single-instance.** Two replicas behind a load balancer will fail any callback that lands on the replica that did not mint the state. Sharing it means moving state into a signed cookie or a table — a real design change, not a tidy-up. Until then: run one instance, or pin OIDC callbacks to one.
+
 ### Force-only mode
 
 Admin toggle `oidc_force_only_mode` that hides the local-password form on the login page when exactly one OIDC provider is enabled. Does not affect API auth or existing local users. Distinct from `forward_auth.hideLocalLogin` — that one hides the form whenever forward-auth is enabled, regardless of OIDC provider count.

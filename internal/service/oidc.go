@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -44,20 +43,77 @@ const (
 	// stateTTL is the window in which a /login must complete the
 	// round-trip back to /callback. Matches the spec's 5-min guidance.
 	stateTTL = 5 * time.Minute
+
+	// githubIssuer is the issuer stamped on identities from the GitHub
+	// flow. GitHub is not an OIDC provider — there is no discovery
+	// document to report one — so it is a constant here rather than
+	// something the exchange returns.
+	githubIssuer = "https://github.com"
 )
+
+// oidcProvider is one login provider's two operations. Both the
+// authorize-URL builder and the callback exchange dispatch on the same
+// slug, so they are declared together and looked up once rather than
+// switched on in two places that must stay in step.
+//
+// Shaped as a struct of funcs rather than an interface for the same
+// reason queue/registry.go is: the per-provider work already lives as
+// methods, so a registration is a pair of method values and no bodies
+// have to move. Adding a provider is one entry in newProviderRegistry.
+type oidcProvider struct {
+	authURL  func(ctx context.Context, redirect, intent, linkUserID string) (string, error)
+	callback func(ctx context.Context, code string, entry stateEntry, redirect string) (resolvedClaims, string, error)
+}
 
 // OIDCService is the multi-provider OIDC/OAuth login service.
 // Google, GitHub, and a custom OIDC provider each have their own
 // settings row and can be enabled in parallel.
+// The narrow interfaces below are the slices of each repo this service
+// uses. Declared so the login flow's own logic — state handling, claim
+// mapping, provider gating — can be tested without a database, the same
+// way Provisioner's three seams made its policy testable.
+
+// oidcSettingsStore is the settings surface: the three provider config
+// rows plus the force-only toggle.
+type oidcSettingsStore interface {
+	GetGoogle(ctx context.Context) (repo.OAuthPresetConfig, error)
+	GetGitHub(ctx context.Context) (repo.OAuthPresetConfig, error)
+	GetGenericOIDC(ctx context.Context) (repo.GenericOIDCConfig, error)
+	GetBool(ctx context.Context, name string) (bool, error)
+}
+
+// oidcUserProfileStore is the one user-facing write the callback makes
+// beyond provisioning: refreshing name/avatar from the IdP's claims.
+type oidcUserProfileStore interface {
+	SyncOIDCProfile(ctx context.Context, userID, name, avatarURL string) error
+}
+
+// oidcSessionStore mints the browser session after a successful login.
+type oidcSessionStore interface {
+	Create(ctx context.Context, userID, userAgent string, ttl time.Duration) (model.Session, error)
+}
+
+// oidcIdentityStore is the user_identities surface used by the link
+// flow; provisioning has its own narrower view of the same table.
+type oidcIdentityStore interface {
+	GetByIssuerSubject(ctx context.Context, issuer, subject string) (model.Identity, error)
+	Insert(ctx context.Context, userID, provider, issuer, subject, email string) (model.Identity, error)
+	TouchLastLogin(ctx context.Context, id string) error
+}
+
 type OIDCService struct {
 	appURL     string
-	settings   *repo.AppSettingsRepo
-	users      *repo.UserRepo
-	sessions   *repo.SessionRepo
-	identities *repo.IdentityRepo
+	settings   oidcSettingsStore
+	users      oidcUserProfileStore
+	sessions   oidcSessionStore
+	identities oidcIdentityStore
 	prov       *Provisioner
 
 	states *stateStore
+
+	// providers is the slug → operations registry. Built once at
+	// construction; the two dispatch sites are map lookups.
+	providers map[string]oidcProvider
 
 	// Discovery cache for the generic OIDC provider only. Google runs
 	// through the same path but its issuer is fixed so we'd still hit
@@ -73,8 +129,11 @@ type cachedDiscovery struct {
 	verifier *oidc.IDTokenVerifier
 }
 
+// NewOIDCService keeps the concrete repo types in its signature because
+// Provisioner needs its own view of the same stores; the service body
+// works through the narrow interfaces above.
 func NewOIDCService(settings *repo.AppSettingsRepo, users *repo.UserRepo, sessions *repo.SessionRepo, identities *repo.IdentityRepo, appURL string) *OIDCService {
-	return &OIDCService{
+	svc := &OIDCService{
 		appURL:     strings.TrimRight(appURL, "/"),
 		settings:   settings,
 		users:      users,
@@ -82,6 +141,27 @@ func NewOIDCService(settings *repo.AppSettingsRepo, users *repo.UserRepo, sessio
 		identities: identities,
 		prov:       NewProvisioner(settings, users, identities),
 		states:     newStateStore(),
+	}
+	svc.providers = svc.newProviderRegistry()
+	return svc
+}
+
+// newProviderRegistry declares every login provider this binary supports.
+// One entry per slug; nothing else in the file switches on a slug.
+func (s *OIDCService) newProviderRegistry() map[string]oidcProvider {
+	return map[string]oidcProvider{
+		repo.ProviderSlugGoogle: {
+			authURL:  s.authURLGoogleWithIntent,
+			callback: s.callbackGoogle,
+		},
+		repo.ProviderSlugGitHub: {
+			authURL:  s.authURLGitHubWithIntent,
+			callback: s.callbackGitHub,
+		},
+		repo.ProviderSlugGeneric: {
+			authURL:  s.authURLGenericWithIntent,
+			callback: s.callbackGeneric,
+		},
 	}
 }
 
@@ -217,16 +297,7 @@ func (s *OIDCService) AuthURL(ctx context.Context, slug, baseURL string) (string
 	if redirect == "" {
 		return "", ErrOIDCNotConfigured
 	}
-	switch slug {
-	case repo.ProviderSlugGoogle:
-		return s.authURLGoogle(ctx, redirect)
-	case repo.ProviderSlugGitHub:
-		return s.authURLGitHub(ctx, redirect)
-	case repo.ProviderSlugGeneric:
-		return s.authURLGeneric(ctx, redirect)
-	default:
-		return "", ErrOIDCUnknownProvider
-	}
+	return s.authURLForSlug(ctx, slug, redirect, IntentLogin, "")
 }
 
 // ExchangeOutcome is the discriminated result of completing an OIDC
@@ -334,41 +405,53 @@ func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent, sess
 // resolveCallback runs the provider-specific OAuth/OIDC token exchange
 // and returns the resolved claims + canonical issuer for the request.
 func (s *OIDCService) resolveCallback(ctx context.Context, code string, entry stateEntry, redirect string) (resolvedClaims, string, error) {
-	switch entry.ProviderSlug {
-	case repo.ProviderSlugGoogle:
-		cfg, err := s.settings.GetGoogle(ctx)
-		if err != nil {
-			return resolvedClaims{}, "", err
-		}
-		if !googleUsable(cfg) {
-			return resolvedClaims{}, "", ErrOIDCDisabled
-		}
-		return s.oidcCallback(ctx, code, entry, googleOIDCConfig(cfg), redirect)
-	case repo.ProviderSlugGitHub:
-		cfg, err := s.settings.GetGitHub(ctx)
-		if err != nil {
-			return resolvedClaims{}, "", err
-		}
-		if !githubUsable(cfg) {
-			return resolvedClaims{}, "", ErrOIDCDisabled
-		}
-		claims, err := s.githubCallback(ctx, code, entry, cfg, redirect)
-		if err != nil {
-			return resolvedClaims{}, "", err
-		}
-		return claims, "https://github.com", nil
-	case repo.ProviderSlugGeneric:
-		cfg, err := s.settings.GetGenericOIDC(ctx)
-		if err != nil {
-			return resolvedClaims{}, "", err
-		}
-		if !genericUsable(cfg) {
-			return resolvedClaims{}, "", ErrOIDCDisabled
-		}
-		return s.oidcCallback(ctx, code, entry, cfg, redirect)
-	default:
+	p, ok := s.providers[entry.ProviderSlug]
+	if !ok {
 		return resolvedClaims{}, "", ErrOIDCUnknownProvider
 	}
+	return p.callback(ctx, code, entry, redirect)
+}
+
+// callbackGoogle exchanges the code against Google's OIDC endpoints.
+func (s *OIDCService) callbackGoogle(ctx context.Context, code string, entry stateEntry, redirect string) (resolvedClaims, string, error) {
+	cfg, err := s.settings.GetGoogle(ctx)
+	if err != nil {
+		return resolvedClaims{}, "", err
+	}
+	if !googleUsable(cfg) {
+		return resolvedClaims{}, "", ErrOIDCDisabled
+	}
+	return s.oidcCallback(ctx, code, entry, googleOIDCConfig(cfg), redirect)
+}
+
+// callbackGitHub exchanges the code against GitHub's REST API. GitHub is
+// not an OIDC provider — no discovery document, no ID token — so the
+// issuer is a constant rather than something discovery reports.
+func (s *OIDCService) callbackGitHub(ctx context.Context, code string, entry stateEntry, redirect string) (resolvedClaims, string, error) {
+	cfg, err := s.settings.GetGitHub(ctx)
+	if err != nil {
+		return resolvedClaims{}, "", err
+	}
+	if !githubUsable(cfg) {
+		return resolvedClaims{}, "", ErrOIDCDisabled
+	}
+	claims, err := s.githubCallback(ctx, code, entry, cfg, redirect)
+	if err != nil {
+		return resolvedClaims{}, "", err
+	}
+	return claims, githubIssuer, nil
+}
+
+// callbackGeneric exchanges the code against the admin-configured issuer.
+func (s *OIDCService) callbackGeneric(ctx context.Context, code string, entry stateEntry, redirect string) (resolvedClaims, string, error) {
+	cfg, err := s.settings.GetGenericOIDC(ctx)
+	if err != nil {
+		return resolvedClaims{}, "", err
+	}
+	if !genericUsable(cfg) {
+		return resolvedClaims{}, "", ErrOIDCDisabled
+	}
+	return s.oidcCallback(ctx, code, entry, cfg, redirect)
 }
 
 // AuthURLForLink builds an authorize URL whose state carries
@@ -389,25 +472,16 @@ func (s *OIDCService) AuthURLForLink(ctx context.Context, slug, baseURL, userID 
 // authURLForSlug is the shared dispatch used by both AuthURL and
 // AuthURLForLink — same builders, same state minting, same redirect.
 func (s *OIDCService) authURLForSlug(ctx context.Context, slug, redirect, intent, linkUserID string) (string, error) {
-	switch slug {
-	case repo.ProviderSlugGoogle:
-		return s.authURLGoogleWithIntent(ctx, redirect, intent, linkUserID)
-	case repo.ProviderSlugGitHub:
-		return s.authURLGitHubWithIntent(ctx, redirect, intent, linkUserID)
-	case repo.ProviderSlugGeneric:
-		return s.authURLGenericWithIntent(ctx, redirect, intent, linkUserID)
-	default:
+	p, ok := s.providers[slug]
+	if !ok {
 		return "", ErrOIDCUnknownProvider
 	}
+	return p.authURL(ctx, redirect, intent, linkUserID)
 }
 
 // -----------------------------------------------------------------------------
 // AuthURL builders
 // -----------------------------------------------------------------------------
-
-func (s *OIDCService) authURLGoogle(ctx context.Context, redirect string) (string, error) {
-	return s.authURLGoogleWithIntent(ctx, redirect, IntentLogin, "")
-}
 
 func (s *OIDCService) authURLGoogleWithIntent(ctx context.Context, redirect, intent, linkUserID string) (string, error) {
 	cfg, err := s.settings.GetGoogle(ctx)
@@ -418,10 +492,6 @@ func (s *OIDCService) authURLGoogleWithIntent(ctx context.Context, redirect, int
 		return "", ErrOIDCDisabled
 	}
 	return s.authURLOIDC(ctx, repo.ProviderSlugGoogle, googleOIDCConfig(cfg), redirect, intent, linkUserID)
-}
-
-func (s *OIDCService) authURLGeneric(ctx context.Context, redirect string) (string, error) {
-	return s.authURLGenericWithIntent(ctx, redirect, IntentLogin, "")
 }
 
 func (s *OIDCService) authURLGenericWithIntent(ctx context.Context, redirect, intent, linkUserID string) (string, error) {
@@ -454,12 +524,6 @@ func (s *OIDCService) authURLOIDC(ctx context.Context, slug string, cfg repo.Gen
 	return u, nil
 }
 
-// authURLGitHub builds the GitHub authorize URL by hand; GitHub is not
-// an OIDC provider so there's no discovery document.
-func (s *OIDCService) authURLGitHub(ctx context.Context, redirect string) (string, error) {
-	return s.authURLGitHubWithIntent(ctx, redirect, IntentLogin, "")
-}
-
 func (s *OIDCService) authURLGitHubWithIntent(ctx context.Context, redirect, intent, linkUserID string) (string, error) {
 	cfg, err := s.settings.GetGitHub(ctx)
 	if err != nil {
@@ -480,7 +544,7 @@ func (s *OIDCService) authURLGitHubWithIntent(ctx context.Context, redirect, int
 	v.Set("code_challenge", pkceChallengeS256(verifier))
 	v.Set("code_challenge_method", "S256")
 	v.Set("allow_signup", "true")
-	return "https://github.com/login/oauth/authorize?" + v.Encode(), nil
+	return githubIssuer + "/login/oauth/authorize?" + v.Encode(), nil
 }
 
 func (s *OIDCService) issueStateWithIntent(slug, redirect, intent, linkUserID string) (state, nonce, verifier string, err error) {
@@ -793,216 +857,6 @@ func (s *OIDCService) resolveRedirectURL(fallbackBase string) string {
 }
 
 // -----------------------------------------------------------------------------
-// Test Connection
-// -----------------------------------------------------------------------------
-
-// CheckStatus + TestCheck mirror the spec's diagnostic DTO.
-type CheckStatus string
-
-const (
-	CheckPass CheckStatus = "PASS"
-	CheckFail CheckStatus = "FAIL"
-	CheckWarn CheckStatus = "WARN"
-)
-
-type TestCheck struct {
-	Name    string      `json:"name"`
-	Status  CheckStatus `json:"status"`
-	Message string      `json:"message"`
-}
-
-type TestResult struct {
-	Success bool        `json:"success"`
-	Checks  []TestCheck `json:"checks"`
-}
-
-func (t *TestResult) add(name string, status CheckStatus, msg string) {
-	t.Checks = append(t.Checks, TestCheck{Name: name, Status: status, Message: msg})
-}
-
-// TestGeneric runs the discovery-based checks.
-func (s *OIDCService) TestGeneric(ctx context.Context, cfg repo.GenericOIDCConfig) TestResult {
-	return testOIDCIssuer(ctx, cfg.IssuerURI, cfg.ClientID)
-}
-
-// TestGoogle reuses the generic path after filling in Google's issuer.
-func (s *OIDCService) TestGoogle(ctx context.Context, cfg repo.OAuthPresetConfig) TestResult {
-	return testOIDCIssuer(ctx, "https://accounts.google.com", cfg.ClientID)
-}
-
-// TestGitHub pings the fixed GitHub endpoints (no discovery doc).
-func (s *OIDCService) TestGitHub(ctx context.Context, cfg repo.OAuthPresetConfig) TestResult {
-	out := TestResult{}
-	if cfg.ClientID == "" {
-		out.add("Client ID", CheckFail, "client id is empty")
-		return out
-	}
-	cli := httpClient()
-	for _, ep := range []struct {
-		name, url string
-	}{
-		{"authorize endpoint", "https://github.com/login/oauth/authorize"},
-		{"user API", "https://api.github.com/user"},
-	} {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ep.url, nil)
-		resp, err := cli.Do(req)
-		if err != nil {
-			out.add(ep.name, CheckFail, err.Error())
-			continue
-		}
-		_ = resp.Body.Close()
-		out.add(ep.name, CheckPass, fmt.Sprintf("%s reachable (%d)", ep.url, resp.StatusCode))
-	}
-	if cfg.ClientSecret == "" {
-		out.add("client secret", CheckFail, "GitHub OAuth apps require a client secret")
-	} else {
-		out.add("client secret", CheckPass, "set")
-	}
-	out.Success = true
-	for _, c := range out.Checks {
-		if c.Status == CheckFail {
-			out.Success = false
-			break
-		}
-	}
-	return out
-}
-
-func testOIDCIssuer(ctx context.Context, issuer, clientID string) TestResult {
-	out := TestResult{}
-	if strings.TrimSpace(issuer) == "" {
-		out.add("Issuer URI", CheckFail, "issuer URI is empty")
-		return out
-	}
-	if strings.TrimSpace(clientID) == "" {
-		out.add("Client ID", CheckFail, "client id is empty")
-		return out
-	}
-	cli := httpClient()
-	discoveryURL := strings.TrimRight(issuer, "/") + "/.well-known/openid-configuration"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
-	if err != nil {
-		out.add("Discovery", CheckFail, err.Error())
-		return out
-	}
-	resp, err := cli.Do(req)
-	if err != nil {
-		out.add("Discovery", CheckFail, fmt.Sprintf("fetch %s: %v", discoveryURL, err))
-		return out
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != 200 {
-		out.add("Discovery", CheckFail, fmt.Sprintf("%s returned %d", discoveryURL, resp.StatusCode))
-		return out
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		out.add("Discovery", CheckFail, err.Error())
-		return out
-	}
-	out.add("Discovery", CheckPass, "fetched openid-configuration")
-
-	var doc discoveryDoc
-	if err := json.Unmarshal(body, &doc); err != nil {
-		out.add("Discovery parse", CheckFail, err.Error())
-		return out
-	}
-
-	for _, p := range []struct {
-		name, value string
-	}{
-		{"authorization_endpoint", doc.AuthorizationEndpoint},
-		{"token_endpoint", doc.TokenEndpoint},
-		{"jwks_uri", doc.JWKSURI},
-	} {
-		if p.value == "" {
-			out.add(p.name, CheckFail, "missing")
-		} else {
-			out.add(p.name, CheckPass, p.value)
-		}
-	}
-
-	has := map[string]bool{}
-	for _, sc := range doc.ScopesSupported {
-		has[sc] = true
-	}
-	for _, required := range []string{"openid", "profile", "email"} {
-		if has[required] {
-			out.add("scope: "+required, CheckPass, "advertised")
-		} else if required == "openid" {
-			out.add("scope: openid", CheckFail, "issuer does not advertise openid")
-		} else {
-			out.add("scope: "+required, CheckWarn, "not advertised — claim mapping may fail")
-		}
-	}
-
-	codeOk := false
-	for _, rt := range doc.ResponseTypesSupported {
-		if rt == "code" {
-			codeOk = true
-		}
-	}
-	if codeOk {
-		out.add("response_type: code", CheckPass, "supported")
-	} else {
-		out.add("response_type: code", CheckFail, "authorization code flow not supported")
-	}
-
-	s256 := false
-	for _, m := range doc.CodeChallengeMethodsSupported {
-		if m == "S256" {
-			s256 = true
-		}
-	}
-	if s256 {
-		out.add("PKCE S256", CheckPass, "supported")
-	} else {
-		out.add("PKCE S256", CheckWarn, "not advertised — BookLore sends S256 anyway")
-	}
-
-	if doc.JWKSURI != "" {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, doc.JWKSURI, nil)
-		jresp, err := cli.Do(req)
-		if err != nil {
-			out.add("JWKS fetch", CheckFail, err.Error())
-		} else {
-			defer func() { _ = jresp.Body.Close() }()
-			if jresp.StatusCode != 200 {
-				out.add("JWKS fetch", CheckFail, fmt.Sprintf("%s returned %d", doc.JWKSURI, jresp.StatusCode))
-			} else {
-				var keys struct {
-					Keys []json.RawMessage `json:"keys"`
-				}
-				_ = json.NewDecoder(jresp.Body).Decode(&keys)
-				if len(keys.Keys) == 0 {
-					out.add("JWKS fetch", CheckWarn, "JWKS has no keys")
-				} else {
-					out.add("JWKS fetch", CheckPass, fmt.Sprintf("%d keys", len(keys.Keys)))
-				}
-			}
-		}
-	}
-
-	out.Success = true
-	for _, c := range out.Checks {
-		if c.Status == CheckFail {
-			out.Success = false
-			break
-		}
-	}
-	return out
-}
-
-type discoveryDoc struct {
-	AuthorizationEndpoint         string   `json:"authorization_endpoint"`
-	TokenEndpoint                 string   `json:"token_endpoint"`
-	JWKSURI                       string   `json:"jwks_uri"`
-	ScopesSupported               []string `json:"scopes_supported"`
-	ResponseTypesSupported        []string `json:"response_types_supported"`
-	CodeChallengeMethodsSupported []string `json:"code_challenge_methods_supported"`
-}
-
-// -----------------------------------------------------------------------------
 // State cache
 // -----------------------------------------------------------------------------
 
@@ -1031,6 +885,18 @@ const (
 	IntentLink  = "link"
 )
 
+// stateStore ties an authorize redirect to the callback that returns:
+// it holds the PKCE verifier, the nonce, the provider slug, and the exact
+// redirect_uri that was sent. A state is single-use — take deletes it —
+// so a replayed callback finds nothing, and entries older than stateTTL
+// are reaped on write rather than on a timer.
+//
+// It is deliberately in-process, which makes this service single-instance
+// for login: two replicas behind a load balancer will fail any callback
+// that lands on the replica that did not mint the state. Sharing it would
+// mean moving state into a signed cookie or a table — a real design
+// change, not a tidy-up. Until then, run one instance, or pin OIDC
+// callbacks to one.
 type stateStore struct {
 	mu sync.Mutex
 	m  map[string]stateEntry
