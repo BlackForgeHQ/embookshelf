@@ -15,10 +15,22 @@ type RealtimeEvent =
   | "users.updated"
   | "shelf.public.updated"
   | "shelf.public.removed"
+  | "kindle.sent"
+  | "kindle.failed"
 
 type Handler = (data: string) => void
 
 type SharedShelfPayload = { slug: string }
+
+type KindleResultPayload = { book_id?: string; error?: string }
+
+function parseKindlePayload(raw: string): KindleResultPayload {
+  try {
+    return JSON.parse(raw) as KindleResultPayload
+  } catch {
+    return {}
+  }
+}
 
 function parseSharedShelfPayload(raw: string): SharedShelfPayload | null {
   try {
@@ -102,6 +114,17 @@ export function useRealtime() {
             queryKey: booksQueryKey({ shelf: payload.slug }),
           })
         }
+      },
+      // Send-to-Kindle runs on the queue, so the request returns 202 long
+      // before the mail is away. These two events are the only feedback
+      // the user gets. The server routes them to the requesting user's
+      // subscriptions, so anything arriving here is ours — no filtering.
+      "kindle.sent": () => {
+        toast.success("Sent to Kindle.")
+      },
+      "kindle.failed": (raw) => {
+        const { error } = parseKindlePayload(raw)
+        toast.error(error ? `Send to Kindle failed: ${error}` : "Send to Kindle failed.")
       },
     }
 

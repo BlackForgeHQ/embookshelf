@@ -178,7 +178,7 @@ func (h *Handler) InstanceSummary(c *gin.Context) {
 func (h *Handler) InstanceInfo(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	infos, err := h.enrich.ListProviders(ctx)
+	infos, err := h.providerCfg.ListProviders(ctx)
 	if err != nil {
 		slog.Warn("list providers", "err", err)
 	}

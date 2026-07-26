@@ -367,5 +367,5 @@ func (s *AuthService) broadcastUsersUpdate() {
 	if s.hub == nil {
 		return
 	}
-	s.hub.Broadcast(sse.Event{Name: "users.updated", Data: "{}"})
+	_ = s.hub.Publish(sse.UsersUpdated{})
 }

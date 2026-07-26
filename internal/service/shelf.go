@@ -4,7 +4,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 
@@ -217,14 +216,12 @@ func (s *ShelfService) broadcastPublicUpdated(slug string) {
 	if s.hub == nil {
 		return
 	}
-	payload, _ := json.Marshal(map[string]string{"slug": PublicSlugPrefix + slug})
-	s.hub.Broadcast(sse.Event{Name: "shelf.public.updated", Data: string(payload)})
+	_ = s.hub.Publish(sse.SharedShelfUpdated{Slug: PublicSlugPrefix + slug})
 }
 
 func (s *ShelfService) broadcastPublicRemoved(slug string) {
 	if s.hub == nil {
 		return
 	}
-	payload, _ := json.Marshal(map[string]string{"slug": PublicSlugPrefix + slug})
-	s.hub.Broadcast(sse.Event{Name: "shelf.public.removed", Data: string(payload)})
+	_ = s.hub.Publish(sse.SharedShelfRemoved{Slug: PublicSlugPrefix + slug})
 }

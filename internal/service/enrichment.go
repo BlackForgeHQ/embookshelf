@@ -3,7 +3,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -20,7 +19,6 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/crypto"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/provider"
@@ -35,13 +33,52 @@ import (
 // sources. Which of those are actually queried per request is decided by
 // the provider_settings table — an admin toggles them in Settings and the
 // filter below applies on the next Search.
+
+// The narrow interfaces below are the slices of each repo this service
+// actually uses. They exist so the enrichment logic can be tested without
+// a database or a filesystem — the same pattern that took Provisioner
+// from untestable to 17 DB-free tests. Concrete repos satisfy them
+// implicitly, so wiring is unchanged.
+
+// providerSettingsStore is the provider_settings surface: which providers
+// are on, their config blobs, ranking, and health telemetry.
+type providerSettingsStore interface {
+	AllConfigs(ctx context.Context) (map[string]json.RawMessage, error)
+	EnabledIDs(ctx context.Context) (map[string]bool, error)
+	List(ctx context.Context) ([]repo.ProviderSetting, error)
+	SetConfig(ctx context.Context, id string, config json.RawMessage) error
+	SetEnabled(ctx context.Context, id string, enabled bool) error
+	SetPriority(ctx context.Context, id string, priority *int) error
+	RecordSuccess(ctx context.Context, id string) error
+	RecordError(ctx context.Context, id, msg string) error
+}
+
+// bookMetadataStore is the book surface enrichment writes through when no
+// MetadataWriter is wired.
+type bookMetadataStore interface {
+	UpdateMetadata(ctx context.Context, b model.Book) error
+	SetCover(ctx context.Context, bookID string, hasCover bool, mime string) error
+	SetCoverHash(ctx context.Context, bookID string, hash []byte) error
+}
+
+// coverFileStore is the cover-bytes surface.
+type coverFileStore interface {
+	SaveBookHashed(hash []byte, mime string, data []byte) error
+	DeleteBook(id string) error
+}
+
+// httpDoer is the outbound HTTP seam for cover downloads. Injected so
+// tests can serve bytes from a stub transport instead of the network.
+type httpDoer interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
 type EnrichmentService struct {
 	providers []provider.Provider
-	settings  *repo.ProviderSettingsRepo
-	libs      *repo.LibraryRepo
-	books     *repo.BookRepo
-	covers    *coverstore.Store
-	http      *http.Client
+	settings  providerSettingsStore
+	books     bookMetadataStore
+	covers    coverFileStore
+	http      httpDoer
 	// cipher encrypts password-kind config fields (API keys, tokens,
 	// cookies) before they land in provider_settings.config. Falls
 	// back to a Noop in dev so the app still boots without a KEK.
@@ -59,7 +96,17 @@ type EnrichmentService struct {
 	// writer routes metadata writes through the DB → sidecar → file
 	// pipeline. Optional; nil falls back to direct repo write.
 	writer *MetadataWriter
+
+	// healthWrites tracks the detached provider-health goroutines so a
+	// test can wait for them. Production never waits — the whole point of
+	// those writes is that a request doesn't block on telemetry — but
+	// without this a test asserting on health races them.
+	healthWrites sync.WaitGroup
 }
+
+// awaitHealthWrites blocks until every in-flight provider-health write has
+// finished. Test-only; production deliberately lets them run detached.
+func (s *EnrichmentService) awaitHealthWrites() { s.healthWrites.Wait() }
 
 // WithMetadataWriter wires a MetadataWriter into the service so that
 // ApplyMatch routes through the DB → sidecar → file pipeline instead
@@ -79,38 +126,11 @@ const (
 	enrichCacheTTL = 5 * time.Minute
 )
 
-// ErrUnknownProvider is returned by SetProviderEnabled when the caller
-// hands in an id the binary doesn't recognize.
-var ErrUnknownProvider = errors.New("unknown provider")
-
-// ProviderInfo is the handler-facing DTO shape: static catalog facts
-// joined with the live enabled flag, config blob, priority, health
-// telemetry, and the admin-UI schema describing which inputs to render.
-type ProviderInfo struct {
-	ID       provider.Source
-	Name     string
-	Enabled  bool
-	External bool
-	Priority *int
-	// Config is the stored blob, pass-through to the UI. Providers that
-	// aren't Configurable always have nil here.
-	Config []byte
-	// Schema describes the form fields the Settings panel should render.
-	// nil when the provider doesn't declare a schema.
-	Schema []provider.ConfigField
-	// Health — last-success / last-error timestamps and the most
-	// recent error string. Nil timestamps mean "never observed."
-	LastSuccessAt *time.Time
-	LastErrorAt   *time.Time
-	LastError     string
-}
-
 func NewEnrichmentService(
 	providers []provider.Provider,
-	settings *repo.ProviderSettingsRepo,
-	libs *repo.LibraryRepo,
-	books *repo.BookRepo,
-	covers *coverstore.Store,
+	settings providerSettingsStore,
+	books bookMetadataStore,
+	covers coverFileStore,
 	cipher crypto.Cipher,
 ) *EnrichmentService {
 	if cipher == nil {
@@ -119,7 +139,6 @@ func NewEnrichmentService(
 	return &EnrichmentService{
 		providers: providers,
 		settings:  settings,
-		libs:      libs,
 		books:     books,
 		covers:    covers,
 		http:      &http.Client{Timeout: 15 * time.Second},
@@ -129,107 +148,13 @@ func NewEnrichmentService(
 	}
 }
 
-// LoadConfigs pushes stored provider configs into the matching
-// provider instances. Called on service boot. Failures are logged per
-// provider — one broken blob shouldn't wedge the others.
-//
-// Password-kind fields are decrypted before being handed to the
-// provider so the live Configure call always sees plaintext.
-func (s *EnrichmentService) LoadConfigs(ctx context.Context) error {
-	raw, err := s.settings.AllConfigs(ctx)
-	if err != nil {
-		return err
+// WithHTTPClient swaps the outbound client used for cover downloads.
+// Returns the receiver so it can be chained at construction.
+func (s *EnrichmentService) WithHTTPClient(c httpDoer) *EnrichmentService {
+	if c != nil {
+		s.http = c
 	}
-	for _, p := range s.providers {
-		cfg, ok := raw[string(p.Name())]
-		if !ok {
-			continue
-		}
-		configurable, isCfg := p.(provider.Configurable)
-		if !isCfg {
-			continue
-		}
-		decoded, err := s.decryptConfigFields(cfg, p)
-		if err != nil {
-			slog.Warn("provider config decrypt failed", "provider", p.Name(), "err", err)
-			continue
-		}
-		if err := configurable.Configure(decoded); err != nil {
-			slog.Warn("provider configure failed", "provider", p.Name(), "err", err)
-		}
-	}
-	return nil
-}
-
-// passwordFields returns the set of config keys a provider flags as
-// password-kind — i.e. values that should be encrypted on disk.
-func passwordFields(p provider.Provider) map[string]struct{} {
-	sp, ok := p.(provider.SchemaProvider)
-	if !ok {
-		return nil
-	}
-	out := map[string]struct{}{}
-	for _, f := range sp.ConfigSchema() {
-		if f.Kind == provider.ConfigFieldPassword {
-			out[f.Key] = struct{}{}
-		}
-	}
-	return out
-}
-
-// encryptConfigFields walks a config blob and encrypts the string
-// values whose keys are declared password-kind in the provider's
-// schema. Returns the re-marshaled blob; non-password keys pass
-// through verbatim so the stored JSON stays inspectable.
-func (s *EnrichmentService) encryptConfigFields(cfg []byte, p provider.Provider) ([]byte, error) {
-	return s.transformConfigFields(cfg, p, s.cipher.Encrypt)
-}
-
-// decryptConfigFields is the inverse of encryptConfigFields. Applied
-// after every DB read so callers see plaintext secrets.
-func (s *EnrichmentService) decryptConfigFields(cfg []byte, p provider.Provider) ([]byte, error) {
-	return s.transformConfigFields(cfg, p, s.cipher.Decrypt)
-}
-
-func (s *EnrichmentService) transformConfigFields(
-	cfg []byte, p provider.Provider, op func(string) (string, error),
-) ([]byte, error) {
-	if len(cfg) == 0 || bytes.Equal(bytes.TrimSpace(cfg), []byte("{}")) {
-		return cfg, nil
-	}
-	pw := passwordFields(p)
-	if len(pw) == 0 {
-		return cfg, nil
-	}
-	var obj map[string]any
-	if err := json.Unmarshal(cfg, &obj); err != nil {
-		return nil, err
-	}
-	// Same slot transformer the typed settings rows use — provider
-	// config differs only in how its secret slots are discovered
-	// (declared at runtime by the provider's schema, not by struct
-	// field pointers).
-	keys := make([]string, 0, len(pw))
-	values := make([]string, 0, len(pw))
-	for key := range pw {
-		str, ok := obj[key].(string)
-		if !ok {
-			continue
-		}
-		keys = append(keys, key)
-		values = append(values, str)
-	}
-	slots := make([]*string, len(values))
-	for i := range values {
-		slots[i] = &values[i]
-	}
-	if err := crypto.TransformSlots(op, slots); err != nil {
-		return nil, err
-	}
-	for i, key := range keys {
-		obj[key] = values[i]
-	}
-	return json.Marshal(obj)
+	return s
 }
 
 // SearchResult bundles the fan-out output. QueriedProviders is the ID
@@ -481,119 +406,6 @@ func (s *EnrichmentService) LookupByISBN(ctx context.Context, isbn string) (*pro
 		return &best, p.Name(), nil
 	}
 	return nil, "", nil
-}
-
-// ListProviders joins the static catalog with the live per-row state
-// (enabled + config + priority) and the provider's declared schema.
-// Missing rows count as disabled with an empty config. The returned
-// slice is in catalog order; the handler re-sorts by priority for the
-// admin UI if it wants chain order.
-func (s *EnrichmentService) ListProviders(ctx context.Context) ([]ProviderInfo, error) {
-	rows, err := s.settings.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	byID := make(map[string]repo.ProviderSetting, len(rows))
-	for _, r := range rows {
-		byID[r.ID] = r
-	}
-	byProvider := make(map[provider.Source]provider.Provider, len(s.providers))
-	for _, p := range s.providers {
-		byProvider[p.Name()] = p
-	}
-	out := make([]ProviderInfo, 0, len(provider.Catalog))
-	for _, c := range provider.Catalog {
-		info := ProviderInfo{
-			ID:       c.ID,
-			Name:     c.Name,
-			External: c.External,
-		}
-		if row, ok := byID[string(c.ID)]; ok {
-			info.Enabled = row.Enabled
-			info.Priority = row.Priority
-			info.Config = []byte(row.Config)
-			info.LastSuccessAt = row.LastSuccessAt
-			info.LastErrorAt = row.LastErrorAt
-			info.LastError = row.LastError
-		}
-		if p, ok := byProvider[c.ID]; ok {
-			if sp, ok := p.(provider.SchemaProvider); ok {
-				info.Schema = sp.ConfigSchema()
-			}
-			// Decrypt password-kind fields for the admin UI. Failures
-			// return the raw blob so an admin can at least see the row
-			// exists (the input will be gibberish, which is a visible
-			// signal the KEK rotated out of sync).
-			if decoded, err := s.decryptConfigFields(info.Config, p); err != nil {
-				slog.Warn("list providers config decrypt", "provider", c.ID, "err", err)
-			} else {
-				info.Config = decoded
-			}
-		}
-		out = append(out, info)
-	}
-	return out, nil
-}
-
-// SetProviderEnabled flips the enabled flag for a single provider. The
-// id must match an entry in the static catalog; unknown ids return
-// ErrUnknownProvider rather than silently upserting junk.
-func (s *EnrichmentService) SetProviderEnabled(ctx context.Context, id string, enabled bool) error {
-	if _, ok := provider.CatalogLookup(id); !ok {
-		return ErrUnknownProvider
-	}
-	return s.settings.SetEnabled(ctx, id, enabled)
-}
-
-// SetProviderConfig stores a new config blob and pushes it into the
-// running provider instance. Invalid JSON is caught by Configure and
-// surfaced to the caller so a save button can flash an error.
-//
-// Password-kind fields (API keys, cookies) are encrypted before they
-// land in the DB; the live provider gets the plaintext copy via
-// Configure so the next outbound HTTP request works immediately.
-func (s *EnrichmentService) SetProviderConfig(ctx context.Context, id string, cfg []byte) error {
-	info, ok := provider.CatalogLookup(id)
-	if !ok {
-		return ErrUnknownProvider
-	}
-	var matched provider.Provider
-	for _, p := range s.providers {
-		if p.Name() == info.ID {
-			matched = p
-			break
-		}
-	}
-
-	toStore := cfg
-	if matched != nil {
-		encrypted, err := s.encryptConfigFields(cfg, matched)
-		if err != nil {
-			return err
-		}
-		toStore = encrypted
-	}
-	if err := s.settings.SetConfig(ctx, id, toStore); err != nil {
-		return err
-	}
-	if matched == nil {
-		return nil
-	}
-	configurable, isCfg := matched.(provider.Configurable)
-	if !isCfg {
-		return nil
-	}
-	// The live Configure call reads the plaintext blob — decryption
-	// round-tripping through the DB isn't required.
-	return configurable.Configure(cfg)
-}
-
-// SetProviderPriority stores the sort priority. nil clears it.
-func (s *EnrichmentService) SetProviderPriority(ctx context.Context, id string, priority *int) error {
-	if _, ok := provider.CatalogLookup(id); !ok {
-		return ErrUnknownProvider
-	}
-	return s.settings.SetPriority(ctx, id, priority)
 }
 
 // ApplyOptions controls how a provider candidate is merged onto the
@@ -1022,7 +834,9 @@ func (s *EnrichmentService) cachePut(key string, matches []provider.Match) {
 // client disconnects don't cancel the health update, and a DB hiccup
 // doesn't spill back into the request path.
 func (s *EnrichmentService) recordProviderSuccess(id provider.Source) {
+	s.healthWrites.Add(1)
 	go func() {
+		defer s.healthWrites.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := s.settings.RecordSuccess(ctx, string(id)); err != nil {
@@ -1036,7 +850,9 @@ func (s *EnrichmentService) recordProviderError(id provider.Source, err error) {
 	if err != nil {
 		msg = err.Error()
 	}
+	s.healthWrites.Add(1)
 	go func() {
+		defer s.healthWrites.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := s.settings.RecordError(ctx, string(id), msg); err != nil {

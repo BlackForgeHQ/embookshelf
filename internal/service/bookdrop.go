@@ -4,7 +4,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -393,7 +392,7 @@ func (s *BookDropService) ClearProcessed(ctx context.Context) (int, error) {
 		}
 	}
 	if len(ids) > 0 && s.hub != nil {
-		s.hub.Broadcast(sse.Event{Name: "bookdrop.cleared", Data: "{}"})
+		_ = s.hub.Publish(sse.BookDropCleared{})
 	}
 	return len(ids), nil
 }
@@ -584,7 +583,7 @@ func (s *BookDropService) WipeFiles(ctx context.Context) (BookDropWipeResult, er
 	}
 
 	if s.hub != nil {
-		s.hub.Broadcast(sse.Event{Name: "bookdrop.cleared", Data: "{}"})
+		_ = s.hub.Publish(sse.BookDropCleared{})
 	}
 
 	return res, nil
@@ -626,8 +625,7 @@ func (s *BookDropService) broadcast(id string) {
 	if s.hub == nil {
 		return
 	}
-	payload, _ := json.Marshal(map[string]string{"id": id})
-	s.hub.Broadcast(sse.Event{Name: "bookdrop.updated", Data: string(payload)})
+	_ = s.hub.Publish(sse.BookDropUpdated{ID: id})
 }
 
 func fallback(s, def string) string {

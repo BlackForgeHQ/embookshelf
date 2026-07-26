@@ -4,7 +4,6 @@ package task
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -53,7 +52,7 @@ func SendToKindle(ctx context.Context, args SendToKindleArgs, deps SendToKindleD
 
 	sendErr := deps.Notifier.SendToKindle(ctx, book, user)
 	if sendErr == nil {
-		broadcastKindleEvent(deps.Hub, user.ID, book.ID, "kindle.sent", "")
+		publishKindleResult(deps.Hub, user.ID, book.ID, "")
 		return nil
 	}
 
@@ -62,29 +61,25 @@ func SendToKindle(ctx context.Context, args SendToKindleArgs, deps SendToKindleD
 		errors.Is(sendErr, service.ErrFileTooLarge) ||
 		errors.Is(sendErr, service.ErrKindleEmailUnset) ||
 		errors.Is(sendErr, service.ErrEmailDisabled) {
-		broadcastKindleEvent(deps.Hub, user.ID, book.ID, "kindle.failed", sendErr.Error())
+		publishKindleResult(deps.Hub, user.ID, book.ID, sendErr.Error())
 		slog.Info("send-to-kindle permanent failure", "book_id", book.ID, "user_id", user.ID, "err", sendErr)
 		return nil
 	}
 
-	broadcastKindleEvent(deps.Hub, user.ID, book.ID, "kindle.failed", sendErr.Error())
+	publishKindleResult(deps.Hub, user.ID, book.ID, sendErr.Error())
 	return sendErr
 }
 
-func broadcastKindleEvent(hub *sse.Hub, userID, bookID, eventName, errMsg string) {
+// publishKindleResult notifies the user who asked for the send. The event
+// is routed to that user's subscriptions, so the recipient's id no longer
+// travels to every connected browser.
+func publishKindleResult(hub *sse.Hub, userID, bookID, errMsg string) {
 	if hub == nil {
 		return
 	}
-	payload := map[string]any{
-		"user_id": userID,
-		"book_id": bookID,
-	}
-	if errMsg != "" {
-		payload["error"] = errMsg
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
+	if errMsg == "" {
+		_ = hub.Publish(sse.KindleSent{UserID: userID, BookID: bookID})
 		return
 	}
-	hub.Broadcast(sse.Event{Name: eventName, Data: string(data)})
+	_ = hub.Publish(sse.KindleFailed{UserID: userID, BookID: bookID, Error: errMsg})
 }

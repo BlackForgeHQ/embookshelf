@@ -20,7 +20,7 @@ import (
 func (h *Handler) SettingsProvidersList(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	infos, err := h.enrich.ListProviders(ctx)
+	infos, err := h.providerCfg.ListProviders(ctx)
 	if err != nil {
 		slog.Error("list providers", "err", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "list providers"})
@@ -66,7 +66,7 @@ func (h *Handler) SettingsProviderUpdate(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	if req.Config != nil {
-		if err := h.enrich.SetProviderConfig(ctx, id, req.Config); err != nil {
+		if err := h.providerCfg.SetProviderConfig(ctx, id, req.Config); err != nil {
 			if errors.Is(err, service.ErrUnknownProvider) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "unknown provider"})
 				return
@@ -77,7 +77,7 @@ func (h *Handler) SettingsProviderUpdate(c *gin.Context) {
 		}
 	}
 	if req.PriorityClear {
-		if err := h.enrich.SetProviderPriority(ctx, id, nil); err != nil {
+		if err := h.providerCfg.SetProviderPriority(ctx, id, nil); err != nil {
 			if errors.Is(err, service.ErrUnknownProvider) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "unknown provider"})
 				return
@@ -87,7 +87,7 @@ func (h *Handler) SettingsProviderUpdate(c *gin.Context) {
 			return
 		}
 	} else if req.Priority != nil {
-		if err := h.enrich.SetProviderPriority(ctx, id, req.Priority); err != nil {
+		if err := h.providerCfg.SetProviderPriority(ctx, id, req.Priority); err != nil {
 			if errors.Is(err, service.ErrUnknownProvider) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "unknown provider"})
 				return
@@ -98,7 +98,7 @@ func (h *Handler) SettingsProviderUpdate(c *gin.Context) {
 		}
 	}
 	if req.Enabled != nil {
-		if err := h.enrich.SetProviderEnabled(ctx, id, *req.Enabled); err != nil {
+		if err := h.providerCfg.SetProviderEnabled(ctx, id, *req.Enabled); err != nil {
 			if errors.Is(err, service.ErrUnknownProvider) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "unknown provider"})
 				return
@@ -111,7 +111,7 @@ func (h *Handler) SettingsProviderUpdate(c *gin.Context) {
 
 	// Return the full refreshed list so the client can reconcile its
 	// cache without a second round-trip.
-	infos, err := h.enrich.ListProviders(ctx)
+	infos, err := h.providerCfg.ListProviders(ctx)
 	if err != nil {
 		slog.Error("list providers after update", "err", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "list providers"})

@@ -255,11 +255,12 @@ database must be empty; migrations are applied to it automatically.
 	if err := providerSettingsRepo.SeedIfAbsent(ctx, defaults); err != nil {
 		slog.Warn("seed provider settings", "err", err)
 	}
-	enrichSvc := service.NewEnrichmentService(providers, providerSettingsRepo, libRepo, bookRepo, covers, secretCipher)
+	enrichSvc := service.NewEnrichmentService(providers, providerSettingsRepo, bookRepo, covers, secretCipher)
+	providerCfgSvc := service.NewProviderSettingsService(providers, providerSettingsRepo, secretCipher)
 	// Push stored per-provider config (API keys, language, …) into the
 	// running provider instances. Failure here is non-fatal — providers
 	// fall back to their no-config defaults.
-	if err := enrichSvc.LoadConfigs(ctx); err != nil {
+	if err := providerCfgSvc.LoadConfigs(ctx); err != nil {
 		slog.Warn("load provider configs", "err", err)
 	}
 	// MetadataWriter coordinates DB → sidecar → file pipeline writes

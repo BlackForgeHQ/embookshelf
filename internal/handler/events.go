@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/blackforge/embookshelf/internal/auth"
 )
 
 // Events streams the SSE hub to a single client. Every connection:
@@ -36,11 +38,17 @@ func (h *Handler) Events(c *gin.Context) {
 	c.Writer.WriteHeader(http.StatusOK)
 	c.Writer.Flush()
 
-	ch, cancel := h.hub.Subscribe(32)
+	// The subscription is bound to the authenticated user so the hub can
+	// route user-scoped events (Send-to-Kindle results) to their owner
+	// instead of fanning them out to every connected browser.
+	var userID string
+	if u := auth.UserFromContext(c.Request.Context()); u != nil {
+		userID = u.ID
+	}
+
+	ch, cancel := h.hub.Subscribe(userID, 32)
 	defer cancel()
 
-	// Send the user's id once so the client knows which session the
-	// stream is bound to. Useful if we ever want per-user fan-out later.
 	_, _ = fmt.Fprint(c.Writer, ": connected\n\n")
 	c.Writer.Flush()
 

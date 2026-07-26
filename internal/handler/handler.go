@@ -29,6 +29,7 @@ type Handler struct {
 	bookdrop     *service.BookDropService
 	progress     *service.ProgressService
 	enrich       *service.EnrichmentService
+	providerCfg  *service.ProviderSettingsService
 	annotations  *service.AnnotationService
 	stats        *service.StatsService
 	readingStats *service.ReadingSessionService
@@ -67,16 +68,19 @@ type Handler struct {
 }
 
 type Deps struct {
-	Cfg          config.Config
-	Static       embed.FS
-	Version      string
-	Commit       string
-	Lib          *service.LibraryService
-	Shelf        *service.ShelfService
-	Auth         *service.AuthService
-	BookDrop     *service.BookDropService
-	Progress     *service.ProgressService
-	Enrich       *service.EnrichmentService
+	Cfg      config.Config
+	Static   embed.FS
+	Version  string
+	Commit   string
+	Lib      *service.LibraryService
+	Shelf    *service.ShelfService
+	Auth     *service.AuthService
+	BookDrop *service.BookDropService
+	Progress *service.ProgressService
+	Enrich   *service.EnrichmentService
+	// ProviderCfg is the provider_settings admin surface, split out of
+	// Enrich (the fan-out path never touches it).
+	ProviderCfg  *service.ProviderSettingsService
 	Annotations  *service.AnnotationService
 	Stats        *service.StatsService
 	ReadingStats *service.ReadingSessionService
@@ -114,7 +118,7 @@ func New(d Deps) *Handler {
 		cfg: d.Cfg, static: d.Static,
 		version: d.Version, commit: d.Commit,
 		lib: d.Lib, shelf: d.Shelf, auth: d.Auth,
-		bookdrop: d.BookDrop, progress: d.Progress, enrich: d.Enrich,
+		bookdrop: d.BookDrop, progress: d.Progress, enrich: d.Enrich, providerCfg: d.ProviderCfg,
 		annotations: d.Annotations, stats: d.Stats,
 		readingStats: d.ReadingStats,
 		devices:      d.Devices,

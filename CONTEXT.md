@@ -219,6 +219,18 @@ Opaque change token from a backend (S3 returns one; LocalFS leaves it empty). Us
 
 `scan.RelocateByHash` (or inline equivalent in `task.LibraryScan`); for a New walk entry, hashes the bytes and queries `Files.GetByContentHash` in the same library. On hit, updates the existing `files.location` to the new path — the rename safety net under ADR-0018. On miss, returns without side effect; scan is never an ingest path.
 
+### Event catalog
+
+`internal/sse`'s `Catalog`; the single declaration of every SSE event the server publishes. One typed payload struct per event, each naming itself (`EventName`) and stating its [[Audience]]. Emitters call `Hub.Publish(payload)` and never hand-marshal a map or type a name, so a field rename is a compile error rather than a silently-changed wire shape. Quirks that used to live at call sites — the `public:` prefix on shared-shelf slugs — are stamped in the payload instead.
+
+Exists because the vocabulary was two hand-kept lists: string literals across `service`/`task`, and a hand-typed union in `ui/src/api/realtime.ts`. They drifted — `kindle.sent` / `kindle.failed` were published with no listener, so Send-to-Kindle reported nothing to the user. Two Go tests now parse the client union and assert it equals the Catalog in both directions, so the next divergence fails the build. The tests parse the union block specifically, not the whole file: every name also appears as a handler key, and a substring search would still pass after a union entry was deleted.
+
+### Audience
+
+`sse.Audience`; who receives an event, declared by the payload rather than decided by the caller. `Everyone()` is the default for instance-wide surfaces (BookDrop has no per-user rows and its routes are `authed`, not admin-only; Shared shelves are public by definition). `User(id)` restricts delivery to one user's subscriptions — all of them, so every open tab sees it.
+
+Routing replaced client-side filtering. `Hub` fanned every event to every subscriber, so a per-user event had to carry its recipient in the payload and rely on the client to ignore other people's — which meant the recipient's id reached every connected browser. Send-to-Kindle results are the only user-scoped events today; their `UserID` is tagged `json:"-"` and never reaches the wire.
+
 ### Job registry
 
 `queue.registry(deps)`; the single list of job kinds the binary knows. One `register[T](work)` entry per job declares the kind, the args type, and the work function together, and derives River's typed-worker plumbing from them; the per-job `Deps` structs are assembled once. Adding a job is one line: the `Client` interface does not widen (kind travels with the payload via `queue.JobArgs`), and no second registration site exists. Confines the River driver import to `internal/queue`; `internal/task` does not import it.
@@ -365,6 +377,12 @@ Candidate matches presented to the user for review before persisting. Streamed o
 
 `EnrichmentService.AutoEnrich(ctx, book)`; headless background gap-fill triggered by bookdrop approve. Empty-only policy: clones `book.Locks` in-memory and sets every non-empty field as locked for the duration of the apply, leaving DB locks unchanged (ADR-0012). Prefers ISBN chain; falls back to `Search` with Confidence ≥ 70 threshold. Triggers `TriggerAutoEnrichment` — ADR-0001 §3 keeps this off the in-file embedded write path.
 
+### ProviderSettingsService
+
+`service.ProviderSettingsService`; the admin surface over `provider_settings` — which metadata providers are enabled, their config blobs, their ranking, and the health telemetry the Settings panel renders. Also owns `LoadConfigs`, the boot-time push of stored config into the running provider instances, and the schema-driven secret walk that AES-GCM encrypts `password`-kind fields in place (ADR-0010).
+
+Split out of `EnrichmentService`, which had grown to six unrelated concerns behind one struct. This half was a clean cut: no fan-out or apply path calls it. **Cover intake deliberately stayed behind** — `ApplyMatch` calls `ImportCoverFromURL`, so separating it would have added a dependency without removing coupling (one adapter is a hypothetical seam, not a real one).
+
 ### Provider settings row
 
 `provider_settings(id, enabled, config, priority, last_success_at, last_error_at, last_error)`. One row per Catalog entry. `config` is JSONB; `password`-kind fields (Hardcover token, Amazon cookie) are AES-256-GCM encrypted in place; non-secret fields (region, language, enabled flags) stay plaintext for `psql` legibility (ADR-0010). `priority` is a single nullable int; ranked-first then unranked-in-catalog-order.
@@ -380,6 +398,12 @@ Candidate matches presented to the user for review before persisting. Streamed o
 ### Configurable / SchemaProvider
 
 Optional interfaces a `Provider` may implement. `Configurable.Configure(rawJSON)` accepts plaintext config from the settings UI; `SchemaProvider.ConfigSchema()` returns `[]ConfigField` describing inputs the admin UI should render (text / password / select / textarea). Password-kind fields drive the per-field encryption walk in `EnrichmentService.transformConfigFields`.
+
+### Enrichment cache
+
+The in-process result cache inside `EnrichmentService`, keyed by normalized `(title|author|isbn)` with a 5-minute TTL. Exists to protect provider quota — Google Books allows roughly 100 requests per 100s per IP, and an admin tabbing between books burns that fast.
+
+Its freshness rules are asymmetric and worth knowing before relying on either entry point: **`Search` is cached, `SearchStream` is not**, and editing provider settings does **not** invalidate it, so an admin who fixes an API key can still see a stale match list until the TTL lapses. This is pinned by tests rather than changed — the quota protection is deliberate — but it is a property callers must know, not one they can discover from a signature.
 
 ### Graceful degrade
 
