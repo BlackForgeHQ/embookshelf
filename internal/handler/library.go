@@ -376,7 +376,7 @@ func (h *Handler) BookPatch(c *gin.Context) {
 	if !bindJSON(c, &patch) {
 		return
 	}
-	applyBookPatch(&current, patch)
+	patch.toDomain().Apply(&current)
 
 	if err := h.lib.UpdateBookMetadata(c.Request.Context(), current); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
@@ -554,118 +554,37 @@ func (h *Handler) BookRemoveShelf(c *gin.Context) {
 
 // applyBookPatch mutates b in place with the non-nil fields of p. Tag slices
 // are copied to avoid sharing backing storage with the request.
-func applyBookPatch(b *model.Book, p bookPatch) {
-	if p.Title != nil {
-		b.Title = strings.TrimSpace(*p.Title)
+// toDomain converts the wire patch into the domain patch. The editing rules
+// — trimming, clamps, tag cleanup, the PublishDate/Year coupling, tri-state
+// public reviews — live on model.BookPatch.Apply so they hold for every
+// caller, not only this endpoint.
+func (p bookPatch) toDomain() model.BookPatch {
+	return model.BookPatch{
+		Title:              p.Title,
+		Subtitle:           p.Subtitle,
+		Author:             p.Author,
+		Format:             p.Format,
+		Year:               p.Year,
+		PublishDate:        p.PublishDate,
+		Language:           p.Language,
+		Rating:             p.Rating,
+		Palette:            p.Palette,
+		Description:        p.Description,
+		ISBN:               p.ISBN,
+		ISBN10:             p.ISBN10,
+		Publisher:          p.Publisher,
+		Series:             p.Series,
+		SeriesNum:          p.SeriesNum,
+		SeriesTotal:        p.SeriesTotal,
+		Genres:             p.Genres,
+		Moods:              p.Moods,
+		Tags:               p.Tags,
+		AgeRating:          p.AgeRating,
+		ContentRating:      p.ContentRating,
+		Pages:              p.Pages,
+		PublicReviews:      p.PublicReviews,
+		PublicReviewsClear: p.PublicReviewsClear,
 	}
-	if p.Subtitle != nil {
-		b.Subtitle = strings.TrimSpace(*p.Subtitle)
-	}
-	if p.Author != nil {
-		b.Author = strings.TrimSpace(*p.Author)
-	}
-	if p.Format != nil {
-		b.Format = strings.TrimSpace(*p.Format)
-	}
-	if p.Year != nil {
-		b.Year = *p.Year
-	}
-	if p.PublishDate != nil {
-		raw := strings.TrimSpace(*p.PublishDate)
-		if raw == "" {
-			b.PublishDate = nil
-		} else if t, err := time.Parse("2006-01-02", raw); err == nil {
-			b.PublishDate = &t
-			// Keep Year in sync when a full date is supplied — avoids a
-			// confusing mismatch between the two columns on display.
-			b.Year = t.Year()
-		}
-	}
-	if p.Language != nil {
-		b.Language = strings.TrimSpace(*p.Language)
-	}
-	if p.Rating != nil {
-		r := *p.Rating
-		if r < 0 {
-			r = 0
-		}
-		if r > 5 {
-			r = 5
-		}
-		b.Rating = r
-	}
-	if p.Palette != nil {
-		b.CoverPalette = strings.TrimSpace(*p.Palette)
-	}
-	if p.Description != nil {
-		b.Description = *p.Description
-	}
-	if p.ISBN != nil {
-		b.ISBN = strings.TrimSpace(*p.ISBN)
-	}
-	if p.ISBN10 != nil {
-		b.ISBN10 = strings.TrimSpace(*p.ISBN10)
-	}
-	if p.Publisher != nil {
-		b.Publisher = strings.TrimSpace(*p.Publisher)
-	}
-	if p.Series != nil {
-		b.Series = strings.TrimSpace(*p.Series)
-	}
-	if p.SeriesNum != nil {
-		b.SeriesIndex = *p.SeriesNum
-	}
-	if p.SeriesTotal != nil {
-		if *p.SeriesTotal < 0 {
-			b.SeriesTotal = 0
-		} else {
-			b.SeriesTotal = *p.SeriesTotal
-		}
-	}
-	if p.Genres != nil {
-		b.Genres = cleanStringSlice(*p.Genres)
-	}
-	if p.Moods != nil {
-		b.Moods = cleanStringSlice(*p.Moods)
-	}
-	if p.Tags != nil {
-		b.Tags = cleanStringSlice(*p.Tags)
-	}
-	if p.AgeRating != nil {
-		b.AgeRating = strings.TrimSpace(*p.AgeRating)
-	}
-	if p.ContentRating != nil {
-		b.ContentRating = strings.TrimSpace(*p.ContentRating)
-	}
-	if p.Pages != nil {
-		if *p.Pages < 0 {
-			b.Pages = 0
-		} else {
-			b.Pages = *p.Pages
-		}
-	}
-	// Tri-state public_reviews: explicit clear wins over a set, so
-	// callers can send both to "reset then ignore". A plain set just
-	// overwrites the current value.
-	if p.PublicReviewsClear {
-		b.PublicReviews = nil
-	} else if p.PublicReviews != nil {
-		v := *p.PublicReviews
-		b.PublicReviews = &v
-	}
-}
-
-// cleanStringSlice trims + dedupes a string slice for storage. Keeps
-// first-occurrence order and drops empties.
-func cleanStringSlice(in []string) []string {
-	tags := model.DedupTags(in)
-	clean := tags[:0]
-	for _, t := range tags {
-		if v := strings.TrimSpace(t); v != "" {
-			clean = append(clean, v)
-		}
-	}
-	return clean
 }
 
 // BookDetail returns a single book enriched with the user's shelf

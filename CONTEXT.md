@@ -164,6 +164,14 @@ Library deletion: `?purge=true` query param deletes the on-disk folder (local) o
 
 `service.LibraryStore`; the deep seam that turns a `libraryID` into a `LibraryHandle{Library, Storage, Placer}` plus delivery glue (`BookSource`, `Open`, `Relativize`). Composes `LibraryRepo` + `Resolver` + `PlacerBuilder` behind one `For(ctx, libraryID)` method. Stateless — each call does a fresh PK lookup. Used by `BookDropService.Approve`, the file-serve handler, library scan, and files backfill. Replaces the scattered `lib, _ := libs.GetByID(); resolver.Resolve(*lib.BackendID); ...` chain that appeared at every callsite. (Bookdrop ingest still calls `Resolver` directly because it has no library_id at ingest time.)
 
+### Book patch
+
+`model.BookPatch`; a partial edit to a Book — nil field means "leave alone", non-nil means "set to this" — carrying the book editing rules on `Apply(*Book)`. Domain-level rather than a wire shape, so a bulk edit, a CLI, or an import path gets the same invariants as the metadata PATCH endpoint instead of re-deriving them.
+
+The rules it owns: short text fields trimmed (Description kept verbatim, it is prose); Rating clamped 0–5; Pages and SeriesTotal clamped non-negative while SeriesIndex is not; Genres/Moods/Tags trimmed then de-duplicated case-sensitively per DedupTags; PublicReviews tri-state with clear beating set.
+
+Two behaviours that surprise callers, both pinned by tests: setting `PublishDate` **also sets Year** (Year is a denormalised display column and would otherwise go stale), so a patch carrying both ends up with the date's year; and an unparseable `PublishDate` is silently ignored rather than rejected. Field *content* — ISBN shape, a plausible year — is validated only in the browser, so a non-UI caller can store neither.
+
 ### Source
 
 `storage.Source`; the random-access byte view of a single object. `io.ReaderAt + io.Closer + Size() int64`. Returned by `Storage.Open(ctx, key)`. **Distinct** from `storage.Get` (sequential streaming via `io.ReadCloser`) — Source is for callers that need to seek (zip directories, PDF XREF, MP4 atoms). **Distinct** from `service.BookSource` — that's a delivery decision, not a byte primitive.
