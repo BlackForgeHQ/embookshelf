@@ -1,10 +1,12 @@
-# Bookdrop auto-enrichment fills empty fields only, via transient locks
+# Bookdrop auto-enrichment fills empty fields only
 
-When a book is approved out of bookdrop, `EnrichmentService.AutoEnrich(ctx, book)` runs in the background to backfill missing metadata from external providers. The policy is "fill empty unlocked fields, leave non-empty fields alone." It is implemented by **cloning `book.Locks` in-memory, marking every currently-non-empty field as locked**, and calling the regular `ApplyMatch` with that synthesized lock set. The DB locks are never mutated. Provider selection prefers the ISBN chain (ADR-0011); if the book has no ISBN, fan-out runs and applies only when the top match has `Confidence ≥ 70`.
+When a book is approved out of bookdrop, `EnrichmentService.AutoEnrich(ctx, book)` runs in the background to backfill missing metadata from external providers. The policy is "fill empty unlocked fields, leave non-empty fields alone." It is implemented by **`ApplyOptions{OnlyEmpty: true}`**, an explicit argument to `ApplyMatch`. The stored `*_locked` columns are not involved: they carry the user's intent and nothing else. Provider selection prefers the ISBN chain (ADR-0011); if the book has no ISBN, fan-out runs and applies only when the top match has `Confidence ≥ 70`.
 
 ## Status
 
-accepted (2026-05-03)
+accepted (2026-05-03), amended 2026-07-27 — §2 replaced. The transient-lock
+implementation it described was **not** safe, and had been corrupting data
+since it shipped; see below.
 
 ## Decisions bundled here
 
@@ -12,22 +14,48 @@ accepted (2026-05-03)
 
 Auto-enrichment is the silent path — no user clicked "apply." The local extractor (EPUB OPF, PDF `/Info`, audio tag readers) usually produces trustworthy values for whatever the file carries. The right job for auto-enrich is **gap-fill**: ISBN missing → fetch it; description missing → fetch it; title already extracted → leave alone.
 
-### 2. Implementation: transient lock synthesis
+### 2. Implementation: an explicit `OnlyEmpty` option
 
-`AutoEnrich` reads `book.Locks` (a copy — `book` is passed by value), then:
+`AutoEnrich` passes the policy as an argument:
 
 ```go
-applyLocks := book.Locks
-if strings.TrimSpace(book.Title) != "" { applyLocks.Title = true }
-if strings.TrimSpace(book.Author) != "" { applyLocks.Author = true }
-// … one branch per field …
-book.Locks = applyLocks
-_, err := s.ApplyMatch(ctx, book, *match, …, TriggerAutoEnrichment)
+_, err := s.ApplyMatch(ctx, book, *match, ApplyOptions{
+	MergeCategories: true,
+	OnlyEmpty:       true,
+	ApplyCover:      !book.Locks.Cover && !book.HasCover,
+}, TriggerAutoEnrichment)
 ```
 
-`ApplyMatch` already honors `book.Locks` for every field write. Reusing that gate means auto-enrich and manual-apply share one merge codepath; no parallel "is field empty" branch in the writer. The DB row's real lock columns are not touched — `ApplyMatch` writes the post-merge book back, including `Locks`, but the synthesized true-flags only persist if a real lock was already set; the rest revert because the overlay was on the in-memory copy.
+`ApplyMatch` gates every field on one predicate — never write a locked
+field, and under `OnlyEmpty` never write a populated one — so auto-enrich
+and manual-apply still share a single merge codepath.
 
-**Hidden invariant: `book` must remain pass-by-value down to `ApplyMatch`.** If a future refactor turns it into `*model.Book`, the synthesized locks become persistent corruption — every auto-enriched book ends up with every field locked. Test coverage in `service` should pin this. If the codepath needs to evolve, prefer making the empty-only policy explicit in `ApplyOptions{OnlyFillEmpty: true}` rather than a different lock-synthesis trick.
+**This replaces the original transient-lock implementation, which was
+wrong.** That version cloned `book.Locks`, set every populated field's flag
+true, and passed the book to `ApplyMatch`. The claim recorded here — that
+"the rest revert because the overlay was on the in-memory copy" — does not
+hold: pass-by-value protects the *caller's variable*, not the row. The
+in-memory copy is exactly what `ApplyMatch` hands to the write step, and
+`BookRepo.UpdateMetadata` writes all 15 `*_locked` columns from it.
+
+The consequence was live from the day it shipped, not merely latent behind
+the pointer refactor §2 warned about: **every auto-enriched book came out
+with every already-populated field permanently locked** — locks the user
+never set, which shielded those fields from all future enrichment and could
+only be cleared by hand, one book at a time. It went unnoticed because
+`AutoEnrich` had no tests; the "test coverage in `service` should pin this"
+line in the original §2 was never acted on.
+
+Damage already written is left in place. A lock set by this bug is
+byte-identical to one a user set deliberately — `books` records no
+provenance — so a repair migration would have to either clear locks users
+meant to keep or guess. Unlocking a field someone chose to protect is worse
+than leaving one they did not choose. Existing locks are visible and
+clearable per book in the edit UI.
+
+`AutoEnrich` and the `OnlyEmpty` gate are now covered in
+`internal/service/enrichment_apply_test.go`, including a test that fails if
+the lock overlay is reintroduced.
 
 ### 3. ISBN chain preferred over fan-out
 
@@ -57,9 +85,12 @@ The "provider data > extractor data" assumption is wrong for self-hosted librari
 
 BookLore stages provider candidates in `metadata_fetch_proposal` for a user to review. For embookshelf's "drop a folder, walk away" use case, that's too much friction — the user wanted enrichment to happen, not to come back to a queue. ADR-0012's empty-only policy plus the existing per-field locks gives users a finer-grained way to opt-out (lock the fields they want to protect) without a review step.
 
-### Rejected: explicit `ApplyOptions{OnlyFillEmpty: true}` flag
+### ~~Rejected~~ Adopted 2026-07-27: explicit `ApplyOptions{OnlyEmpty: true}` flag
 
-Cleaner than transient-lock synthesis but duplicates the lock-honoring branch in `ApplyMatch`. Worth revisiting if/when the value-vs-pointer invariant in §2 becomes load-bearing for some other reason.
+Originally rejected as "cleaner than transient-lock synthesis but duplicates
+the lock-honoring branch in `ApplyMatch`". The duplication never
+materialised — one predicate covers both rules — and the alternative it was
+rejected in favour of was silently corrupting data. Adopted; see §2.
 
 ## Companion artifacts
 

@@ -443,7 +443,7 @@ Candidate matches presented to the user for review before persisting. Streamed o
 
 ### Auto-enrich
 
-`EnrichmentService.AutoEnrich(ctx, book)`; headless background gap-fill triggered by bookdrop approve. Empty-only policy: clones `book.Locks` in-memory and sets every non-empty field as locked for the duration of the apply, leaving DB locks unchanged (ADR-0012). Prefers ISBN chain; falls back to `Search` with Confidence ≥ 70 threshold. Triggers `TriggerAutoEnrichment` — ADR-0001 §3 keeps this off the in-file embedded write path.
+`EnrichmentService.AutoEnrich(ctx, book)`; headless background gap-fill triggered by bookdrop approve. Empty-only policy carried by `ApplyOptions{OnlyEmpty: true}`, an explicit argument (ADR-0012 §2): fill blank fields, leave populated ones alone. The stored `*_locked` columns are never written by this path — they record the user's intent only. The earlier implementation synthesised a lock overlay instead and persisted it, permanently locking every auto-enriched book on every field it already had. Prefers ISBN chain; falls back to `Search` with Confidence ≥ 70 threshold. Triggers `TriggerAutoEnrichment` — ADR-0001 §3 keeps this off the in-file embedded write path.
 
 ### ProviderSettingsService
 

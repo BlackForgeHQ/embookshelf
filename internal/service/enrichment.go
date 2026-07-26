@@ -421,6 +421,14 @@ type ApplyOptions struct {
 	// cover lock is off. Failures are logged and swallowed so a broken
 	// cover doesn't abort the metadata write.
 	ApplyCover bool
+	// OnlyEmpty fills blank fields and leaves populated ones alone —
+	// ADR-0012's auto-enrich policy. It is a property of this apply, not
+	// of the book: it must never reach the stored *_locked columns.
+	//
+	// The policy used to be emulated by setting book.Locks true for every
+	// populated field, which the write step then persisted, permanently
+	// locking every auto-enriched book on every field it already had.
+	OnlyEmpty bool
 }
 
 // ApplyMatch merges the provider candidate onto the book and persists
@@ -434,22 +442,28 @@ type ApplyOptions struct {
 func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m provider.Match, opts ApplyOptions, trigger Trigger) (model.Book, error) {
 	locks := book.Locks
 
-	if !locks.Title && m.Title != "" {
+	// writable reports whether this apply may touch a field: never when
+	// the user locked it, and under OnlyEmpty only when it is still blank.
+	writable := func(locked bool, populated bool) bool {
+		return !locked && (!opts.OnlyEmpty || !populated)
+	}
+
+	if writable(locks.Title, book.Title != "") && m.Title != "" {
 		book.Title = strings.TrimSpace(m.Title)
 	}
-	if !locks.Author && len(m.Authors) > 0 {
+	if writable(locks.Author, book.Author != "") && len(m.Authors) > 0 {
 		book.Author = strings.Join(m.Authors, ", ")
 	}
-	if !locks.Description && m.Description != "" {
+	if writable(locks.Description, book.Description != "") && m.Description != "" {
 		book.Description = m.Description
 	}
-	if !locks.Publisher && m.Publisher != "" {
+	if writable(locks.Publisher, book.Publisher != "") && m.Publisher != "" {
 		book.Publisher = m.Publisher
 	}
-	if !locks.Series && m.Series != "" {
+	if writable(locks.Series, book.Series != "") && m.Series != "" {
 		book.Series = m.Series
 	}
-	if !locks.Language && m.Language != "" {
+	if writable(locks.Language, book.Language != "") && m.Language != "" {
 		book.Language = m.Language
 	}
 	if m.ISBN != "" {
@@ -460,19 +474,19 @@ func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m p
 		trimmed := strings.TrimSpace(m.ISBN)
 		digits := countDigits(trimmed)
 		switch {
-		case digits == 13 && !locks.ISBN:
+		case digits == 13 && writable(locks.ISBN, book.ISBN != ""):
 			book.ISBN = trimmed
-		case digits == 10 && !locks.ISBN10:
+		case digits == 10 && writable(locks.ISBN10, book.ISBN10 != ""):
 			book.ISBN10 = trimmed
-		case digits != 13 && digits != 10 && !locks.ISBN:
+		case digits != 13 && digits != 10 && writable(locks.ISBN, book.ISBN != ""):
 			book.ISBN = trimmed
 		}
 	}
-	if !locks.PublishDate && m.Year > 0 {
+	if writable(locks.PublishDate, book.Year != 0) && m.Year > 0 {
 		book.Year = m.Year
 	}
 
-	if !locks.Genres {
+	if writable(locks.Genres, len(book.Genres) > 0) {
 		clean := cleanCategorySlice(m.Categories)
 		if len(clean) > 0 {
 			if opts.MergeCategories {
@@ -493,7 +507,7 @@ func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m p
 		}
 	}
 
-	if opts.ApplyCover && !locks.Cover && strings.TrimSpace(m.CoverURL) != "" {
+	if opts.ApplyCover && writable(locks.Cover, book.HasCover) && strings.TrimSpace(m.CoverURL) != "" {
 		if _, err := s.ImportCoverFromURL(ctx, book.ID, m.CoverURL); err != nil {
 			slog.Warn("apply match cover import", "book", book.ID, "err", err)
 		}
@@ -553,44 +567,16 @@ func (s *EnrichmentService) AutoEnrich(ctx context.Context, book model.Book) (bo
 	}
 	slog.Info("auto-enrich applying", "book", book.ID, "source", src, "conf", match.Confidence)
 
-	// Emulate the "empty only" policy by locking every currently-filled
-	// field for the duration of this apply. We revert locks after so
-	// admin-set locks stay in the DB.
-	applyLocks := book.Locks
-	if strings.TrimSpace(book.Title) != "" {
-		applyLocks.Title = true
-	}
-	if strings.TrimSpace(book.Author) != "" {
-		applyLocks.Author = true
-	}
-	if strings.TrimSpace(book.Description) != "" {
-		applyLocks.Description = true
-	}
-	if strings.TrimSpace(book.Publisher) != "" {
-		applyLocks.Publisher = true
-	}
-	if strings.TrimSpace(book.Series) != "" {
-		applyLocks.Series = true
-	}
-	if strings.TrimSpace(book.Language) != "" {
-		applyLocks.Language = true
-	}
-	if strings.TrimSpace(book.ISBN) != "" {
-		applyLocks.ISBN = true
-	}
-	if len(book.Genres) > 0 {
-		applyLocks.Genres = true
-	}
-	if book.HasCover {
-		applyLocks.Cover = true
-	}
-	// Swap in the temporary locks only for the apply call.
-	originalLocks := book.Locks
-	book.Locks = applyLocks
-
+	// The empty-only policy is an argument, not a mutation: OnlyEmpty
+	// tells ApplyMatch to fill blanks and leave populated fields alone.
+	// This used to be emulated by setting book.Locks true for every
+	// populated field, which the write step persisted — permanently
+	// locking every auto-enriched book on every field it already had,
+	// against both the comment here and ADR-0012.
 	if _, err := s.ApplyMatch(ctx, book, *match, ApplyOptions{
 		MergeCategories: true,
-		ApplyCover:      !originalLocks.Cover && !book.HasCover,
+		OnlyEmpty:       true,
+		ApplyCover:      !book.Locks.Cover && !book.HasCover,
 	}, TriggerAutoEnrichment); err != nil {
 		return false, err
 	}
