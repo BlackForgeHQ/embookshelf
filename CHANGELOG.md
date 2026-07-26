@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.0](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.19...v0.5.0) (2026-07-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* Postgres is now required (ADR-0023). SQLite is no longer a supported backend, and a `sqlite://` DATABASE_URL refuses to boot instead of serving.
+
+### Features
+
+* **database:** transition to Postgres-only backend and implement SQLite import ([09a7726](https://github.com/BlackForgeHQ/embookshelf/commit/09a7726b610d609168ff94c0785b002cf97bd859))
+* **secrets:** implement at-rest encryption for settings and enhance job queue handling ([72b618b](https://github.com/BlackForgeHQ/embookshelf/commit/72b618b63734dc6dc547c27a65ead288e069f5e0))
+
+
+### Chores
+
+* mark Postgres-only removal as a breaking change ([677a1fa](https://github.com/BlackForgeHQ/embookshelf/commit/677a1fa33e0a594230a0b52d69d4022dd7f09ce3))
+
 ## [0.4.19](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.18...v0.4.19) (2026-05-09)
 
 
