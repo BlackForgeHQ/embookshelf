@@ -28,6 +28,11 @@ import {
   fetchBookAnnotations,
   recentAnnotationsQueryKey,
 } from "@/api/annotations"
+import {
+  bookAudiobookQueryKey,
+  fetchBookAudiobook,
+  narrationUrl,
+} from "@/api/audiobooks"
 import { bookQueryKey, fetchBook, updateProgress } from "@/api/books"
 import { AudioReader } from "@/components/AudioReader"
 import { ComicReader } from "@/components/ComicReader"
@@ -113,7 +118,90 @@ function Reader() {
     )
   }
 
+  if (b.format === "EPUB") {
+    return <NarratableShell book={b} />
+  }
   return <ReaderShell book={b} />
+}
+
+// NarratableShell picks which rendition of an EPUB to open.
+//
+// books.format names the *primary* format, so an EPUB with a narration
+// would otherwise always open the text reader and the audio would be
+// unreachable from here — the concrete cost of ADR-0025 §3 moving the
+// dispatch key off that column.
+//
+// The switch lives here rather than inside either shell: both are large,
+// self-contained, and have no business knowing the other exists.
+function NarratableShell({ book }: { book: BookDetail }) {
+  const narration = useQuery({
+    queryKey: bookAudiobookQueryKey(book.id),
+    queryFn: () => fetchBookAudiobook(book.id),
+  })
+  const [listening, setListening] = useState(false)
+
+  const ready = narration.data?.state === "ready"
+  // Falling back to text when the narration is not ready matters on a
+  // reload mid-run: the toggle vanishes rather than opening a player with
+  // nothing behind it.
+  const listen = listening && ready
+
+  return (
+    <>
+      {ready && <RenditionSwitch listening={listen} onChange={setListening} />}
+      {listen ? (
+        <AudioReaderShell book={book} audioUrl={narrationUrl(book.id)} />
+      ) : (
+        <ReaderShell book={book} />
+      )}
+    </>
+  )
+}
+
+// RenditionSwitch floats above whichever shell is mounted, because
+// neither one owns the choice.
+function RenditionSwitch({
+  listening,
+  onChange,
+}: {
+  listening: boolean
+  onChange: (v: boolean) => void
+}) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        bottom: 16,
+        left: "50%",
+        transform: "translateX(-50%)",
+        zIndex: 60,
+        display: "flex",
+        gap: 2,
+        padding: 2,
+        borderRadius: 999,
+        background: "var(--color-surface, #fff)",
+        border: "1px solid var(--color-rule-soft)",
+        boxShadow: "0 2px 10px rgb(0 0 0 / 0.12)",
+      }}
+    >
+      <Button
+        size="sm"
+        variant={listening ? "ghost" : "outline"}
+        style={{ borderRadius: 999 }}
+        onClick={() => onChange(false)}
+      >
+        Read
+      </Button>
+      <Button
+        size="sm"
+        variant={listening ? "outline" : "ghost"}
+        style={{ borderRadius: 999 }}
+        onClick={() => onChange(true)}
+      >
+        <Icon name="play" size={14} /> Listen
+      </Button>
+    </div>
+  )
 }
 
 function ReaderShell({ book }: { book: BookDetail }) {
@@ -1045,7 +1133,16 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
 // ComicReaderShell, this is deliberately a parallel implementation
 // instead of folded into ReaderShell — audio has a fundamentally
 // different progress model (continuous time vs. discrete pages/CFIs).
-function AudioReaderShell({ book }: { book: BookDetail }) {
+function AudioReaderShell({
+  book,
+  audioUrl,
+}: {
+  book: BookDetail
+  // Set for a narrated EPUB, whose audio is the *other* rendition and so
+  // is not what the plain file route serves. Absent for a book that is
+  // itself an audiobook.
+  audioUrl?: string
+}) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -1395,7 +1492,7 @@ function AudioReaderShell({ book }: { book: BookDetail }) {
 
       <AudioReader
         ref={audioRef}
-        url={`/api/v1/books/${book.id}/file`}
+        url={audioUrl ?? `/api/v1/books/${book.id}/file`}
         initialSeconds={initialSeconds}
         initialRate={rate}
         chapters={book.chapters}

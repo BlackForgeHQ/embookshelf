@@ -47,6 +47,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { AudiobookPanel } from "@/components/book/AudiobookPanel"
 import { ReadingGuidePanel } from "@/components/book/ReadingGuidePanel"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
@@ -303,6 +304,9 @@ function BookDetail() {
               <TabsTrigger value="guide" className="flex-none px-3">
                 Guide
               </TabsTrigger>
+              <TabsTrigger value="narration" className="flex-none px-3">
+                Narration
+              </TabsTrigger>
               <TabsTrigger value="notes" className="flex-none px-3">
                 Notes
               </TabsTrigger>
@@ -346,6 +350,10 @@ function BookDetail() {
 
             <TabsContent value="guide">
               <ReadingGuidePanel bookId={id} />
+            </TabsContent>
+
+            <TabsContent value="narration">
+              <AudiobookPanel bookId={id} format={b.format} />
             </TabsContent>
 
             <TabsContent value="notes">
