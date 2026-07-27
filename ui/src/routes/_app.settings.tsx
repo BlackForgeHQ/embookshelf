@@ -4,7 +4,6 @@ import { createFileRoute } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 
 import { AboutPanel } from "@/components/settings/AboutPanel"
-import { BackupsPanel } from "@/components/settings/BackupsPanel"
 import { BookDropPanel } from "@/components/settings/BookDropPanel"
 import { OidcPanel } from "@/components/settings/OidcPanel"
 import { ForwardAuthPanel } from "@/components/settings/ForwardAuthPanel"
@@ -40,7 +39,6 @@ type SectionKey =
   | "users"
   | "oidc"
   | "forwardAuth"
-  | "backups"
   | "about"
 
 type SectionSpec = {
@@ -61,7 +59,6 @@ const SECTIONS: Array<SectionSpec> = [
   { key: "users", label: "Users & roles", adminOnly: true },
   { key: "oidc", label: "OIDC / SSO", adminOnly: true },
   { key: "forwardAuth", label: "Forward auth", adminOnly: true },
-  { key: "backups", label: "Backups", adminOnly: true },
   { key: "about", label: "About", adminOnly: true },
 ]
 
@@ -120,7 +117,6 @@ function Admin() {
         )}
         {active === "oidc" && <OidcPanel isAdmin={isAdmin} />}
         {active === "forwardAuth" && <ForwardAuthPanel isAdmin={isAdmin} />}
-        {active === "backups" && <BackupsPanel isAdmin={isAdmin} />}
         {active === "about" && <AboutPanel isAdmin={isAdmin} />}
       </SettingsShell>
     </div>

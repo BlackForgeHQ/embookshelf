@@ -183,7 +183,7 @@ stores per-driver config as JSONB.
 
 | Path | Purpose |
 |------|---------|
-| `/app/data` | Configuration, cache, database backups |
+| `/app/data` | Covers, caches, managed library folders |
 | `/books` | Book library storage |
 | `/bookdrop` | Watched folder for file imports |
 

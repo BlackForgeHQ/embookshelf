@@ -136,9 +136,19 @@ func (h *Handler) Engine() *gin.Engine {
 
 			// Reading guides (ADR-0024). Generation is queued, so the
 			// POST answers 202 and guide.updated lands over SSE.
+			//
+			// Reading a guide is open to any signed-in user; writing one
+			// is admin-only, for the same two reasons the audiobook
+			// routes below are. Generating spends the instance's LLM
+			// key, and a guide is per-book rather than per-user, so one
+			// reader's regenerate or hand-edit overwrites what everyone
+			// else sees. The bulk run is already admin-gated under
+			// /settings/reading-guide/run.
 			authed.GET("/books/:id/guide", h.BookGuideGet)
-			authed.POST("/books/:id/guide", h.BookGuideGenerate)
-			authed.PUT("/books/:id/guide", h.BookGuideEdit)
+			authed.POST("/books/:id/guide",
+				auth.RequireRole(model.RoleAdmin), h.BookGuideGenerate)
+			authed.PUT("/books/:id/guide",
+				auth.RequireRole(model.RoleAdmin), h.BookGuideEdit)
 
 			// Generated narration (ADR-0025 — ADR-0028). Reading the
 			// status is open to any signed-in user, because anyone can

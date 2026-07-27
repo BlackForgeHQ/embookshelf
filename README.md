@@ -351,6 +351,10 @@ preferences, device sync, sign out).
 - **OpenTelemetry** — server traces / metrics / logs export via OTLP
   when `OTEL_ENABLED=true`; browser SDK gates on
   `VITE_OTEL_ENABLED=true`.
+- **Backups** — no built-in backup job. Durable state is the Postgres
+  database, the book files (whose sidecars carry metadata edits), and
+  `EMBOOKSHELF_SECRET_KEY`; everything else is cache. See
+  [docs/ops/backups.md](docs/ops/backups.md).
 
 ## UI stack
 

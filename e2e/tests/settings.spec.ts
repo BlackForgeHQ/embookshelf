@@ -325,19 +325,6 @@ test.describe('settings · users & roles', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Backups (informational)
-// ---------------------------------------------------------------------------
-
-test.describe('settings · backups', () => {
-  test('renders backup guidance', async ({ page }) => {
-    await openAdminSettings(page, 'Backups');
-
-    const main = page.getByRole('main');
-    await expect(main.getByText('pg_dump embookshelf')).toBeVisible();
-  });
-});
-
-// ---------------------------------------------------------------------------
 // About
 // ---------------------------------------------------------------------------
 

@@ -9,6 +9,7 @@ import {
   generateBookGuide,
   saveBookGuide,
 } from "@/api/guides"
+import { fetchMe, meQueryKey } from "@/api/auth"
 import { useApiMutation } from "@/api/mutation"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/Icon"
@@ -39,6 +40,9 @@ function toDraft(g: ReadingGuide): EditDraft {
 }
 
 export function ReadingGuidePanel({ bookId }: { bookId: string }) {
+  const me = useQuery({ queryKey: meQueryKey, queryFn: fetchMe })
+  const isAdmin = me.data?.role === "admin"
+
   const guide = useQuery({
     queryKey: bookGuideQueryKey(bookId),
     queryFn: () => fetchBookGuide(bookId),
@@ -72,6 +76,15 @@ export function ReadingGuidePanel({ bookId }: { bookId: string }) {
   const g = guide.data
 
   if (!g) {
+    if (!isAdmin) {
+      return (
+        <p className="t-small">
+          No reading guide yet. An administrator can generate one — it asks a
+          language model and spends the instance's key, so it is theirs to
+          start.
+        </p>
+      )
+    }
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 640 }}>
         <p className="t-small">
@@ -158,7 +171,7 @@ export function ReadingGuidePanel({ bookId }: { bookId: string }) {
 
       <GuideProvenance guide={g} />
 
-      {!editing && (
+      {isAdmin && !editing && (
         <div style={{ display: "flex", gap: 8 }}>
           <Button
             variant="outline"
