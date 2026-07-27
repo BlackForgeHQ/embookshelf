@@ -208,15 +208,6 @@ database must be empty; migrations are applied to it automatically.
 
 	// Services.
 	backendRepo := repo.NewStorageBackendRepo(dbh)
-	libSvc := service.NewLibraryService(libRepo, bookRepo, service.LibraryServiceDeps{
-		Backends: backendRepo,
-		SharedS3: cfg.SharedS3,
-		Resolver: storageResolver,
-		DataPath: cfg.DataPath,
-	})
-	shelfSvc := service.NewShelfService(shelfRepo, hub)
-	searchSvc := service.NewSearchService(libRepo, bookRepo, shelfRepo)
-	authSvc := service.NewAuthService(userRepo, sessionRepo, hub)
 	pendingOrphansRepo := repo.NewPendingOrphanRepo(dbh)
 	libStore := service.NewLibraryStore(service.LibraryStoreDeps{
 		Libs:            libRepo,
@@ -227,6 +218,41 @@ database must be empty; migrations are applied to it automatically.
 		PresignTTL:      cfg.PresignTTL,
 		PresignFallback: cfg.PresignFallback,
 	})
+	// MetadataWriter coordinates the ADR-0001 edit-side pipeline —
+	// DB → in-file embed → sidecar → folder rename — for metadata edits.
+	// It is built here, ahead of every service that performs an edit,
+	// because LibraryService and EnrichmentService both take it as a
+	// constructor argument: an edit that reaches only the books row is a
+	// half-written edit, so there is no wiring in which they should run
+	// without it. The auto-enrich background path passes
+	// TriggerAutoEnrichment to skip the side-effect steps and only
+	// persist the DB row.
+	sidecarWriter := sidecar.NewWriter()
+	renameGrace := cfg.S3RenameGrace
+	if renameGrace <= 0 {
+		// ADR-0005: 2× PresignTTL covers any URL the client could
+		// still hold. Floor at 1h so very short PresignTTL (manual
+		// override) doesn't make the sweeper too aggressive.
+		renameGrace = max(2*cfg.PresignTTL, time.Hour)
+	}
+	metadataWriter := service.NewMetadataWriter(service.MetadataWriterDeps{
+		Books:       bookRepo,
+		LibStore:    libStore,
+		Sidecar:     sidecarWriter,
+		Dispatch:    fileproc.DispatchEmbedder,
+		Files:       fileRepo,
+		Orphans:     pendingOrphansRepo,
+		RenameGrace: renameGrace,
+	})
+	libSvc := service.NewLibraryService(libRepo, bookRepo, service.LibraryServiceDeps{
+		Backends: backendRepo,
+		SharedS3: cfg.SharedS3,
+		Resolver: storageResolver,
+		DataPath: cfg.DataPath,
+	}, metadataWriter)
+	shelfSvc := service.NewShelfService(shelfRepo, hub)
+	searchSvc := service.NewSearchService(libRepo, bookRepo, shelfRepo)
+	authSvc := service.NewAuthService(userRepo, sessionRepo, hub)
 	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, bookRepo, covers, hub, fileRepo).
 		WithLibraryStore(libStore).
 		WithBookDropPath(cfg.BookDropPath)
@@ -257,7 +283,8 @@ database must be empty; migrations are applied to it automatically.
 	if err := providerSettingsRepo.SeedIfAbsent(ctx, defaults); err != nil {
 		slog.Warn("seed provider settings", "err", err)
 	}
-	enrichSvc := service.NewEnrichmentService(providers, providerSettingsRepo, bookRepo, covers, secretCipher)
+	enrichSvc := service.NewEnrichmentService(
+		providers, providerSettingsRepo, bookRepo, covers, secretCipher, metadataWriter)
 	providerCfgSvc := service.NewProviderSettingsService(providers, providerSettingsRepo, secretCipher)
 	// Push stored per-provider config (API keys, language, …) into the
 	// running provider instances. Failure here is non-fatal — providers
@@ -265,30 +292,6 @@ database must be empty; migrations are applied to it automatically.
 	if err := providerCfgSvc.LoadConfigs(ctx); err != nil {
 		slog.Warn("load provider configs", "err", err)
 	}
-	// MetadataWriter coordinates DB → sidecar → file pipeline writes
-	// for metadata edits. Wired into LibraryService + EnrichmentService
-	// so manual edits and apply-match flows route through it; the
-	// auto-enrich background path passes TriggerAutoEnrichment to skip
-	// the side-effect steps and only persist the DB row.
-	sidecarWriter := sidecar.NewWriter()
-	renameGrace := cfg.S3RenameGrace
-	if renameGrace <= 0 {
-		// ADR-0005: 2× PresignTTL covers any URL the client could
-		// still hold. Floor at 1h so very short PresignTTL (manual
-		// override) doesn't make the sweeper too aggressive.
-		renameGrace = max(2*cfg.PresignTTL, time.Hour)
-	}
-	metadataWriter := service.NewMetadataWriter(service.MetadataWriterDeps{
-		Books:       bookRepo,
-		LibStore:    libStore,
-		Sidecar:     sidecarWriter,
-		Dispatch:    fileproc.DispatchEmbedder,
-		Files:       fileRepo,
-		Orphans:     pendingOrphansRepo,
-		RenameGrace: renameGrace,
-	})
-	libSvc.WithMetadataWriter(metadataWriter)
-	enrichSvc.WithMetadataWriter(metadataWriter)
 	deviceSvc := service.NewDeviceService(
 		deviceRepo, bookRepo, libStore,
 		service.NewRemarkableDriver(),

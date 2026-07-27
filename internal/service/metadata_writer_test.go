@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-package service_test
+package service
 
 import (
 	"bytes"
@@ -16,7 +16,6 @@ import (
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sidecar"
 	"github.com/blackforge/embookshelf/internal/storage"
 	"github.com/blackforge/embookshelf/internal/storage/local"
@@ -63,19 +62,6 @@ func (f *fakeOrphans) Insert(ctx context.Context, rows []repo.PendingOrphanInser
 	return f.err
 }
 
-// fakeLibStore returns a fixed handle for any libraryID.
-type fakeLibStore struct {
-	handle *service.LibraryHandle
-	err    error
-}
-
-func (f *fakeLibStore) For(ctx context.Context, libraryID string) (*service.LibraryHandle, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.handle, nil
-}
-
 // recordingSidecarWriter captures the last Write call args.
 type recordingSidecarWriter struct {
 	calls []sidecarCall
@@ -101,11 +87,48 @@ func (r *recordingSidecarWriter) Write(
 	return r.err
 }
 
+// newPipelineWriter builds a MetadataWriter over a local library: the
+// shape every edit-side caller gets in production, where Write is the
+// whole ADR-0001 sequence (DB → in-file embed → sidecar → folder rename)
+// rather than a bare UpdateMetadata. A nil dispatch stands for "this
+// format has no in-file target", which collapses the sidecar to a full
+// mirror.
+//
+// The returned Storage is the library root — seed a book file into it
+// when the test needs the embed step to have something to open. This is
+// the one writer harness: LibraryService and EnrichmentService tests
+// build their services on top of it rather than faking the pipeline a
+// second time.
+func newPipelineWriter(
+	t *testing.T,
+	books BookMetadataWriter,
+	side SidecarWriterFor,
+	dispatch EmbedderDispatcher,
+) (*MetadataWriter, storage.Storage) {
+	t.Helper()
+	fs, err := local.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	if dispatch == nil {
+		dispatch = func(string) (fileproc.Embedder, error) { return nil, fileproc.ErrUnsupportedEmbed }
+	}
+	return NewMetadataWriter(MetadataWriterDeps{
+		Books: books,
+		LibStore: &fakeLibStore{handle: &LibraryHandle{
+			Library: model.Library{ID: "lib1"},
+			Storage: fs,
+		}},
+		Sidecar:  side,
+		Dispatch: dispatch,
+	}), fs
+}
+
 func TestMetadataWriter_Write_AutoEnrichment_DBOnly(t *testing.T) {
 	books := &fakeBookWriter{}
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{Books: books})
+	mw := NewMetadataWriter(MetadataWriterDeps{Books: books})
 	book := model.Book{ID: "b1", Title: "Auto-applied"}
-	if _, err := mw.Write(context.Background(), book, service.TriggerAutoEnrichment); err != nil {
+	if _, err := mw.Write(context.Background(), book, TriggerAutoEnrichment); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	if len(books.called) != 1 {
@@ -118,8 +141,8 @@ func TestMetadataWriter_Write_AutoEnrichment_DBOnly(t *testing.T) {
 
 func TestMetadataWriter_Write_DBFails_ErrorReturned(t *testing.T) {
 	books := &fakeBookWriter{err: context.Canceled}
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{Books: books})
-	_, err := mw.Write(context.Background(), model.Book{ID: "b1"}, service.TriggerManualEdit)
+	mw := NewMetadataWriter(MetadataWriterDeps{Books: books})
+	_, err := mw.Write(context.Background(), model.Book{ID: "b1"}, TriggerManualEdit)
 	if err == nil {
 		t.Fatal("Write: want error, got nil")
 	}
@@ -132,11 +155,11 @@ func TestMetadataWriter_Write_ManualEdit_FiresSidecar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("local.New: %v", err)
 	}
-	handle := &service.LibraryHandle{
+	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1"},
 		Storage: fs,
 	}
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,
 		LibStore: &fakeLibStore{handle: handle},
 		Sidecar:  rec,
@@ -149,7 +172,7 @@ func TestMetadataWriter_Write_ManualEdit_FiresSidecar(t *testing.T) {
 		Format:    "PDF",
 		Tags:      []string{"sf"},
 	}
-	if _, err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
+	if _, err := mw.Write(context.Background(), book, TriggerManualEdit); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	if len(rec.calls) != 1 {
@@ -184,11 +207,11 @@ func TestMetadataWriter_Write_NoDispatch_FullModeSidecar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("local.New: %v", err)
 	}
-	handle := &service.LibraryHandle{
+	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", BackendID: nil},
 		Storage: fs,
 	}
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,
 		LibStore: &fakeLibStore{handle: handle},
 		Sidecar:  rec,
@@ -199,7 +222,7 @@ func TestMetadataWriter_Write_NoDispatch_FullModeSidecar(t *testing.T) {
 		ID: "b1", LibraryID: "lib1",
 		Path: "books/x.epub", Format: "EPUB", Title: "X",
 	}
-	if _, err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
+	if _, err := mw.Write(context.Background(), book, TriggerManualEdit); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	if len(rec.calls) != 1 {
@@ -216,12 +239,12 @@ func TestMetadataWriter_Write_NoDispatch_FullModeSidecar(t *testing.T) {
 func TestMetadataWriter_Write_AutoEnrichment_SkipsSidecar(t *testing.T) {
 	books := &fakeBookWriter{}
 	rec := &recordingSidecarWriter{}
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,
-		LibStore: &fakeLibStore{handle: &service.LibraryHandle{}},
+		LibStore: &fakeLibStore{handle: &LibraryHandle{}},
 		Sidecar:  rec,
 	})
-	if _, err := mw.Write(context.Background(), model.Book{ID: "b1"}, service.TriggerAutoEnrichment); err != nil {
+	if _, err := mw.Write(context.Background(), model.Book{ID: "b1"}, TriggerAutoEnrichment); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	if len(rec.calls) != 0 {
@@ -243,13 +266,13 @@ func TestMetadataWriter_Write_EPUBLocal_SpilloverMode(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	handle := &service.LibraryHandle{
+	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", BackendID: nil},
 	}
 	handle.Storage = fs
 
 	emb := &fakeEmbedder{out: []byte("rezipped-epub-bytes")}
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,
 		LibStore: &fakeLibStore{handle: handle},
 		Sidecar:  rec,
@@ -265,7 +288,7 @@ func TestMetadataWriter_Write_EPUBLocal_SpilloverMode(t *testing.T) {
 		ID: "b1", LibraryID: "lib1",
 		Path: bookKey, Format: "EPUB", Title: "Curated",
 	}
-	if _, err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
+	if _, err := mw.Write(context.Background(), book, TriggerManualEdit); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -336,11 +359,11 @@ func TestMetadataWriter_Write_UnsupportedFormat_FullMirror(t *testing.T) {
 	if err != nil {
 		t.Fatalf("local.New: %v", err)
 	}
-	handle := &service.LibraryHandle{
+	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", BackendID: nil},
 		Storage: fs,
 	}
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,
 		LibStore: &fakeLibStore{handle: handle},
 		Sidecar:  rec,
@@ -350,7 +373,7 @@ func TestMetadataWriter_Write_UnsupportedFormat_FullMirror(t *testing.T) {
 		ID: "b1", LibraryID: "lib1",
 		Path: "books/x.cbz", Format: "CBZ", Title: "X",
 	}
-	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	out, err := mw.Write(context.Background(), book, TriggerManualEdit)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -377,12 +400,12 @@ func TestMetadataWriter_Write_EmbedFailure_FullMirror(t *testing.T) {
 	if _, err := fs.Put(context.Background(), bookKey, strings.NewReader("placeholder")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	handle := &service.LibraryHandle{
+	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", BackendID: nil},
 		Storage: fs,
 	}
 	emb := &fakeEmbedder{err: errors.New("rezip exploded")}
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,
 		LibStore: &fakeLibStore{handle: handle},
 		Sidecar:  rec,
@@ -392,7 +415,7 @@ func TestMetadataWriter_Write_EmbedFailure_FullMirror(t *testing.T) {
 		ID: "b1", LibraryID: "lib1",
 		Path: bookKey, Format: "EPUB", Title: "X",
 	}
-	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	out, err := mw.Write(context.Background(), book, TriggerManualEdit)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -424,7 +447,7 @@ func TestMetadataWriter_HashStamp_MultiRow_NoFormatMatch_Skips(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	handle := &service.LibraryHandle{
+	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", BackendID: nil},
 	}
 	handle.Storage = fs
@@ -435,7 +458,7 @@ func TestMetadataWriter_HashStamp_MultiRow_NoFormatMatch_Skips(t *testing.T) {
 		{ID: "f2", BookID: "b1", Format: "MOBI"},
 	}}
 
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,
 		LibStore: &fakeLibStore{handle: handle},
 		Sidecar:  rec,
@@ -447,7 +470,7 @@ func TestMetadataWriter_HashStamp_MultiRow_NoFormatMatch_Skips(t *testing.T) {
 		ID: "b1", LibraryID: "lib1",
 		Path: bookKey, Format: "EPUB", Title: "X",
 	}
-	if _, err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
+	if _, err := mw.Write(context.Background(), book, TriggerManualEdit); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	if len(files.stamped) != 0 {
@@ -474,13 +497,13 @@ func TestMetadataWriter_Write_ReturnsOutcome_LocalEPUBSuccess(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	handle := &service.LibraryHandle{
+	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", BackendID: nil},
 	}
 	handle.Storage = fs
 
 	emb := &fakeEmbedder{out: []byte("rezipped")}
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,
 		LibStore: &fakeLibStore{handle: handle},
 		Sidecar:  rec,
@@ -491,7 +514,7 @@ func TestMetadataWriter_Write_ReturnsOutcome_LocalEPUBSuccess(t *testing.T) {
 		ID: "b1", LibraryID: "lib1",
 		Path: bookKey, Format: "EPUB", Title: "X",
 	}
-	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	out, err := mw.Write(context.Background(), book, TriggerManualEdit)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -505,8 +528,8 @@ func TestMetadataWriter_Write_ReturnsOutcome_LocalEPUBSuccess(t *testing.T) {
 
 func TestMetadataWriter_Write_ReturnsOutcome_AutoEnrichment(t *testing.T) {
 	books := &fakeBookWriter{}
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{Books: books})
-	out, err := mw.Write(context.Background(), model.Book{ID: "b1"}, service.TriggerAutoEnrichment)
+	mw := NewMetadataWriter(MetadataWriterDeps{Books: books})
+	out, err := mw.Write(context.Background(), model.Book{ID: "b1"}, TriggerAutoEnrichment)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -532,7 +555,7 @@ func TestMetadataWriter_HashStampAfterFileWrite(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	handle := &service.LibraryHandle{
+	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", BackendID: nil},
 	}
 	handle.Storage = fs
@@ -540,7 +563,7 @@ func TestMetadataWriter_HashStampAfterFileWrite(t *testing.T) {
 	emb := &fakeEmbedder{out: []byte("rezipped-bytes")}
 	files := &fakeFileRepo{files: []model.File{{ID: "f1", BookID: "b1", Format: "EPUB"}}}
 
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,
 		LibStore: &fakeLibStore{handle: handle},
 		Sidecar:  rec,
@@ -552,7 +575,7 @@ func TestMetadataWriter_HashStampAfterFileWrite(t *testing.T) {
 		ID: "b1", LibraryID: "lib1",
 		Path: bookKey, Format: "EPUB", Title: "X",
 	}
-	if _, err := mw.Write(context.Background(), book, service.TriggerManualEdit); err != nil {
+	if _, err := mw.Write(context.Background(), book, TriggerManualEdit); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -600,13 +623,13 @@ func TestMetadataWriter_FolderRename_NewLayout(t *testing.T) {
 			{ID: "f1", Location: oldFolder + "/hobbit.epub", Format: "EPUB"},
 		},
 	}
-	handle := &service.LibraryHandle{
+	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", Path: libRoot},
 		Storage: fs,
 	}
 	libStore := &fakeLibStore{handle: handle}
 
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,
 		LibStore: libStore,
 		Files:    files,
@@ -623,7 +646,7 @@ func TestMetadataWriter_FolderRename_NewLayout(t *testing.T) {
 		FolderPath: &folder,
 	}
 
-	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	out, err := mw.Write(context.Background(), book, TriggerManualEdit)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -676,12 +699,12 @@ func TestMetadataWriter_FolderRename_NoChange(t *testing.T) {
 
 	books := &fakeBookWriter{}
 	files := &fakeFileRepo{}
-	handle := &service.LibraryHandle{
+	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", Path: libRoot},
 		Storage: fs,
 	}
 	libStore := &fakeLibStore{handle: handle}
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,
 		LibStore: libStore,
 		Files:    files,
@@ -696,7 +719,7 @@ func TestMetadataWriter_FolderRename_NoChange(t *testing.T) {
 		Path:       folder + "/hobbit.epub",
 		FolderPath: &folder,
 	}
-	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	out, err := mw.Write(context.Background(), book, TriggerManualEdit)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -739,12 +762,12 @@ func TestMetadataWriter_FolderRename_S3Renames(t *testing.T) {
 		},
 	}
 	orphans := &fakeOrphans{}
-	handle := &service.LibraryHandle{
+	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", Path: libRoot, BackendID: &backendID},
 		Storage: fs,
 	}
 	libStore := &fakeLibStore{handle: handle}
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:       books,
 		LibStore:    libStore,
 		Files:       files,
@@ -759,7 +782,7 @@ func TestMetadataWriter_FolderRename_S3Renames(t *testing.T) {
 		Format: "EPUB", Path: oldFolder + "/hobbit.epub",
 		FolderPath: &folder,
 	}
-	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	out, err := mw.Write(context.Background(), book, TriggerManualEdit)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -838,11 +861,11 @@ func TestMetadataWriter_FolderRename_BackendTxFailRollback(t *testing.T) {
 		},
 	}
 	orphans := &fakeOrphans{}
-	handle := &service.LibraryHandle{
+	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", Path: libRoot, BackendID: &backendID},
 		Storage: fs,
 	}
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,
 		LibStore: &fakeLibStore{handle: handle},
 		Files:    files,
@@ -856,7 +879,7 @@ func TestMetadataWriter_FolderRename_BackendTxFailRollback(t *testing.T) {
 		Format: "EPUB", Path: oldFolder + "/hobbit.epub",
 		FolderPath: &folder,
 	}
-	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	out, err := mw.Write(context.Background(), book, TriggerManualEdit)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -896,11 +919,11 @@ func TestMetadataWriter_FolderRename_BackendNoOrphansRepo(t *testing.T) {
 	}
 
 	books := &fakeBookWriter{}
-	handle := &service.LibraryHandle{
+	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", Path: libRoot, BackendID: &backendID},
 		Storage: fs,
 	}
-	mw := service.NewMetadataWriter(service.MetadataWriterDeps{
+	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,
 		LibStore: &fakeLibStore{handle: handle},
 	})
@@ -911,7 +934,7 @@ func TestMetadataWriter_FolderRename_BackendNoOrphansRepo(t *testing.T) {
 		Format: "EPUB", Path: folder + "/hobbit.epub",
 		FolderPath: &folder,
 	}
-	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	out, err := mw.Write(context.Background(), book, TriggerManualEdit)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}

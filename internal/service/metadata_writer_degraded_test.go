@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-package service_test
+package service
 
 import (
 	"context"
@@ -10,46 +10,30 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sidecar"
-	"github.com/blackforge/embookshelf/internal/storage/local"
 )
 
 var errStepFailed = errors.New("permission denied")
 
-// newDegradedWriter builds a writer over a local library whose format has
-// no in-file embed target, so the sidecar is the only portable record —
-// the case where losing it silently matters most.
+// newDegradedWriter is newPipelineWriter over a format with no in-file
+// embed target, so the sidecar is the only portable record — the case
+// where losing it silently matters most.
 func newDegradedWriter(
 	t *testing.T,
 	books *fakeBookWriter,
 	side *recordingSidecarWriter,
-	dispatch service.EmbedderDispatcher,
-) *service.MetadataWriter {
+	dispatch EmbedderDispatcher,
+) *MetadataWriter {
 	t.Helper()
-	fs, err := local.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("local.New: %v", err)
-	}
-	if dispatch == nil {
-		dispatch = func(string) (fileproc.Embedder, error) { return nil, fileproc.ErrUnsupportedEmbed }
-	}
-	return service.NewMetadataWriter(service.MetadataWriterDeps{
-		Books: books,
-		LibStore: &fakeLibStore{handle: &service.LibraryHandle{
-			Library: model.Library{ID: "lib1"},
-			Storage: fs,
-		}},
-		Sidecar:  side,
-		Dispatch: dispatch,
-	})
+	mw, _ := newPipelineWriter(t, books, side, dispatch)
+	return mw
 }
 
 func degradedBook() model.Book {
 	return model.Book{ID: "b1", LibraryID: "lib1", Path: "books/x.cbz", Format: "CBZ", Title: "X"}
 }
 
-func assertWarns(t *testing.T, out service.Outcome, step string) {
+func assertWarns(t *testing.T, out Outcome, step string) {
 	t.Helper()
 	for _, w := range out.Warnings() {
 		if strings.Contains(w, step) {
@@ -74,7 +58,7 @@ func TestMetadataWriterReportsSidecarFailure(t *testing.T) {
 	side := &recordingSidecarWriter{err: errStepFailed}
 	mw := newDegradedWriter(t, books, side, nil)
 
-	out, err := mw.Write(context.Background(), degradedBook(), service.TriggerManualEdit)
+	out, err := mw.Write(context.Background(), degradedBook(), TriggerManualEdit)
 	if err != nil {
 		t.Fatalf("Write = %v, want nil — the DB write succeeded", err)
 	}
@@ -95,7 +79,7 @@ func TestMetadataWriterSidecarModeReflectsReality(t *testing.T) {
 	side := &recordingSidecarWriter{err: errStepFailed}
 	mw := newDegradedWriter(t, books, side, nil)
 
-	out, _ := mw.Write(context.Background(), degradedBook(), service.TriggerManualEdit)
+	out, _ := mw.Write(context.Background(), degradedBook(), TriggerManualEdit)
 	if out.SidecarMode != "" {
 		t.Fatalf("SidecarMode = %q after a failed write, want empty", out.SidecarMode)
 	}
@@ -106,7 +90,7 @@ func TestMetadataWriterSidecarSuccessIsNotDegraded(t *testing.T) {
 	side := &recordingSidecarWriter{}
 	mw := newDegradedWriter(t, books, side, nil)
 
-	out, err := mw.Write(context.Background(), degradedBook(), service.TriggerManualEdit)
+	out, err := mw.Write(context.Background(), degradedBook(), TriggerManualEdit)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -130,7 +114,7 @@ func TestMetadataWriterDBFailureStillErrors(t *testing.T) {
 	books := &fakeBookWriter{err: errStepFailed}
 	mw := newDegradedWriter(t, books, &recordingSidecarWriter{}, nil)
 
-	if _, err := mw.Write(context.Background(), degradedBook(), service.TriggerManualEdit); err == nil {
+	if _, err := mw.Write(context.Background(), degradedBook(), TriggerManualEdit); err == nil {
 		t.Fatal("Write returned nil despite the DB write failing")
 	}
 }
@@ -142,7 +126,7 @@ func TestMetadataWriterWarningsNameTheStep(t *testing.T) {
 	side := &recordingSidecarWriter{err: errStepFailed}
 	mw := newDegradedWriter(t, books, side, nil)
 
-	out, _ := mw.Write(context.Background(), degradedBook(), service.TriggerManualEdit)
+	out, _ := mw.Write(context.Background(), degradedBook(), TriggerManualEdit)
 	warns := out.Warnings()
 	if len(warns) != 1 {
 		t.Fatalf("warnings = %v, want exactly one", warns)
@@ -165,7 +149,7 @@ func TestMetadataWriterReportsInFileFailure(t *testing.T) {
 
 	book := degradedBook()
 	book.Format = "EPUB"
-	out, err := mw.Write(context.Background(), book, service.TriggerManualEdit)
+	out, err := mw.Write(context.Background(), book, TriggerManualEdit)
 	if err != nil {
 		t.Fatalf("Write = %v, want nil — the DB write succeeded", err)
 	}
@@ -191,7 +175,7 @@ func TestMetadataWriterUnsupportedFormatIsNotDegraded(t *testing.T) {
 	side := &recordingSidecarWriter{}
 	mw := newDegradedWriter(t, books, side, nil) // dispatch refuses
 
-	out, err := mw.Write(context.Background(), degradedBook(), service.TriggerManualEdit)
+	out, err := mw.Write(context.Background(), degradedBook(), TriggerManualEdit)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}

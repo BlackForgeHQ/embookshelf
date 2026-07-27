@@ -98,6 +98,16 @@ func (f *fakeBookStore) SetCoverHash(_ context.Context, _ string, hash []byte) e
 	return nil
 }
 
+// SetFolderPath and RenameFolderTx round the fake out to
+// BookMetadataWriter, so the same object can back the MetadataWriter the
+// enrichment service now writes through. That is deliberate: assertions
+// on f.updated therefore observe the DB step of the real pipeline, not a
+// direct repo call that only ever existed in tests.
+func (f *fakeBookStore) SetFolderPath(_ context.Context, _, _, _ string) error { return nil }
+func (f *fakeBookStore) RenameFolderTx(_ context.Context, _ repo.RenameFolderTxArgs) error {
+	return nil
+}
+
 type fakeCoverStore struct {
 	saved   []byte
 	mime    string
@@ -141,7 +151,8 @@ func newEnrichForTest(t *testing.T) (*EnrichmentService, *fakeBookStore, *fakeCo
 	t.Helper()
 	books := &fakeBookStore{}
 	covers := &fakeCoverStore{}
-	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, covers, nil)
+	writer, _ := newPipelineWriter(t, books, &recordingSidecarWriter{}, nil)
+	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, covers, nil, writer)
 	return svc, books, covers
 }
 
@@ -286,7 +297,8 @@ func TestApplyMatchMergesOrReplacesCategories(t *testing.T) {
 func TestApplyMatchPropagatesWriteFailure(t *testing.T) {
 	t.Parallel()
 	books := &fakeBookStore{updateErr: errors.New("db down")}
-	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, &fakeCoverStore{}, nil)
+	writer, _ := newPipelineWriter(t, books, &recordingSidecarWriter{}, nil)
+	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, &fakeCoverStore{}, nil, writer)
 
 	if _, err := svc.ApplyMatch(context.Background(), model.Book{ID: "b1"},
 		provider.Match{Title: "x"}, ApplyOptions{}, TriggerManualEdit); err == nil {
@@ -489,7 +501,9 @@ func TestCountDigits(t *testing.T) {
 func TestProviderHealthWritesAreRecorded(t *testing.T) {
 	t.Parallel()
 	settings := newFakeProviderSettings()
-	svc := NewEnrichmentService(nil, settings, &fakeBookStore{}, &fakeCoverStore{}, nil)
+	books := &fakeBookStore{}
+	writer, _ := newPipelineWriter(t, books, &recordingSidecarWriter{}, nil)
+	svc := NewEnrichmentService(nil, settings, books, &fakeCoverStore{}, nil, writer)
 
 	svc.recordProviderSuccess(provider.Source("googlebooks"))
 	svc.recordProviderError(provider.Source("amazon"), errors.New("rate limited"))

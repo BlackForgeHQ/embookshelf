@@ -53,20 +53,24 @@ type LibraryService struct {
 	repo   *repo.LibraryRepo
 	books  *repo.BookRepo
 	deps   LibraryServiceDeps
-	writer *MetadataWriter // optional; nil falls back to direct repo write
+	writer *MetadataWriter
 }
 
-func NewLibraryService(r *repo.LibraryRepo, b *repo.BookRepo, deps LibraryServiceDeps) *LibraryService {
-	return &LibraryService{repo: r, books: b, deps: deps}
-}
-
-// WithMetadataWriter wires a MetadataWriter into the service so that
-// UpdateBookMetadata routes through the DB → sidecar → file pipeline
-// instead of going straight to the book repo. Returns the receiver so
-// it can be chained at construction time.
-func (s *LibraryService) WithMetadataWriter(w *MetadataWriter) *LibraryService {
-	s.writer = w
-	return s
+// NewLibraryService builds the service. The MetadataWriter is a
+// positional argument, not an optional setter: an edit that reaches the
+// books row and nothing else is a half-written edit, so there is no
+// configuration in which this service should be constructed without the
+// ADR-0001 pipeline behind it. It used to be installed post-construction
+// by WithMetadataWriter, which only the composition root ever called —
+// every test therefore drove a direct-repo fallback that never ran in
+// production.
+func NewLibraryService(
+	r *repo.LibraryRepo,
+	b *repo.BookRepo,
+	deps LibraryServiceDeps,
+	w *MetadataWriter,
+) *LibraryService {
+	return &LibraryService{repo: r, books: b, deps: deps, writer: w}
 }
 
 func (s *LibraryService) List(ctx context.Context) ([]model.Library, error) {
@@ -240,10 +244,7 @@ func (s *LibraryService) GetBook(ctx context.Context, userID, id string) (model.
 // the sidecar and in-file copies kept up, so the caller can tell the user
 // their edit did not reach the file instead of only logging it.
 func (s *LibraryService) UpdateBookMetadata(ctx context.Context, b model.Book) (Outcome, error) {
-	if s.writer != nil {
-		return s.writer.Write(ctx, b, TriggerManualEdit)
-	}
-	return Outcome{}, s.books.UpdateMetadata(ctx, b)
+	return s.writer.Write(ctx, b, TriggerManualEdit)
 }
 
 // DeleteBook hard-deletes a book. FKs on shelf_books, annotations,

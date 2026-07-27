@@ -54,10 +54,11 @@ type providerSettingsStore interface {
 	RecordError(ctx context.Context, id, msg string) error
 }
 
-// bookMetadataStore is the book surface enrichment writes through when no
-// MetadataWriter is wired.
+// bookMetadataStore is the cover surface enrichment writes through.
+// Metadata itself no longer travels this way — it goes through the
+// MetadataWriter — so UpdateMetadata is deliberately absent: a caller
+// that reaches for it would be bypassing ADR-0001.
 type bookMetadataStore interface {
-	UpdateMetadata(ctx context.Context, b model.Book) error
 	SetCover(ctx context.Context, bookID string, hasCover bool, mime string) error
 	SetCoverHash(ctx context.Context, bookID string, hash []byte) error
 }
@@ -94,8 +95,8 @@ type EnrichmentService struct {
 	cache    map[string]cacheEntry
 	cacheTTL time.Duration
 
-	// writer routes metadata writes through the DB → sidecar → file
-	// pipeline. Optional; nil falls back to direct repo write.
+	// writer routes metadata writes through the ADR-0001 pipeline
+	// (DB → in-file embed → sidecar → folder rename). Required.
 	writer *MetadataWriter
 
 	// healthWrites tracks the detached provider-health goroutines so a
@@ -109,15 +110,6 @@ type EnrichmentService struct {
 // finished. Test-only; production deliberately lets them run detached.
 func (s *EnrichmentService) awaitHealthWrites() { s.healthWrites.Wait() }
 
-// WithMetadataWriter wires a MetadataWriter into the service so that
-// ApplyMatch routes through the DB → sidecar → file pipeline instead
-// of going straight to the book repo. Returns the receiver so it can
-// be chained at construction time.
-func (s *EnrichmentService) WithMetadataWriter(w *MetadataWriter) *EnrichmentService {
-	s.writer = w
-	return s
-}
-
 type cacheEntry struct {
 	matches []provider.Match
 	at      time.Time
@@ -127,12 +119,20 @@ const (
 	enrichCacheTTL = 5 * time.Minute
 )
 
+// NewEnrichmentService builds the service. The MetadataWriter is a
+// positional argument, not an optional setter: applying a match is an
+// edit like any other, so there is no configuration in which it should
+// skip the ADR-0001 pipeline. It used to be installed post-construction
+// by WithMetadataWriter, which only the composition root ever called —
+// every test therefore drove a direct-repo fallback that never ran in
+// production, which is where ADR-0012's lock-corruption bug lived.
 func NewEnrichmentService(
 	providers []provider.Provider,
 	settings providerSettingsStore,
 	books bookMetadataStore,
 	covers coverFileStore,
 	cipher crypto.Cipher,
+	writer *MetadataWriter,
 ) *EnrichmentService {
 	if cipher == nil {
 		cipher = crypto.Noop{}
@@ -142,6 +142,7 @@ func NewEnrichmentService(
 		settings:  settings,
 		books:     books,
 		covers:    covers,
+		writer:    writer,
 		http: &http.Client{
 			Timeout:       15 * time.Second,
 			CheckRedirect: coverRedirectPolicy(),
@@ -518,14 +519,8 @@ func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m p
 		}
 	}
 
-	if s.writer != nil {
-		if _, err := s.writer.Write(ctx, book, trigger); err != nil {
-			return model.Book{}, err
-		}
-	} else {
-		if err := s.books.UpdateMetadata(ctx, book); err != nil {
-			return model.Book{}, err
-		}
+	if _, err := s.writer.Write(ctx, book, trigger); err != nil {
+		return model.Book{}, err
 	}
 
 	if opts.ApplyCover && writable(locks.Cover, book.HasCover) && strings.TrimSpace(m.CoverURL) != "" {

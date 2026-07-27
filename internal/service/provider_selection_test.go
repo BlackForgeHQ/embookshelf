@@ -25,14 +25,24 @@ func (p *countingProvider) Search(context.Context, provider.Query) ([]provider.M
 
 var errSettingsDown = errors.New("provider_settings unreadable")
 
-func selectionHarness(readErr error) (*EnrichmentService, *countingProvider) {
+func selectionHarness(t *testing.T, readErr error) (*EnrichmentService, *countingProvider) {
+	t.Helper()
 	p := &countingProvider{id: provider.Source("amazon")}
 	settings := newFakeProviderSettings()
 	settings.readErr = readErr
 	svc := NewEnrichmentService(
 		[]provider.Provider{p}, settings, &fakeBookStore{}, &fakeCoverStore{}, nil,
+		searchOnlyWriter(t),
 	)
 	return svc, p
+}
+
+// searchOnlyWriter is the required MetadataWriter for tests that never
+// write: selection is a read path, so the pipeline behind it is inert.
+func searchOnlyWriter(t *testing.T) *MetadataWriter {
+	t.Helper()
+	w, _ := newPipelineWriter(t, &fakeBookStore{}, &recordingSidecarWriter{}, nil)
+	return w
 }
 
 // The three search paths used to log "running all providers" and query
@@ -44,7 +54,7 @@ func selectionHarness(readErr error) (*EnrichmentService, *countingProvider) {
 // failure this "degrade" covers barely occurs in isolation.
 
 func TestSearchFailsWhenProviderSettingsUnreadable(t *testing.T) {
-	svc, p := selectionHarness(errSettingsDown)
+	svc, p := selectionHarness(t, errSettingsDown)
 
 	_, err := svc.Search(context.Background(), provider.Query{Title: "Dune"})
 	if !errors.Is(err, errSettingsDown) {
@@ -56,7 +66,7 @@ func TestSearchFailsWhenProviderSettingsUnreadable(t *testing.T) {
 }
 
 func TestLookupByISBNFailsWhenProviderSettingsUnreadable(t *testing.T) {
-	svc, p := selectionHarness(errSettingsDown)
+	svc, p := selectionHarness(t, errSettingsDown)
 
 	_, _, err := svc.LookupByISBN(context.Background(), "9780441013593")
 	if !errors.Is(err, errSettingsDown) {
@@ -68,7 +78,7 @@ func TestLookupByISBNFailsWhenProviderSettingsUnreadable(t *testing.T) {
 }
 
 func TestSearchStreamReportsUnreadableProviderSettings(t *testing.T) {
-	svc, p := selectionHarness(errSettingsDown)
+	svc, p := selectionHarness(t, errSettingsDown)
 
 	var sawErr bool
 	var done bool
@@ -94,7 +104,7 @@ func TestSearchStreamReportsUnreadableProviderSettings(t *testing.T) {
 // TestSelectionSkipsDisabledProvider is the ordinary path, pinned so the
 // degrade change does not quietly invert it.
 func TestSelectionSkipsDisabledProvider(t *testing.T) {
-	svc, p := selectionHarness(nil)
+	svc, p := selectionHarness(t, nil)
 
 	res, err := svc.Search(context.Background(), provider.Query{Title: "Dune"})
 	if err != nil {
@@ -114,6 +124,7 @@ func TestSelectionQueriesEnabledProvider(t *testing.T) {
 	settings.enabled["amazon"] = true
 	svc := NewEnrichmentService(
 		[]provider.Provider{p}, settings, &fakeBookStore{}, &fakeCoverStore{}, nil,
+		searchOnlyWriter(t),
 	)
 
 	res, err := svc.Search(context.Background(), provider.Query{Title: "Dune"})
@@ -138,6 +149,7 @@ func TestLookupByISBNTreatsNoRowsAsNothingEnabled(t *testing.T) {
 	settings := newFakeProviderSettings() // no enabled entries → no rows
 	svc := NewEnrichmentService(
 		[]provider.Provider{p}, settings, &fakeBookStore{}, &fakeCoverStore{}, nil,
+		searchOnlyWriter(t),
 	)
 
 	match, _, err := svc.LookupByISBN(context.Background(), "9780441013593")

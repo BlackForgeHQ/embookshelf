@@ -493,7 +493,7 @@ Fan-out policy: per-provider error → log + write to health table + return nil 
 
 ### Apply match
 
-`EnrichmentService.ApplyMatch(ctx, book, match, opts, trigger)`; the lock-honoring merge. For each unlocked field, overwrite from match if non-empty; categories union when `opts.MergeCategories`; cover imported when `opts.ApplyCover` and unlocked. Routes through `MetadataWriter` if wired (so DB → sidecar → file pipeline runs per ADR-0001), else direct to repo. Single codepath shared by manual UI apply and auto-enrich.
+`EnrichmentService.ApplyMatch(ctx, book, match, opts, trigger)`; the lock-honoring merge. For each unlocked field, overwrite from match if non-empty; categories union when `opts.MergeCategories`; cover imported when `opts.ApplyCover` and unlocked. Always routes through `MetadataWriter`, which `EnrichmentService` and `LibraryService` both take as a required constructor argument — there is no direct-to-repo fallback and no wiring that skips the ADR-0001 pipeline. Single codepath shared by manual UI apply and auto-enrich.
 
 ---
 
