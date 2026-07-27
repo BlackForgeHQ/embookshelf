@@ -12,7 +12,7 @@ import {
   testReadingGuide,
 } from "@/api/guides"
 import { useApiMutation } from "@/api/mutation"
-import { AdminGate, Card, Field, Select, Toggle } from "@/components/SettingsShared"
+import { Card, Field, Select, Toggle } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -65,11 +65,10 @@ const PRESETS: ReadonlyArray<{
   },
 ]
 
-export function ReadingGuidesPanel({ isAdmin }: { isAdmin: boolean }) {
+export function ReadingGuidesPanel() {
   const settings = useQuery({
     queryKey: readingGuideSettingsQueryKey,
     queryFn: fetchReadingGuideSettings,
-    enabled: isAdmin,
   })
 
   const [form, setForm] = useState<ReadingGuideSettings>(emptyForm)
@@ -99,8 +98,6 @@ export function ReadingGuidesPanel({ isAdmin }: { isAdmin: boolean }) {
     successToast: "Reading guide settings saved.",
     onSuccess: () => setKeyDraft(""),
   })
-
-  if (!isAdmin) return <AdminGate label="Reading guides" />
 
   const update = <TKey extends keyof ReadingGuideSettings>(
     key: TKey,

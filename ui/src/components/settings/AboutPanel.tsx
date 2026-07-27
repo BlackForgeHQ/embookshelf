@@ -3,12 +3,10 @@ import { useQuery } from "@tanstack/react-query"
 import { fetchInstanceInfo, instanceInfoQueryKey } from "@/api/settings"
 import { Card, DefRow } from "@/components/SettingsShared"
 
-
-export function AboutPanel({ isAdmin }: { isAdmin: boolean }) {
+export function AboutPanel() {
   const info = useQuery({
     queryKey: instanceInfoQueryKey,
     queryFn: fetchInstanceInfo,
-    enabled: isAdmin,
   })
 
   return (
@@ -23,35 +21,25 @@ export function AboutPanel({ isAdmin }: { isAdmin: boolean }) {
           label="Version"
           value={<span className="mono">{info.data?.version ?? "—"}</span>}
         />
-        {isAdmin && (
-          <>
-            <DefRow
-              label="Runtime"
-              value={
-                <span className="mono">{info.data?.goVersion ?? "—"}</span>
-              }
-            />
-            <DefRow
-              label="BookDrop path"
-              value={
-                <span className="mono">{info.data?.bookDropPath ?? "—"}</span>
-              }
-            />
-            <DefRow
-              label="Data path"
-              value={<span className="mono">{info.data?.dataPath ?? "—"}</span>}
-            />
-            <DefRow
-              label="Migrate on start"
-              value={
-                info.data ? (info.data.migrateOnStart ? "yes" : "no") : "—"
-              }
-            />
-          </>
-        )}
+        <DefRow
+          label="Runtime"
+          value={<span className="mono">{info.data?.goVersion ?? "—"}</span>}
+        />
+        <DefRow
+          label="BookDrop path"
+          value={<span className="mono">{info.data?.bookDropPath ?? "—"}</span>}
+        />
+        <DefRow
+          label="Data path"
+          value={<span className="mono">{info.data?.dataPath ?? "—"}</span>}
+        />
+        <DefRow
+          label="Migrate on start"
+          value={info.data ? (info.data.migrateOnStart ? "yes" : "no") : "—"}
+        />
       </Card>
 
-      {isAdmin && info.data && (
+      {info.data && (
         <>
           <div className="t-label" style={{ marginTop: 24, marginBottom: 10 }}>
             Instance totals

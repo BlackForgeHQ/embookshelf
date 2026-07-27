@@ -9,7 +9,7 @@ import {
   saveForwardAuthSettings,
 } from "@/api/forwardAuth"
 import { useApiMutation } from "@/api/mutation"
-import { AdminGate, Card, Field, Toggle } from "@/components/SettingsShared"
+import { Card, Field, Toggle } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -29,11 +29,10 @@ const emptyForm: ForwardAuthSettings = {
   hideLocalLogin: false,
 }
 
-export function ForwardAuthPanel({ isAdmin }: { isAdmin: boolean }) {
+export function ForwardAuthPanel() {
   const settings = useQuery({
     queryKey: forwardAuthSettingsQueryKey,
     queryFn: fetchForwardAuthSettings,
-    enabled: isAdmin,
   })
 
   const [form, setForm] = useState<ForwardAuthSettings>(emptyForm)
@@ -74,7 +73,6 @@ export function ForwardAuthPanel({ isAdmin }: { isAdmin: boolean }) {
 
   const enabledWithoutCidrs = form.enabled && cidrList.length === 0
 
-  if (!isAdmin) return <AdminGate label="Forward auth" />
   if (settings.isLoading) {
     return (
       <>
