@@ -495,6 +495,30 @@ Fan-out policy: per-provider error → log + write to health table + return nil 
 
 ---
 
+## Reading guides (ADR-0024)
+
+### Reading guide
+
+A short LLM-written orientation for one book: what it is about, who it suits, who it does not, and which reader problems it addresses. Stored in `book_reading_guides`, one row per book.
+
+**Distinct** from `Book.Description` — that is the publisher blurb, arrives from a Metadata provider or the EPUB OPF, and participates in locks, Sidecar and enrichment. A Reading guide is derived text: it is not metadata about the book and never reaches the Sidecar or the file's embedded metadata. Hence a separate table — a column on `books` would pull it into `UpdateMetadata` and therefore into the ADR-0001 write-back pipeline.
+
+**Not an agent.** Single-shot generation, no tools and no loop; calling it an agent would promise machinery that does not exist.
+
+### Source kind
+
+What a given Reading guide was built from: `full_text` or `metadata`. EPUB yields full text; PDF, CBZ and audio have none and get a metadata-only guide. Stored beside the text and shown in the UI, because a metadata-only guide for an obscure book is substantially the model filling in gaps.
+
+### Guide generator
+
+The service that assembles the input, calls the model, and records the result. Its only outbound seam is an OpenAI-compatible endpoint configured by base URL, so cloud and a local Ollama are the same adapter. The key lives in an encrypted field, like provider secrets (ADR-0010).
+
+**Distinct** from a Metadata provider: that one looks up facts via `Search(Query) []Match`; this one writes prose.
+
+### Guide run
+
+An admin-triggered bulk generation across the library. Shows an estimated volume before starting — cost is always the result of an explicit action, and nothing generates on approve. Skips guides marked `edited_by_user` so a run cannot erase hand-written text; the per-book button always overwrites, because there the intent is visible.
+
 ## Email delivery (ADRs 0020–0021)
 
 ### Email subsystem
