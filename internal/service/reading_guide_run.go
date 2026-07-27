@@ -15,6 +15,7 @@ import (
 // here — one place decides what a run may overwrite.
 type guideCandidateLister interface {
 	ListGuideCandidates(ctx context.Context) ([]repo.GuideCandidate, error)
+	CountCoverage(ctx context.Context) (total, done int, err error)
 }
 
 // GuideDispatcher hands one book to the worker pool. A function rather
@@ -34,6 +35,11 @@ type GuideEstimate struct {
 	// full-text book fills the cap, which most real books do — a
 	// 300-page EPUB extracts to roughly nine times it.
 	MaxInputTokens int
+	// TotalBooks and BooksWithGuide describe the library rather than this
+	// run, so a progress bar built from them survives a page reload, a
+	// restart, and a run someone started yesterday.
+	TotalBooks     int
+	BooksWithGuide int
 }
 
 // metadataPromptTokens is the rough cost of a metadata-only prompt:
@@ -72,7 +78,11 @@ func (r *GuideRunner) Estimate(ctx context.Context) (GuideEstimate, error) {
 	if err != nil {
 		return GuideEstimate{}, fmt.Errorf("list guide candidates: %w", err)
 	}
-	est := GuideEstimate{Books: len(rows)}
+	total, done, err := r.candidates.CountCoverage(ctx)
+	if err != nil {
+		return GuideEstimate{}, fmt.Errorf("count guide coverage: %w", err)
+	}
+	est := GuideEstimate{Books: len(rows), TotalBooks: total, BooksWithGuide: done}
 	capTokens := int(r.textCap / charsPerToken)
 	for _, c := range rows {
 		if strings.EqualFold(c.Format, "EPUB") {

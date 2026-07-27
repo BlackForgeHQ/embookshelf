@@ -146,3 +146,24 @@ func (r *BookReadingGuideRepo) ListGuideCandidates(ctx context.Context) ([]Guide
 	}
 	return out, rows.Err()
 }
+
+// CountCoverage reports how many books exist and how many already have a
+// guide. Both numbers come from one query so they cannot be read a moment
+// apart and disagree while a run is landing guides.
+//
+// Hand-edited guides count as done — a guide is a guide however it was
+// written, and excluding them would pin the progress bar below 100% on any
+// library where someone edited one.
+func (r *BookReadingGuideRepo) CountCoverage(ctx context.Context) (total, done int, err error) {
+	const q = `
+		SELECT count(*) AS total,
+		       count(g.book_id) AS done
+		FROM books b
+		LEFT JOIN book_reading_guides g ON g.book_id = b.id
+		WHERE b.deleted_at IS NULL
+	`
+	if err := r.db.SQL.QueryRowContext(ctx, q).Scan(&total, &done); err != nil {
+		return 0, 0, err
+	}
+	return total, done, nil
+}

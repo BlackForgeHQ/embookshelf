@@ -220,6 +220,8 @@ func (h *Handler) SettingsReadingGuideEstimate(c *gin.Context) {
 		"books":          est.Books,
 		"fullTextBooks":  est.FullTextBooks,
 		"maxInputTokens": est.MaxInputTokens,
+		"totalBooks":     est.TotalBooks,
+		"booksWithGuide": est.BooksWithGuide,
 	})
 }
 

@@ -11,8 +11,16 @@ import (
 )
 
 type fakeCandidates struct {
-	rows []repo.GuideCandidate
-	err  error
+	rows        []repo.GuideCandidate
+	err         error
+	total, done int
+}
+
+func (f *fakeCandidates) CountCoverage(context.Context) (int, int, error) {
+	if f.err != nil {
+		return 0, 0, f.err
+	}
+	return f.total, f.done, nil
 }
 
 func (f *fakeCandidates) ListGuideCandidates(context.Context) ([]repo.GuideCandidate, error) {
@@ -36,7 +44,7 @@ func (f *fakeDispatch) dispatch(_ context.Context, bookID string) error {
 }
 
 func runHarness(rows ...repo.GuideCandidate) (*GuideRunner, *fakeDispatch) {
-	cands := &fakeCandidates{rows: rows}
+	cands := &fakeCandidates{rows: rows, total: len(rows), done: 0}
 	disp := &fakeDispatch{}
 	return NewGuideRunner(cands, disp.dispatch, 48_000), disp
 }
@@ -165,5 +173,25 @@ func TestStartWithNothingToDo(t *testing.T) {
 	}
 	if n != 0 || len(disp.ids) != 0 {
 		t.Fatalf("queued = %d, dispatched = %v", n, disp.ids)
+	}
+}
+
+// TestEstimateCarriesLibraryCoverage — the progress bar reads these two
+// numbers. They describe the library, not a run, so a reload does not
+// reset them and a run started before the last restart still shows.
+func TestEstimateCarriesLibraryCoverage(t *testing.T) {
+	cands := &fakeCandidates{
+		rows:  []repo.GuideCandidate{{BookID: "1", Format: "EPUB"}},
+		total: 10,
+		done:  9,
+	}
+	r := NewGuideRunner(cands, func(context.Context, string) error { return nil }, 48_000)
+
+	est, err := r.Estimate(context.Background())
+	if err != nil {
+		t.Fatalf("Estimate: %v", err)
+	}
+	if est.TotalBooks != 10 || est.BooksWithGuide != 9 {
+		t.Fatalf("coverage = %d/%d, want 9/10", est.BooksWithGuide, est.TotalBooks)
 	}
 }

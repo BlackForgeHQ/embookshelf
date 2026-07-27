@@ -278,3 +278,98 @@ func TestBookReadingGuideRepo_ListGuideCandidates(t *testing.T) {
 		t.Error("a hand-edited guide was listed — a bulk run would erase it")
 	}
 }
+
+// TestBookReadingGuideRepo_CountCoverage drives the progress bar on a bulk
+// run: how many books exist, and how many already have a guide. Both come
+// from one query so the two numbers cannot be read a second apart and
+// disagree while guides are landing.
+func TestBookReadingGuideRepo_CountCoverage(t *testing.T) {
+	d := repotest.New(t)
+	libs := repo.NewLibraryRepo(d)
+	books := repo.NewBookRepo(d)
+	guides := repo.NewBookReadingGuideRepo(d)
+	ctx := context.Background()
+
+	lib, err := libs.CreateLibrary(ctx, "Guides", "guides", "/tmp/guides", nil)
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	mk := func(title string) string {
+		t.Helper()
+		b, err := books.Create(ctx, model.Book{
+			LibraryID: lib.ID, Title: title, Format: "EPUB", Path: title + ".epub",
+		})
+		if err != nil {
+			t.Fatalf("create %s: %v", title, err)
+		}
+		return b.ID
+	}
+	withGuide := mk("has-guide")
+	mk("no-guide-1")
+	mk("no-guide-2")
+	if err := guides.Upsert(ctx, sampleGuide(withGuide)); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	total, done, err := guides.CountCoverage(ctx)
+	if err != nil {
+		t.Fatalf("CountCoverage: %v", err)
+	}
+	if total != 3 {
+		t.Errorf("total = %d, want 3", total)
+	}
+	if done != 1 {
+		t.Errorf("done = %d, want 1", done)
+	}
+}
+
+// TestBookReadingGuideRepo_CountCoverageCountsHandEdited — a hand-written
+// guide is still a guide. Excluding it would leave the bar stuck below
+// 100% forever on a library where someone edited one.
+func TestBookReadingGuideRepo_CountCoverageCountsHandEdited(t *testing.T) {
+	d := repotest.New(t)
+	bookID, guides := guideFixture(t, d)
+	ctx := context.Background()
+
+	if err := guides.Upsert(ctx, sampleGuide(bookID)); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := guides.SaveEdit(ctx, bookID, model.ReadingGuideText{About: "mine"}); err != nil {
+		t.Fatalf("SaveEdit: %v", err)
+	}
+
+	total, done, err := guides.CountCoverage(ctx)
+	if err != nil {
+		t.Fatalf("CountCoverage: %v", err)
+	}
+	if total != 1 || done != 1 {
+		t.Fatalf("total=%d done=%d, want 1/1 — a hand-edited guide still counts", total, done)
+	}
+}
+
+// TestBookReadingGuideRepo_CountCoverageIgnoresSoftDeleted — books carry a
+// deleted_at column that every query filters on, so coverage must too or a
+// soft-deleted book would hold the bar below 100% forever.
+//
+// Set directly with SQL because nothing in the codebase writes deleted_at
+// today: BookRepo.Delete is a hard DELETE. The column and its filters are
+// defensive, and a test that went through Delete would pass whether or not
+// the filter existed.
+func TestBookReadingGuideRepo_CountCoverageIgnoresSoftDeleted(t *testing.T) {
+	d := repotest.New(t)
+	bookID, guides := guideFixture(t, d)
+	ctx := context.Background()
+
+	if _, err := d.SQL.ExecContext(ctx,
+		`UPDATE books SET deleted_at = now() WHERE id = $1`, bookID); err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+
+	total, done, err := guides.CountCoverage(ctx)
+	if err != nil {
+		t.Fatalf("CountCoverage: %v", err)
+	}
+	if total != 0 || done != 0 {
+		t.Fatalf("total=%d done=%d, want 0/0 for a soft-deleted book", total, done)
+	}
+}

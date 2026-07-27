@@ -241,6 +241,13 @@ function GuideRunCard() {
   const estimate = useQuery({
     queryKey: guideEstimateQueryKey,
     queryFn: fetchGuideEstimate,
+    // Poll while books still need a guide. Coverage is two counts on a
+    // query that already runs, so this is cheap; it stops on its own once
+    // nothing is outstanding rather than polling an idle instance forever.
+    refetchInterval: (q) => {
+      const d = q.state.data
+      return d && d.books > 0 ? 4000 : false
+    },
   })
 
   const runMut = useApiMutation(startGuideRun, {
@@ -252,18 +259,70 @@ function GuideRunCard() {
 
   const est = estimate.data
 
+  if (!est) {
+    return (
+      <Card className="mt-6">
+        <h3 className="t-h3 mb-2">Generate for the whole library</h3>
+        <p className="t-small">Checking what needs a guide…</p>
+      </Card>
+    )
+  }
+
+  const pct =
+    est.totalBooks > 0
+      ? Math.round((est.booksWithGuide / est.totalBooks) * 100)
+      : 0
+  // Something is in flight when the run mutation just fired, or when the
+  // count is still falling between polls. Neither is authoritative — this
+  // is a hint for the label, not a claim about the queue.
+  const working = runMut.isPending || (estimate.isFetching && est.books > 0)
+
   return (
     <Card className="mt-6">
       <h3 className="t-h3 mb-2">Generate for the whole library</h3>
-      {!est ? (
-        <p className="t-small">Checking what needs a guide…</p>
-      ) : est.books === 0 ? (
+
+      {est.totalBooks > 0 && (
+        <div className="mb-4">
+          <div
+            className="mb-1 flex items-baseline justify-between"
+            style={{ gap: 12 }}
+          >
+            <span className="t-small">
+              {est.booksWithGuide.toLocaleString()} of{" "}
+              {est.totalBooks.toLocaleString()} books have a guide
+            </span>
+            <span className="t-small tabular-nums">{pct}%</span>
+          </div>
+          <div
+            aria-label="Reading guide coverage"
+            style={{
+              height: 6,
+              borderRadius: 3,
+              background: "var(--color-rule-soft)",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                width: `${pct}%`,
+                height: "100%",
+                background: "var(--color-accent, #0f766e)",
+                transition: "width .4s ease",
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {est.books === 0 ? (
         <p className="t-small">Every book already has a guide.</p>
       ) : (
         <>
           <p className="t-small mb-1">
-            {est.books.toLocaleString()} book{est.books === 1 ? "" : "s"} need a
-            guide, {est.fullTextBooks.toLocaleString()} of them read in full.
+            {est.books.toLocaleString()} book{est.books === 1 ? "" : "s"} still
+            need{est.books === 1 ? "s" : ""} one,{" "}
+            {est.fullTextBooks.toLocaleString()} of them read in full.
+            {working ? " Generating…" : null}
           </p>
           <p className="t-small mb-4">
             Up to <strong>{est.maxInputTokens.toLocaleString()}</strong> input

@@ -98,6 +98,10 @@ export type GuideRunEstimate = {
   books: number
   fullTextBooks: number
   maxInputTokens: number
+  // Library coverage, not run state — a reload does not reset it and a
+  // run started before the last restart still shows up.
+  totalBooks: number
+  booksWithGuide: number
 }
 
 export const guideEstimateQueryKey = ["reading-guide-estimate"] as const
