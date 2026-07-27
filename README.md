@@ -258,6 +258,15 @@ Left-nav panels at `/settings`:
   enabled by default on fresh installs; Hardcover + Goodreads land
   disabled (the former needs a token, the latter is scrape-only and
   brittle).
+- **Reading guides** — LLM-written orientation per book: what it is
+  about, who it suits, who should skip it, which reader problems it
+  addresses (ADR-0024). **Off by default and configured here, not by
+  env var** — base URL, model, credential, guide language, and how much
+  book text to send. Any OpenAI-compatible endpoint works, so a local
+  Ollama keeps every book on your own hardware. `Test connection`
+  sends one short prompt and shows what came back. Generation never
+  happens on its own: it is a button on a book, or an admin run over
+  the library that shows a token estimate first.
 - **Metadata defaults** — instance-wide defaults that flow into
   newly-imported books (language, default tags, …).
 - **OIDC / SSO** — DB-backed config (issuer, client id/secret,
@@ -367,6 +376,13 @@ Worth knowing:
 All env vars are optional unless marked required; sensible defaults
 live in [internal/config/config.go](internal/config/config.go).
 
+Not everything is an env var. Metadata providers, OIDC, email and
+**reading guides** are configured in the admin UI and stored in
+`app_settings`, so they can be changed without a restart and their
+credentials are encrypted at rest. The only env var reading guides care
+about is `EMBOOKSHELF_SECRET_KEY`, which is what encrypts the LLM key
+you paste into the panel.
+
 **Server / DB**
 
 | Var | Default | Notes |
@@ -376,7 +392,7 @@ live in [internal/config/config.go](internal/config/config.go).
 | `ALLOWED_ORIGINS` | `*` | CORS / CSRF allow-list for `Origin`/`Referer` |
 | `APP_URL` | _(unset, falls back to request origin)_ | Public origin; feeds the OIDC redirect URI |
 | `MIGRATE_ON_START` | `true` | Apply app schema (+ River migrations on Postgres) on boot |
-| `LOG_LEVEL` | `info` | `slog` level |
+| `LOG_LEVEL` | _(reserved)_ | Read into config but not applied — `slog` is pinned to `info` in `main.go`. Wiring it up is a small change nobody has needed yet |
 | `BOOKDROP_PATH` | `./bookdrop` | Watched folder for imports |
 | `DATA_PATH` | `./data` | Covers + on-disk caches |
 | `SESSION_SECRET` | _(reserved)_ | Not read today; reserved for a future JWT layer |
@@ -385,7 +401,7 @@ live in [internal/config/config.go](internal/config/config.go).
 
 | Var | Default | Notes |
 | --- | --- | --- |
-| `EMBOOKSHELF_SECRET_KEY` | _(unset — dev only)_ | Base64-encoded 32 bytes (`openssl rand -base64 32`). Encrypts provider API keys / OIDC client secrets / cookies at rest with AES-256-GCM (ADR-0010). Unset = plaintext storage + loud boot warning |
+| `EMBOOKSHELF_SECRET_KEY` | _(unset — dev only)_ | Base64-encoded 32 bytes (`openssl rand -base64 32`). Encrypts provider API keys / OIDC client secrets / the reading-guide LLM key / cookies at rest with AES-256-GCM (ADR-0010). Unset = plaintext storage + loud boot warning |
 
 **S3 storage** (only needed if you create `kind=s3` libraries)
 
