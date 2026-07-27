@@ -343,6 +343,11 @@ database must be empty; migrations are applied to it automatically.
 	// sender is hot-reloadable via Notifier.Reload so admins can flip
 	// the EMAIL row from the settings UI without restarting the
 	// process. Reload at boot applies the persisted state.
+	// Reading guides (ADR-0024). Seeded disabled, so the settings panel
+	// has a row to edit and nothing generates until an admin turns it on.
+	if err := appSettingsRepo.SeedReadingGuideIfAbsent(ctx); err != nil {
+		slog.Warn("seed reading guide settings", "err", err)
+	}
 	if err := appSettingsRepo.SeedEmailIfAbsent(ctx); err != nil {
 		slog.Warn("seed email settings", "err", err)
 	}
