@@ -265,6 +265,8 @@ Opaque change token from a backend (S3 returns one; LocalFS leaves it empty). Us
 
 `fileproc.IsAudioFormat`; whether a `books.format` value denotes an audiobook (`MP3`, `M4B`). Audio takes a different ingest path — duration and narrator come from tag metadata rather than a text extractor — so the service, task, and extractor packages all ask this. It lives in `fileproc` because format dispatch is that package's job and all three already import it; previously the same four lines were copied into each, so adding a format meant three edits nothing forced to agree.
 
+Says nothing about origin: it answers "is this file audio", not "did we make it". A generated audio [[Rendition]] keeps `books.format = EPUB`, so `IsAudioFormat(book.Format)` is false for a book that has a narration — check for an audio `files` row, or `book_audiobooks`, when the question is about the [[Audiobook run]].
+
 ### Column-order coupling
 
 The hazard that survives in `internal/repo`: several positionally ordered lists that must agree by hand — a `*Cols` constant's SELECT order, its `scan*` function's `Scan` destinations, and for `books` a 39-column `UPDATE` against its argument slice. ADR-0023 removed the *dialect* axis of this duplication; the *column-position* axis is untouched.
@@ -519,6 +521,82 @@ The service that assembles the input, calls the model, and records the result. I
 
 An admin-triggered bulk generation across the library. Shows an estimated volume before starting — cost is always the result of an explicit action, and nothing generates on approve. Skips guides marked `edited_by_user` so a run cannot erase hand-written text; the per-book button always overwrites, because there the intent is visible.
 
+---
+
+## Audiobook generation (ADRs 0025–0028)
+
+### Rendition
+
+One of the ways a single Book can be consumed: its text, or its generated narration. Both are `files` rows on the same `books` row — narrating a book produces another artifact of the same work, not another work (ADR-0025).
+
+Introduced because `books.format` stops being the reader's dispatch key. `books.format` remains the *primary* format cache (`EPUB` outranks `MP3`, so a narrated EPUB stays `EPUB`), and `read.$id.tsx` dispatches on the rendition the user selected instead. Flipping `books.format` to `MP3` would have made every downstream surface work untouched and was rejected as destructive: the book stops being readable as text, the in-file embed retargets to a format with no embed path, and Send-to-Kindle's [[Eligible format]] gate turns the button off.
+
+The hazard worth knowing: several call sites still branch on `book.format`, and after this they are answering a subtly different question than the one they appear to. Reading and listening share one progress value, bridged by the [[Alignment map]].
+
+### Narratable format
+
+The set `{epub}`; the formats audiobook generation accepts. EPUB is the only format with a text extractor — there is no PDF library in `go.mod`, CBZ is images, MOBI/AZW3/FB2 have no extractor. Gated at three points like its namesake: the UI button, the handler (415 `FORMAT_NOT_NARRATABLE`), and the queue worker.
+
+**Distinct** from [[Eligible format]] (`{epub, pdf}`, Send-to-Kindle). Different set, different filter — do not reuse the term. Also distinct from ADR-0024's Source kind: a guide degrades to `metadata` for a PDF, whereas narration has no degraded mode, since nobody wants a narrated blurb.
+
+### TTS engine
+
+A speech-synthesis backend: `openai` (any OpenAI-compatible `/v1/audio/speech`, including local Kokoro and openedai-speech), `elevenlabs`, `azure`. Two methods on the seam — synthesis and `ListVoices`, the latter feeding the generate dialog, fetched on open and not cached.
+
+**Distinct** from Metadata provider, OIDC provider and Forward-auth. Never say "provider" alone for this.
+
+Unlike metadata providers, engines are **selected, not fanned out** — fan-out would generate and bill the same book three times — so `provider_settings.priority` semantics and ADR-0013's graceful degrade do not apply. A failed engine is a failed generation.
+
+### TTS catalog
+
+The Go literal declaring which engines the binary knows, plus their endpoints, per-request character caps, and a default price per million characters. Hard-coded and rebuilt to change, like the metadata [[Catalog]] (ADR-0008).
+
+Its existence reverses the stance of ADR-0020 and ADR-0024, which both refused a catalog. Those refusals turned on the vendors differing in billing rather than capability; speech engines differ in per-request cap (3,000 → unbounded), SSML support, word-timing output, and price by a factor of twenty. Here the second and third adapters are real on day one.
+
+### Audiobook settings row
+
+`app_settings.AUDIOBOOK`; one typed `repo.Setting[T]` row holding the selected engine, the default voice, and a per-engine sub-struct (`enabled`, `apiKey`, `baseURL`, `model`, `defaultVoice`, `pricePerMillionChars`). `Secrets` returns the three API keys, which is the whole opt-in to AES-GCM at rest (ADR-0010).
+
+Deliberately **not** a `provider_settings`-shaped table: that machinery exists for runtime-discovered, divergent config, and TTS config is uniform and closed at compile time. Using `Setting[T]` also picks up the safer encryption path — `AppSettingsRepo` holds the Cipher, so a new accessor cannot silently store plaintext.
+
+`pricePerMillionChars` is admin-editable and catalog-prefilled: the pre-flight estimate shows real money, and a stale default is the operator's to correct rather than a bug we cannot close.
+
+### Audiobook run
+
+An admin-triggered generation of one Book's narration. Admin-only at the router and **per book — there is no bulk run** (ADR-0028 §1). A reading-guide [[Guide run]] over a thousand books costs about ten dollars; the same shape here costs eight thousand to a hundred and seventy thousand, so the surface is not built rather than gated.
+
+One audiobook per Book (`book_audiobooks.book_id` is the PK, mirroring `book_reading_guides`). Regenerate is a destructive overwrite behind a type-to-confirm. Cancel is a state the workers check before each engine call — the only stop-loss on a run in progress — and sweeps [[Staging area]] immediately; failure retains it, because a retry is likely.
+
+State lives in `book_audiobooks` (state, engine, voice, model, `source_content_hash`, `file_id`, error). Provenance is the `file_id` pointer, not a flag on `files`. Staleness is `source_content_hash` against the book's current EPUB hash — surfaced as "generated from an older copy", never auto-invalidated.
+
+Generation is **not** one of `MetadataWriter`'s triggers: no Sidecar, no in-file embed, no folder rename. In particular `books.narrator` is never written — that column means "what this file's tags said"; the synthesized voice lives on `book_audiobooks.voice`.
+
+### Segment
+
+One unit of synthesis: a row in `book_audiobook_segments` (sequence, chapter title, character range, staged path, duration, start offset, state, error) and one River job on the dedicated `audiobook` queue.
+
+Boundaries come from EPUB spine items, titles from a `toc.ncx` / EPUB3 `nav` parser mapping TOC hrefs back to spine items; non-prose front matter (cover, nav, copyright) is skipped. A cap of ~40,000 characters splits an oversized chapter into several segments sharing one title, and is also the fallback when an EPUB has no usable structure. Splits land on sentence boundaries — a mid-sentence split is audible at every one of ~180 seams.
+
+Chapter granularity is load-bearing twice over: a book-length job would outlive River's ~1h JobRescuer window and be silently re-run and re-billed, and a failure at call 170 of 180 would otherwise cost the whole book. On failure the run fails but every completed segment is retained; Retry re-enqueues only `pending` and `failed`.
+
+**Distinct** from `model.Chapter` — a Chapter is the playback view written to `books.chapters` at finalize; several Segments may share one.
+
+### Alignment map
+
+The `(char_start, char_end) ↔ (start_s, start_s + duration_s)` correspondence between a book's text and its narration, letting one progress value serve both [[Rendition]]s. Not a separate structure — it *is* `book_audiobook_segments`, since embookshelf generated the audio from the text and knows both sides for free.
+
+Persisted from the first version even though cross-rendition sync itself is deferred: regenerating a 500 MB audiobook later purely to recover data we already had would be absurd.
+
+### Staging area
+
+`${DATA_PATH}/audiobooks/{book_id}/`; where per-Segment MP3s live until finalize concatenates them. Local filesystem, outside `storage.Storage`, following the `coverstore` precedent for derived bytes — the output is not a library artifact until it is finished.
+
+Finalize joins the frames byte-wise (same engine, voice and settings across a run, so no transcode and no muxer), writes ID3v2 `CTOC`/`CHAP` chapter frames plus standard tags and cover art, hands the single file to `Placer`, and clears staging. `failed` and `canceled` runs are reaped after 7 days by an hourly sweeper, following `LoopMissingPurge` and `LoopOrphanedKeys`.
+
+MP3 rather than M4B because every engine emits MP3 and none emits M4B; M4B needs AAC, and no usable pure-Go AAC encoder exists. Requiring `ffmpeg` was rejected — it would make the feature silently dark on installs without it, trading the single-binary property for container polish (ADR-0027).
+
+---
+
 ## Email delivery (ADRs 0020–0021)
 
 ### Email subsystem
@@ -571,7 +649,9 @@ Avoid these substitutes — they drift the meaning:
 - "API" / "signature" → say **interface** (includes invariants, error modes, ordering, not just types).
 - "boundary" → say **seam** (boundary is overloaded with DDD bounded contexts).
 - "Storage source" / "BookSource" used interchangeably → no. `storage.Source` = bytes; `service.BookSource` = delivery target.
-- "Provider" alone is ambiguous — say **OIDC provider** (auth, redirect flow) or **metadata provider** (enrichment) or **Forward-auth** (proxy header trust). For statements that span OIDC + forward-auth, say **External identity provider**.
+- "Provider" alone is ambiguous — say **OIDC provider** (auth, redirect flow) or **metadata provider** (enrichment) or **TTS engine** (narration) or **Forward-auth** (proxy header trust). For statements that span OIDC + forward-auth, say **External identity provider**.
+- "Eligible format" ≠ **Narratable format**. The first is `{epub, pdf}` and belongs to Send-to-Kindle (ADR-0021); the second is `{epub}` and belongs to audiobook generation (ADR-0028). Never reuse one for the other.
+- "Audiobook" alone is ambiguous once generation exists — say **ingested audiobook** (an MP3/M4B that arrived through BookDrop, whose `books.format` *is* audio) or **generated audiobook** / **audio Rendition** (synthesized from an EPUB, whose `books.format` stays `EPUB`). [[Audio format]] is the ingest-side predicate and says nothing about origin.
 - "Trusted proxy" alone is ambiguous — say **Trusted proxy CIDR** (the IP allowlist) when discussing the gate; "the upstream proxy" when discussing the deployment.
 - "Email provider" — **don't use**. There is no email-provider abstraction. Say **Sender** (transport seam) or **SMTP config** (the `app_settings.EMAIL` row). ADR-0020.
 
