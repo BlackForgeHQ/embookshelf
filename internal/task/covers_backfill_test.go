@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -33,13 +34,20 @@ func newCoversBackfillDeps(t *testing.T) (task.CoversBackfillDeps, *repo.Library
 	return deps, lr, br, coverRoot
 }
 
+// legacyCoverPath spells out the pre-backfill books/<id> layout. The
+// store no longer exports a builder for it — naming a key is what let
+// callers invent their own resolution order — so the one test that has
+// to plant and then miss a legacy file writes the path itself.
+func legacyCoverPath(coverRoot, bookID string) string {
+	return filepath.Join(coverRoot, "books", bookID)
+}
+
 // createBookWithLegacyCover creates a library + book row with has_cover=true
 // and writes fake cover bytes to the legacy books/<id> path.
 func createBookWithLegacyCover(
 	t *testing.T,
 	lr *repo.LibraryRepo,
 	br *repo.BookRepo,
-	cs *coverstore.Store,
 	coverRoot string,
 	data []byte,
 ) model.Book {
@@ -61,7 +69,7 @@ func createBookWithLegacyCover(
 	}
 
 	// Write cover bytes to the legacy books/<id> path.
-	legacyPath := cs.BookPath(book.ID)
+	legacyPath := legacyCoverPath(coverRoot, book.ID)
 	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll legacy: %v", err)
 	}
@@ -88,7 +96,7 @@ func TestRunCoversBackfill_migratesLegacyCover(t *testing.T) {
 	cs := coverstore.New(coverRoot)
 
 	coverData := []byte("fake jpeg cover bytes")
-	book := createBookWithLegacyCover(t, lr, br, cs, coverRoot, coverData)
+	book := createBookWithLegacyCover(t, lr, br, coverRoot, coverData)
 
 	ctx := context.Background()
 	if err := task.RunCoversBackfill(ctx, deps); err != nil {
@@ -110,20 +118,25 @@ func TestRunCoversBackfill_migratesLegacyCover(t *testing.T) {
 		t.Fatalf("CoverHash mismatch: got %x, want %x", got.CoverHash, expected)
 	}
 
-	// Hashed path should exist and contain the original bytes.
-	hashedPath := cs.HashedPath(got.CoverHash, book.CoverMime)
-	onDisk, err := os.ReadFile(hashedPath)
+	// Legacy path should be swept.
+	if _, err := os.Stat(legacyCoverPath(coverRoot, book.ID)); !os.IsNotExist(err) {
+		t.Fatalf("legacy cover still exists after backfill: %v", err)
+	}
+
+	// …and the cover must still serve. With the legacy copy gone, only
+	// the hash-keyed one can be answering, which is the whole point of
+	// the run.
+	rc, err := cs.Open(got)
 	if err != nil {
-		t.Fatalf("ReadFile hashed path %q: %v", hashedPath, err)
+		t.Fatalf("Open after backfill: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	onDisk, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
 	}
 	if !bytes.Equal(onDisk, coverData) {
 		t.Fatalf("hashed cover bytes mismatch")
-	}
-
-	// Legacy path should be removed.
-	legacyPath := cs.BookPath(book.ID)
-	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
-		t.Fatalf("legacy cover still exists after backfill: %v", err)
 	}
 }
 
@@ -166,10 +179,9 @@ func TestRunCoversBackfill_missingLegacyFileSkipped(t *testing.T) {
 // no-op (the LIMIT-500 query returns no rows).
 func TestRunCoversBackfill_idempotent(t *testing.T) {
 	deps, lr, br, coverRoot := newCoversBackfillDeps(t)
-	cs := coverstore.New(coverRoot)
 
 	coverData := []byte("idempotent cover")
-	book := createBookWithLegacyCover(t, lr, br, cs, coverRoot, coverData)
+	book := createBookWithLegacyCover(t, lr, br, coverRoot, coverData)
 
 	ctx := context.Background()
 

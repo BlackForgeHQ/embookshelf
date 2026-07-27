@@ -252,11 +252,16 @@ func chapterMarks(segments []model.AudiobookSegment, durations []int64) ([]model
 
 // loadCover reads the book's cover so the finished file carries it. Best
 // effort — a narration without embedded art is still a good narration.
+//
+// Asks by book rather than by hash: a library the Covers backfill has not
+// finished has rows with no cover_hash at all, and those books used to
+// finalize with no art for no better reason than which namespace their
+// bytes happened to be in.
 func loadCover(deps AudiobookDeps, book model.Book) ([]byte, string) {
-	if deps.Covers == nil || !book.HasCover || len(book.CoverHash) == 0 {
+	if deps.Covers == nil || !book.HasCover {
 		return nil, ""
 	}
-	rc, err := deps.Covers.OpenBookHashed(book.CoverHash, book.CoverMime)
+	rc, err := deps.Covers.Open(book)
 	if err != nil {
 		return nil, ""
 	}
