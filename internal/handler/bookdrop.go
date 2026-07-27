@@ -294,7 +294,7 @@ func (h *Handler) BookDropApprove(c *gin.Context) {
 
 	// Re-load through the library service so the response carries the
 	// per-user progress fields + shelf memberships (empty on a fresh import).
-	fresh, err := h.lib.GetBook(c.Request.Context(), userID, book.ID)
+	fresh, err := h.books.GetByID(c.Request.Context(), userID, book.ID)
 	if err != nil {
 		writeServerError(c, "bookdrop approve reload", err)
 		return

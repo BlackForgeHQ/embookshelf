@@ -353,7 +353,7 @@ The split exists because a 31-field `Deps` struct made every seam optional by co
 
 ### Book file sandbox
 
-`handler.sandboxPath`; the allow-list gate every filesystem read or delete of a book file passes through. Roots are `BOOKDROP_PATH` plus every Library with a local path; a path must resolve inside one of them after cleaning. Fails closed — no configured roots admits nothing. Serving and deleting share the one implementation so a change to the rule cannot apply to one and miss the other.
+`service.SandboxPath`; the allow-list gate every filesystem read or delete of a book file passes through. Roots are `BOOKDROP_PATH` plus every Library with a local path; a path must resolve inside one of them after cleaning. Fails closed — no configured roots admits nothing. Serving (`handler.sandboxPath`) and deleting (`LibraryService.DeleteBook`) share the one implementation so a change to the rule cannot apply to one and miss the other — the reason it lives in `service` rather than in the HTTP layer with its other caller.
 
 ### Placer
 

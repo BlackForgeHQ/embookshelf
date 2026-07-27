@@ -227,7 +227,13 @@ func (h *LibraryHandle) DeleteBookBytes(ctx context.Context, bookID string, loca
 		return nil
 	}
 	var failures []error
-	for _, key := range locations {
+	for _, location := range locations {
+		// Through storageKey, not the raw location: a local install's
+		// LocalFS is rooted at "/" and answers to absolute keys, so
+		// handing it the library-relative files.location asked the
+		// filesystem to delete "/Author/Title/book.epub" and quietly
+		// removed nothing. The same reason OpenBook goes through it.
+		key := h.storageKey(location)
 		if derr := h.Storage.Delete(ctx, key); derr != nil && !errors.Is(derr, storage.ErrNotFound) {
 			failures = append(failures, fmt.Errorf("delete %s: %w", key, derr))
 		}

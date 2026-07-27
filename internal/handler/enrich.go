@@ -76,7 +76,7 @@ func (h *Handler) EnrichSearch(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	book, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	book, err := h.books.GetByID(c.Request.Context(), userID, id)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
@@ -132,7 +132,7 @@ func (h *Handler) EnrichStream(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	book, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	book, err := h.books.GetByID(c.Request.Context(), userID, id)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
@@ -232,7 +232,7 @@ func (h *Handler) EnrichApplyMatch(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	book, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	book, err := h.books.GetByID(c.Request.Context(), userID, id)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
@@ -277,7 +277,7 @@ func (h *Handler) EnrichApplyMatch(c *gin.Context) {
 
 	// Reload so the response carries fresh cover flags + any side
 	// effects of the cover-from-url import that ran after UpdateMetadata.
-	fresh, err := h.lib.GetBook(c.Request.Context(), userID, updated.ID)
+	fresh, err := h.books.GetByID(c.Request.Context(), userID, updated.ID)
 	if err != nil {
 		writeServerError(c, "enrich apply reload", err)
 		return
@@ -313,7 +313,7 @@ func (h *Handler) EnrichToggleFieldLocks(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	book, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	book, err := h.books.GetByID(c.Request.Context(), userID, id)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
@@ -353,7 +353,7 @@ func (h *Handler) EnrichToggleFieldLocks(c *gin.Context) {
 		return
 	}
 
-	fresh, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	fresh, err := h.books.GetByID(c.Request.Context(), userID, id)
 	if err != nil {
 		writeServerError(c, "lock reload", err)
 		return
@@ -469,7 +469,7 @@ func (h *Handler) EnrichApplyCover(c *gin.Context) {
 	id := c.Param("id")
 	// Ensure the book exists + is visible to the user before touching the
 	// cover pipeline. The enrich service itself doesn't enforce ACLs.
-	if _, err := h.lib.GetBook(c.Request.Context(), userID, id); err != nil {
+	if _, err := h.books.GetByID(c.Request.Context(), userID, id); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
 			return
@@ -509,7 +509,7 @@ func (h *Handler) EnrichRemoveCover(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	if _, err := h.lib.GetBook(c.Request.Context(), userID, id); err != nil {
+	if _, err := h.books.GetByID(c.Request.Context(), userID, id); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
 			return
