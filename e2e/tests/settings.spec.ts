@@ -239,15 +239,22 @@ test.describe('settings · device sync', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Email delivery (informational, admin)
+// Email delivery (admin)
 // ---------------------------------------------------------------------------
 
 test.describe('settings · email delivery', () => {
-  test('renders the informational panel', async ({ page }) => {
+  // This panel used to be a placeholder reading "SMTP is not yet wired",
+  // and the spec still asserted that string long after ADR-0020 wired it
+  // — so it failed for the good reason that the feature had shipped.
+  // Asserting the form's controls instead means it now fails only if the
+  // panel actually breaks.
+  test('renders the SMTP configuration form', async ({ page }) => {
     await openAdminSettings(page, 'Email delivery');
 
     const main = page.getByRole('main');
-    await expect(main.getByText(/SMTP is not yet wired/)).toBeVisible();
+    await expect(main.getByText(/SMTP configuration powers/)).toBeVisible();
+    await expect(main.getByText('Enable email delivery', { exact: true })).toBeVisible();
+    await expect(main.getByText('SMTP host', { exact: true })).toBeVisible();
   });
 });
 

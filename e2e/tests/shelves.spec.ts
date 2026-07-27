@@ -54,10 +54,13 @@ test.describe('shelves', () => {
     await page.goto('/');
 
     const sidebar = page.locator('[data-sidebar="sidebar"]');
-    // Reading Now is the hardcoded pinned row in the sidebar — it
-    // always renders, regardless of seed state.
+    // A pinned row that renders regardless of seed state, so the spec
+    // fails loudly if the sidebar itself is broken rather than silently
+    // passing on an empty list. This used to be "Reading Now", which the
+    // sidebar no longer has — "All Books" and "Unshelved" are the pinned
+    // entries now (the latter per ADR-0016).
     await expect(
-      sidebar.getByRole('link', { name: /Reading Now/ }).first(),
+      sidebar.getByRole('link', { name: /All Books/ }).first(),
     ).toBeVisible();
     // Tolerate duplicates that pre-date the repo Create-loop fix.
     // The test's intent is "the seeded shelves render", not "exactly
