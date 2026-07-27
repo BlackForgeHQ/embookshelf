@@ -15,7 +15,6 @@ import {
 import { useApiMutation } from "@/api/mutation"
 import { Icon } from "@/components/Icon"
 import {
-  AdminGate,
   NotebookEmpty,
   QuillMark,
 } from "@/components/SettingsShared"
@@ -24,18 +23,16 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 
-export function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
+export function ProvidersPanel() {
   const queryClient = useQueryClient()
   const providersQuery = useQuery({
     queryKey: providerSettingsQueryKey,
     queryFn: fetchProviderSettings,
-    enabled: isAdmin,
   })
 
   const metaQuery = useQuery({
     queryKey: metadataSettingsQueryKey,
     queryFn: fetchMetadataSettings,
-    enabled: isAdmin,
   })
 
   const metaMut = useApiMutation(updateMetadataSettings, {
@@ -55,8 +52,6 @@ export function ProvidersPanel({ isAdmin }: { isAdmin: boolean }) {
       queryClient.setQueryData(providerSettingsQueryKey, providers)
     },
   })
-
-  if (!isAdmin) return <AdminGate label="Metadata providers" />
 
   const providers = providersQuery.data ?? []
   const enabledCount = providers.filter((p) => p.enabled).length

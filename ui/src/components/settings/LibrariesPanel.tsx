@@ -13,7 +13,7 @@ import {
 } from "@/api/settings"
 import { useApiMutation } from "@/api/mutation"
 import { Icon } from "@/components/Icon"
-import { AdminGate, NotebookEmpty } from "@/components/SettingsShared"
+import { NotebookEmpty } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -34,13 +34,12 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { slugify } from "@/lib/utils"
 
-export function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
+export function LibrariesPanel() {
   const [creatorOpen, setCreatorOpen] = useState(false)
 
   const libraries = useQuery({
     queryKey: settingsLibrariesQueryKey,
     queryFn: fetchSettingsLibraries,
-    enabled: isAdmin,
   })
 
   const appConfig = useQuery({
@@ -57,8 +56,6 @@ export function LibrariesPanel({ isAdmin }: { isAdmin: boolean }) {
 
   const rows = useMemo(() => libraries.data ?? [], [libraries.data])
   const existingNames = useMemo(() => rows.map((l) => l.name), [rows])
-
-  if (!isAdmin) return <AdminGate label="Libraries" />
 
   const isEmpty = !libraries.isLoading && rows.length === 0
 

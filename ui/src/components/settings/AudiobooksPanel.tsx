@@ -15,7 +15,7 @@ import {
   testAudiobook,
 } from "@/api/audiobooks"
 import { useApiMutation } from "@/api/mutation"
-import { AdminGate, Card, Field, Select, Toggle } from "@/components/SettingsShared"
+import { Card, Field, Select, Toggle } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -33,11 +33,10 @@ const ENGINE_NOTES: Record<string, string> = {
     "Cheap and capable. The base URL is your region host, e.g. https://westeurope.tts.speech.microsoft.com",
 }
 
-export function AudiobooksPanel({ isAdmin }: { isAdmin: boolean }) {
+export function AudiobooksPanel() {
   const settings = useQuery({
     queryKey: audiobookSettingsQueryKey,
     queryFn: fetchAudiobookSettings,
-    enabled: isAdmin,
   })
 
   const [form, setForm] = useState<AudiobookSettings>(emptyForm)
@@ -69,7 +68,6 @@ export function AudiobooksPanel({ isAdmin }: { isAdmin: boolean }) {
     },
   })
 
-  if (!isAdmin) return <AdminGate label="Audiobook narration" />
   if (settings.isLoading) return <p className="t-small">Loading…</p>
 
   const selected = form.engines.find((e) => e.id === form.engine)

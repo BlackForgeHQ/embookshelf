@@ -11,30 +11,28 @@ import {
 } from "@/api/email"
 import { useApiMutation } from "@/api/mutation"
 import { Icon } from "@/components/Icon"
-import {
-  AdminGate,
-  Card,
-  Field,
-  Select,
-} from "@/components/SettingsShared"
+import { Card, Field, Select } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
-export function InvitesPanel({ isAdmin }: { isAdmin: boolean }) {
-  // Invites endpoints return 503 EMAIL_DISABLED when SMTP is off, so gate
-  // the listing query on the email subsystem being enabled — otherwise
-  // TanStack Query's retry storm hammers the server with failed GETs.
+export function InvitesPanel() {
   const emailSettings = useQuery({
     queryKey: emailSettingsQueryKey,
     queryFn: fetchEmailSettings,
-    enabled: isAdmin,
   })
-  const emailEnabled = emailSettings.data?.enabled ?? false
+
+  // Every invites endpoint answers 503 EMAIL_DISABLED while SMTP is off.
+  // This is that same rule, read once from the email settings and used
+  // for both consequences: don't ask (TanStack Query would retry-storm
+  // the server with failed GETs), and say why. Deliberately tri-state —
+  // `undefined` means the settings haven't loaded, which is neither
+  // permission to fetch nor grounds to claim email is disabled.
+  const emailEnabled = emailSettings.data?.enabled
 
   const invites = useQuery({
     queryKey: invitesQueryKey,
     queryFn: fetchInvites,
-    enabled: isAdmin && emailEnabled,
+    enabled: emailEnabled === true,
   })
 
   const [open, setOpen] = useState(false)
@@ -57,9 +55,7 @@ export function InvitesPanel({ isAdmin }: { isAdmin: boolean }) {
     errorToast: (err) => err.message || "Could not revoke invite.",
   })
 
-  if (!isAdmin) return <AdminGate label="Invites" />
-
-  if (emailSettings.isSuccess && !emailEnabled) {
+  if (emailEnabled === false) {
     return (
       <>
         <div className="mb-4 flex items-center justify-between">

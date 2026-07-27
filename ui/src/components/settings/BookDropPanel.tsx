@@ -13,7 +13,6 @@ import {
 } from "@/api/bookdrop"
 import { useApiMutation } from "@/api/mutation"
 import {
-  AdminGate,
   Card,
   DefRow,
   InboxMark,
@@ -31,17 +30,15 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
-export function BookDropPanel({ isAdmin }: { isAdmin: boolean }) {
+export function BookDropPanel() {
   const queue = useQuery({
     queryKey: bookdropQueryKey,
     queryFn: fetchBookDrop,
-    enabled: isAdmin,
   })
 
   const files = useQuery({
     queryKey: bookdropFilesQueryKey,
     queryFn: previewBookDropFiles,
-    enabled: isAdmin,
   })
 
   const processed = useMemo(
@@ -68,8 +65,6 @@ export function BookDropPanel({ isAdmin }: { isAdmin: boolean }) {
     errorToast: (err) => err.message || "Failed to wipe BookDrop.",
     onSuccess: () => setWipeOpen(false),
   })
-
-  if (!isAdmin) return <AdminGate label="BookDrop" />
 
   return (
     <>

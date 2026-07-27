@@ -4,6 +4,7 @@ import { AccountPanel } from "@/components/account/AccountPanel"
 import { DevicesPanel } from "@/components/account/DevicesPanel"
 import { MyShelvesPanel } from "@/components/account/MyShelvesPanel"
 import { ReadingPreferencesPanel } from "@/components/account/ReadingPreferencesPanel"
+import type { SettingsSection } from "@/components/SettingsShared"
 import { SettingsShell } from "@/components/SettingsShared"
 import { TopBar } from "@/components/TopBar"
 
@@ -18,11 +19,17 @@ type AccountSearch = {
   error?: string
 }
 
-const SECTIONS: ReadonlyArray<{ key: SectionKey; label: string }> = [
-  { key: "account", label: "Account" },
-  { key: "shelves", label: "My shelves" },
-  { key: "reading", label: "Reading preferences" },
-  { key: "devices", label: "Device sync" },
+// No adminOnly rows: /account is per-user by definition, so the shell's
+// gate never fires here and the route has no admin-ness to pass it.
+const SECTIONS: ReadonlyArray<SettingsSection<SectionKey>> = [
+  { key: "account", label: "Account", render: () => <AccountPanel /> },
+  { key: "shelves", label: "My shelves", render: () => <MyShelvesPanel /> },
+  {
+    key: "reading",
+    label: "Reading preferences",
+    render: () => <ReadingPreferencesPanel />,
+  },
+  { key: "devices", label: "Device sync", render: () => <DevicesPanel /> },
 ]
 
 function isSectionKey(v: unknown): v is SectionKey {
@@ -60,13 +67,7 @@ function AccountPage() {
             search: key === "account" ? {} : { section: key },
           })
         }
-        isAdmin
-      >
-        {active === "account" && <AccountPanel />}
-        {active === "shelves" && <MyShelvesPanel />}
-        {active === "reading" && <ReadingPreferencesPanel />}
-        {active === "devices" && <DevicesPanel />}
-      </SettingsShell>
+      />
     </div>
   )
 }

@@ -243,38 +243,56 @@ export function QuillMark() {
   )
 }
 
-export function AdminGate({ label }: { label: string }) {
+// Not exported: the gate is the shell's business now. Eleven panels used
+// to import this and decide for themselves when to render it, which is
+// exactly the obligation that moved up here.
+function AdminGate({ label }: { label: string }) {
   return (
     <>
       <h2 className="t-h2 mb-6">{label}</h2>
       <div className="t-small text-muted-foreground italic">
-        {label} are admin-only.
+        This section is admin-only.
       </div>
     </>
   )
 }
 
+// A section of a SettingsShell: its nav entry, whether it is admin-only,
+// and how to render its panel. `render` is a thunk, not an element, so
+// the shell can decide *not* to call it — a gated section's panel never
+// mounts, so its queries never fire and it never has to know it was
+// gated. Keep the thunk free of hooks: it runs inside the shell's render,
+// not as a component of its own.
+export type SettingsSection<TKey extends string> = {
+  key: TKey
+  label: string
+  adminOnly?: boolean
+  badge?: ReactNode
+  render: () => ReactNode
+}
+
 // SettingsShell is the two-column nav layout shared by /settings and
-// /admin: left nav of section labels, right content slot. Callers
-// control the section list, active section, and the content render.
+// /account: left nav of section labels, right content slot. It owns the
+// admin gate for the whole surface — it already had the section list and
+// the adminOnly flag it needed to disable a nav button, so it also
+// answers the only other question that flag implies: which panel a
+// non-admin gets to mount (none). Panels take no isAdmin prop.
 export function SettingsShell<TKey extends string>({
   sections,
   active,
   onSelect,
-  isAdmin,
-  children,
+  isAdmin = false,
 }: {
-  sections: ReadonlyArray<{
-    key: TKey
-    label: string
-    adminOnly?: boolean
-    badge?: ReactNode
-  }>
+  sections: ReadonlyArray<SettingsSection<TKey>>
   active: TKey
   onSelect: (key: TKey) => void
-  isAdmin: boolean
-  children: ReactNode
+  // Defaults to false so a caller that forgets to pass it fails closed,
+  // and so a surface with no admin-only sections (/account) can omit it.
+  isAdmin?: boolean
 }) {
+  const activeSection = sections.find((s) => s.key === active)
+  const activeGated = Boolean(activeSection?.adminOnly) && !isAdmin
+
   return (
     <div className="mx-auto grid w-full max-w-[960px] grid-cols-1 gap-6 p-4 md:grid-cols-[220px_1fr] md:gap-10 md:p-8">
       <nav className="scrollbar-hide -mx-4 flex gap-1 overflow-x-auto border-b border-border px-4 pb-2 md:mx-0 md:flex-col md:border-b-0 md:px-0 md:pb-0">
@@ -303,7 +321,13 @@ export function SettingsShell<TKey extends string>({
         })}
       </nav>
 
-      <div className="w-full max-w-[640px]">{children}</div>
+      <div className="w-full max-w-[640px]">
+        {activeGated ? (
+          <AdminGate label={activeSection?.label ?? "This section"} />
+        ) : (
+          activeSection?.render()
+        )}
+      </div>
     </div>
   )
 }

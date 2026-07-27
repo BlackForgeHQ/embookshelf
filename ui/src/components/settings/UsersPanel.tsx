@@ -2,6 +2,7 @@ import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 
 import type { AuthUser } from "@/api/auth"
+import { fetchMe, meQueryKey } from "@/api/auth"
 import {
   approveSettingsUser,
   createSettingsUser,
@@ -13,28 +14,24 @@ import {
 } from "@/api/settings"
 import { useApiMutation } from "@/api/mutation"
 import { Icon } from "@/components/Icon"
-import {
-  AdminGate,
-  Avatar,
-  Card,
-  Field,
-  Select,
-} from "@/components/SettingsShared"
+import { Avatar, Card, Field, Select } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
-export function UsersPanel({
-  isAdmin,
-  me,
-}: {
-  isAdmin: boolean
-  me: AuthUser | null
-}) {
+export function UsersPanel() {
   const users = useQuery({
     queryKey: settingsUsersQueryKey,
     queryFn: fetchSettingsUsers,
-    enabled: isAdmin,
   })
+
+  // "Which row is me" is the panel's own question, so it asks — the same
+  // cached /me the route already holds, not a prop threaded through the
+  // section table.
+  const me = useQuery({
+    queryKey: meQueryKey,
+    queryFn: fetchMe,
+    staleTime: 60_000,
+  }).data
 
   const sortedUsers = useMemo(() => {
     const all = users.data ?? []
@@ -88,8 +85,6 @@ export function UsersPanel({
     successToast: "User denied.",
   })
 
-  if (!isAdmin) return <AdminGate label="Users & roles" />
-
   return (
     <>
       <div className="mb-4 flex items-center justify-between">
@@ -106,8 +101,8 @@ export function UsersPanel({
         </Button>
       </div>
       <p className="mb-6 text-sm text-muted-foreground italic">
-        Admins see every settings pane; regular users see only Account, Reading
-        preferences, Device sync, and About.
+        Admins see every settings pane; regular users see only their own
+        Account, Reading preferences, Device sync, and shelves.
       </p>
 
       {createOpen && (

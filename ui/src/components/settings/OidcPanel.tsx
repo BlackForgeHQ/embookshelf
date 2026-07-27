@@ -17,17 +17,16 @@ import {
   testOidcProvider,
 } from "@/api/oidc"
 import { useApiMutation } from "@/api/mutation"
-import { AdminGate, Card, Field, Select } from "@/components/SettingsShared"
+import { Card, Field, Select } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 
-export function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
+export function OidcPanel() {
   const queryClient = useQueryClient()
   const query = useQuery({
     queryKey: oidcAdminSettingsQueryKey,
     queryFn: fetchOidcAdminSettings,
-    enabled: isAdmin,
   })
 
   const [draft, setDraft] = useState<OidcAdminSettings | null>(null)
@@ -61,7 +60,6 @@ export function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
     },
   })
 
-  if (!isAdmin) return <AdminGate label="OIDC / SSO" />
   if (query.isLoading || !draft) {
     return (
       <>

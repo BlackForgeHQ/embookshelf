@@ -11,7 +11,6 @@ import {
 import { useApiMutation } from "@/api/mutation"
 import { Icon } from "@/components/Icon"
 import {
-  AdminGate,
   Card,
   Field,
   Select,
@@ -37,11 +36,10 @@ const emptyForm: EmailSettings = {
   passwordSet: false,
 }
 
-export function EmailPanel({ isAdmin }: { isAdmin: boolean }) {
+export function EmailPanel() {
   const settings = useQuery({
     queryKey: emailSettingsQueryKey,
     queryFn: fetchEmailSettings,
-    enabled: isAdmin,
   })
 
   const [form, setForm] = useState<EmailSettings>(emptyForm)
@@ -77,8 +75,6 @@ export function EmailPanel({ isAdmin }: { isAdmin: boolean }) {
     if (value === "") return false
     return !/^https?:\/\/\S+/i.test(value)
   }, [form.publicUrl])
-
-  if (!isAdmin) return <AdminGate label="Email delivery" />
 
   function update<TKey extends keyof EmailSettings>(
     key: TKey,
