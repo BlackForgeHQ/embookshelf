@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.6.1](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.0...v0.6.1) (2026-07-27)
+
+
+### Features
+
+* **audiobook:** generate narration from a book's EPUB ([57e6685](https://github.com/BlackForgeHQ/embookshelf/commit/57e668587c1c93726187c190cfeb397ee4f6cb48))
+* **audiobook:** surface narration in the UI ([316ba52](https://github.com/BlackForgeHQ/embookshelf/commit/316ba528f7dce805725b4448ef89c7ff84ee3f8b))
+* **guides:** show library coverage while a bulk run works ([fd1bcbc](https://github.com/BlackForgeHQ/embookshelf/commit/fd1bcbc4ea605302762ac0dd3fa2e47daa201f34))
+
+
+### Bug Fixes
+
+* **library:** delete a book's bytes, not just its legacy path ([c5dbc79](https://github.com/BlackForgeHQ/embookshelf/commit/c5dbc79aca9def1b315338bd42c8ec65cea8592a))
+* **library:** resolve file locations against the library root ([34f0d29](https://github.com/BlackForgeHQ/embookshelf/commit/34f0d29aa966ae9f937785082f595c477d7dfc47))
+* **shelves:** opening a regular shelf 500s on Postgres ([bd8b437](https://github.com/BlackForgeHQ/embookshelf/commit/bd8b43784e689a8649dd2dcc8fd671bb3cb6d449))
+
+
+### Documentation
+
+* document audiobook configuration, correct ADR-0027 on MP3 ([e327d6b](https://github.com/BlackForgeHQ/embookshelf/commit/e327d6b56db5d7d12e183572468eb6af441194c2))
+* document reading guide configuration ([3b3217e](https://github.com/BlackForgeHQ/embookshelf/commit/3b3217eb83689c7e8800e993869a3bcab7a1e132))
+* record the audiobook generation design ([a85ed8e](https://github.com/BlackForgeHQ/embookshelf/commit/a85ed8e90faabc07f0f146169f26663257a4af5c))
+
 ## [0.6.0](https://github.com/BlackForgeHQ/embookshelf/compare/v0.5.0...v0.6.0) (2026-07-27)
 
 
