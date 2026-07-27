@@ -1,10 +1,7 @@
 import { useMemo, useRef, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { toast } from "sonner"
 
-import type { ApiError } from "@/api/client"
-import type { Annotation } from "@/api/annotations"
 import type { BookDetail } from "@/api/books"
 import type { AudioProgress, AudioReaderHandle } from "@/components/AudioReader"
 import type {
@@ -19,6 +16,8 @@ import type {
   EpubTocEntry,
 } from "@/components/EpubReader"
 import type { PdfProgress, PdfReaderHandle } from "@/components/PdfReader"
+import type { Locator } from "@/lib/locator"
+import { useApiMutation } from "@/api/mutation"
 import { useReadingPosition } from "@/hooks/useReadingPosition"
 import {
   decodeLocator,
@@ -28,18 +27,14 @@ import {
 } from "@/lib/locator"
 import {
   annotationKind,
-  bookAnnotationsQueryKey,
+  bookAnnotationsQuery,
   createAnnotation,
+  createBookmark,
   deleteAnnotation,
-  fetchBookAnnotations,
-  recentAnnotationsQueryKey,
 } from "@/api/annotations"
-import {
-  bookAudiobookQueryKey,
-  fetchBookAudiobook,
-  narrationUrl,
-} from "@/api/audiobooks"
-import { bookQueryKey, fetchBook, updateProgress } from "@/api/books"
+import { bookAudiobookQuery, narrationUrl } from "@/api/audiobooks"
+import { bookQuery, updateProgress } from "@/api/books"
+import { useApiQuery } from "@/api/query"
 import { AudioReader } from "@/components/AudioReader"
 import { ComicReader } from "@/components/ComicReader"
 import { EpubReader } from "@/components/EpubReader"
@@ -70,10 +65,7 @@ function Reader() {
   const { id } = Route.useParams()
   const navigate = useNavigate()
 
-  const book = useQuery({
-    queryKey: bookQueryKey(id),
-    queryFn: () => fetchBook(id),
-  })
+  const book = useApiQuery(bookQuery(id))
 
   if (book.isLoading) {
     return <FullScreenMessage>Loading…</FullScreenMessage>
@@ -120,10 +112,7 @@ function Reader() {
 // The switch lives here rather than inside either shell: both are large,
 // self-contained, and have no business knowing the other exists.
 function NarratableShell({ book }: { book: BookDetail }) {
-  const narration = useQuery({
-    queryKey: bookAudiobookQueryKey(book.id),
-    queryFn: () => fetchBookAudiobook(book.id),
-  })
+  const narration = useApiQuery(bookAudiobookQuery(book.id))
   const [listening, setListening] = useState(false)
 
   const ready = narration.data?.state === "ready"
@@ -192,7 +181,6 @@ function RenditionSwitch({
 
 function ReaderShell({ book }: { book: BookDetail }) {
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
   // This shell drives EPUB and PDF, so it takes the kind that matches the
   // format and ignores the other — a token of the wrong kind means "start
   // from the beginning" rather than a coerced position.
@@ -233,70 +221,31 @@ function ReaderShell({ book }: { book: BookDetail }) {
 
   // Annotations for this book — drives the side panel AND the EPUB
   // highlight overlay.
-  const annotations = useQuery({
-    queryKey: bookAnnotationsQueryKey(book.id),
-    queryFn: () => fetchBookAnnotations(book.id),
+  const annotations = useApiQuery(bookAnnotationsQuery(book.id))
+
+  const createAnnotationMut = useApiMutation(createAnnotation, {
+    onSuccess: () => setPendingSelection(null),
   })
 
-  const invalidateAnnotations = () => {
-    queryClient.invalidateQueries({
-      queryKey: bookAnnotationsQueryKey(book.id),
-    })
-    queryClient.invalidateQueries({ queryKey: recentAnnotationsQueryKey })
-  }
+  const deleteAnnotationMut = useApiMutation(deleteAnnotation)
 
-  const createAnnotationMut = useMutation({
-    mutationFn: (body: {
-      locator?: string
-      selectedText?: string
-      note?: string
-    }) => createAnnotation.fn({ bookId: book.id, body }),
-    onSuccess: () => {
-      invalidateAnnotations()
-      setPendingSelection(null)
-    },
-  })
-
-  const deleteAnnotationMut = useMutation({
-    mutationFn: (a: Annotation) =>
-      deleteAnnotation.fn({ id: a.id, bookId: a.bookId }),
-    onSuccess: invalidateAnnotations,
-  })
-
-  // Bookmark = a zero-text annotation at the current location, marked
-  // with color="bookmark" so the notebook can group it separately. The
-  // annotations CHECK constraint requires selected_text or note to be
-  // non-empty, so we put the literal label in selected_text.
-  const bookmarkMut = useMutation({
-    mutationFn: (locator: string) =>
-      createAnnotation.fn({
-        bookId: book.id,
-        body: {
-          locator,
-          selectedText: "Bookmark",
-          color: "bookmark",
-        },
-      }),
-    onSuccess: () => {
-      invalidateAnnotations()
-      toast.success("Bookmark saved")
-    },
-    onError: (err) =>
-      toast.error((err as unknown as ApiError).message || "Bookmark failed"),
+  const bookmarkMut = useApiMutation(createBookmark, {
+    successToast: "Bookmark saved",
+    errorToast: (err) => err.message || "Bookmark failed",
   })
 
   const onBookmark = () => {
-    const locator =
+    const locator: Locator | null =
       book.format === "PDF" && pageState
-        ? encodeLocator({ kind: "page", page: pageState.current })
+        ? { kind: "page", page: pageState.current }
         : book.format === "EPUB" && cfiState
-          ? encodeLocator({ kind: "cfi", cfi: cfiState })
-          : ""
+          ? { kind: "cfi", cfi: cfiState }
+          : null
     if (!locator) {
       toast.info("Open the book first, then bookmark.")
       return
     }
-    bookmarkMut.mutate(locator)
+    bookmarkMut.mutate({ bookId: book.id, locator })
   }
 
   // EPUB highlights for the rendition overlay. Stable reference when the
@@ -563,8 +512,11 @@ function ReaderShell({ book }: { book: BookDetail }) {
                 disabled={createAnnotationMut.isPending}
                 onClick={() =>
                   createAnnotationMut.mutate({
-                    locator: pendingSelection.cfiRange,
-                    selectedText: pendingSelection.text,
+                    bookId: book.id,
+                    body: {
+                      locator: pendingSelection.cfiRange,
+                      selectedText: pendingSelection.text,
+                    },
                   })
                 }
               >
@@ -579,9 +531,12 @@ function ReaderShell({ book }: { book: BookDetail }) {
                   const note = window.prompt("Add a note for this selection:")
                   if (!note || !note.trim()) return
                   createAnnotationMut.mutate({
-                    locator: pendingSelection.cfiRange,
-                    selectedText: pendingSelection.text,
-                    note: note.trim(),
+                    bookId: book.id,
+                    body: {
+                      locator: pendingSelection.cfiRange,
+                      selectedText: pendingSelection.text,
+                      note: note.trim(),
+                    },
                   })
                 }}
               >
@@ -661,11 +616,14 @@ function ReaderShell({ book }: { book: BookDetail }) {
                   )
                   if (!note || !note.trim()) return
                   createAnnotationMut.mutate({
-                    locator: encodeLocator({
-                      kind: "page",
-                      page: pageState.current,
-                    }),
-                    note: note.trim(),
+                    bookId: book.id,
+                    body: {
+                      locator: encodeLocator({
+                        kind: "page",
+                        page: pageState.current,
+                      }),
+                      note: note.trim(),
+                    },
                   })
                 }}
               >
@@ -750,7 +708,12 @@ function ReaderShell({ book }: { book: BookDetail }) {
                         type="button"
                         variant="ghost"
                         size="icon-xs"
-                        onClick={() => deleteAnnotationMut.mutate(a)}
+                        onClick={() =>
+                          deleteAnnotationMut.mutate({
+                            id: a.id,
+                            bookId: a.bookId,
+                          })
+                        }
                         disabled={deleteAnnotationMut.isPending}
                         aria-label="Delete"
                         title="Delete"
@@ -875,7 +838,6 @@ function ReaderShell({ book }: { book: BookDetail }) {
 // debounce/persist pattern (queueProgress) but otherwise stand alone.
 function ComicReaderShell({ book }: { book: BookDetail }) {
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
 
   // ComicReader counts pages from 0; a page token carries the human page
   // number. The shell converts at its own boundary — the alternative,
@@ -897,25 +859,9 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
     debounceMs: PROGRESS_DEBOUNCE_MS,
   })
 
-  const bookmarkMut = useMutation({
-    mutationFn: (locator: string) =>
-      createAnnotation.fn({
-        bookId: book.id,
-        body: {
-          locator,
-          selectedText: `Bookmark · page ${page + 1}`,
-          color: "bookmark",
-        },
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: bookAnnotationsQueryKey(book.id),
-      })
-      queryClient.invalidateQueries({ queryKey: recentAnnotationsQueryKey })
-      toast.success("Bookmark saved")
-    },
-    onError: (err) =>
-      toast.error((err as unknown as ApiError).message || "Bookmark failed"),
+  const bookmarkMut = useApiMutation(createBookmark, {
+    successToast: "Bookmark saved",
+    errorToast: (err) => err.message || "Bookmark failed",
   })
 
   const onComicProgress = (p: ComicProgress) => {
@@ -1006,9 +952,10 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
             aria-label="Bookmark"
             disabled={bookmarkMut.isPending}
             onClick={() =>
-              bookmarkMut.mutate(
-                encodeLocator({ kind: "page", page: page + 1 })
-              )
+              bookmarkMut.mutate({
+                bookId: book.id,
+                locator: { kind: "page", page: page + 1 },
+              })
             }
           >
             <Icon name="bookmark" size={14} />
@@ -1141,7 +1088,6 @@ function AudioReaderShell({
   audioUrl?: string
 }) {
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
 
   const initialSeconds = useMemo(() => {
     const resume = decodeLocator(book.resumeCfi)
@@ -1161,25 +1107,9 @@ function AudioReaderShell({
     debounceMs: AUDIO_PROGRESS_DEBOUNCE_MS,
   })
 
-  const bookmarkMut = useMutation({
-    mutationFn: (locator: string) =>
-      createAnnotation.fn({
-        bookId: book.id,
-        body: {
-          locator,
-          selectedText: `Bookmark · ${formatHMS(seconds)}`,
-          color: "bookmark",
-        },
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: bookAnnotationsQueryKey(book.id),
-      })
-      queryClient.invalidateQueries({ queryKey: recentAnnotationsQueryKey })
-      toast.success("Bookmark saved")
-    },
-    onError: (err) =>
-      toast.error((err as unknown as ApiError).message || "Bookmark failed"),
+  const bookmarkMut = useApiMutation(createBookmark, {
+    successToast: "Bookmark saved",
+    errorToast: (err) => err.message || "Bookmark failed",
   })
 
   const onAudioProgress = (p: AudioProgress) => {
@@ -1244,7 +1174,10 @@ function AudioReaderShell({
           aria-label="Bookmark"
           disabled={bookmarkMut.isPending}
           onClick={() =>
-            bookmarkMut.mutate(encodeLocator({ kind: "time", seconds }))
+            bookmarkMut.mutate({
+              bookId: book.id,
+              locator: { kind: "time", seconds },
+            })
           }
         >
           <Icon name="bookmark" size={14} />

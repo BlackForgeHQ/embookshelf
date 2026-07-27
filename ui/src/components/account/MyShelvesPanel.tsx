@@ -1,22 +1,20 @@
 import { useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 
-import type {Shelf} from "@/api/books";
+import type { Shelf } from "@/api/books"
 import { accentColor } from "@/components/AccentPicker"
 import { Card } from "@/components/SettingsShared"
 import { ShelfIcon } from "@/components/ShelfIcon"
 import { ShelfIconPicker } from "@/components/ShelfIconPicker"
 import { Button } from "@/components/ui/button"
-import { fetchMe, meQueryKey } from "@/api/auth"
+import { meQuery } from "@/api/auth"
 import {
-  
   deleteShelf,
-  fetchShelves,
   publishShelf,
-  shelvesQueryKey,
-  updateShelf
+  shelvesQuery,
+  updateShelf,
 } from "@/api/books"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
 
 // MyShelvesPanel — owned shelves overview. Heavy table view per ADR-0019:
 // icon · name · accent · kind · visibility · book count · created. Inline
@@ -24,15 +22,8 @@ import { useApiMutation } from "@/api/mutation"
 // for everyone. Re-uses the existing mutations so realtime SSE flows
 // cover this surface without extra wiring.
 export function MyShelvesPanel() {
-  const me = useQuery({
-    queryKey: meQueryKey,
-    queryFn: fetchMe,
-    staleTime: 60_000,
-  })
-  const shelves = useQuery({
-    queryKey: shelvesQueryKey,
-    queryFn: fetchShelves,
-  })
+  const me = useApiQuery(meQuery)
+  const shelves = useApiQuery(shelvesQuery)
 
   const updateMut = useApiMutation(updateShelf)
   const deleteMut = useApiMutation(deleteShelf, {

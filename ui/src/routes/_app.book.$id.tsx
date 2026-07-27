@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMemo, useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 
@@ -7,46 +7,36 @@ import type { ApiError } from "@/api/client"
 import type { BookDetail as BookDetailPayload } from "@/api/books"
 import {
   annotationKind,
-  bookAnnotationsQueryKey,
+  bookAnnotationsQuery,
   createAnnotation,
   deleteAnnotation,
-  fetchBookAnnotations,
 } from "@/api/annotations"
-import { fetchMe, meQueryKey } from "@/api/auth"
+import { meQuery } from "@/api/auth"
 import { useApiMutation } from "@/api/mutation"
 import {
   addBookToShelf,
+  bookQuery,
   bookQueryKey,
   deleteBook,
-  fetchBook,
-  fetchShelves,
   isKindleEligibleFormat,
   patchBook,
   removeBookFromShelf,
   sendBookToKindle,
+  shelvesQuery,
   shelvesQueryKey,
 } from "@/api/books"
-import { appConfigQueryKey, fetchAppConfig } from "@/api/settings"
+import { appConfigQuery } from "@/api/settings"
 import {
   DEVICE_KIND_LABELS,
-  devicesQueryKey,
-  fetchDevices,
+  devicesQuery,
   sendBookToDevice,
 } from "@/api/devices"
+import { useApiQuery } from "@/api/query"
 import { locatorLabel } from "@/lib/locator"
+import { ConfirmPhraseDialog } from "@/components/ConfirmPhraseDialog"
 import { Cover, StarRating } from "@/components/Cover"
 import { Icon } from "@/components/Icon"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { AudiobookPanel } from "@/components/book/AudiobookPanel"
 import { ReadingGuidePanel } from "@/components/book/ReadingGuidePanel"
@@ -85,15 +75,8 @@ function BookDetail() {
   const [tab, setTab] = useState<Tab>("overview")
   const [deleteOpen, setDeleteOpen] = useState(false)
 
-  const book = useQuery({
-    queryKey: bookQueryKey(id),
-    queryFn: () => fetchBook(id),
-  })
-  const me = useQuery({
-    queryKey: meQueryKey,
-    queryFn: fetchMe,
-    staleTime: 60_000,
-  })
+  const book = useApiQuery(bookQuery(id))
+  const me = useApiQuery(meQuery)
   const isAdmin = me.data?.role === "admin"
 
   const deleteMut = useApiMutation(deleteBook, {
@@ -502,7 +485,7 @@ function Meta({ label, children }: { label: string; children: ReactNode }) {
 // are surfaced read-only with a rule hint so users learn why they can't
 // be edited directly.
 function ShelfCard({ book }: { book: BookDetailPayload }) {
-  const shelves = useQuery({ queryKey: shelvesQueryKey, queryFn: fetchShelves })
+  const shelves = useApiQuery(shelvesQuery)
   const [pickerOpen, setPickerOpen] = useState(false)
 
   const addMut = useApiMutation(addBookToShelf, {
@@ -876,10 +859,7 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
 // (`selectedText` stays empty) — highlights come from the EPUB reader's
 // selection flow, not from typing here.
 function NotesPanel({ bookId }: { bookId: string }) {
-  const annotations = useQuery({
-    queryKey: bookAnnotationsQueryKey(bookId),
-    queryFn: () => fetchBookAnnotations(bookId),
-  })
+  const annotations = useApiQuery(bookAnnotationsQuery(bookId))
 
   const createMut = useApiMutation(createAnnotation)
   const deleteMut = useApiMutation(deleteAnnotation)
@@ -1041,11 +1021,7 @@ function SendToKindleButton({
   kindleEmail: string
 }) {
   const navigate = useNavigate()
-  const cfg = useQuery({
-    queryKey: appConfigQueryKey,
-    queryFn: fetchAppConfig,
-    staleTime: 5 * 60_000,
-  })
+  const cfg = useApiQuery(appConfigQuery)
 
   const sendMut = useApiMutation(sendBookToKindle, {
     successToast: "Send-to-Kindle queued.",
@@ -1108,7 +1084,7 @@ function SendToKindleButton({
 // paired, the button navigates to the account page on the Devices section.
 function SendToDeviceButton({ bookId }: { bookId: string }) {
   const navigate = useNavigate()
-  const devices = useQuery({ queryKey: devicesQueryKey, queryFn: fetchDevices })
+  const devices = useApiQuery(devicesQuery)
   const [open, setOpen] = useState(false)
 
   const sendMut = useApiMutation(sendBookToDevice, {
@@ -1166,7 +1142,8 @@ function SendToDeviceButton({ bookId }: { bookId: string }) {
 // DeleteBookDialog confirms a destructive book teardown. The "type the
 // title to confirm" gate matches the weight of the operation — the DB
 // row, its cover, the source file on disk, and every reader's notes,
-// progress, and shelf placements go with it.
+// progress, and shelf placements go with it. The gate itself is
+// ConfirmPhraseDialog's; this is only the consequence copy.
 function DeleteBookDialog({
   open,
   onOpenChange,
@@ -1180,63 +1157,27 @@ function DeleteBookDialog({
   busy: boolean
   onConfirm: () => void
 }) {
-  const [confirmInput, setConfirmInput] = useState("")
-
-  useEffect(() => {
-    // Reset the typed confirmation on close — prop→state sync, not
-    // cascading renders; this is the intended use of setState-in-effect.
-    // Deliberate: setState inside an effect, syncing React state from an
-    // external source. Was suppressed via react-hooks/set-state-in-effect;
-    // Biome has no equivalent rule yet, so there is nothing to suppress.
-    if (!open) setConfirmInput("")
-  }, [open])
-
-  const matches = confirmInput.trim() === title.trim()
-
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[440px]">
-        <DialogHeader>
-          <DialogTitle>Delete book</DialogTitle>
-          <DialogDescription>
-            Permanently remove <strong>{title}</strong> — the DB row, its cover,
-            its source file on disk, and every reader&apos;s progress, notes,
-            and shelf placements for it. This cannot be undone.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="delete-book-confirm">
-            Type the title to confirm.
-          </Label>
-          <Input
-            id="delete-book-confirm"
-            value={confirmInput}
-            onChange={(e) => setConfirmInput(e.target.value)}
-            placeholder={title}
-            autoFocus
-          />
-        </div>
-
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => onOpenChange(false)}
-            disabled={busy}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={onConfirm}
-            disabled={!matches || busy}
-          >
-            {busy ? "Deleting…" : "Delete book"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <ConfirmPhraseDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Delete book"
+      description={
+        <>
+          Permanently remove <strong>{title}</strong> — the DB row, its cover,
+          its source file on disk, and every reader&apos;s progress, notes, and
+          shelf placements for it. This cannot be undone.
+        </>
+      }
+      phrase={title}
+      // A title is long enough that echoing it in the instruction reads
+      // worse than pointing at it; the placeholder carries the text.
+      prompt="Type the title to confirm."
+      placeholder={title}
+      confirmLabel="Delete book"
+      busyLabel="Deleting…"
+      busy={busy}
+      onConfirm={onConfirm}
+    />
   )
 }

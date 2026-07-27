@@ -1,20 +1,19 @@
 import { useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 
 import type { ApiError } from "@/api/client"
 import type { Audiobook, AudiobookEstimate } from "@/api/audiobooks"
 import {
-  bookAudiobookQueryKey,
+  audiobookEstimateQuery,
+  bookAudiobookQuery,
   cancelAudiobook,
   deleteAudiobook,
-  fetchAudiobookEstimate,
-  fetchBookAudiobook,
   generateAudiobook,
   narrationUrl,
   retryAudiobook,
 } from "@/api/audiobooks"
-import { fetchMe, meQueryKey } from "@/api/auth"
+import { meQuery } from "@/api/auth"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/Icon"
 
@@ -49,12 +48,10 @@ export function AudiobookPanel({
   bookId: string
   format: string
 }) {
-  const me = useQuery({ queryKey: meQueryKey, queryFn: fetchMe })
+  const me = useApiQuery(meQuery)
   const isAdmin = me.data?.role === "admin"
 
-  const audiobook = useQuery({
-    queryKey: bookAudiobookQueryKey(bookId),
-    queryFn: () => fetchBookAudiobook(bookId),
+  const audiobook = useApiQuery(bookAudiobookQuery(bookId), {
     // Poll only while something is actually moving, and stop on its own
     // once it is not — the same self-terminating shape the guide run
     // uses, so an idle instance is never polled.
@@ -354,13 +351,9 @@ function RegenerateButton({
   setConfirming: (v: boolean) => void
   hasExisting: boolean
 }) {
-  const estimate = useQuery({
-    queryKey: ["audiobook-estimate", bookId],
-    queryFn: () => fetchAudiobookEstimate(bookId),
-    // Only ask once the user has signalled intent. Estimating extracts the
-    // whole book, which is not work to do on every page view.
+  // Only ask once the user has signalled intent.
+  const estimate = useApiQuery(audiobookEstimateQuery(bookId), {
     enabled: confirming,
-    staleTime: 60_000,
   })
 
   const generateMut = useApiMutation(generateAudiobook, {

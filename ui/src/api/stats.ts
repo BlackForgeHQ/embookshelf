@@ -1,4 +1,5 @@
 import { api } from "./client"
+import { defineQuery } from "./query"
 
 export type StatsBucket = { label: string; count: number }
 export type StatsYearBucket = { decade: number; count: number }
@@ -30,3 +31,5 @@ export async function fetchStats(): Promise<Stats> {
 }
 
 export const statsQueryKey = ["stats"] as const
+
+export const statsQuery = defineQuery({ key: statsQueryKey, fn: fetchStats })

@@ -1,14 +1,11 @@
 import { useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 
 import type { SettingsSectionKey } from "@/components/settings/sections"
 import { SETTINGS_SECTIONS } from "@/components/settings/sections"
-import {
-  fetchSettingsUsers,
-  settingsUsersQueryKey,
-} from "@/api/settings"
-import { fetchMe, meQueryKey } from "@/api/auth"
+import { settingsUsersQuery } from "@/api/settings"
+import { meQuery } from "@/api/auth"
+import { useApiQuery } from "@/api/query"
 import { SettingsShell } from "@/components/SettingsShared"
 import { TopBar } from "@/components/TopBar"
 
@@ -17,23 +14,14 @@ export const Route = createFileRoute("/_app/settings")({
 })
 
 function Admin() {
-  const me = useQuery({
-    queryKey: meQueryKey,
-    queryFn: fetchMe,
-    staleTime: 60_000,
-  })
+  const me = useApiQuery(meQuery)
   const isAdmin = me.data?.role === "admin"
   const [active, setActive] = useState<SettingsSectionKey>("libraries")
 
-  const usersQuery = useQuery({
-    queryKey: settingsUsersQueryKey,
-    queryFn: fetchSettingsUsers,
-    enabled: isAdmin,
-  })
+  const usersQuery = useApiQuery(settingsUsersQuery, { enabled: isAdmin })
 
   const pendingCount = useMemo(
-    () =>
-      (usersQuery.data ?? []).filter((u) => u.status === "pending").length,
+    () => (usersQuery.data ?? []).filter((u) => u.status === "pending").length,
     [usersQuery.data]
   )
 

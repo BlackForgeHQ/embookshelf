@@ -1,17 +1,16 @@
 import { useEffect, useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 
 import type { LibraryKind, SettingsLibrary } from "@/api/settings"
 import {
-  appConfigQueryKey,
+  appConfigQuery,
   createLibrary,
   deleteLibrary,
-  fetchAppConfig,
-  fetchSettingsLibraries,
   rescanLibrary,
-  settingsLibrariesQueryKey,
+  settingsLibrariesQuery,
 } from "@/api/settings"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
+import { ConfirmPhraseDialog } from "@/components/ConfirmPhraseDialog"
 import { Icon } from "@/components/Icon"
 import { NotebookEmpty } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
@@ -37,15 +36,9 @@ import { slugify } from "@/lib/utils"
 export function LibrariesPanel() {
   const [creatorOpen, setCreatorOpen] = useState(false)
 
-  const libraries = useQuery({
-    queryKey: settingsLibrariesQueryKey,
-    queryFn: fetchSettingsLibraries,
-  })
+  const libraries = useApiQuery(settingsLibrariesQuery)
 
-  const appConfig = useQuery({
-    queryKey: appConfigQueryKey,
-    queryFn: fetchAppConfig,
-  })
+  const appConfig = useApiQuery(appConfigQuery)
 
   const rescanMut = useApiMutation(rescanLibrary, {
     successToast: "Rescan started.",
@@ -611,6 +604,10 @@ function KindCard({
 // Delete dialog
 // ---------------------------------------------------------------------------
 
+// The S3 purge toggle is the extra-switch slot's existing case: it rides
+// along with the confirmation, so the dialog owns it and hands its value
+// to onConfirm rather than the panel keeping a second piece of state it
+// would have to remember to reset.
 function DeleteLibraryDialog({
   open,
   onOpenChange,
@@ -626,79 +623,40 @@ function DeleteLibraryDialog({
   busy: boolean
   onConfirm: (purge: boolean) => void
 }) {
-  const [confirmInput, setConfirmInput] = useState("")
-  const [purge, setPurge] = useState(false)
-
-  useEffect(() => {
-    if (!open) {
-      // Deliberate: setState inside an effect, syncing React state from an
-      // external source. Was suppressed via react-hooks/set-state-in-effect;
-      // Biome has no equivalent rule yet, so there is nothing to suppress.
-      setConfirmInput("")
-      setPurge(false)
-    }
-  }, [open])
-
-  const matches = confirmInput.trim() === library.name
-
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[460px]">
-        <DialogHeader>
-          <DialogTitle>Delete library</DialogTitle>
-          <DialogDescription>
-            Removes <strong>{library.name}</strong>, all {library.bookCount}{" "}
-            book records, their cover images, and every annotation, reading
-            session, and shelf assignment inside it.{" "}
-            {isS3
-              ? "S3 objects are left alone unless you check the purge option below."
-              : "Source files on disk are left alone."}
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="delete-confirm">
-            Type <span className="mono">{library.name}</span> to confirm.
-          </Label>
-          <Input
-            id="delete-confirm"
-            value={confirmInput}
-            onChange={(e) => setConfirmInput(e.target.value)}
-            autoFocus
-          />
-        </div>
-
-        {isS3 && (
-          <label className="flex cursor-pointer items-center gap-3 text-sm">
-            <Switch
-              checked={purge}
-              onCheckedChange={(v) => setPurge(Boolean(v))}
-            />
-            <span>Also delete every object in the S3 bucket prefix</span>
-          </label>
-        )}
-
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => onOpenChange(false)}
-            disabled={busy}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={() => onConfirm(purge)}
-            disabled={!matches || busy}
-            className="active:translate-y-[1px]"
-          >
-            {busy ? "Deleting…" : "Delete library"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <ConfirmPhraseDialog<boolean>
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Delete library"
+      description={
+        <>
+          Removes <strong>{library.name}</strong>, all {library.bookCount} book
+          records, their cover images, and every annotation, reading session,
+          and shelf assignment inside it.{" "}
+          {isS3
+            ? "S3 objects are left alone unless you check the purge option below."
+            : "Source files on disk are left alone."}
+        </>
+      }
+      phrase={library.name}
+      confirmLabel="Delete library"
+      busyLabel="Deleting…"
+      busy={busy}
+      extras={{
+        initial: false,
+        render: (purge, setPurge) =>
+          isS3 ? (
+            <label className="flex cursor-pointer items-center gap-3 text-sm">
+              <Switch
+                checked={purge}
+                onCheckedChange={(v) => setPurge(Boolean(v))}
+              />
+              <span>Also delete every object in the S3 bucket prefix</span>
+            </label>
+          ) : null,
+      }}
+      onConfirm={onConfirm}
+    />
   )
 }
 

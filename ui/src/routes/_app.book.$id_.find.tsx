@@ -1,13 +1,13 @@
 // ui/src/routes/_app.book.$id_.find.tsx
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
-import { Link, createFileRoute, useNavigate } from "@tanstack/react-router"
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
 
 import type { EnrichMatch } from "@/api/enrich"
 import type { ProviderState } from "@/components/metadata/ProviderStatusChips"
 import { applyCoverFromUrl, streamEnrichment } from "@/api/enrich"
-import { bookQueryKey, fetchBook } from "@/api/books"
+import { bookQuery } from "@/api/books"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
 import { Icon } from "@/components/Icon"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -38,10 +38,7 @@ function FindMetadata() {
   const { id } = Route.useParams()
   const navigate = useNavigate()
 
-  const book = useQuery({
-    queryKey: bookQueryKey(id),
-    queryFn: () => fetchBook(id),
-  })
+  const book = useApiQuery(bookQuery(id))
 
   const [searchTitle, setSearchTitle] = useState("")
   const [searchAuthor, setSearchAuthor] = useState("")

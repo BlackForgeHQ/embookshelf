@@ -1,16 +1,12 @@
 import { api } from "./client"
 import { booksQueryKey, librariesQueryKey, shelvesQueryKey } from "./books"
 import { defineMutation } from "./mutation"
+import { defineQuery } from "./query"
 import type { BookDetail } from "./books"
 
 // Mirrors internal/handler/bookdrop.go bookdropDTO.
 export type BookDropState =
-  | "discovered"
-  | "processing"
-  | "ready"
-  | "failed"
-  | "imported"
-  | "rejected"
+  "discovered" | "processing" | "ready" | "failed" | "imported" | "rejected"
 
 export type BookDropItem = {
   id: string
@@ -41,6 +37,16 @@ export async function fetchBookDrop(): Promise<Array<BookDropItem>> {
 
 export const bookdropQueryKey = ["bookdrop"] as const
 export const bookdropFilesQueryKey = ["settings", "bookdrop", "files"] as const
+
+export const bookdropQuery = defineQuery({
+  key: bookdropQueryKey,
+  fn: fetchBookDrop,
+})
+
+export const bookdropFilesQuery = defineQuery({
+  key: bookdropFilesQueryKey,
+  fn: previewBookDropFiles,
+})
 
 export const approveBookDrop = defineMutation({
   fn: async ({

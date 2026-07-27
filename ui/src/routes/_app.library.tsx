@@ -1,16 +1,9 @@
 import { useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 
 import type { Book } from "@/api/books"
-import {
-  booksQueryKey,
-  fetchBooks,
-  fetchLibraries,
-  fetchShelves,
-  librariesQueryKey,
-  shelvesQueryKey,
-} from "@/api/books"
+import { booksQuery, librariesQuery, shelvesQuery } from "@/api/books"
+import { useApiQuery } from "@/api/query"
 import { Cover, StarRating } from "@/components/Cover"
 import { Icon } from "@/components/Icon"
 import { NotebookEmpty } from "@/components/SettingsShared"
@@ -103,17 +96,14 @@ function LibraryView() {
     unshelved: isUnshelved || undefined,
   }
 
-  const books = useQuery({
-    queryKey: booksQueryKey(queryParams),
-    queryFn: () => fetchBooks(queryParams),
+  const books = useApiQuery(booksQuery(queryParams), {
+    // Hold the previous grid while a filter changes rather than blanking
+    // the page — the key carries the filter, so this is a different query.
     placeholderData: (prev) => prev,
   })
 
-  const libraries = useQuery({
-    queryKey: librariesQueryKey,
-    queryFn: fetchLibraries,
-  })
-  const shelves = useQuery({ queryKey: shelvesQueryKey, queryFn: fetchShelves })
+  const libraries = useApiQuery(librariesQuery)
+  const shelves = useApiQuery(shelvesQuery)
 
   const rows = books.data?.books ?? []
 

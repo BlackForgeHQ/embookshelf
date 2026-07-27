@@ -1,11 +1,11 @@
 import { useState } from "react"
-import { useQuery } from "@tanstack/react-query"
-import { Link, createFileRoute, useNavigate } from "@tanstack/react-router"
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
 import { toast } from "sonner"
 import type { FormEvent } from "react"
 
-import { confirmPasswordReset, verifyPasswordReset } from "@/api/auth"
+import { confirmPasswordReset, passwordResetVerifyQuery } from "@/api/auth"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -26,12 +26,8 @@ function ResetPasswordPage() {
   // making the user fill the form twice. Disabled until we actually
   // have a token in the URL — the same component handles the "no
   // token at all" case below.
-  const verify = useQuery({
-    queryKey: ["password-reset-verify", token ?? ""],
-    queryFn: () => verifyPasswordReset(token!),
+  const verify = useApiQuery(passwordResetVerifyQuery(token ?? ""), {
     enabled: !!token,
-    staleTime: 30_000,
-    retry: false,
   })
 
   const [next, setNext] = useState("")

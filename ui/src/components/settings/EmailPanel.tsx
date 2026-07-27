@@ -2,8 +2,7 @@ import { useMemo, useState } from "react"
 
 import type { EmailSettings, EmailTLS } from "@/api/email"
 import {
-  emailSettingsQueryKey,
-  fetchEmailSettings,
+  emailSettingsQuery,
   sendEmailTest,
   updateEmailSettings,
 } from "@/api/email"
@@ -43,8 +42,8 @@ const INTRO = `SMTP configuration powers password resets, admin invites, and Sen
 
 export function EmailPanel() {
   const draft = useSettingsDraft({
-    queryKey: emailSettingsQueryKey,
-    queryFn: fetchEmailSettings,
+    queryKey: emailSettingsQuery.key,
+    queryFn: emailSettingsQuery.fn,
     initial: emptyForm,
     save: updateEmailSettings,
     successToast: "Email settings saved.",

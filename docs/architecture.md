@@ -647,16 +647,28 @@ the prototype's single-component `setView` state machine.
 - **Typed API modules** — per-resource clients live under
   [ui/src/api/](../ui/src/api/) (`auth`, `books`, `bookdrop`, `devices`,
   `annotations`, `enrich`, `settings`, `stats`, `reading`, `realtime`).
-  Each exports query keys + fetchers so `useQuery`/`useMutation` call
-  sites stay one-liner.
+  Each declares its endpoints as **specs**, not as loose keys and
+  fetchers: `defineMutation` ([`api/mutation.ts`](../ui/src/api/mutation.ts))
+  pairs a call with the keys it invalidates, and `defineQuery`
+  ([`api/query.ts`](../ui/src/api/query.ts)) pairs a key with its fetcher
+  *and its caching policy*. Call sites name a resource —
+  `useApiQuery(meQuery)`, `useApiMutation(deleteBook)` — and say only
+  what a screen can know (`enabled`, `refetchInterval`,
+  `placeholderData`). `staleTime` is deliberately not accepted at a call
+  site: it is a property of the endpoint, and stating it per screen is
+  what let ten readers of `/api/v1/me` drift into two policies.
+  `apiQueryOptions(spec)` hands the same spec to `ensureQueryData` in a
+  route guard or to `useQueries`.
 - **Mock data** — [`ui/src/data/mock.ts`](../ui/src/data/mock.ts) is
   the reference dataset from the original prototype. Live routes are
   now backed by the real API; mock exports remain as the source of
   truth for types + the non-authenticated palette/style vocabulary.
-- **Auth state** — `useQuery({ queryKey: meQueryKey })` against
-  `/api/v1/me`. The `/_app` layout's `beforeLoad` calls
-  `queryClient.ensureQueryData` on that key and redirects to `/login`
-  when `null`; login/logout mutate the cache directly and navigate.
+- **Auth state** — `useApiQuery(meQuery)` against `/api/v1/me`. The
+  `/_app` layout's `beforeLoad` calls `queryClient.ensureQueryData` with
+  the same spec and redirects to `/login` when `null`; login/logout mutate
+  the cache directly and navigate. The current user and the app config
+  share one policy (`SESSION_STALE_TIME`), because most screens read both
+  and one refetching while the other holds is the drift the specs close.
 
 ### 5.4 Component library
 
@@ -721,6 +733,15 @@ tokens + `.chip` / `.cover` / `.t-*` utility layer defined in
   predicate-builder dialog for smart shelves. Wrapped in a shadcn
   `Dialog` with `Select`/`Input` predicate rows and editorial `Button`
   variants.
+- [`ConfirmPhraseDialog.tsx`](../ui/src/components/ConfirmPhraseDialog.tsx) —
+  the type-to-confirm gate for destructive actions. Callers give it the
+  phrase to type, the consequence copy, a confirm action and an optional
+  slot for switches that ride along (the S3 purge toggle on library
+  deletion). The match rule — trim both sides, case- and
+  interior-whitespace-sensitive, an empty phrase matching nothing — is
+  stated once here, not per dialog. Used by library deletion, book
+  deletion and the BookDrop wipe; ADR-0014 and ADR-0025 §4 both mandate
+  the gate.
 - [`EpubReader.tsx`](../ui/src/components/EpubReader.tsx) +
   [`PdfReader.tsx`](../ui/src/components/PdfReader.tsx) — imperative
   reader surfaces; see §5.6.

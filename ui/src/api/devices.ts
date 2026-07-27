@@ -1,5 +1,6 @@
 import { api } from "./client"
 import { defineMutation } from "./mutation"
+import { defineQuery } from "./query"
 
 // Kinds the server ships with drivers for. Keep in sync with
 // internal/model/device.go — the Settings UI picks its "Add device" list
@@ -21,6 +22,11 @@ export async function fetchDevices(): Promise<Array<Device>> {
 }
 
 export const devicesQueryKey = ["devices"] as const
+
+export const devicesQuery = defineQuery({
+  key: devicesQueryKey,
+  fn: fetchDevices,
+})
 
 // Pairs a new device. For reMarkable Paper Pro, `params` carries the
 // 8-character code users see at https://my.remarkable.com/device/desktop/connect.

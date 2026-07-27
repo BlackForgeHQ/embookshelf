@@ -1,6 +1,7 @@
 import { api } from "./client"
 import { oidcConfigQueryKey } from "./auth"
 import { defineMutation } from "./mutation"
+import { defineQuery } from "./query"
 
 // ForwardAuthHeaders mirrors repo.ForwardAuthHeaders. Operator points
 // each field at whatever the upstream proxy emits (Authelia
@@ -23,6 +24,11 @@ export type ForwardAuthSettings = {
 }
 
 export const forwardAuthSettingsQueryKey = ["forward-auth-settings"] as const
+
+export const forwardAuthSettingsQuery = defineQuery({
+  key: forwardAuthSettingsQueryKey,
+  fn: fetchForwardAuthSettings,
+})
 
 export async function fetchForwardAuthSettings(): Promise<ForwardAuthSettings> {
   return api<ForwardAuthSettings>("/api/v1/settings/forward-auth")

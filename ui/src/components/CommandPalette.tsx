@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 
-import { searchQueryKey, searchSuggest } from "@/api/search"
+import { useApiQuery } from "@/api/query"
+import { searchQuery } from "@/api/search"
 import { Icon } from "@/components/Icon"
 import {
   CommandDialog,
@@ -31,11 +31,8 @@ export function CommandPalette({ open, onOpenChange }: Props) {
   const debounced = useDebounce(input, DEBOUNCE_MS)
   const enabled = debounced.trim().length >= MIN_QUERY_LENGTH
 
-  const query = useQuery({
-    queryKey: searchQueryKey(debounced, 8),
-    queryFn: () => searchSuggest(debounced, 8),
+  const query = useApiQuery(searchQuery(debounced, 8), {
     enabled: open && enabled,
-    staleTime: 30_000,
   })
 
   function close() {

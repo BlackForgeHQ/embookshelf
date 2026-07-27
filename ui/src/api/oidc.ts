@@ -1,6 +1,7 @@
 import { api } from "./client"
 import { oidcConfigQueryKey } from "./auth"
 import { defineMutation } from "./mutation"
+import { defineQuery } from "./query"
 
 export type ProviderSlug = "google" | "github" | "generic"
 
@@ -71,12 +72,23 @@ export const saveOidcAdminSettings = defineMutation({
   invalidates: [oidcAdminSettingsQueryKey, oidcConfigQueryKey],
 })
 
-export async function testOidcProvider(
-  slug: ProviderSlug,
-  body: Record<string, unknown>
-): Promise<OidcTestResult> {
-  return api<OidcTestResult>(`/api/v1/settings/oidc/test/${slug}`, {
-    method: "POST",
-    body: JSON.stringify(body),
+export const oidcAdminSettingsQuery = defineQuery({
+  key: oidcAdminSettingsQueryKey,
+  fn: fetchOidcAdminSettings,
+})
+
+// A probe against one provider's issuer. Declared like every other write
+// even though it changes nothing — `invalidates: []` is the statement
+// that it changes nothing, and it keeps the endpoint in the same
+// vocabulary as its neighbours. The panel runs it through
+// `useConnectionTest`, which reports the verdict inline instead of
+// toasting it.
+export const testOidcProvider = (slug: ProviderSlug) =>
+  defineMutation({
+    fn: (body: Record<string, unknown>): Promise<OidcTestResult> =>
+      api<OidcTestResult>(`/api/v1/settings/oidc/test/${slug}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    invalidates: [],
   })
-}

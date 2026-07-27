@@ -1,9 +1,9 @@
 // ui/src/routes/_app.book.$id_.edit.tsx
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQueryClient } from "@tanstack/react-query"
 import {
-  Link,
   createFileRoute,
+  Link,
   useBlocker,
   useNavigate,
 } from "@tanstack/react-router"
@@ -11,8 +11,9 @@ import type { ReactNode } from "react"
 
 import type { LockField } from "@/api/books"
 import type { FormState } from "@/lib/book-form"
-import { bookQueryKey, fetchBook, patchBook } from "@/api/books"
+import { bookQuery, bookQueryKey, patchBook } from "@/api/books"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
 import {
   blankForm,
   bookToForm,
@@ -59,10 +60,7 @@ function MetadataEditor() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
-  const book = useQuery({
-    queryKey: bookQueryKey(id),
-    queryFn: () => fetchBook(id),
-  })
+  const book = useApiQuery(bookQuery(id))
 
   const [form, setForm] = useState<FormState>(blankForm())
   const baselineRef = useRef<FormState>(blankForm())

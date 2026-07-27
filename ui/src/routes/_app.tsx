@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
-import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
+import { createFileRoute, Outlet, redirect } from "@tanstack/react-router"
 
-import { fetchMe, meQueryKey } from "@/api/auth"
+import { meQuery } from "@/api/auth"
 import { useRealtime } from "@/api/realtime"
-import { fetchInstanceSummary, instanceSummaryQueryKey } from "@/api/settings"
+import { instanceSummaryQuery } from "@/api/settings"
+import { apiQueryOptions, useApiQuery } from "@/api/query"
 import { CommandPalette } from "@/components/CommandPalette"
 import { AppSidebar } from "@/components/Sidebar"
 import { ShelfDraftProvider } from "@/components/ShelfDraftProvider"
@@ -22,11 +22,9 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 // QueryClient so sibling routes reuse it without refetching.
 export const Route = createFileRoute("/_app")({
   beforeLoad: async ({ context, location }) => {
-    const me = await context.queryClient.ensureQueryData({
-      queryKey: meQueryKey,
-      queryFn: fetchMe,
-      staleTime: 60_000,
-    })
+    const me = await context.queryClient.ensureQueryData(
+      apiQueryOptions(meQuery)
+    )
     if (!me) {
       throw redirect({
         to: "/login",
@@ -84,13 +82,9 @@ function AppLayout() {
 
 function StatusBar() {
   // Counts come from /api/v1/instance alongside version+mode; the endpoint
-  // is cheap (single COUNT(*) per library) so a 5-minute staleTime keeps
-  // the bar fresh without polling.
-  const instance = useQuery({
-    queryKey: instanceSummaryQueryKey,
-    queryFn: fetchInstanceSummary,
-    staleTime: 5 * 60_000,
-  })
+  // is cheap (single COUNT(*) per library), and its spec says how long the
+  // answer keeps.
+  const instance = useApiQuery(instanceSummaryQuery)
 
   const version = instance.data?.version ?? "…"
   const libCount = instance.data?.libraries

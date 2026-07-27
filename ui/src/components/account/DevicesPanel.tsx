@@ -1,25 +1,21 @@
 import { useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 
 import type { Device, DeviceKind } from "@/api/devices"
 import {
-  DEVICE_KIND_LABELS,
   deleteDevice,
-  devicesQueryKey,
-  fetchDevices,
+  DEVICE_KIND_LABELS,
+  devicesQuery,
   pairDevice,
 } from "@/api/devices"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
 import { Icon } from "@/components/Icon"
 import { Card, Field } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
 export function DevicesPanel() {
-  const devices = useQuery({
-    queryKey: devicesQueryKey,
-    queryFn: fetchDevices,
-  })
+  const devices = useApiQuery(devicesQuery)
 
   const [adding, setAdding] = useState<DeviceKind | null>(null)
 

@@ -1,6 +1,7 @@
 import { api } from "./client"
 import { librariesQueryKey } from "./books"
 import { defineMutation } from "./mutation"
+import { INSTANCE_STALE_TIME, SESSION_STALE_TIME, defineQuery } from "./query"
 import type { AuthUser } from "./auth"
 import type { Library } from "./books"
 
@@ -32,6 +33,11 @@ export type CreateLibraryInput = {
 }
 
 export const settingsLibrariesQueryKey = ["settings", "libraries"] as const
+
+export const settingsLibrariesQuery = defineQuery({
+  key: settingsLibrariesQueryKey,
+  fn: fetchSettingsLibraries,
+})
 
 export const createLibrary = defineMutation({
   fn: async (input: CreateLibraryInput): Promise<SettingsLibrary> => {
@@ -85,6 +91,16 @@ export async function fetchAppConfig(): Promise<AppConfig> {
 }
 
 export const appConfigQueryKey = ["app", "config"] as const
+
+// What this instance allows. Session-scoped like the current user, and
+// deliberately the same policy: the two are read together on most screens,
+// and one refetching while the other holds is the drift that made a book
+// page ask the server who you were every time it mounted.
+export const appConfigQuery = defineQuery({
+  key: appConfigQueryKey,
+  fn: fetchAppConfig,
+  staleTime: SESSION_STALE_TIME,
+})
 
 // --- Instance info ---------------------------------------------------------
 
@@ -144,6 +160,12 @@ export async function fetchInstanceInfo(): Promise<InstanceInfo> {
 
 export const instanceInfoQueryKey = ["settings", "instance"] as const
 
+export const instanceInfoQuery = defineQuery({
+  key: instanceInfoQueryKey,
+  fn: fetchInstanceInfo,
+  staleTime: INSTANCE_STALE_TIME,
+})
+
 // --- Metadata providers (admin) --------------------------------------------
 
 export async function fetchProviderSettings(): Promise<Array<ProviderInfo>> {
@@ -154,6 +176,11 @@ export async function fetchProviderSettings(): Promise<Array<ProviderInfo>> {
 }
 
 export const providerSettingsQueryKey = ["settings", "providers"] as const
+
+export const providerSettingsQuery = defineQuery({
+  key: providerSettingsQueryKey,
+  fn: fetchProviderSettings,
+})
 
 export const updateProviderSetting = defineMutation({
   fn: async (args: {
@@ -186,6 +213,11 @@ export async function fetchMetadataSettings(): Promise<MetadataSettings> {
 
 export const metadataSettingsQueryKey = ["settings", "metadata"] as const
 
+export const metadataSettingsQuery = defineQuery({
+  key: metadataSettingsQueryKey,
+  fn: fetchMetadataSettings,
+})
+
 export const updateMetadataSettings = defineMutation({
   fn: (body: MetadataSettings): Promise<MetadataSettings> =>
     api<MetadataSettings>("/api/v1/settings/metadata", {
@@ -210,6 +242,14 @@ export async function fetchInstanceSummary(): Promise<InstanceSummary> {
 
 export const instanceSummaryQueryKey = ["instance", "summary"] as const
 
+// The status-bar counts. Cheap, cosmetic, and mounted for the whole
+// session — a five-minute answer is plenty.
+export const instanceSummaryQuery = defineQuery({
+  key: instanceSummaryQueryKey,
+  fn: fetchInstanceSummary,
+  staleTime: INSTANCE_STALE_TIME,
+})
+
 // --- Users (admin) ---------------------------------------------------------
 
 export async function fetchSettingsUsers(): Promise<Array<AuthUser>> {
@@ -220,6 +260,11 @@ export async function fetchSettingsUsers(): Promise<Array<AuthUser>> {
 }
 
 export const settingsUsersQueryKey = ["settings", "users"] as const
+
+export const settingsUsersQuery = defineQuery({
+  key: settingsUsersQueryKey,
+  fn: fetchSettingsUsers,
+})
 
 export const createSettingsUser = defineMutation({
   fn: async (body: {

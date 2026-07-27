@@ -7,8 +7,7 @@ import type {
   ProviderSlug,
 } from "@/api/oidc"
 import {
-  fetchOidcAdminSettings,
-  oidcAdminSettingsQueryKey,
+  oidcAdminSettingsQuery,
   saveOidcAdminSettings,
   testOidcProvider,
 } from "@/api/oidc"
@@ -64,8 +63,8 @@ export function OidcPanel() {
   // could not tell an untouched field from an erased one; the module
   // makes that distinction part of the secret itself.
   const draft = useSettingsDraft({
-    queryKey: oidcAdminSettingsQueryKey,
-    queryFn: fetchOidcAdminSettings,
+    queryKey: oidcAdminSettingsQuery.key,
+    queryFn: oidcAdminSettingsQuery.fn,
     initial: emptyForm,
     save: saveOidcAdminSettings,
     successToast: "OIDC settings saved.",
@@ -270,9 +269,7 @@ function withSecret<TValue extends { clientSecretSet: boolean }>(
 // in each panel.
 function useOidcTest(slug: ProviderSlug) {
   return useConnectionTest({
-    test: {
-      fn: (body: Record<string, unknown>) => testOidcProvider(slug, body),
-    },
+    test: testOidcProvider(slug),
     read: (res: OidcTestResult) => ({
       ok: res.success,
       message: res.success

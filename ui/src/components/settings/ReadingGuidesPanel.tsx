@@ -1,16 +1,13 @@
-import { useQuery } from "@tanstack/react-query"
-
 import type { ReadingGuideSettings } from "@/api/guides"
 import {
-  fetchGuideEstimate,
-  fetchReadingGuideSettings,
-  guideEstimateQueryKey,
-  readingGuideSettingsQueryKey,
+  guideEstimateQuery,
+  readingGuideSettingsQuery,
   saveReadingGuideSettings,
   startGuideRun,
   testReadingGuide,
 } from "@/api/guides"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
 import { useConnectionTest } from "@/hooks/useConnectionTest"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
 import {
@@ -81,8 +78,8 @@ const PRESETS: ReadonlyArray<{
 
 export function ReadingGuidesPanel() {
   const draft = useSettingsDraft({
-    queryKey: readingGuideSettingsQueryKey,
-    queryFn: fetchReadingGuideSettings,
+    queryKey: readingGuideSettingsQuery.key,
+    queryFn: readingGuideSettingsQuery.fn,
     initial: emptyForm,
     save: saveReadingGuideSettings,
     successToast: "Reading guide settings saved.",
@@ -251,9 +248,7 @@ export function ReadingGuidesPanel() {
 // §4: cost follows visibly from an explicit action, and a number nobody
 // sees until the bill arrives does not qualify.
 function GuideRunCard() {
-  const estimate = useQuery({
-    queryKey: guideEstimateQueryKey,
-    queryFn: fetchGuideEstimate,
+  const estimate = useApiQuery(guideEstimateQuery, {
     // Poll while books still need a guide. Coverage is two counts on a
     // query that already runs, so this is cheap; it stops on its own once
     // nothing is outstanding rather than polling an idle instance forever.

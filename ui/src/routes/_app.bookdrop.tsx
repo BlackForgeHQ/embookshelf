@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 
@@ -14,15 +14,16 @@ import {
   approveBookDrop,
   bookdropCoverUrl,
   bookdropFileUrl,
+  bookdropQuery,
   bookdropQueryKey,
-  fetchBookDrop,
   putBookDropCover,
   rejectBookDrop,
   uploadBookDrop,
 } from "@/api/bookdrop"
 import { useApiMutation } from "@/api/mutation"
 import { renderPdfPageOneJpeg } from "@/lib/pdfCover"
-import { fetchLibraries, librariesQueryKey } from "@/api/books"
+import { librariesQuery } from "@/api/books"
+import { useApiQuery } from "@/api/query"
 import { Icon } from "@/components/Icon"
 import { TopBar } from "@/components/TopBar"
 import { Button } from "@/components/ui/button"
@@ -51,14 +52,8 @@ function BookDrop() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
-  const queue = useQuery({
-    queryKey: bookdropQueryKey,
-    queryFn: fetchBookDrop,
-  })
-  const libraries = useQuery({
-    queryKey: librariesQueryKey,
-    queryFn: fetchLibraries,
-  })
+  const queue = useApiQuery(bookdropQuery)
+  const libraries = useApiQuery(librariesQuery)
 
   const active = useMemo(
     () =>

@@ -1,15 +1,13 @@
 import { useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 
 import type { AudiobookEngine, AudiobookSettings } from "@/api/audiobooks"
 import {
-  audiobookSettingsQueryKey,
-  audiobookVoicesQueryKey,
-  fetchAudiobookSettings,
-  fetchAudiobookVoices,
+  audiobookSettingsQuery,
+  audiobookVoicesQuery,
   saveAudiobookSettings,
   testAudiobook,
 } from "@/api/audiobooks"
+import { useApiQuery } from "@/api/query"
 import type { SecretField } from "@/hooks/useSettingsDraft"
 import { useConnectionTest } from "@/hooks/useConnectionTest"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
@@ -48,8 +46,8 @@ export function AudiobooksPanel() {
   // its own record of typed keys, and no longer decides what an empty one
   // means — `secrets.value` answers both.
   const draft = useSettingsDraft({
-    queryKey: audiobookSettingsQueryKey,
-    queryFn: fetchAudiobookSettings,
+    queryKey: audiobookSettingsQuery.key,
+    queryFn: audiobookSettingsQuery.fn,
     initial: emptyForm,
     save: saveAudiobookSettings,
     successToast: "Audiobook settings saved.",
@@ -272,13 +270,9 @@ function EngineCard({
 // ids are account-specific and hundreds long respectively.
 function VoicePicker({ engineLabel }: { engineLabel: string }) {
   const [open, setOpen] = useState(false)
-  const voices = useQuery({
-    queryKey: audiobookVoicesQueryKey,
-    queryFn: fetchAudiobookVoices,
-    // Only on request: this is a live call to the engine, and it is
-    // useless until a key is actually saved.
-    enabled: open,
-  })
+  // Only on request: this is a live call to the engine, and it is useless
+  // until a key is actually saved.
+  const voices = useApiQuery(audiobookVoicesQuery, { enabled: open })
 
   return (
     <Card className="mt-6">

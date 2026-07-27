@@ -1,4 +1,5 @@
 import { api } from "./client"
+import { defineQuery } from "./query"
 
 // Mirrors internal/handler/reading_stats.go readingStatsDTO.
 export type ReadingStats = {
@@ -23,3 +24,9 @@ export async function fetchReadingStats(days?: number): Promise<ReadingStats> {
 // invalidate reading stats in one call.
 export const readingStatsQueryKey = (days?: number) =>
   days ? (["stats", "reading", days] as const) : (["stats", "reading"] as const)
+
+export const readingStatsQuery = (days?: number) =>
+  defineQuery({
+    key: readingStatsQueryKey(days),
+    fn: () => fetchReadingStats(days),
+  })

@@ -1,6 +1,7 @@
 import { api } from "./client"
 import { bookQueryKey } from "./books"
 import { defineMutation } from "./mutation"
+import { defineQuery } from "./query"
 
 // Mirrors internal/handler/audiobook.go audiobookDTO.
 //
@@ -149,6 +150,31 @@ export const saveAudiobookSettings = defineMutation({
 export type AudiobookVoice = { id: string; label: string }
 
 export const audiobookVoicesQueryKey = ["audiobook-voices"] as const
+
+export const audiobookSettingsQuery = defineQuery({
+  key: audiobookSettingsQueryKey,
+  fn: fetchAudiobookSettings,
+})
+
+export const audiobookVoicesQuery = defineQuery({
+  key: audiobookVoicesQueryKey,
+  fn: fetchAudiobookVoices,
+})
+
+export const bookAudiobookQuery = (id: string) =>
+  defineQuery({
+    key: bookAudiobookQueryKey(id),
+    fn: () => fetchBookAudiobook(id),
+  })
+
+// Estimating extracts the whole book, which is not work to do on every
+// page view — the call site enables it only once the reader has asked.
+export const audiobookEstimateQuery = (id: string) =>
+  defineQuery({
+    key: ["audiobook-estimate", id] as const,
+    fn: () => fetchAudiobookEstimate(id),
+    staleTime: 60_000,
+  })
 
 export async function fetchAudiobookVoices(): Promise<Array<AudiobookVoice>> {
   const res = await api<{ voices: Array<AudiobookVoice> }>(
