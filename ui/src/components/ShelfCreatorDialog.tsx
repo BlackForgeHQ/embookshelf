@@ -47,7 +47,9 @@ export function ShelfCreatorDialog({
     if (open) return
     // Reset form on close — legitimate use of setState-in-effect
     // (external "prop" state → local state synchronisation).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // Deliberate: setState inside an effect, syncing React state from an
+    // external source. Was suppressed via react-hooks/set-state-in-effect;
+    // Biome has no equivalent rule yet, so there is nothing to suppress.
     setName("")
     setAccent("accent")
     setIcon("library")

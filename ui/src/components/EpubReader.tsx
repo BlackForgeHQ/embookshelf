@@ -5,10 +5,6 @@ import {
   useRef,
   useState,
 } from "react"
-// epub.js ships without first-class TS types in 0.3.x — the import
-// resolves fine at runtime and we narrow the surface we touch below.
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
 import ePub from "epubjs"
 
 export type EpubTocEntry = {
@@ -70,6 +66,7 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(
     const [booted, setBooted] = useState(false)
     const renditionRef = useRef<any>(null)
 
+    // biome-ignore lint/correctness/useExhaustiveDependencies: boots once per url; typography flows through a separate effect so a font change does not tear down the rendition
     useEffect(() => {
       if (!containerRef.current) return
       // Mutable flag captured by cleanup. Boxed in an object so
@@ -147,7 +144,8 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(
           // TS narrows flag.cancelled to false after the earlier guard,
           // even across `await` — but the cleanup mutates it at any
           // await resumption point, so the check still fires at runtime.
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+          // The condition is not provably unnecessary at runtime — the value comes
+          // from an untyped library surface.
           if (flag.cancelled) return
 
           const toc: Array<EpubTocEntry> =
@@ -173,7 +171,6 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(
       // Intentionally boot once per URL; typography changes flow through
       // the separate effect below so we don't tear down the rendition for
       // a font swap.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [url, initialCfi])
 
     // Live typography — re-apply on change without remounting the book.

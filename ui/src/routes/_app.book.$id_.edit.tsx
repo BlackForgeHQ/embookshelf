@@ -81,7 +81,9 @@ function MetadataEditor() {
   useEffect(() => {
     if (book.data && !hydrated) {
       const seeded = bookToForm(book.data)
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      // Deliberate: setState inside an effect, syncing React state from an
+      // external source. Was suppressed via react-hooks/set-state-in-effect;
+      // Biome has no equivalent rule yet, so there is nothing to suppress.
       setForm(seeded)
       baselineRef.current = seeded
       setHydrated(true)
@@ -89,7 +91,8 @@ function MetadataEditor() {
   }, [book.data, hydrated])
 
   const dirtyCount = useMemo(
-    // eslint-disable-next-line react-hooks/refs
+    // Deliberate ref access. Was suppressed via react-hooks/refs; Biome has
+    // no equivalent rule yet, so there is nothing to suppress.
     () => dirtyFieldCount(form, baselineRef.current),
     [form]
   )

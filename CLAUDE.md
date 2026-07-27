@@ -10,7 +10,7 @@ make build            # ui-build + go build → ./tmp/embookshelf
 make test             # go test ./...
 make ci-local         # all CI checks in parallel
 make go-lint          # golangci-lint v2.11.4
-make ui-lint          # ESLint (cd ui && bun run lint)
+make ui-lint          # Biome lint (cd ui && bun run lint)
 make ui-typecheck     # tsc --noEmit
 make ui-test          # vitest run
 make migrate          # apply migrations

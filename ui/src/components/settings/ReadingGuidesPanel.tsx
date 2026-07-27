@@ -80,7 +80,9 @@ export function ReadingGuidesPanel({ isAdmin }: { isAdmin: boolean }) {
 
   useEffect(() => {
     if (settings.data) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      // Deliberate: setState inside an effect, syncing React state from an
+      // external source. Was suppressed via react-hooks/set-state-in-effect;
+      // Biome has no equivalent rule yet, so there is nothing to suppress.
       setForm(settings.data)
       setKeyDraft("")
     }

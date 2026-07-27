@@ -526,7 +526,7 @@ function ReaderShell({ book }: { book: BookDetail }) {
               url={`/api/v1/books/${book.id}/file`}
               initialCfi={resumeCfi}
               highlights={epubHighlights}
-              onReady={({ toc: t }) => setToc(t.map(flatten).flat())}
+              onReady={({ toc: t }) => setToc(t.flatMap(flatten))}
               onProgress={onEpubProgress}
               onSelect={(sel) => setPendingSelection(sel)}
             />

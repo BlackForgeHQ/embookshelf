@@ -55,6 +55,7 @@ export const PdfReader = forwardRef<PdfReaderHandle, Props>(
     const [currentPage, setCurrentPage] = useState(initialPage ?? 1)
     const initialScrollDone = useRef(false)
 
+    // biome-ignore lint/correctness/useExhaustiveDependencies: boots the document once per url; including the render callbacks would destroy and reload the PDF on every parent render
     useEffect(() => {
       // Explicit `: boolean` widens the type so the linter doesn't
       // narrow to literal-false — the cleanup closure mutates it.
@@ -86,7 +87,6 @@ export const PdfReader = forwardRef<PdfReaderHandle, Props>(
         cancelled = true
         void loaded?.loadingTask.destroy()
       }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [url])
 
     // Jump to initialPage once the container is mounted and doc is ready.

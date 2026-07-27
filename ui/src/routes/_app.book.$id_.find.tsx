@@ -52,7 +52,9 @@ function FindMetadata() {
   // sync on first hydration — the intended use of setState-in-effect.
   useEffect(() => {
     if (book.data && !hydrated) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      // Deliberate: setState inside an effect, syncing React state from an
+      // external source. Was suppressed via react-hooks/set-state-in-effect;
+      // Biome has no equivalent rule yet, so there is nothing to suppress.
       setSearchTitle(book.data.title)
       setSearchAuthor(book.data.author)
       setSearchIsbn(book.data.isbn ?? "")
@@ -133,12 +135,12 @@ function FindMetadata() {
   // Auto-start the first search once the book and inputs hydrate.
   // The autoStartedRef latch prevents re-firing if hydrated ever flips
   // back-and-forth (it doesn't, but the ref makes the intent explicit).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: auto-starts the search exactly once after hydration, guarded by a ref
   useEffect(() => {
     if (hydrated && !autoStartedRef.current) {
       autoStartedRef.current = true
       startSearch()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated])
 
   const coverMut = useApiMutation(applyCoverFromUrl, {

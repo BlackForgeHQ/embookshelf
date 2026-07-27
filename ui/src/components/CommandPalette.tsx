@@ -67,7 +67,9 @@ export function CommandPalette({ open, onOpenChange }: Props) {
     if (!enabled || !data) return
     const b = data.books[0]
     if (b) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      // Deliberate: setState inside an effect, syncing React state from an
+      // external source. Was suppressed via react-hooks/set-state-in-effect;
+      // Biome has no equivalent rule yet, so there is nothing to suppress.
       setSelected(`book ${b.id} ${b.title} ${b.author}`)
       return
     }

@@ -54,7 +54,9 @@ export function EmailPanel({ isAdmin }: { isAdmin: boolean }) {
   // accidentally clobbering a value the server never sent us.
   useEffect(() => {
     if (settings.data) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      // Deliberate: setState inside an effect, syncing React state from an
+      // external source. Was suppressed via react-hooks/set-state-in-effect;
+      // Biome has no equivalent rule yet, so there is nothing to suppress.
       setForm({ ...settings.data, smtp: { ...settings.data.smtp, password: "" } })
       setPwDraft("")
     }

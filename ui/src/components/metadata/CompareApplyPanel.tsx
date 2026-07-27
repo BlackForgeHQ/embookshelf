@@ -178,10 +178,12 @@ export function CompareApplyPanel({
   // intentionally exclude `book` from the deps — a refetch (SSE
   // invalidation, etc.) creates a new `book` reference but the user's
   // in-progress checkbox state must survive across those refetches.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: rebuilds the diff when a new match arrives; book changes reach it through that same match
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // Deliberate: setState inside an effect, syncing React state from an
+    // external source. Was suppressed via react-hooks/set-state-in-effect;
+    // Biome has no equivalent rule yet, so there is nothing to suppress.
     setRows(buildDiffRows(book, match))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [match])
 
   const applyMut = useApiMutation(applyEnrichmentMatch, {

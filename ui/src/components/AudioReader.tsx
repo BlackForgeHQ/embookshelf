@@ -81,6 +81,7 @@ export const AudioReader = forwardRef<AudioReaderHandle, Props>(
     const onPlayingChangeRef = useRef(onPlayingChange)
     onPlayingChangeRef.current = onPlayingChange
 
+    // biome-ignore lint/correctness/useExhaustiveDependencies: the handle closes over refs rather than values, so rebuilding it on every dep change would churn the identity the parent holds
     useImperativeHandle(
       ref,
       () => ({
@@ -114,7 +115,6 @@ export const AudioReader = forwardRef<AudioReaderHandle, Props>(
           a.playbackRate = rate
         },
       }),
-      // eslint-disable-next-line react-hooks/exhaustive-deps
       [duration]
     )
 

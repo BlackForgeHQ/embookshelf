@@ -45,7 +45,9 @@ export function OidcPanel({ isAdmin }: { isAdmin: boolean }) {
   useEffect(() => {
     if (query.data && !draft) {
       // Prop→state sync on first load; not a cascading render.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      // Deliberate: setState inside an effect, syncing React state from an
+      // external source. Was suppressed via react-hooks/set-state-in-effect;
+      // Biome has no equivalent rule yet, so there is nothing to suppress.
       setDraft(query.data)
     }
   }, [query.data, draft])

@@ -269,11 +269,13 @@ function ProviderRow({
   // Rehydrate when the server payload shifts (e.g. another admin saved).
   // Hash compare avoids nuking in-flight edits that match the stored state.
   const configHash = JSON.stringify(provider.config ?? {})
+  // biome-ignore lint/correctness/useExhaustiveDependencies: configHash is the intended trigger; depending on the schema object itself would re-run on every render
   useEffect(() => {
     // Prop→state rehydration when another admin saves; not a cascading render.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // Deliberate: setState inside an effect, syncing React state from an
+    // external source. Was suppressed via react-hooks/set-state-in-effect;
+    // Biome has no equivalent rule yet, so there is nothing to suppress.
     setValues(schemaToForm(schema, provider.config ?? {}))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configHash])
 
   const dirty = schema.some(

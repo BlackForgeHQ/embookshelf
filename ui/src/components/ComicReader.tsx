@@ -51,6 +51,7 @@ export const ComicReader = forwardRef<ComicReaderHandle, Props>(
     onProgressRef.current = onProgress
 
     // One-shot load of the page count.
+    // biome-ignore lint/correctness/useExhaustiveDependencies: loads the archive once per book; the page state it writes must not re-trigger it
     useEffect(() => {
       let cancelled = false as boolean
       ;(async () => {
@@ -66,11 +67,11 @@ export const ComicReader = forwardRef<ComicReaderHandle, Props>(
       return () => {
         cancelled = true
       }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [bookId])
 
     // Clamp page once total is known. Initial page may have been beyond
     // a now-shorter archive (rare, but possible after a re-import).
+    // biome-ignore lint/correctness/useExhaustiveDependencies: emits progress for the latest page without re-subscribing every time the page moves
     useEffect(() => {
       if (total === null) return
       const clamped = Math.max(0, Math.min(total - 1, page))
@@ -83,7 +84,6 @@ export const ComicReader = forwardRef<ComicReaderHandle, Props>(
           percent: total <= 1 ? 1 : clamped / (total - 1),
         })
       }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [total])
 
     const setAndEmit = (next: number) => {
@@ -99,6 +99,7 @@ export const ComicReader = forwardRef<ComicReaderHandle, Props>(
       })
     }
 
+    // biome-ignore lint/correctness/useExhaustiveDependencies: the handle closes over the current page deliberately; adding the emit callback would rebuild it on every page turn
     useImperativeHandle(
       ref,
       () => ({
@@ -106,12 +107,12 @@ export const ComicReader = forwardRef<ComicReaderHandle, Props>(
         prev: () => setAndEmit(page - 1),
         goTo: (n: number) => setAndEmit(n),
       }),
-      // eslint-disable-next-line react-hooks/exhaustive-deps
       [page, total]
     )
 
     // Keyboard navigation: arrows, space, page-up/down. Bound on window so
     // it works even when the focus is on a button in the chrome.
+    // biome-ignore lint/correctness/useExhaustiveDependencies: rebinds the key handler only when the page bounds change; adding the emit callback would re-attach the listener on every keypress
     useEffect(() => {
       const onKey = (e: KeyboardEvent) => {
         if (e.target instanceof HTMLInputElement) return
@@ -139,7 +140,6 @@ export const ComicReader = forwardRef<ComicReaderHandle, Props>(
       }
       window.addEventListener("keydown", onKey)
       return () => window.removeEventListener("keydown", onKey)
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [page, total])
 
     // Preload neighbors. Browsers cache the GET responses, so subsequent

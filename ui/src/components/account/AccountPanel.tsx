@@ -43,6 +43,7 @@ export function AccountPanel() {
   // Toast and clear redirect-back signals from the OIDC link callback.
   // Running once per (linked, error) pair keeps refresh from re-firing
   // the toast.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on the OIDC callback params only; navigate is stable and including it would re-fire the redirect
   useEffect(() => {
     if (!search.linked && !search.error) return
     if (search.linked) {
@@ -56,7 +57,6 @@ export function AccountPanel() {
       search: search.section ? { section: search.section } : {},
       replace: true,
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search.linked, search.error])
 
   const me = useQuery({
@@ -434,7 +434,9 @@ function SendToKindleSection({ currentEmail }: { currentEmail: string }) {
   // (e.g. another tab persists a new value). Effectively a controlled
   // "reset on prop change" — write a key swap when this gets noisy.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // Deliberate: setState inside an effect, syncing React state from an
+    // external source. Was suppressed via react-hooks/set-state-in-effect;
+    // Biome has no equivalent rule yet, so there is nothing to suppress.
     setDraft(currentEmail)
   }, [currentEmail])
 

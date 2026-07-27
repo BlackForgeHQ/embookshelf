@@ -220,7 +220,7 @@ go-lint: ## Run golangci-lint (pinned version fetched via `go run` if not on PAT
 	fi
 
 .PHONY: ui-lint
-ui-lint: ## Lint the UI (ESLint)
+ui-lint: ## Lint the UI (Biome)
 	cd ui && bun run lint
 
 .PHONY: ui-typecheck
