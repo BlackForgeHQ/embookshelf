@@ -70,8 +70,32 @@ func (h *Handler) BookAudiobookGet(c *gin.Context) {
 		writeError(c, http.StatusNotFound, "this book has no generated narration")
 		return
 	}
+	// Taken once, before any other work. requireUserID writes its own 401
+	// and returns "", so deriving the id part-way through — as this used
+	// to, inline in the book lookup below — put a response on the wire
+	// that the handler then followed with a 200.
+	userID := requireUserID(c)
+	if userID == "" {
+		return
+	}
+	ctx := c.Request.Context()
 	id := c.Param("id")
-	run, err := h.audiobookRepo.GetByBookID(c.Request.Context(), id)
+
+	// The book is resolved first: this is a book-scoped route, and every
+	// answer below is about that book. The error used to go to the blank
+	// identifier, which handed the DTO a zero-value Book — so a book we
+	// could not load was reported as never stale rather than as missing.
+	book, err := h.lib.GetBook(ctx, userID, id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			writeError(c, http.StatusNotFound, "book not found")
+			return
+		}
+		writeServerError(c, "audiobook book lookup", err)
+		return
+	}
+
+	run, err := h.audiobookRepo.GetByBookID(ctx, id)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "this book has no generated narration")
@@ -80,14 +104,11 @@ func (h *Handler) BookAudiobookGet(c *gin.Context) {
 		writeServerError(c, "audiobook get", err)
 		return
 	}
-	cov, err := h.audiobookRepo.Coverage(c.Request.Context(), id)
+	cov, err := h.audiobookRepo.Coverage(ctx, id)
 	if err != nil {
 		writeServerError(c, "audiobook coverage", err)
 		return
 	}
-	// Best effort: a book we cannot load costs the staleness badge, not
-	// the status the caller actually asked for.
-	book, _ := h.lib.GetBook(c.Request.Context(), requireUserID(c), id)
 	c.JSON(http.StatusOK, h.audiobookDTO(c, book, run, cov))
 }
 
@@ -185,6 +206,13 @@ func (h *Handler) BookAudiobookDelete(c *gin.Context) {
 		writeError(c, http.StatusNotFound, "this book has no generated narration")
 		return
 	}
+	// Same reason as BookAudiobookGet: the id was derived inline in the
+	// book lookup below, where a 401 from requireUserID would have been
+	// followed by this handler's own 204.
+	userID := requireUserID(c)
+	if userID == "" {
+		return
+	}
 	ctx := c.Request.Context()
 	id := c.Param("id")
 
@@ -208,7 +236,7 @@ func (h *Handler) BookAudiobookDelete(c *gin.Context) {
 		location string
 	)
 	if run.FileID != nil && h.libStore != nil {
-		if book, berr := h.lib.GetBook(ctx, requireUserID(c), id); berr == nil {
+		if book, berr := h.lib.GetBook(ctx, userID, id); berr == nil {
 			if lh, herr := h.libStore.For(ctx, book.LibraryID); herr == nil {
 				handle = lh
 				location = narrationLocation(ctx, handle, id, run)
