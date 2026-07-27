@@ -298,10 +298,11 @@ func cleanStaging(dataPath, bookID string) {
 // back to does not park gigabytes forever.
 const StaleStagingTTL = 7 * 24 * time.Hour
 
-// SweepAudiobookStaging removes staging for runs left terminal-but-not-done
-// for longer than StaleStagingTTL.
+// SweepAudiobookStaging removes staging for runs whose staged segments
+// have been dead weight for longer than StaleStagingTTL. Which runs
+// those are is ListStaleStaging's judgement, not this loop's.
 func SweepAudiobookStaging(ctx context.Context, deps AudiobookDeps) (int, error) {
-	ids, err := deps.Audiobooks.ListStaleTerminal(ctx, int(StaleStagingTTL/(24*time.Hour)))
+	ids, err := deps.Audiobooks.ListStaleStaging(ctx, int(StaleStagingTTL/(24*time.Hour)))
 	if err != nil {
 		return 0, err
 	}

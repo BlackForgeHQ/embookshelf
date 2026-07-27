@@ -569,6 +569,8 @@ One audiobook per Book (`book_audiobooks.book_id` is the PK, mirroring `book_rea
 
 State lives in `book_audiobooks` (state, engine, voice, model, `source_content_hash`, `file_id`, error). Provenance is the `file_id` pointer, not a flag on `files`. Staleness is `source_content_hash` against the book's current EPUB hash — surfaced as "generated from an older copy", never auto-invalidated.
 
+The `state` column is a **summary, not the fact**. [[Coverage]] over the Segment rows is the fact, and where the two disagree Coverage wins: `model.NextForRun(state, coverage)` derives the run's next transition from the counts, consulting `state` only for the three conclusions that outrank them (ready has its file, canceled was stopped on purpose, failed needs no second failure). `AudiobookService.Status` applies that rule on every read, so a run whose segments all landed is finalizable on sight however it is labelled — see [[Reconcile-on-read]].
+
 Generation is **not** one of `MetadataWriter`'s triggers: no Sidecar, no in-file embed, no folder rename. In particular `books.narrator` is never written — that column means "what this file's tags said"; the synthesized voice lives on `book_audiobooks.voice`.
 
 ### Segment
@@ -581,6 +583,14 @@ Chapter granularity is load-bearing twice over: a book-length job would outlive 
 
 **Distinct** from `model.Chapter` — a Chapter is the playback view written to `books.chapters` at finalize; several Segments may share one.
 
+A Segment's result is never written on its own. `BookAudiobookRepo.RecordSegment` writes the row, reads [[Coverage]], and moves the run in one transaction, locking the run row `FOR UPDATE` first so concurrent workers cannot each read a snapshot missing the other's write and both conclude the run is unfinished. It replaced a write-then-advance pair whose two halves a killed process could separate.
+
+### Coverage
+
+`model.AudiobookCoverage{Total, Done, Failed}`; the three counts of an [[Audiobook run]]'s Segments, taken in one query so they cannot be read a moment apart and disagree while segments are landing. Progress is done-over-total on persisted rows rather than job state, which is what survives a reload and a restart on a job measured in tens of minutes (ADR-0028 §7).
+
+It is also the run's **authority on its own lifecycle**, not merely a progress bar: `Complete()` (every Segment landed) and `Settled()` (none still outstanding) are what `NextForRun` decides transitions from, in preference to the `book_audiobooks.state` column. Same shape and same reasoning as the reading-guide run's `CountCoverage`.
+
 ### Alignment map
 
 The `(char_start, char_end) ↔ (start_s, start_s + duration_s)` correspondence between a book's text and its narration, letting one progress value serve both [[Rendition]]s. Not a separate structure — it *is* `book_audiobook_segments`, since embookshelf generated the audio from the text and knows both sides for free.
@@ -591,9 +601,17 @@ Persisted from the first version even though cross-rendition sync itself is defe
 
 `${DATA_PATH}/audiobooks/{book_id}/`; where per-Segment MP3s live until finalize concatenates them. Local filesystem, outside `storage.Storage`, following the `coverstore` precedent for derived bytes — the output is not a library artifact until it is finished.
 
-Finalize joins the frames byte-wise (same engine, voice and settings across a run, so no transcode and no muxer), writes ID3v2 `CTOC`/`CHAP` chapter frames plus standard tags and cover art, hands the single file to `Placer`, and clears staging. `failed` and `canceled` runs are reaped after 7 days by an hourly sweeper, following `LoopMissingPurge` and `LoopOrphanedKeys`.
+Finalize joins the frames byte-wise (same engine, voice and settings across a run, so no transcode and no muxer), writes ID3v2 `CTOC`/`CHAP` chapter frames plus standard tags and cover art, hands the single file to `Placer`, and clears staging.
+
+Reclaim is `BookAudiobookRepo.ListStaleStaging`, swept hourly, following `LoopMissingPurge` and `LoopOrphanedKeys`. It matches any run untouched for 7 days **except** a pending or running one whose Coverage is complete — that run is a single finalize away from a finished book, so reclaiming it would convert something recoverable into audio that has to be bought again. Keyed on the segment rows rather than on the state column, so a run stranded outside `failed`/`canceled` is still reclaimable; the earlier `state IN ('failed','canceled')` predicate left such a run parking gigabytes forever.
 
 MP3 rather than M4B because every engine emits MP3 and none emits M4B; M4B needs AAC, and no usable pure-Go AAC encoder exists. Requiring `ffmpeg` was rejected — it would make the feature silently dark on installs without it, trading the single-binary property for container polish (ADR-0027).
+
+### Reconcile-on-read
+
+Where a stranded [[Audiobook run]] recovers. `AudiobookService.Status` reads the run and its [[Coverage]] and applies `NextForRun` before it answers, so the poll the UI already makes every four seconds is also what re-dispatches a finalize job a crash lost. `Retry` runs the same rule first, ahead of its already-running and nothing-outstanding refusals — both of which used to fire on precisely the stranded run.
+
+Chosen over the two alternatives deliberately. It cannot live in the write alone: `RecordSegment` commits to Postgres and the finalize job goes to River, two systems no transaction spans. And a sweeper would be a second schedule carrying a second copy of the completeness rule, running hourly, for an observation already happening on every page load. Best effort by construction — a queue that is down costs the recovery, not the read.
 
 ---
 

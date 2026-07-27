@@ -36,6 +36,7 @@ type audiobookStore interface {
 	GetByBookID(ctx context.Context, bookID string) (model.Audiobook, error)
 	SetState(ctx context.Context, bookID string, state model.AudiobookState, msg string) error
 	ListUnfinishedSegments(ctx context.Context, bookID string) ([]model.AudiobookSegment, error)
+	Coverage(ctx context.Context, bookID string) (model.AudiobookCoverage, error)
 }
 
 // SegmentDispatcher enqueues one segment job.
@@ -102,6 +103,7 @@ type AudiobookService struct {
 	store    audiobookStore
 	books    bookSourceOpener
 	dispatch SegmentDispatcher
+	finalize FinalizeDispatcher
 	sweep    StagingSweeper
 }
 
@@ -124,6 +126,71 @@ func NewAudiobookService(
 func (s *AudiobookService) WithStagingSweeper(sweep StagingSweeper) *AudiobookService {
 	s.sweep = sweep
 	return s
+}
+
+// WithFinalizeDispatcher wires the enqueue that turns a complete run into
+// a published book. Needed here as well as in the segment worker because
+// this is where a run that lost its finalize job gets it back.
+func (s *AudiobookService) WithFinalizeDispatcher(finalize FinalizeDispatcher) *AudiobookService {
+	s.finalize = finalize
+	return s
+}
+
+// Status reports a run and its Coverage, reconciling the two before it
+// answers.
+//
+// This is where recovery lives, and reconcile-on-read is a deliberate
+// choice over the two alternatives. It cannot live in the write alone:
+// the write commits to Postgres and the finalize job goes to River, two
+// systems no transaction spans, so a crash in between will always be
+// possible. And a sweeper would be a second schedule carrying a second
+// copy of the completeness rule, running hourly, for an observation that
+// is already happening — the status endpoint is polled every four
+// seconds while a run is live (ADR-0028 §7) and hit on every book-detail
+// page load. Putting it here makes recovery a property of the module:
+// every caller that asks how a run is doing gets an answer that is true
+// when it arrives, and there is nothing to remember to schedule.
+//
+// The reconciliation is best effort. A queue that is down costs the
+// recovery, not the read — a status endpoint that 500s because finalize
+// could not be enqueued would hide the very progress it exists to show.
+func (s *AudiobookService) Status(ctx context.Context, bookID string) (model.Audiobook, model.AudiobookCoverage, error) {
+	run, err := s.store.GetByBookID(ctx, bookID)
+	if err != nil {
+		return model.Audiobook{}, model.AudiobookCoverage{}, err
+	}
+	cov, err := s.store.Coverage(ctx, bookID)
+	if err != nil {
+		return model.Audiobook{}, model.AudiobookCoverage{}, err
+	}
+	return s.reconcile(ctx, run, cov), cov, nil
+}
+
+// reconcile applies whatever NextForRun derives, returning the run as it
+// stands afterwards.
+func (s *AudiobookService) reconcile(ctx context.Context, run model.Audiobook, cov model.AudiobookCoverage) model.Audiobook {
+	switch model.NextForRun(run.State, cov) {
+	case model.AudiobookNextFinalize:
+		if err := s.dispatchFinalize(ctx, run.BookID); err != nil {
+			slog.Warn("audiobook: reconcile finalize", "book", run.BookID, "err", err)
+		}
+	case model.AudiobookNextFail:
+		msg := cov.FailureMessage()
+		if err := s.store.SetState(ctx, run.BookID, model.AudiobookFailed, msg); err != nil {
+			slog.Warn("audiobook: reconcile failure", "book", run.BookID, "err", err)
+			return run
+		}
+		run.State, run.Error = model.AudiobookFailed, msg
+	case model.AudiobookNextNothing:
+	}
+	return run
+}
+
+func (s *AudiobookService) dispatchFinalize(ctx context.Context, bookID string) error {
+	if s.finalize == nil {
+		return errors.New("no queue configured for audiobook generation")
+	}
+	return s.finalize(ctx, bookID)
 }
 
 // Narratable reports whether a book's format can be read aloud. Checked
@@ -289,6 +356,18 @@ func (s *AudiobookService) Retry(ctx context.Context, bookID string) error {
 	run, err := s.store.GetByBookID(ctx, bookID)
 	if err != nil {
 		return err
+	}
+	cov, err := s.store.Coverage(ctx, bookID)
+	if err != nil {
+		return err
+	}
+	// Checked before the already-running guard, and before the
+	// nothing-outstanding refusal below, because a stranded run is
+	// precisely a run whose state says running and whose segments say
+	// done. Both of those guards fired on it, which is how the one thing
+	// the user could still press told them there was nothing to do.
+	if model.NextForRun(run.State, cov) == model.AudiobookNextFinalize {
+		return s.dispatchFinalize(ctx, bookID)
 	}
 	if run.State == model.AudiobookRunning {
 		return fmt.Errorf("audiobook for %s is already running", bookID)
