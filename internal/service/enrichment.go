@@ -20,7 +20,6 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/blackforge/embookshelf/internal/crypto"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/provider"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -80,10 +79,11 @@ type EnrichmentService struct {
 	books     bookMetadataStore
 	covers    coverFileStore
 	http      httpDoer
-	// cipher encrypts password-kind config fields (API keys, tokens,
-	// cookies) before they land in provider_settings.config. Falls
-	// back to a Noop in dev so the app still boots without a KEK.
-	cipher crypto.Cipher
+
+	// No Cipher here. This service reads provider_settings but never
+	// writes config, and the rows it reads arrive decrypted from the
+	// repo — the field this struct used to carry was assigned at
+	// construction and never read, a dead ADR-0010 obligation.
 
 	// Result cache keyed by normalized (title|author|isbn). A fresh hit
 	// returns without any upstream calls, which matters for Google Books
@@ -132,11 +132,7 @@ func NewEnrichmentService(
 	settings providerSettingsStore,
 	books bookMetadataStore,
 	covers coverFileStore,
-	cipher crypto.Cipher,
 ) *EnrichmentService {
-	if cipher == nil {
-		cipher = crypto.Noop{}
-	}
 	return &EnrichmentService{
 		providers: providers,
 		settings:  settings,
@@ -146,7 +142,6 @@ func NewEnrichmentService(
 			Timeout:       15 * time.Second,
 			CheckRedirect: coverRedirectPolicy(),
 		},
-		cipher:   cipher,
 		cache:    make(map[string]cacheEntry),
 		cacheTTL: enrichCacheTTL,
 	}

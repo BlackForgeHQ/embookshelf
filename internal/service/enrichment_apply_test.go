@@ -24,7 +24,7 @@ func (p *matchProvider) Search(context.Context, provider.Query) ([]provider.Matc
 
 func applyHarness() (*EnrichmentService, *fakeBookStore) {
 	books := &fakeBookStore{}
-	return NewEnrichmentService(nil, newFakeProviderSettings(), books, &fakeCoverStore{}, nil), books
+	return NewEnrichmentService(nil, newFakeProviderSettings(), books, &fakeCoverStore{}), books
 }
 
 // sole returns the single book handed to the store, failing otherwise.
@@ -226,7 +226,7 @@ func autoEnrichHarness() (*EnrichmentService, *fakeBookStore) {
 		matches: []provider.Match{withConfidence(fullMatch, 95)},
 	}
 	svc := NewEnrichmentService(
-		[]provider.Provider{p}, settings, books, &fakeCoverStore{}, nil,
+		[]provider.Provider{p}, settings, books, &fakeCoverStore{},
 	)
 	return svc, books
 }

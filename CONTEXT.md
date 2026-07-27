@@ -28,7 +28,7 @@ This importer is the only reason two SQLite artifacts survive: the `modernc.org/
 
 Declaring `Secrets` is how a row opts into at-rest encryption — it returns pointers to the secret fields, which the implementation runs through the [[Slot transformer]] on every write and reverses on every read. Callers only ever see plaintext. `AppSettingsRepo` holds the Cipher rather than taking it per call, so a new accessor cannot silently store a secret in plaintext (the gap that left OIDC client secrets unencrypted until the mechanism was unified).
 
-**Distinct** from `provider_settings` — a separate table whose secret keys are declared at runtime by each metadata provider, not by struct fields. It shares the Slot transformer but not `Setting[T]`.
+**Distinct** from `provider_settings` — a separate table whose secret keys are declared at runtime by each metadata provider, not by struct fields. It shares the Slot transformer and the same placement of the obligation (`ProviderSettingsRepo` holds the Cipher too), but not `Setting[T]`.
 
 ---
 
@@ -433,7 +433,7 @@ Existing libraries keep their current shape. Place-time uses the new layout for 
 
 ### EnrichmentService
 
-`service.EnrichmentService`; the fan-out coordinator. Owns `providers []provider.Provider`, the in-process result cache (5min TTL, 512-entry cap), the cover store + book repo handles, and the `Cipher` for password-field secrets. Three external entry points: `Search` (batch fan-out + merge by Confidence), `SearchStream` (SSE-friendly per-provider channel), `LookupByISBN` (priority chain, first non-empty wins).
+`service.EnrichmentService`; the fan-out coordinator. Owns `providers []provider.Provider`, the in-process result cache (5min TTL, 512-entry cap), and the cover store + book repo handles. Carries **no** `Cipher` — it reads `provider_settings` but never writes config, and the rows it reads arrive decrypted from the repo. It held one until #166, assigned at construction and never read: a dead ADR-0010 obligation. Three external entry points: `Search` (batch fan-out + merge by Confidence), `SearchStream` (SSE-friendly per-provider channel), `LookupByISBN` (priority chain, first non-empty wins).
 
 ### Prospective metadata
 
@@ -449,13 +449,15 @@ Candidate matches presented to the user for review before persisting. Streamed o
 
 ### ProviderSettingsService
 
-`service.ProviderSettingsService`; the admin surface over `provider_settings` — which metadata providers are enabled, their config blobs, their ranking, and the health telemetry the Settings panel renders. Also owns `LoadConfigs`, the boot-time push of stored config into the running provider instances, and the schema-driven secret walk that AES-GCM encrypts `password`-kind fields in place (ADR-0010).
+`service.ProviderSettingsService`; the admin surface over `provider_settings` — which metadata providers are enabled, their config blobs, their ranking, and the health telemetry the Settings panel renders. Also owns `LoadConfigs`, the boot-time push of stored config into the running provider instances.
+
+Owns **no** crypto. Config crosses this module as plaintext in both directions; the encrypt/decrypt seam is `ProviderSettingsRepo` (ADR-0010 §4). It held the secret walk until #166, which made encryption a property of this call path rather than of the row — `SetConfig` stored whatever blob it was handed, so a second writer would have stored plaintext with nothing to catch it.
 
 Split out of `EnrichmentService`, which had grown to six unrelated concerns behind one struct. This half was a clean cut: no fan-out or apply path calls it. **Cover intake deliberately stayed behind** — `ApplyMatch` calls `ImportCoverFromURL`, so separating it would have added a dependency without removing coupling (one adapter is a hypothetical seam, not a real one).
 
 ### Provider settings row
 
-`provider_settings(id, enabled, config, priority, last_success_at, last_error_at, last_error)`. One row per Catalog entry. `config` is JSONB; `password`-kind fields (Hardcover token, Amazon cookie) are AES-256-GCM encrypted in place; non-secret fields (region, language, enabled flags) stay plaintext for `psql` legibility (ADR-0010). `priority` is a single nullable int; ranked-first then unranked-in-catalog-order.
+`provider_settings(id, enabled, config, priority, last_success_at, last_error_at, last_error)`. One row per Catalog entry. `config` is JSONB; `password`-kind fields (Hardcover token, Amazon cookie) are AES-256-GCM encrypted in place by `ProviderSettingsRepo`, which holds the Cipher and a `SecretKeyFunc` the way `AppSettingsRepo` holds the Cipher and a Setting's `Secrets`; non-secret fields (region, language, enabled flags) stay plaintext for `psql` legibility (ADR-0010). Every value leaving the repo is plaintext and every value entering it is encrypted, so no accessor can forget — a read that cannot decrypt errors rather than handing back ciphertext. `priority` is a single nullable int; ranked-first then unranked-in-catalog-order.
 
 ### Cipher
 
@@ -467,7 +469,7 @@ Split out of `EnrichmentService`, which had grown to six unrelated concerns behi
 
 ### Configurable / SchemaProvider
 
-Optional interfaces a `Provider` may implement. `Configurable.Configure(rawJSON)` accepts plaintext config from the settings UI; `SchemaProvider.ConfigSchema()` returns `[]ConfigField` describing inputs the admin UI should render (text / password / select / textarea). Password-kind fields drive the per-field encryption walk in `EnrichmentService.transformConfigFields`.
+Optional interfaces a `Provider` may implement. `Configurable.Configure(rawJSON)` accepts plaintext config from the settings UI; `SchemaProvider.ConfigSchema()` returns `[]ConfigField` describing inputs the admin UI should render (text / password / select / textarea). Password-kind is a single declaration driving two things — how the admin UI renders the input, and whether the value is encrypted at rest — so the two cannot drift apart. `provider.SecretKeyLookup` snapshots those keys into the `id → []string` function `ProviderSettingsRepo` uses to find its slots, which is how the repo stays free of the provider catalog.
 
 ### Cover host allow-list
 

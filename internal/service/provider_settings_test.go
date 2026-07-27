@@ -4,12 +4,9 @@ package service
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"strings"
 	"testing"
 
-	"github.com/blackforge/embookshelf/internal/crypto"
 	"github.com/blackforge/embookshelf/internal/provider"
 )
 
@@ -39,107 +36,58 @@ func newSchemaProvider() *schemaProvider {
 	}
 }
 
-func testCipher(t *testing.T) crypto.Cipher {
-	t.Helper()
-	key := make([]byte, 32)
-	for i := range key {
-		key[i] = byte(i)
+// ---------------------------------------------------------------------------
+// This service owns no crypto. Encryption is a property of the row, so it
+// sits on ProviderSettingsRepo (ADR-0010 §4) and is pinned by
+// repo/provider_settings_test.go. What these tests pin is the other half
+// of that split: config crosses this module untransformed in both
+// directions, so there is no second place a secret could be mangled.
+// ---------------------------------------------------------------------------
+
+// SetProviderConfig hands the blob to the store exactly as it arrived.
+// Transforming it here would double-encrypt once the repo does its job.
+func TestSetProviderConfigPassesBlobToStoreUntouched(t *testing.T) {
+	t.Parallel()
+
+	settings := newFakeProviderSettings()
+	svc := NewProviderSettingsService([]provider.Provider{newSchemaProvider()}, settings)
+
+	plain := `{"token":"plaintext-secret","language":"en"}`
+	if err := svc.SetProviderConfig(context.Background(), "hardcover", []byte(plain)); err != nil {
+		t.Fatalf("SetProviderConfig: %v", err)
 	}
-	c, err := crypto.NewAESGCM(base64.StdEncoding.EncodeToString(key))
-	if err != nil {
-		t.Fatalf("NewAESGCM: %v", err)
+	if got := string(settings.configs["hardcover"]); got != plain {
+		t.Errorf("store received %s, want the blob verbatim (%s)", got, plain)
 	}
-	return c
 }
 
-// Password-kind fields are encrypted in place; everything else stays
-// readable so a stored config is still legible in psql (ADR-0010).
-func TestProviderConfigEncryptsOnlyPasswordFields(t *testing.T) {
+// ADR-0010 §4: a metadata provider never carries a Cipher, so the live
+// Configure call must see plaintext on the save path.
+func TestSetProviderConfigConfiguresProviderWithPlaintext(t *testing.T) {
 	t.Parallel()
 
 	p := newSchemaProvider()
-	svc := NewProviderSettingsService([]provider.Provider{p}, newFakeProviderSettings(), testCipher(t))
+	svc := NewProviderSettingsService([]provider.Provider{p}, newFakeProviderSettings())
 
-	plain := []byte(`{"token":"secret-token","language":"en"}`)
-	enc, err := svc.encryptConfigFields(plain, p)
+	err := svc.SetProviderConfig(context.Background(), "hardcover",
+		[]byte(`{"token":"live-token","language":"en"}`))
 	if err != nil {
-		t.Fatalf("encrypt: %v", err)
+		t.Fatalf("SetProviderConfig: %v", err)
 	}
-
-	if strings.Contains(string(enc), "secret-token") {
-		t.Errorf("password field stored in plaintext: %s", enc)
-	}
-	var obj map[string]any
-	if err := json.Unmarshal(enc, &obj); err != nil {
-		t.Fatalf("encrypted blob is not valid JSON: %v", err)
-	}
-	if obj["language"] != "en" {
-		t.Errorf("non-secret field was altered: %v", obj["language"])
-	}
-
-	back, err := svc.decryptConfigFields(enc, p)
-	if err != nil {
-		t.Fatalf("decrypt: %v", err)
-	}
-	var round map[string]any
-	if err := json.Unmarshal(back, &round); err != nil {
-		t.Fatalf("decrypted blob is not valid JSON: %v", err)
-	}
-	if round["token"] != "secret-token" {
-		t.Errorf("round-trip lost the secret: %v", round["token"])
+	if !strings.Contains(string(p.config), "live-token") {
+		t.Errorf("provider received %s, want the plaintext token", p.config)
 	}
 }
 
-// A provider that declares no schema has no secrets to find; the blob
-// must pass through untouched rather than being re-marshalled.
-func TestProviderConfigWithoutSchemaPassesThrough(t *testing.T) {
-	t.Parallel()
-
-	plainProvider := &schemaProvider{name: provider.Source("openlibrary")}
-	svc := NewProviderSettingsService(
-		[]provider.Provider{plainProvider}, newFakeProviderSettings(), testCipher(t))
-
-	in := []byte(`{"anything":"goes"}`)
-	out, err := svc.encryptConfigFields(in, plainProvider)
-	if err != nil {
-		t.Fatalf("encrypt: %v", err)
-	}
-	if string(out) != string(in) {
-		t.Errorf("blob = %s, want it untouched", out)
-	}
-}
-
-func TestProviderConfigEmptyBlobIsNoop(t *testing.T) {
-	t.Parallel()
-
-	p := newSchemaProvider()
-	svc := NewProviderSettingsService([]provider.Provider{p}, newFakeProviderSettings(), testCipher(t))
-
-	for _, in := range [][]byte{nil, []byte(""), []byte("{}"), []byte("  {}  ")} {
-		out, err := svc.encryptConfigFields(in, p)
-		if err != nil {
-			t.Fatalf("encrypt(%q): %v", in, err)
-		}
-		if string(out) != string(in) {
-			t.Errorf("encrypt(%q) = %q, want unchanged", in, out)
-		}
-	}
-}
-
-// LoadConfigs hands each provider its stored config with secrets already
-// decrypted — a provider must never receive ciphertext.
-func TestLoadConfigsHandsProvidersPlaintext(t *testing.T) {
+// LoadConfigs is the boot path: whatever the store returns reaches
+// Configure unchanged, because the store already decrypted it.
+func TestLoadConfigsHandsProvidersWhatTheStoreReturns(t *testing.T) {
 	t.Parallel()
 
 	p := newSchemaProvider()
 	settings := newFakeProviderSettings()
-	svc := NewProviderSettingsService([]provider.Provider{p}, settings, testCipher(t))
-
-	stored, err := svc.encryptConfigFields([]byte(`{"token":"live-token","language":"fr"}`), p)
-	if err != nil {
-		t.Fatalf("seed encrypt: %v", err)
-	}
-	settings.configs["hardcover"] = stored
+	settings.configs["hardcover"] = []byte(`{"token":"live-token","language":"fr"}`)
+	svc := NewProviderSettingsService([]provider.Provider{p}, settings)
 
 	if err := svc.LoadConfigs(context.Background()); err != nil {
 		t.Fatalf("LoadConfigs: %v", err)
@@ -152,11 +100,45 @@ func TestLoadConfigsHandsProvidersPlaintext(t *testing.T) {
 	}
 }
 
+// ListProviders surfaces the store's config as-is for the admin UI. A
+// blob that still held ciphertext here would land in a password input and
+// be re-encrypted by the next Save.
+func TestListProvidersSurfacesStoredConfig(t *testing.T) {
+	t.Parallel()
+
+	p := newSchemaProvider()
+	settings := newFakeProviderSettings()
+	settings.enabled["hardcover"] = true
+	settings.configs["hardcover"] = []byte(`{"token":"live-token"}`)
+	svc := NewProviderSettingsService([]provider.Provider{p}, settings)
+
+	infos, err := svc.ListProviders(context.Background())
+	if err != nil {
+		t.Fatalf("ListProviders: %v", err)
+	}
+	var found bool
+	for _, info := range infos {
+		if info.ID != provider.Source("hardcover") {
+			continue
+		}
+		found = true
+		if !strings.Contains(string(info.Config), "live-token") {
+			t.Errorf("config = %s, want the plaintext token", info.Config)
+		}
+		if len(info.Schema) != 2 {
+			t.Errorf("schema = %v, want the provider's two fields", info.Schema)
+		}
+	}
+	if !found {
+		t.Fatal("hardcover missing from the catalog join")
+	}
+}
+
 func TestSetProviderEnabledRejectsUnknownID(t *testing.T) {
 	t.Parallel()
 
 	svc := NewProviderSettingsService(
-		[]provider.Provider{newSchemaProvider()}, newFakeProviderSettings(), testCipher(t))
+		[]provider.Provider{newSchemaProvider()}, newFakeProviderSettings())
 
 	if err := svc.SetProviderEnabled(context.Background(), "not-a-provider", true); err == nil {
 		t.Fatal("want ErrUnknownProvider for an id the binary doesn't ship")
@@ -167,36 +149,12 @@ func TestSetProviderEnabledTogglesKnownID(t *testing.T) {
 	t.Parallel()
 
 	settings := newFakeProviderSettings()
-	svc := NewProviderSettingsService(
-		[]provider.Provider{newSchemaProvider()}, settings, testCipher(t))
+	svc := NewProviderSettingsService([]provider.Provider{newSchemaProvider()}, settings)
 
 	if err := svc.SetProviderEnabled(context.Background(), "hardcover", true); err != nil {
 		t.Fatalf("SetProviderEnabled: %v", err)
 	}
 	if !settings.enabled["hardcover"] {
 		t.Error("provider was not enabled in the store")
-	}
-}
-
-// Config written through the service must land encrypted, not raw.
-func TestSetProviderConfigStoresEncrypted(t *testing.T) {
-	t.Parallel()
-
-	settings := newFakeProviderSettings()
-	svc := NewProviderSettingsService(
-		[]provider.Provider{newSchemaProvider()}, settings, testCipher(t))
-
-	err := svc.SetProviderConfig(context.Background(), "hardcover",
-		[]byte(`{"token":"plaintext-secret","language":"en"}`))
-	if err != nil {
-		t.Fatalf("SetProviderConfig: %v", err)
-	}
-
-	stored := string(settings.configs["hardcover"])
-	if strings.Contains(stored, "plaintext-secret") {
-		t.Errorf("secret reached the store in plaintext: %s", stored)
-	}
-	if !strings.Contains(stored, "en") {
-		t.Errorf("non-secret field lost: %s", stored)
 	}
 }

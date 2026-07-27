@@ -54,7 +54,6 @@ func TestSettingsProvidersListReturnsCatalog(t *testing.T) {
 			&fakeProviderSettings{rows: []repo.ProviderSetting{
 				{ID: "google_books", Enabled: true},
 			}},
-			nil,
 		),
 	}
 
