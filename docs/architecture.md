@@ -721,6 +721,15 @@ tokens + `.chip` / `.cover` / `.t-*` utility layer defined in
   predicate-builder dialog for smart shelves. Wrapped in a shadcn
   `Dialog` with `Select`/`Input` predicate rows and editorial `Button`
   variants.
+- [`ConfirmPhraseDialog.tsx`](../ui/src/components/ConfirmPhraseDialog.tsx) —
+  the type-to-confirm gate for destructive actions. Callers give it the
+  phrase to type, the consequence copy, a confirm action and an optional
+  slot for switches that ride along (the S3 purge toggle on library
+  deletion). The match rule — trim both sides, case- and
+  interior-whitespace-sensitive, an empty phrase matching nothing — is
+  stated once here, not per dialog. Used by library deletion, book
+  deletion and the BookDrop wipe; ADR-0014 and ADR-0025 §4 both mandate
+  the gate.
 - [`EpubReader.tsx`](../ui/src/components/EpubReader.tsx) +
   [`PdfReader.tsx`](../ui/src/components/PdfReader.tsx) — imperative
   reader surfaces; see §5.6.

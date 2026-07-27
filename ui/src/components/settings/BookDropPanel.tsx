@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 
@@ -12,6 +12,7 @@ import {
   wipeBookDropFiles,
 } from "@/api/bookdrop"
 import { useApiMutation } from "@/api/mutation"
+import { ConfirmPhraseDialog } from "@/components/ConfirmPhraseDialog"
 import {
   Card,
   DefRow,
@@ -27,8 +28,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 
 export function BookDropPanel() {
   const queue = useQuery({
@@ -272,10 +271,13 @@ function ClearProcessedDialog({
   )
 }
 
-// WipeFilesDialog mirrors DeleteLibraryDialog: type the literal token to
-// enable confirm. The token is `bookdrop` rather than e.g. `WIPE` so the
-// admin must register what they're wiping, not just type a generic
-// destructive verb. See ADR-0014.
+// The token is `bookdrop` rather than e.g. `WIPE` so the admin must
+// register what they're wiping, not just type a generic destructive verb.
+// See ADR-0014.
+const WIPE_PHRASE = "bookdrop"
+
+// WipeFilesDialog is the ConfirmPhraseDialog with the wipe's consequences
+// filled in; the gate itself lives in that module.
 function WipeFilesDialog({
   open,
   onOpenChange,
@@ -293,71 +295,32 @@ function WipeFilesDialog({
   busy: boolean
   onConfirm: () => void
 }) {
-  const [confirmInput, setConfirmInput] = useState("")
-
-  useEffect(() => {
-    if (!open) {
-      // Deliberate: setState inside an effect, syncing React state from an
-      // external source. Was suppressed via react-hooks/set-state-in-effect;
-      // Biome has no equivalent rule yet, so there is nothing to suppress.
-      setConfirmInput("")
-    }
-  }, [open])
-
-  const matches = confirmInput.trim() === "bookdrop"
-
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[440px]">
-        <DialogHeader>
-          <DialogTitle>Wipe BookDrop files?</DialogTitle>
-          <DialogDescription>
-            Permanently deletes <strong>{count}</strong>{" "}
-            {count === 1 ? "file" : "files"} ({formatBytes(bytes)}) under{" "}
-            <span className="mono">BOOKDROP_PATH</span>. Files from other users'
-            pending uploads are included.
-            {skippedInFlight > 0 && (
-              <>
-                {" "}
-                <strong>{skippedInFlight}</strong> in-flight{" "}
-                {skippedInFlight === 1 ? "file" : "files"} will be left alone.
-              </>
-            )}
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="wipe-confirm">
-            Type <span className="mono">bookdrop</span> to confirm.
-          </Label>
-          <Input
-            id="wipe-confirm"
-            value={confirmInput}
-            onChange={(e) => setConfirmInput(e.target.value)}
-            autoFocus
-          />
-        </div>
-
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => onOpenChange(false)}
-            disabled={busy}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={onConfirm}
-            disabled={!matches || busy}
-          >
-            {busy ? "Wiping…" : "Wipe files"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <ConfirmPhraseDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Wipe BookDrop files?"
+      description={
+        <>
+          Permanently deletes <strong>{count}</strong>{" "}
+          {count === 1 ? "file" : "files"} ({formatBytes(bytes)}) under{" "}
+          <span className="mono">BOOKDROP_PATH</span>. Files from other users'
+          pending uploads are included.
+          {skippedInFlight > 0 && (
+            <>
+              {" "}
+              <strong>{skippedInFlight}</strong> in-flight{" "}
+              {skippedInFlight === 1 ? "file" : "files"} will be left alone.
+            </>
+          )}
+        </>
+      }
+      phrase={WIPE_PHRASE}
+      confirmLabel="Wipe files"
+      busyLabel="Wiping…"
+      busy={busy}
+      onConfirm={onConfirm}
+    />
   )
 }
 

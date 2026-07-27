@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import type { ReactNode } from "react"
@@ -34,19 +34,10 @@ import {
   sendBookToDevice,
 } from "@/api/devices"
 import { locatorLabel } from "@/lib/locator"
+import { ConfirmPhraseDialog } from "@/components/ConfirmPhraseDialog"
 import { Cover, StarRating } from "@/components/Cover"
 import { Icon } from "@/components/Icon"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { AudiobookPanel } from "@/components/book/AudiobookPanel"
 import { ReadingGuidePanel } from "@/components/book/ReadingGuidePanel"
@@ -1166,7 +1157,8 @@ function SendToDeviceButton({ bookId }: { bookId: string }) {
 // DeleteBookDialog confirms a destructive book teardown. The "type the
 // title to confirm" gate matches the weight of the operation — the DB
 // row, its cover, the source file on disk, and every reader's notes,
-// progress, and shelf placements go with it.
+// progress, and shelf placements go with it. The gate itself is
+// ConfirmPhraseDialog's; this is only the consequence copy.
 function DeleteBookDialog({
   open,
   onOpenChange,
@@ -1180,63 +1172,27 @@ function DeleteBookDialog({
   busy: boolean
   onConfirm: () => void
 }) {
-  const [confirmInput, setConfirmInput] = useState("")
-
-  useEffect(() => {
-    // Reset the typed confirmation on close — prop→state sync, not
-    // cascading renders; this is the intended use of setState-in-effect.
-    // Deliberate: setState inside an effect, syncing React state from an
-    // external source. Was suppressed via react-hooks/set-state-in-effect;
-    // Biome has no equivalent rule yet, so there is nothing to suppress.
-    if (!open) setConfirmInput("")
-  }, [open])
-
-  const matches = confirmInput.trim() === title.trim()
-
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[440px]">
-        <DialogHeader>
-          <DialogTitle>Delete book</DialogTitle>
-          <DialogDescription>
-            Permanently remove <strong>{title}</strong> — the DB row, its cover,
-            its source file on disk, and every reader&apos;s progress, notes,
-            and shelf placements for it. This cannot be undone.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="delete-book-confirm">
-            Type the title to confirm.
-          </Label>
-          <Input
-            id="delete-book-confirm"
-            value={confirmInput}
-            onChange={(e) => setConfirmInput(e.target.value)}
-            placeholder={title}
-            autoFocus
-          />
-        </div>
-
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => onOpenChange(false)}
-            disabled={busy}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={onConfirm}
-            disabled={!matches || busy}
-          >
-            {busy ? "Deleting…" : "Delete book"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <ConfirmPhraseDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Delete book"
+      description={
+        <>
+          Permanently remove <strong>{title}</strong> — the DB row, its cover,
+          its source file on disk, and every reader&apos;s progress, notes, and
+          shelf placements for it. This cannot be undone.
+        </>
+      }
+      phrase={title}
+      // A title is long enough that echoing it in the instruction reads
+      // worse than pointing at it; the placeholder carries the text.
+      prompt="Type the title to confirm."
+      placeholder={title}
+      confirmLabel="Delete book"
+      busyLabel="Deleting…"
+      busy={busy}
+      onConfirm={onConfirm}
+    />
   )
 }
