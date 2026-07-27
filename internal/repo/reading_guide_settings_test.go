@@ -35,6 +35,26 @@ func TestReadingGuideConfigDefaults(t *testing.T) {
 	if cfg.TextCap <= 0 {
 		t.Errorf("TextCap = %d, want a positive default", cfg.TextCap)
 	}
+	if cfg.AuthStyle != "bearer" {
+		t.Errorf("AuthStyle = %q, want bearer by default", cfg.AuthStyle)
+	}
+}
+
+// TestReadingGuideAuthStyleFallsBackToBearer — anything unrecognised must
+// not silently produce a request with no credential header at all.
+func TestReadingGuideAuthStyleFallsBackToBearer(t *testing.T) {
+	r, ctx := guideSettingsRepo(t)
+
+	if err := r.SetReadingGuide(ctx, repo.ReadingGuideConfig{AuthStyle: "nonsense"}); err != nil {
+		t.Fatalf("SetReadingGuide: %v", err)
+	}
+	got, err := r.GetReadingGuide(ctx)
+	if err != nil {
+		t.Fatalf("GetReadingGuide: %v", err)
+	}
+	if got.AuthStyle != "bearer" {
+		t.Fatalf("AuthStyle = %q, want bearer", got.AuthStyle)
+	}
 }
 
 func TestReadingGuideConfigRoundTrip(t *testing.T) {
@@ -45,6 +65,7 @@ func TestReadingGuideConfigRoundTrip(t *testing.T) {
 		BaseURL:         "https://api.openai.com/v1",
 		Model:           "gpt-4o-mini",
 		APIKey:          "sk-secret-value",
+		AuthStyle:       "api-key",
 		Language:        "ru",
 		TextCap:         96_000,
 		RequestJSONMode: true,

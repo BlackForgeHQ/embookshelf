@@ -34,14 +34,31 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+// AuthStyle selects how the credential is presented.
+type AuthStyle string
+
+const (
+	// AuthBearer sends "Authorization: Bearer <key>". OpenAI, OpenRouter,
+	// vLLM and llama.cpp all want this; it is the default.
+	AuthBearer AuthStyle = "bearer"
+	// AuthAPIKeyHeader sends "api-key: <key>", which is how Azure OpenAI
+	// has historically authenticated. Azure AI Foundry exposes an
+	// OpenAI-compatible surface at /openai/v1, but a bogus key returns
+	// the same 401 for either header, so which one a given resource
+	// accepts cannot be probed — hence a setting rather than a guess.
+	AuthAPIKeyHeader AuthStyle = "api-key"
+)
+
 // Config describes the endpoint. APIKey is optional — a local server
-// usually wants none, and sending an empty bearer token makes some of
-// them reject the request outright.
+// usually wants none, and sending an empty credential makes some of them
+// reject the request outright.
 type Config struct {
 	BaseURL string
 	Model   string
 	APIKey  string
-	Timeout time.Duration
+	// AuthStyle defaults to AuthBearer when empty.
+	AuthStyle AuthStyle
+	Timeout   time.Duration
 	// RequestJSONMode sends response_format: json_object. Off by default:
 	// support is uneven across OpenAI-compatible servers, so the prompt
 	// carries the JSON contract and this is a bonus, never a dependency.
@@ -68,6 +85,9 @@ func New(cfg Config) (*Client, error) {
 	cfg.BaseURL = strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = DefaultTimeout
+	}
+	if cfg.AuthStyle == "" {
+		cfg.AuthStyle = AuthBearer
 	}
 	// No retry decorator here, unlike the metadata providers: one
 	// generation can run for minutes, so a blind retry multiplies both
@@ -109,7 +129,11 @@ func (c *Client) Chat(ctx context.Context, msgs []Message) (string, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if key := strings.TrimSpace(c.cfg.APIKey); key != "" {
-		req.Header.Set("Authorization", "Bearer "+key)
+		if c.cfg.AuthStyle == AuthAPIKeyHeader {
+			req.Header.Set("api-key", key)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
 	}
 
 	resp, err := c.http.Do(req)

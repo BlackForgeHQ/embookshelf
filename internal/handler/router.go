@@ -177,6 +177,7 @@ func (h *Handler) Engine() *gin.Engine {
 
 				admin.GET("/reading-guide", h.SettingsReadingGuideGet)
 				admin.PUT("/reading-guide", h.SettingsReadingGuideUpdate)
+				admin.POST("/reading-guide/test", h.SettingsReadingGuideTest)
 				admin.GET("/reading-guide/estimate", h.SettingsReadingGuideEstimate)
 				admin.POST("/reading-guide/run", h.SettingsReadingGuideRun)
 				admin.GET("/providers", h.SettingsProvidersList)

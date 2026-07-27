@@ -69,6 +69,8 @@ export type ReadingGuideSettings = {
   model: string
   apiKey?: string
   keySet: boolean
+  // "bearer" for OpenAI/Ollama/OpenRouter, "api-key" for Azure.
+  authStyle: "bearer" | "api-key"
   language: string
   textCap: number
   requestJsonMode: boolean
@@ -103,6 +105,19 @@ export const guideEstimateQueryKey = ["reading-guide-estimate"] as const
 export async function fetchGuideEstimate(): Promise<GuideRunEstimate> {
   return api<GuideRunEstimate>("/api/v1/settings/reading-guide/estimate")
 }
+
+// testReadingGuide sends one trivial prompt and reports what came back.
+// Always resolves 200 — a refused endpoint is a result to display, not a
+// request that failed.
+export type GuideTestResult = { ok: boolean; reply?: string; error?: string }
+
+export const testReadingGuide = defineMutation({
+  fn: (): Promise<GuideTestResult> =>
+    api<GuideTestResult>("/api/v1/settings/reading-guide/test", {
+      method: "POST",
+    }),
+  invalidates: [],
+})
 
 export const startGuideRun = defineMutation({
   fn: (): Promise<{ queued: number }> =>

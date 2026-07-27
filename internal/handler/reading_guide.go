@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/blackforge/embookshelf/internal/llm"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/task"
@@ -148,6 +149,7 @@ type readingGuideSettingsDTO struct {
 	Model           string `json:"model"`
 	APIKey          string `json:"apiKey,omitempty"`
 	KeySet          bool   `json:"keySet"`
+	AuthStyle       string `json:"authStyle"`
 	Language        string `json:"language"`
 	TextCap         int64  `json:"textCap"`
 	RequestJSONMode bool   `json:"requestJsonMode"`
@@ -161,7 +163,7 @@ func (h *Handler) SettingsReadingGuideGet(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, readingGuideSettingsDTO{
 		Enabled: cfg.Enabled, BaseURL: cfg.BaseURL, Model: cfg.Model,
-		KeySet: cfg.APIKey != "", Language: cfg.Language,
+		KeySet: cfg.APIKey != "", AuthStyle: cfg.AuthStyle, Language: cfg.Language,
 		TextCap: cfg.TextCap, RequestJSONMode: cfg.RequestJSONMode,
 	})
 }
@@ -183,6 +185,7 @@ func (h *Handler) SettingsReadingGuideUpdate(c *gin.Context) {
 		BaseURL:         body.BaseURL,
 		Model:           body.Model,
 		APIKey:          current.APIKey,
+		AuthStyle:       body.AuthStyle,
 		Language:        body.Language,
 		TextCap:         body.TextCap,
 		RequestJSONMode: body.RequestJSONMode,
@@ -250,4 +253,52 @@ func (h *Handler) SettingsReadingGuideRun(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"queued": queued})
+}
+
+// SettingsReadingGuideTest sends one trivial prompt to the configured
+// endpoint and reports what came back.
+//
+// Worth its own endpoint rather than "generate one and see": the failures
+// that matter here — wrong base URL, wrong auth header, unknown model,
+// no quota — are all indistinguishable from "the guide looks bad" if the
+// only way to exercise them is a real generation. Mirrors the email
+// subsystem's test-send.
+func (h *Handler) SettingsReadingGuideTest(c *gin.Context) {
+	ctx := c.Request.Context()
+	cfg, err := h.appSettings.GetReadingGuide(ctx)
+	if err != nil {
+		writeServerError(c, "read guide settings", err)
+		return
+	}
+	if strings.TrimSpace(cfg.BaseURL) == "" || strings.TrimSpace(cfg.Model) == "" {
+		writeError(c, http.StatusBadRequest, "set a base URL and model first")
+		return
+	}
+
+	client, err := llm.New(llm.Config{
+		BaseURL:         cfg.BaseURL,
+		Model:           cfg.Model,
+		APIKey:          cfg.APIKey,
+		AuthStyle:       llm.AuthStyle(cfg.AuthStyle),
+		RequestJSONMode: cfg.RequestJSONMode,
+		// Short: a test that hangs for five minutes teaches nothing.
+		Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	reply, err := client.Chat(ctx, []llm.Message{
+		{Role: llm.RoleUser, Content: "Reply with the single word: ready"},
+	})
+	if err != nil {
+		// The endpoint's own message is the useful part — Azure names a
+		// bad key or a wrong region explicitly — so pass it through
+		// rather than flattening it to "test failed".
+		slog.Warn("reading guide test", "err", err)
+		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "reply": strings.TrimSpace(reply)})
 }

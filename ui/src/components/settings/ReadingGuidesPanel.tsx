@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 
-import type { ReadingGuideSettings } from "@/api/guides"
+import type { GuideTestResult, ReadingGuideSettings } from "@/api/guides"
 import {
   fetchGuideEstimate,
   fetchReadingGuideSettings,
@@ -9,9 +9,10 @@ import {
   readingGuideSettingsQueryKey,
   saveReadingGuideSettings,
   startGuideRun,
+  testReadingGuide,
 } from "@/api/guides"
 import { useApiMutation } from "@/api/mutation"
-import { AdminGate, Card, Field, Toggle } from "@/components/SettingsShared"
+import { AdminGate, Card, Field, Select, Toggle } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -25,6 +26,7 @@ const emptyForm: ReadingGuideSettings = {
   baseUrl: "",
   model: "",
   keySet: false,
+  authStyle: "bearer",
   language: "en",
   textCap: DEFAULT_TEXT_CAP,
   requestJsonMode: false,
@@ -33,10 +35,34 @@ const emptyForm: ReadingGuideSettings = {
 // Presets for the endpoints people actually use. Ollama first: it is the
 // reason the adapter is OpenAI-compatible rather than vendor-specific —
 // pointing at localhost keeps every book on the operator's own machine.
-const PRESETS: ReadonlyArray<{ label: string; baseUrl: string; hint: string }> = [
-  { label: "Ollama (local)", baseUrl: "http://localhost:11434/v1", hint: "nothing leaves this machine" },
-  { label: "OpenAI", baseUrl: "https://api.openai.com/v1", hint: "needs an API key" },
-  { label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", hint: "needs an API key" },
+const PRESETS: ReadonlyArray<{
+  label: string
+  baseUrl: string
+  authStyle: ReadingGuideSettings["authStyle"]
+  hint: string
+}> = [
+  {
+    label: "Ollama (local)",
+    baseUrl: "http://localhost:11434/v1",
+    authStyle: "bearer",
+    hint: "nothing leaves this machine",
+  },
+  { label: "OpenAI", baseUrl: "https://api.openai.com/v1", authStyle: "bearer", hint: "needs an API key" },
+  {
+    label: "OpenRouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    authStyle: "bearer",
+    hint: "needs an API key",
+  },
+  {
+    // Azure exposes the OpenAI-compatible surface at /openai/v1 — note
+    // the base stops there, the client appends /chat/completions. A
+    // resource URL ending in /responses is the other API and will 404.
+    label: "Azure AI",
+    baseUrl: "https://<resource>.services.ai.azure.com/openai/v1",
+    authStyle: "api-key",
+    hint: "uses an api-key header, not a bearer token",
+  },
 ]
 
 export function ReadingGuidesPanel({ isAdmin }: { isAdmin: boolean }) {
@@ -59,6 +85,13 @@ export function ReadingGuidesPanel({ isAdmin }: { isAdmin: boolean }) {
       setKeyDraft("")
     }
   }, [settings.data])
+
+  const [testResult, setTestResult] = useState<GuideTestResult | null>(null)
+  // Save first: the test reads the stored row, so an unsaved key would
+  // test the previous configuration and report a confusing result.
+  const testMut = useApiMutation(testReadingGuide, {
+    onSuccess: (res: GuideTestResult) => setTestResult(res),
+  })
 
   const saveMut = useApiMutation(saveReadingGuideSettings, {
     successToast: "Reading guide settings saved.",
@@ -96,7 +129,10 @@ export function ReadingGuidesPanel({ isAdmin }: { isAdmin: boolean }) {
               key={p.label}
               variant="outline"
               size="sm"
-              onClick={() => update("baseUrl", p.baseUrl)}
+              onClick={() => {
+                update("baseUrl", p.baseUrl)
+                update("authStyle", p.authStyle)
+              }}
               title={p.hint}
             >
               {p.label}
@@ -126,6 +162,16 @@ export function ReadingGuidesPanel({ isAdmin }: { isAdmin: boolean }) {
             placeholder={form.keySet ? "••••••••" : "not needed for a local model"}
           />
         </Field>
+        <Field label="Credential header">
+          <Select
+            value={form.authStyle}
+            onChange={(v) => update("authStyle", v as ReadingGuideSettings["authStyle"])}
+            options={[
+              { value: "bearer", label: "Authorization: Bearer (OpenAI, Ollama, OpenRouter)" },
+              { value: "api-key", label: "api-key (Azure)" },
+            ]}
+          />
+        </Field>
         <Field label="Guide language">
           <Input
             value={form.language}
@@ -153,7 +199,7 @@ export function ReadingGuidesPanel({ isAdmin }: { isAdmin: boolean }) {
           onChange={(v) => update("requestJsonMode", v)}
         />
 
-        <div className="mt-4">
+        <div className="mt-4 flex items-center gap-2">
           <Button
             disabled={saveMut.isPending}
             onClick={() =>
@@ -162,7 +208,25 @@ export function ReadingGuidesPanel({ isAdmin }: { isAdmin: boolean }) {
           >
             Save
           </Button>
+          <Button
+            variant="outline"
+            disabled={testMut.isPending}
+            onClick={() => testMut.mutate(undefined)}
+            title="Sends one short prompt to the endpoint"
+          >
+            {testMut.isPending ? "Testing…" : "Test connection"}
+          </Button>
         </div>
+        {testResult && (
+          <p
+            className="t-small mt-2"
+            style={{ color: testResult.ok ? undefined : "var(--color-warn, #92400e)" }}
+          >
+            {testResult.ok
+              ? `Endpoint replied: "${testResult.reply}"`
+              : `Endpoint refused: ${testResult.error}`}
+          </p>
+        )}
       </Card>
 
       {form.enabled && <GuideRunCard />}

@@ -33,6 +33,9 @@ type ReadingGuideConfig struct {
 	BaseURL string `json:"baseUrl"`
 	Model   string `json:"model"`
 	APIKey  string `json:"apiKey,omitempty"`
+	// AuthStyle is "bearer" (default) or "api-key". Azure OpenAI wants
+	// the latter; everything else wants the former.
+	AuthStyle string `json:"authStyle"`
 	// Language every guide is written in, regardless of the book's own.
 	Language string `json:"language"`
 	// TextCap bounds how much book text reaches the model.
@@ -45,8 +48,9 @@ type ReadingGuideConfig struct {
 
 func DefaultReadingGuideConfig() ReadingGuideConfig {
 	return ReadingGuideConfig{
-		Language: "en",
-		TextCap:  DefaultReadingGuideTextCap,
+		AuthStyle: "bearer",
+		Language:  "en",
+		TextCap:   DefaultReadingGuideTextCap,
 	}
 }
 
@@ -59,6 +63,10 @@ var readingGuideSetting = Setting[ReadingGuideConfig]{
 		cfg.BaseURL = strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 		cfg.Model = strings.TrimSpace(cfg.Model)
 		cfg.APIKey = strings.TrimSpace(cfg.APIKey)
+		cfg.AuthStyle = strings.ToLower(strings.TrimSpace(cfg.AuthStyle))
+		if cfg.AuthStyle != "api-key" {
+			cfg.AuthStyle = "bearer"
+		}
 		cfg.Language = strings.ToLower(strings.TrimSpace(cfg.Language))
 		if cfg.Language == "" {
 			cfg.Language = "en"

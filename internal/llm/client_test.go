@@ -314,3 +314,57 @@ func TestNewNormalisesBaseURL(t *testing.T) {
 		t.Fatalf("Chat: %v", err)
 	}
 }
+
+// --- auth styles ---------------------------------------------------------
+
+// Azure AI Foundry exposes an OpenAI-compatible surface at /openai/v1 but
+// has historically authenticated with an `api-key` header rather than a
+// bearer token. Probing a live resource with a bogus key returns the same
+// 401 for both, so which one it accepts cannot be discovered without a
+// real credential — the style is therefore explicit rather than guessed.
+func TestChatUsesAPIKeyHeaderWhenConfigured(t *testing.T) {
+	rec := &recorder{replies: []string{"ok"}}
+	c := testClient(t, rec.server(t), func(cfg *Config) {
+		cfg.APIKey = "azure-secret"
+		cfg.AuthStyle = AuthAPIKeyHeader
+	})
+
+	if _, err := c.Chat(context.Background(), []Message{{Role: RoleUser, Content: "x"}}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if got := rec.headers[0].Get("api-key"); got != "azure-secret" {
+		t.Errorf("api-key = %q, want the key", got)
+	}
+	if got := rec.headers[0].Get("Authorization"); got != "" {
+		t.Errorf("Authorization = %q, want none when using the api-key style", got)
+	}
+}
+
+func TestChatDefaultsToBearer(t *testing.T) {
+	rec := &recorder{replies: []string{"ok"}}
+	c := testClient(t, rec.server(t), func(cfg *Config) { cfg.APIKey = "sk-x" })
+
+	if _, err := c.Chat(context.Background(), []Message{{Role: RoleUser, Content: "x"}}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if got := rec.headers[0].Get("Authorization"); got != "Bearer sk-x" {
+		t.Errorf("Authorization = %q", got)
+	}
+	if got := rec.headers[0].Get("api-key"); got != "" {
+		t.Errorf("api-key = %q, want none by default", got)
+	}
+}
+
+// TestChatSendsNoAuthHeaderWithoutKey holds for either style — a local
+// model needs no credential at all.
+func TestChatSendsNoAuthHeaderWithoutKey(t *testing.T) {
+	rec := &recorder{replies: []string{"ok"}}
+	c := testClient(t, rec.server(t), func(cfg *Config) { cfg.AuthStyle = AuthAPIKeyHeader })
+
+	if _, err := c.Chat(context.Background(), []Message{{Role: RoleUser, Content: "x"}}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if rec.headers[0].Get("api-key") != "" || rec.headers[0].Get("Authorization") != "" {
+		t.Error("sent an auth header with no key configured")
+	}
+}
