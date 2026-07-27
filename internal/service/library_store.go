@@ -120,6 +120,40 @@ func (h *LibraryHandle) OpenBook(ctx context.Context, book model.Book) (io.Reade
 	return file, info.Size(), file, nil
 }
 
+// OpenBookSource is OpenBook for callers that need random access — the
+// EPUB text extractor reads a zip central directory and cannot work from
+// a stream. Resolution is not duplicated: it delegates to OpenBook and
+// adapts, so the "never reach around this with os.Open(book.Path)" rule
+// holds here too.
+//
+// The returned Source must be closed.
+func (h *LibraryHandle) OpenBookSource(ctx context.Context, book model.Book) (storage.Source, error) {
+	r, size, closer, err := h.OpenBook(ctx, book)
+	if err != nil {
+		return nil, err
+	}
+	// Backend path: the Closer is the Source OpenBook opened.
+	if src, ok := closer.(storage.Source); ok {
+		return src, nil
+	}
+	// Local path: *os.File is both ReaderAt and Closer.
+	if ra, ok := r.(io.ReaderAt); ok {
+		return readerAtSource{ReaderAt: ra, size: size, closer: closer}, nil
+	}
+	_ = closer.Close()
+	return nil, errors.New("book bytes are not randomly accessible")
+}
+
+// readerAtSource adapts a ReaderAt plus a size into a storage.Source.
+type readerAtSource struct {
+	io.ReaderAt
+	size   int64
+	closer io.Closer
+}
+
+func (s readerAtSource) Size() int64  { return s.size }
+func (s readerAtSource) Close() error { return s.closer.Close() }
+
 // SidecarKey returns the paired JSON sidecar storage key for a book
 // file's storage key. Delegates to sidecar.KeyFor so the derivation
 // rule lives in one place.
