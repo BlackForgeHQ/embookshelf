@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 
-import type { GuideTestResult, ReadingGuideSettings } from "@/api/guides"
+import type { ReadingGuideSettings } from "@/api/guides"
 import {
   fetchGuideEstimate,
   fetchReadingGuideSettings,
@@ -12,7 +11,17 @@ import {
   testReadingGuide,
 } from "@/api/guides"
 import { useApiMutation } from "@/api/mutation"
-import { Card, Field, Select, Toggle } from "@/components/SettingsShared"
+import { useConnectionTest } from "@/hooks/useConnectionTest"
+import { useSettingsDraft } from "@/hooks/useSettingsDraft"
+import {
+  Card,
+  ConnectionTestReport,
+  Field,
+  PanelHeader,
+  PanelLoading,
+  Select,
+  Toggle,
+} from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -47,7 +56,12 @@ const PRESETS: ReadonlyArray<{
     authStyle: "bearer",
     hint: "nothing leaves this machine",
   },
-  { label: "OpenAI", baseUrl: "https://api.openai.com/v1", authStyle: "bearer", hint: "needs an API key" },
+  {
+    label: "OpenAI",
+    baseUrl: "https://api.openai.com/v1",
+    authStyle: "bearer",
+    hint: "needs an API key",
+  },
   {
     label: "OpenRouter",
     baseUrl: "https://openrouter.ai/api/v1",
@@ -66,53 +80,56 @@ const PRESETS: ReadonlyArray<{
 ]
 
 export function ReadingGuidesPanel() {
-  const settings = useQuery({
+  const draft = useSettingsDraft({
     queryKey: readingGuideSettingsQueryKey,
     queryFn: fetchReadingGuideSettings,
+    initial: emptyForm,
+    save: saveReadingGuideSettings,
+    successToast: "Reading guide settings saved.",
+    toPayload: (form, secrets) => ({
+      ...form,
+      apiKey: secrets.value("apiKey"),
+      keySet: secrets.stillSet("apiKey", form.keySet),
+    }),
   })
 
-  const [form, setForm] = useState<ReadingGuideSettings>(emptyForm)
-  // The key lives outside `form` for the same reason the SMTP password
-  // does: the server never sends it back, so an empty submit must mean
-  // "leave the stored one alone" rather than "clear it".
-  const [keyDraft, setKeyDraft] = useState("")
-
-  useEffect(() => {
-    if (settings.data) {
-      // Deliberate: setState inside an effect, syncing React state from an
-      // external source. Was suppressed via react-hooks/set-state-in-effect;
-      // Biome has no equivalent rule yet, so there is nothing to suppress.
-      setForm(settings.data)
-      setKeyDraft("")
-    }
-  }, [settings.data])
-
-  const [testResult, setTestResult] = useState<GuideTestResult | null>(null)
   // Save first: the test reads the stored row, so an unsaved key would
   // test the previous configuration and report a confusing result.
-  const testMut = useApiMutation(testReadingGuide, {
-    onSuccess: (res: GuideTestResult) => setTestResult(res),
+  const test = useConnectionTest({
+    test: testReadingGuide,
+    read: (res) => ({
+      ok: res.ok,
+      message: res.ok
+        ? `Endpoint replied: "${res.reply}"`
+        : `Endpoint refused: ${res.error}`,
+    }),
   })
 
-  const saveMut = useApiMutation(saveReadingGuideSettings, {
-    successToast: "Reading guide settings saved.",
-    onSuccess: () => setKeyDraft(""),
-  })
-
+  const form = draft.value
+  const apiKey = draft.secret("apiKey")
   const update = <TKey extends keyof ReadingGuideSettings>(
     key: TKey,
     value: ReadingGuideSettings[TKey]
-  ) => setForm((f) => ({ ...f, [key]: value }))
+  ) => draft.patch(key, value)
+
+  if (draft.loading) {
+    return (
+      <>
+        <PanelHeader title="Reading guides" />
+        <PanelLoading />
+      </>
+    )
+  }
 
   return (
     <>
-      <h2 className="t-h2 mb-6">Reading guides</h2>
+      <PanelHeader title="Reading guides" />
 
       <Card>
         <p className="t-small mb-4">
-          Generates a short orientation for each book — what it is about, who
-          it suits, who should skip it. Books are sent to the endpoint below,
-          so point it at a local model if you would rather they stayed here.
+          Generates a short orientation for each book — what it is about, who it
+          suits, who should skip it. Books are sent to the endpoint below, so
+          point it at a local model if you would rather they stayed here.
         </p>
 
         <Toggle
@@ -153,20 +170,31 @@ export function ReadingGuidesPanel() {
             placeholder="llama3.1 / gpt-4o-mini"
           />
         </Field>
-        <Field label={form.keySet ? "API key (stored — leave blank to keep)" : "API key"}>
+        <Field
+          label={
+            form.keySet ? "API key (stored — leave blank to keep)" : "API key"
+          }
+        >
           <Input
             type="password"
-            value={keyDraft}
-            onChange={(e) => setKeyDraft(e.target.value)}
-            placeholder={form.keySet ? "••••••••" : "not needed for a local model"}
+            value={apiKey.value}
+            onChange={(e) => apiKey.set(e.target.value)}
+            placeholder={
+              form.keySet ? "••••••••" : "not needed for a local model"
+            }
           />
         </Field>
         <Field label="Credential header">
           <Select
             value={form.authStyle}
-            onChange={(v) => update("authStyle", v as ReadingGuideSettings["authStyle"])}
+            onChange={(v) =>
+              update("authStyle", v as ReadingGuideSettings["authStyle"])
+            }
             options={[
-              { value: "bearer", label: "Authorization: Bearer (OpenAI, Ollama, OpenRouter)" },
+              {
+                value: "bearer",
+                label: "Authorization: Bearer (OpenAI, Ollama, OpenRouter)",
+              },
               { value: "api-key", label: "api-key (Azure)" },
             ]}
           />
@@ -199,33 +227,19 @@ export function ReadingGuidesPanel() {
         />
 
         <div className="mt-4 flex items-center gap-2">
-          <Button
-            disabled={saveMut.isPending}
-            onClick={() =>
-              saveMut.mutate(keyDraft.trim() ? { ...form, apiKey: keyDraft } : form)
-            }
-          >
-            Save
+          <Button disabled={draft.saving} onClick={draft.save}>
+            {draft.saving ? "Saving…" : "Save"}
           </Button>
           <Button
             variant="outline"
-            disabled={testMut.isPending}
-            onClick={() => testMut.mutate(undefined)}
+            disabled={test.running}
+            onClick={() => test.run(undefined)}
             title="Sends one short prompt to the endpoint"
           >
-            {testMut.isPending ? "Testing…" : "Test connection"}
+            {test.running ? "Testing…" : "Test connection"}
           </Button>
         </div>
-        {testResult && (
-          <p
-            className="t-small mt-2"
-            style={{ color: testResult.ok ? undefined : "var(--color-warn, #92400e)" }}
-          >
-            {testResult.ok
-              ? `Endpoint replied: "${testResult.reply}"`
-              : `Endpoint refused: ${testResult.error}`}
-          </p>
-        )}
+        <ConnectionTestReport outcome={test.outcome} />
       </Card>
 
       {form.enabled && <GuideRunCard />}

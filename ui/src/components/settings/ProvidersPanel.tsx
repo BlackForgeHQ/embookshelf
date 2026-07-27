@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 
 import { toast } from "sonner"
@@ -13,11 +13,9 @@ import {
   updateProviderSetting,
 } from "@/api/settings"
 import { useApiMutation } from "@/api/mutation"
+import { useDraft } from "@/hooks/useSettingsDraft"
 import { Icon } from "@/components/Icon"
-import {
-  NotebookEmpty,
-  QuillMark,
-} from "@/components/SettingsShared"
+import { NotebookEmpty, QuillMark } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -257,25 +255,23 @@ function ProviderRow({
   onMoveDown: () => void
 }) {
   const schema = provider.schema ?? []
-  const [values, setValues] = useState<Record<string, string>>(() =>
-    schemaToForm(schema, provider.config ?? {})
-  )
   const [expanded, setExpanded] = useState(false)
-  // Rehydrate when the server payload shifts (e.g. another admin saved).
-  // Hash compare avoids nuking in-flight edits that match the stored state.
+
+  // The row's payload arrives as a prop — it is a slice of the providers
+  // list query, not a query of its own — so it uses the draft core
+  // directly. Same rule as every other settings panel: the list refetches
+  // whenever any row is toggled, and a refetch must not take away what
+  // the admin is typing into a config field.
   const configHash = JSON.stringify(provider.config ?? {})
   // biome-ignore lint/correctness/useExhaustiveDependencies: configHash is the intended trigger; depending on the schema object itself would re-run on every render
-  useEffect(() => {
-    // Prop→state rehydration when another admin saves; not a cascading render.
-    // Deliberate: setState inside an effect, syncing React state from an
-    // external source. Was suppressed via react-hooks/set-state-in-effect;
-    // Biome has no equivalent rule yet, so there is nothing to suppress.
-    setValues(schemaToForm(schema, provider.config ?? {}))
-  }, [configHash])
-
-  const dirty = schema.some(
-    (f) => (values[f.key] ?? "") !== valueToString(provider.config?.[f.key])
+  const source = useMemo(
+    () => schemaToForm(schema, provider.config ?? {}),
+    [configHash]
   )
+  const draft = useDraft(source, EMPTY_CONFIG)
+  const values = draft.value
+
+  const dirty = draft.dirty
   const hasConfig = schema.length > 0
   const ranked = provider.priority != null
 
@@ -388,9 +384,7 @@ function ProviderRow({
               key={field.key}
               field={field}
               value={values[field.key] ?? ""}
-              onChange={(v) =>
-                setValues((prev) => ({ ...prev, [field.key]: v }))
-              }
+              onChange={(v) => draft.patch(field.key, v)}
             />
           ))}
           <div className="flex items-center justify-end gap-2 pt-1">
@@ -404,9 +398,7 @@ function ProviderRow({
               variant="outline"
               size="sm"
               disabled={!dirty || busy}
-              onClick={() =>
-                setValues(schemaToForm(schema, provider.config ?? {}))
-              }
+              onClick={draft.revert}
             >
               Revert
             </Button>
@@ -414,7 +406,14 @@ function ProviderRow({
               type="button"
               size="sm"
               disabled={!dirty || busy}
-              onClick={() => onSaveConfig(formToConfig(schema, values))}
+              onClick={() => {
+                onSaveConfig(formToConfig(schema, values))
+                // Settled on submit rather than on the response: the save
+                // belongs to the list, not the row, so the row cannot see
+                // it land. A rejected save leaves the typed values on
+                // screen, which is what a retry needs.
+                draft.settle()
+              }}
             >
               Save config
             </Button>
@@ -581,6 +580,10 @@ function relativeTime(ms: number): string {
 function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + "…" : s
 }
+
+// The pre-payload shape for a config row. Module-level so its identity is
+// stable across renders, which is what the draft core expects.
+const EMPTY_CONFIG: Record<string, string> = {}
 
 function valueToString(v: unknown): string {
   if (v == null) return ""
