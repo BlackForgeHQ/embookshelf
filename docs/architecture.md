@@ -862,6 +862,16 @@ automatically; the hook only wires teardown (`removeEventListener` +
 indicator for cases where the reverse proxy severs the stream with no
 retry budget left.
 
+One connection per session means the subscribing effect must run once,
+so nothing that changes during a session may enter its dependency
+array. The two shared-shelf handlers do need the current route — they
+redirect a viewer sitting on a shelf that was just un-published — and
+they read it at *event* time from `useRouter().state.location`, a live
+getter on a router instance whose identity never changes. Subscribing
+to the location with `useRouterState` instead would put a
+navigation-scoped value in the deps and reopen the stream on every
+route change.
+
 ---
 
 ## 6. Data Model
