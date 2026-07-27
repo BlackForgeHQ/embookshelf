@@ -13,6 +13,7 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/storage"
+	"github.com/blackforge/embookshelf/internal/storage/local"
 )
 
 // ---------------------------------------------------------------------------
@@ -208,5 +209,54 @@ func TestIsBackendBacked(t *testing.T) {
 	}
 	if (&LibraryHandle{Library: model.Library{}}).IsBackendBacked() {
 		t.Error("library without a backend id must report local")
+	}
+}
+
+// A local library stores files.location relative to the library root
+// (CONTEXT, "Files row"), while its LocalFS is rooted at "/" and expects
+// absolute keys (internal/storageloader). Nothing reconciled the two, so
+// opening a book on a local library asked the filesystem for
+// "/Author/Title/book.epub" and got nothing.
+//
+// The symptom was silent rather than loud: reading-guide generation
+// degrades an unreadable book to a metadata-only guide by design, so
+// every EPUB on a local library quietly produced the weaker guide that
+// ADR-0024 §2 reserves for formats with no extractable text.
+func TestOpenBookResolvesRelativeLocationsOnALocalLibrary(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "Kobo Abe", "Woman in the Dunes")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dunes.epub"), []byte("epub-bytes"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Exactly what boot builds for an install with no storage backend.
+	rootedAtSlash, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	handle := &LibraryHandle{
+		Library: model.Library{ID: "lib1", Root: &root},
+		Storage: rootedAtSlash,
+		files: &fakeFiles{byBook: map[string][]model.File{
+			"b1": {{Location: "Kobo Abe/Woman in the Dunes/dunes.epub", Format: "EPUB"}},
+		}},
+	}
+	// books.path is relative too on a storage-v2 approve, so there is no
+	// second chance behind this.
+	book := model.Book{ID: "b1", Format: "EPUB", Path: "Kobo Abe/Woman in the Dunes/dunes.epub"}
+
+	reader, _, closer, err := handle.OpenBook(context.Background(), book)
+	if err != nil {
+		t.Fatalf("OpenBook on a local library: %v", err)
+	}
+	defer func() { _ = closer.Close() }()
+
+	if got := readAll(t, reader); got != "epub-bytes" {
+		t.Errorf("content = %q, want epub-bytes", got)
 	}
 }

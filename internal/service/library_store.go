@@ -86,6 +86,34 @@ func (h *LibraryHandle) IsBackendBacked() bool {
 	return h.Library.BackendID != nil
 }
 
+// storageKey turns a files.location into the key this library's Storage
+// actually answers to.
+//
+// files.location is relative to the library root (CONTEXT, "Files row"),
+// but a local install's LocalFS is rooted at "/" and expects absolute
+// keys — it is deliberately not rooted per library, because the scan
+// worker and bookdrop ingest hand it absolute paths. Nothing reconciled
+// the two, so every read of a locally-placed book asked the filesystem
+// for "/Author/Title/book.epub" and got nothing.
+//
+// The symptom was quiet in one direction and loud in the other: reading
+// a book failed outright, while reading-guide generation degrades an
+// unreadable book to a metadata-only guide by design, so every EPUB on a
+// local library silently produced the weaker guide ADR-0024 §2 reserves
+// for formats with no extractable text.
+//
+// Backend-backed libraries are untouched: their keys are already the
+// object keys, and the backend encodes its own prefix.
+func (h *LibraryHandle) storageKey(location string) string {
+	if h.IsBackendBacked() {
+		return location
+	}
+	if abs := h.LocalPath(location); abs != "" {
+		return abs
+	}
+	return location
+}
+
 // OpenBook returns the book's bytes, wherever they live. Callers that
 // want content — Send-to-Kindle, device push — use this and never
 // learn the delivery vocabulary; BookSource stays for the file-serve
@@ -98,9 +126,10 @@ func (h *LibraryHandle) IsBackendBacked() bool {
 func (h *LibraryHandle) OpenBook(ctx context.Context, book model.Book) (io.Reader, int64, io.Closer, error) {
 	if h.Storage != nil && h.files != nil {
 		if f, err := primaryFile(ctx, h.files, book); err == nil {
-			src, oerr := h.Storage.Open(ctx, f.Location)
+			key := h.storageKey(f.Location)
+			src, oerr := h.Storage.Open(ctx, key)
 			if oerr != nil {
-				return nil, 0, nil, fmt.Errorf("open %s: %w", f.Location, oerr)
+				return nil, 0, nil, fmt.Errorf("open %s: %w", key, oerr)
 			}
 			return io.NewSectionReader(src, 0, src.Size()), src.Size(), src, nil
 		}
@@ -320,7 +349,7 @@ func (h *LibraryHandle) BookSource(ctx context.Context, book model.Book) (BookSo
 		return BookSource{
 			Kind:    BookDeliveryStream,
 			Storage: h.Storage,
-			Key:     f.Location,
+			Key:     h.storageKey(f.Location),
 		}, nil
 	}
 
