@@ -253,21 +253,6 @@ func slugify(name string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-// Search and GetBook are pass-throughs to the book repo and are on their
-// way out: every caller that can reach the repo directly now does. They
-// survive only for the OPDS, cover and audiobook handlers, which are
-// held open elsewhere and could not be converted in the same change.
-// Nothing new should route book reads through here — the repo is the
-// book-scoped seam, and a second one in front of it only makes handlers
-// choose between two doors to the same room.
-func (s *LibraryService) Search(ctx context.Context, userID, librarySlug string, p model.SearchParams) ([]model.Book, error) {
-	return s.books.Search(ctx, userID, librarySlug, p)
-}
-
-func (s *LibraryService) GetBook(ctx context.Context, userID, id string) (model.Book, error) {
-	return s.books.GetByID(ctx, userID, id)
-}
-
 // UpdateBookMetadata persists an edit and reports what actually landed.
 // A nil error means the books row was updated; the Outcome says whether
 // the sidecar and in-file copies kept up, so the caller can tell the user

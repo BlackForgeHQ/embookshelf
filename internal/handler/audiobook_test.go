@@ -32,6 +32,7 @@ func audiobookGetHandler(t *testing.T) (*Handler, *repo.BookRepo, *repo.LibraryR
 	runs := repo.NewBookAudiobookRepo(d)
 	h := &Handler{
 		lib:           service.NewLibraryService(libs, books, service.LibraryServiceDeps{}),
+		books:         books,
 		audiobookRepo: runs,
 		audiobooks:    &service.AudiobookService{},
 	}

@@ -27,7 +27,7 @@ func (h *Handler) BookCover(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	book, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	book, err := h.books.GetByID(c.Request.Context(), userID, id)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			c.Status(http.StatusNotFound)

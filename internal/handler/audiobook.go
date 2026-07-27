@@ -85,7 +85,7 @@ func (h *Handler) BookAudiobookGet(c *gin.Context) {
 	// answer below is about that book. The error used to go to the blank
 	// identifier, which handed the DTO a zero-value Book — so a book we
 	// could not load was reported as never stale rather than as missing.
-	book, err := h.lib.GetBook(ctx, userID, id)
+	book, err := h.books.GetByID(ctx, userID, id)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
@@ -235,7 +235,7 @@ func (h *Handler) BookAudiobookDelete(c *gin.Context) {
 		location string
 	)
 	if run.FileID != nil && h.libStore != nil {
-		if book, berr := h.lib.GetBook(ctx, userID, id); berr == nil {
+		if book, berr := h.books.GetByID(ctx, userID, id); berr == nil {
 			if lh, herr := h.libStore.For(ctx, book.LibraryID); herr == nil {
 				handle = lh
 				location = narrationLocation(ctx, handle, id, run)
@@ -287,7 +287,7 @@ func (h *Handler) audiobookPreflight(c *gin.Context) (model.Book, service.Audiob
 		return zeroBook, zeroOpts, false
 	}
 
-	book, err := h.lib.GetBook(c.Request.Context(), requireUserID(c), c.Param("id"))
+	book, err := h.books.GetByID(c.Request.Context(), requireUserID(c), c.Param("id"))
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")

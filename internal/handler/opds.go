@@ -91,7 +91,7 @@ func (h *Handler) OPDSAll(c *gin.Context) {
 
 	var books []model.Book
 	for _, lib := range libs {
-		part, err := h.lib.Search(c.Request.Context(), userID, lib.Slug, model.SearchParams{Sort: "recent"})
+		part, err := h.books.Search(c.Request.Context(), userID, lib.Slug, model.SearchParams{Sort: "recent"})
 		if err != nil {
 			slog.Error("opds all: search", "lib", lib.Slug, "err", err)
 			continue
@@ -113,7 +113,7 @@ func (h *Handler) OPDSLibrary(c *gin.Context) {
 		return
 	}
 	slug := c.Param("slug")
-	books, err := h.lib.Search(c.Request.Context(), userID, slug, model.SearchParams{})
+	books, err := h.books.Search(c.Request.Context(), userID, slug, model.SearchParams{})
 	if err != nil {
 		slog.Error("opds library", "slug", slug, "err", err)
 		c.String(http.StatusInternalServerError, "failed")
@@ -139,7 +139,7 @@ func (h *Handler) OPDSRecent(c *gin.Context) {
 	}
 	var books []model.Book
 	for _, lib := range libs {
-		part, err := h.lib.Search(c.Request.Context(), userID, lib.Slug, model.SearchParams{Sort: "recent"})
+		part, err := h.books.Search(c.Request.Context(), userID, lib.Slug, model.SearchParams{Sort: "recent"})
 		if err != nil {
 			continue
 		}
@@ -168,7 +168,7 @@ func (h *Handler) OPDSSearch(c *gin.Context) {
 	var books []model.Book
 	if q != "" {
 		for _, lib := range libs {
-			part, err := h.lib.Search(c.Request.Context(), userID, lib.Slug, model.SearchParams{Query: q})
+			part, err := h.books.Search(c.Request.Context(), userID, lib.Slug, model.SearchParams{Query: q})
 			if err != nil {
 				continue
 			}
@@ -211,7 +211,7 @@ func (h *Handler) OPDSDownload(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	book, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	book, err := h.books.GetByID(c.Request.Context(), userID, id)
 	if err != nil {
 		c.String(http.StatusNotFound, "book not found")
 		return
@@ -241,7 +241,7 @@ func (h *Handler) OPDSCover(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	book, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	book, err := h.books.GetByID(c.Request.Context(), userID, id)
 	if err != nil || !book.HasCover || h.covers == nil {
 		c.Status(http.StatusNotFound)
 		return
