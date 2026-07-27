@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/blackforge/embookshelf/internal/extractor"
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/storage"
@@ -110,7 +109,7 @@ func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropD
 	}
 	defer func() { _ = src.Close() }()
 
-	res, extractErr := extractor.Extract(ctx, store, src, item.Format, key)
+	res, extractErr := fileproc.ExtractBook(ctx, store, src, item.Format, key)
 	if extractErr != nil {
 		slog.Warn("bookdrop extract failed", "item_id", itemID, "path", item.Path, "err", extractErr)
 		_ = deps.Svc.Fail(ctx, itemID, extractErr)

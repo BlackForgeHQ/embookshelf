@@ -405,7 +405,13 @@ Existing libraries keep their current shape. Place-time uses the new layout for 
 
 ### Extract
 
-`extractor.Extract(ctx, store, src, format, key) ExtractResult`; shared extraction primitive returning format metadata + cover bytes + audio fields + sidecar overlay. Sole consumer is the bookdrop ingest path — under ADR-0018, scan never extracts. Lives in `internal/extractor/` to avoid the import cycle with `internal/ingest/`'s bookdrop watcher (which imports `queue`, which imports `task`).
+`fileproc.ExtractBook(ctx, store, src, format, key) ExtractResult`; shared extraction primitive returning format metadata + cover bytes + audio fields + sidecar overlay. Sole consumer is the bookdrop ingest path — under ADR-0018, scan never extracts.
+
+Lived in its own `internal/extractor/` package until it had one caller and no second consumer: ADR-0018 made BookDrop the only ingest path, and a one-adapter seam is a hypothetical one. Its cost was visible in `formatToPath`, which synthesized fake filenames (`"x.epub"`) so it could feed an extension-keyed dispatcher a format slug — a module converting its own input backwards to satisfy the interface it wrapped. Folding it into `fileproc` puts it where format dispatch already lives and replaces that inverse mapping with [[DispatchFormat]].
+
+### DispatchFormat
+
+`fileproc.DispatchFormat(format) Processor`; the slug-keyed twin of `Dispatch`, which keys off a file extension. Both live in `fileproc` because format dispatch is that package's job. When a caller has both, the key wins: the key is what the bytes actually are, the slug is what a row claims they are.
 
 ---
 

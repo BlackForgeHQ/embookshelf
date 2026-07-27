@@ -171,8 +171,9 @@ The backend has 27 packages. Tiered by role:
 - `fileproc/` — Per-format extract + embed processors.
   `processor.go` (interface + `Dispatch`), `epub.go` + `epub_embed.go`,
   `pdf.go` + `pdf_embed.go`, `cbz.go`, `audio.go`, `embedder.go`.
-- `extractor/` — Format-agnostic metadata façade used by services that
-  don't care which processor backs a given path.
+  `extract.go` carries `ExtractBook` — the format-agnostic pass that
+  merges processor metadata, cover bytes and the sidecar overlay — plus
+  `DispatchFormat`, the slug-keyed twin of `Dispatch`.
 - `sidecar/` — OPF/JSON sidecar reader + writer. ADR-0001
   (edit-side write-back). Reattach on rescan reads sidecars to
   preserve user edits.

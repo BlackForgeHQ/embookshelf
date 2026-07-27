@@ -23,3 +23,6 @@
 /.worktrees/
 /embookshelf-tag
 CLAUDE.local.md
+
+# agent worktrees (transient)
+.claude/worktrees/
