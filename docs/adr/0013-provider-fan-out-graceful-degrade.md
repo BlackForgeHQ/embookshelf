@@ -39,6 +39,18 @@ This asymmetry is the right shape, not an oversight. Stream is consumed by an in
 
 Trade-off: a process kill mid-flight loses pending health writes. Acceptable — health telemetry is best-effort observability, not audit log.
 
+### 4. Provider *selection* degrades closed, unlike provider *execution*
+
+Added 2026-07-27. §1–3 govern what happens when a provider fails mid-fan-out: keep going, surface per-endpoint, record health. This decision governs the step before that — reading `provider_settings` to learn which providers may run at all — and it goes the other way.
+
+`Search`, `SearchStream` and `LookupByISBN` all used to log `"provider settings fetch — running all providers"` and query every adapter when that read failed. Degrading open there is not the same trade as degrading open on a provider error. An admin disables a provider deliberately: the Amazon and Goodreads adapters are scrapers, some cost API quota, and some an operator simply does not want their library titles sent to. Overriding that because a table read blipped sends traffic somewhere it was explicitly refused, silently.
+
+The availability argument is also weaker than it looks. `provider_settings` lives in the same Postgres as the `books` row the request has already loaded, so "settings unreadable but the rest of the request fine" is a narrow window. All three paths now return the error; `SearchStream` has no error return, so it emits an `Err` frame followed by `Done` — the handler already renders `Err` as a `provider-error` event, and `Done` stops the UI waiting.
+
+Related consistency fix: `LookupByISBN` gated on `rows != nil`, so a nil slice from an empty table meant "no filter" and ran everything, while `Search`'s empty `EnabledIDs` map meant "nothing enabled" and ran nothing. Identical database state, opposite behaviour. The guard is gone; empty means empty in both.
+
+Covered in `internal/service/provider_selection_test.go`.
+
 ## Considered options
 
 ### Rejected: fail-fast (return on first provider error)

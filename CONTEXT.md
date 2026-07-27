@@ -483,6 +483,8 @@ Its freshness rules are asymmetric and worth knowing before relying on either en
 
 Fan-out policy: per-provider error → log + write to health table + return nil from goroutine; siblings unaffected. `errgroup` is used purely for ctx propagation (client disconnect cancels all in-flight HTTP calls), **not** for error short-circuit. `_ = g.Wait()` is deliberate. ADR-0013. Don't "fix" it.
 
+**Selection degrades closed, execution degrades open** (ADR-0013 §4). A provider that fails mid-fan-out is skipped and the rest continue; a failure to read `provider_settings` — which decides who runs at all — fails the search instead, rather than querying providers an admin disabled.
+
 ### Provider health
 
 `provider_settings.last_success_at` / `last_error_at` / `last_error`; updated fire-and-forget via detached goroutines with their own 3s ctx so request-side cancellation doesn't lose the write. Surfaced in admin Settings as the universal "is this provider working" signal — the only place per-provider failure is visible regardless of which entry point triggered the call.

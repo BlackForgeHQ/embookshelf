@@ -27,6 +27,9 @@ type fakeProviderSettings struct {
 	configs   map[string]json.RawMessage
 	successes []string
 	errs      []string
+	// readErr makes EnabledIDs and List fail, standing in for the
+	// provider_settings table being unreadable.
+	readErr error
 }
 
 func newFakeProviderSettings() *fakeProviderSettings {
@@ -37,10 +40,22 @@ func (f *fakeProviderSettings) AllConfigs(context.Context) (map[string]json.RawM
 	return f.configs, nil
 }
 func (f *fakeProviderSettings) EnabledIDs(context.Context) (map[string]bool, error) {
+	if f.readErr != nil {
+		return nil, f.readErr
+	}
 	return f.enabled, nil
 }
 func (f *fakeProviderSettings) List(context.Context) ([]repo.ProviderSetting, error) {
-	return nil, nil
+	if f.readErr != nil {
+		return nil, f.readErr
+	}
+	// Returns a nil slice when empty, matching what the repo yields for a
+	// table with no rows — the case the old `rows != nil` guard inverted.
+	var rows []repo.ProviderSetting
+	for id, on := range f.enabled {
+		rows = append(rows, repo.ProviderSetting{ID: id, Enabled: on})
+	}
+	return rows, nil
 }
 func (f *fakeProviderSettings) SetConfig(_ context.Context, id string, cfg json.RawMessage) error {
 	f.configs[id] = cfg

@@ -187,17 +187,22 @@ func (s *EnrichmentService) Search(ctx context.Context, q provider.Query) (Searc
 	// Fetch the live enabled map; on DB error fall through to the full
 	// provider list so an outage of the settings table doesn't silently
 	// disable enrichment entirely. Best-effort graceful degrade.
+	// Degrade closed. If we cannot read which providers the admin enabled
+	// we do not guess: querying a provider someone deliberately disabled —
+	// the Amazon and Goodreads adapters are scrapers, others cost quota —
+	// is worse than reporting the search as unavailable. The settings row
+	// shares a database with the book this request already loaded, so this
+	// failure rarely occurs on its own.
 	enabled, err := s.settings.EnabledIDs(ctx)
 	if err != nil {
-		slog.Warn("provider settings fetch — running all providers", "err", err)
-		enabled = nil
+		return SearchResult{}, fmt.Errorf("provider settings: %w", err)
 	}
 
 	// Compute the set we'd actually query so the UI can say "we searched
 	// these three" consistently across cache hits and fresh fan-outs.
 	queried := make([]provider.Source, 0, len(s.providers))
 	for _, p := range s.providers {
-		if enabled != nil && !enabled[string(p.Name())] {
+		if !enabled[string(p.Name())] {
 			continue
 		}
 		queried = append(queried, p.Name())
@@ -286,17 +291,25 @@ func (s *EnrichmentService) SearchStream(ctx context.Context, q provider.Query) 
 		return out
 	}
 
+	// Degrade closed, as Search does. The stream has no error return, so
+	// the failure rides an Err frame followed by Done — the handler already
+	// renders Err as a provider-error event, and Done keeps the UI from
+	// waiting forever.
 	enabled, err := s.settings.EnabledIDs(ctx)
 	if err != nil {
-		slog.Warn("provider settings fetch — running all providers", "err", err)
-		enabled = nil
+		go func() {
+			out <- StreamEvent{Err: fmt.Errorf("provider settings: %w", err)}
+			out <- StreamEvent{Done: true}
+			close(out)
+		}()
+		return out
 	}
 
 	queried := make([]provider.Source, 0, len(s.providers))
 	type run struct{ p provider.Provider }
 	runs := make([]run, 0, len(s.providers))
 	for _, p := range s.providers {
-		if enabled != nil && !enabled[string(p.Name())] {
+		if !enabled[string(p.Name())] {
 			continue
 		}
 		queried = append(queried, p.Name())
@@ -353,10 +366,10 @@ func (s *EnrichmentService) LookupByISBN(ctx context.Context, isbn string) (*pro
 	if isbn == "" {
 		return nil, "", nil
 	}
+	// Degrade closed, as Search does.
 	rows, err := s.settings.List(ctx)
 	if err != nil {
-		slog.Warn("provider settings fetch — running all providers", "err", err)
-		rows = nil
+		return nil, "", fmt.Errorf("provider settings: %w", err)
 	}
 	enabled := map[string]bool{}
 	priority := map[string]int{}
@@ -388,7 +401,11 @@ func (s *EnrichmentService) LookupByISBN(ctx context.Context, isbn string) (*pro
 
 	q := provider.Query{ISBN: isbn}
 	for _, p := range ordered {
-		if rows != nil && !enabled[string(p.Name())] {
+		// No `rows != nil` guard: an empty table means nothing is enabled,
+		// the same reading Search gives an empty EnabledIDs map. The old
+		// guard made a nil slice mean "no filter", so identical database
+		// state ran every provider here and none there.
+		if !enabled[string(p.Name())] {
 			continue
 		}
 		matches, err := p.Search(ctx, q)
