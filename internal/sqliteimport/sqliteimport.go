@@ -73,9 +73,10 @@ const jobsTable = "jobs"
 // considered omission from a forgotten one, which is exactly the
 // ambiguity that makes a hand-maintained tableOrder risky.
 var excludedTables = map[string]string{
-	jobsTable:           "SQLite-only polling queue; River owns its own tables on Postgres, so queued work cannot transfer",
-	"schema_migrations": "the migrator's own bookkeeping, rebuilt by migrating the target",
-	"library_paths":     "dropped by migration 000018; libraries.path replaced it",
+	"book_reading_guides": "added after ADR-0023 froze SQLite, so no source database can contain it; reading guides are regenerated, not migrated",
+	jobsTable:             "SQLite-only polling queue; River owns its own tables on Postgres, so queued work cannot transfer",
+	"schema_migrations":   "the migrator's own bookkeeping, rebuilt by migrating the target",
+	"library_paths":       "dropped by migration 000018; libraries.path replaced it",
 }
 
 // excludedPrefixes covers table families owned by a dependency rather

@@ -28,6 +28,13 @@ import (
 // books_fts*: SQLite-only virtual tables produced by the FTS5 extension.
 //
 //	PG has none of these.
+//
+// book_reading_guides: added after ADR-0023 froze SQLite. Nothing creates
+//
+//	a SQLite database any more — the tree survives only so
+//	`import-sqlite` can read an operator's old file — so a
+//	post-freeze table has no SQLite counterpart by design.
+//	Any further Postgres-only table belongs here too.
 var allowedDivergence = map[string]bool{
 	"books.tsv":         true,
 	"books_fts":         true,
@@ -37,6 +44,8 @@ var allowedDivergence = map[string]bool{
 	"books_fts_content": true,
 	"books_fts_docsize": true,
 	"jobs":              true, // SQLite-only; PG uses River's river_job
+
+	"book_reading_guides": true, // PG-only, post-freeze (ADR-0023, ADR-0024)
 }
 
 // TestSchemaEquivalence migrates both trees end-to-end against

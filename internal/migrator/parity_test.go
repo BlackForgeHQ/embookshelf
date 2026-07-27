@@ -84,12 +84,19 @@ func missingSide(up, down bool) string {
 // in once parallel migrations begin.
 func TestMigrationParity(t *testing.T) {
 	const cutoff = 24
+	// ADR-0023 froze SQLite: it survives as a read-only source for
+	// `import-sqlite` and nothing creates a SQLite database any more. So
+	// parity is a closed range, not an open one — migrations above the
+	// freeze are Postgres-only by design, and demanding a SQLite twin for
+	// them would be asking for a migration no database will ever run.
+	// Raise this only if SQLite ever becomes a write target again.
+	const sqliteFrozenAt = 38
 
 	pgVersions, pgStems := versionsBySuffix(t, "migrations/postgres")
 	sqVersions, sqStems := versionsBySuffix(t, "migrations/sqlite")
 
-	pgFromCutoff := versionsAtLeast(pgVersions, cutoff)
-	sqFromCutoff := versionsAtLeast(sqVersions, cutoff)
+	pgFromCutoff := versionsInRange(versionsAtLeast(pgVersions, cutoff), sqliteFrozenAt)
+	sqFromCutoff := versionsInRange(versionsAtLeast(sqVersions, cutoff), sqliteFrozenAt)
 
 	if !sliceEqualInt(pgFromCutoff, sqFromCutoff) {
 		t.Errorf("version mismatch >= %d: pg=%v sqlite=%v",
@@ -106,8 +113,19 @@ func TestMigrationParity(t *testing.T) {
 		}
 	}
 
-	t.Logf("parity check: %d versions >= %d (pg=%d, sqlite=%d), all aligned",
-		len(pgFromCutoff), cutoff, len(pgVersions), len(sqVersions))
+	t.Logf("parity check: %d versions in [%d, %d] (pg=%d, sqlite=%d), all aligned",
+		len(pgFromCutoff), cutoff, sqliteFrozenAt, len(pgVersions), len(sqVersions))
+}
+
+// versionsInRange drops versions above the SQLite freeze.
+func versionsInRange(vs []int, max int) []int {
+	out := make([]int, 0, len(vs))
+	for _, v := range vs {
+		if v <= max {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func versionsAtLeast(vs []int, min int) []int {
