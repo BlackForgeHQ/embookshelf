@@ -109,7 +109,12 @@ func (r *ShelfRepo) BooksInShelfForUser(ctx context.Context, userID, shelfSlug, 
 		` + bookFromPG + `
 		JOIN shelf_books sb ON sb.book_id = b.id
 		JOIN shelves     s  ON s.id = sb.shelf_id
-		WHERE s.user_id = $1 AND s.slug = $2 AND b.deleted_at IS NULL
+		-- $1 is cast explicitly because bookFromPG already pins it to
+		-- text via NULLIF($1, '')::uuid. Postgres infers one type per
+		-- parameter across the whole statement, so comparing the same
+		-- $1 to a uuid column bare fails with "operator does not exist:
+		-- uuid = text" — which is what made every regular shelf 500.
+		WHERE s.user_id = $1::uuid AND s.slug = $2 AND b.deleted_at IS NULL
 		ORDER BY ` + orderBy
 	rows, err := r.db.SQL.QueryContext(ctx, q, userID, shelfSlug)
 	if err != nil {

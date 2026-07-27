@@ -208,3 +208,74 @@ func TestShelfUpdateIcon(t *testing.T) {
 		t.Errorf("icon persisted = %q, want %q", fresh.Icon, nextIcon)
 	}
 }
+
+// TestBooksInShelfForUserOnARegularShelf pins the one query that opening
+// a hand-curated shelf runs.
+//
+// It regressed in the Postgres-only migration and stayed broken because
+// nothing exercised it: bookFromPG resolves the progress join with
+// NULLIF($1, ”)::uuid, which makes Postgres infer $1 as text, and the
+// same $1 was then compared against shelves.user_id — a uuid. Every such
+// request failed with `operator does not exist: uuid = text` and a 500,
+// so every regular shelf in the sidebar was unopenable.
+//
+// The smart-shelf path never hit it (it does not compare $1 to a uuid
+// column), which is why smart shelves kept working and made the failure
+// look like a data problem rather than a broken query.
+func TestBooksInShelfForUserOnARegularShelf(t *testing.T) {
+	d := repotest.New(t)
+	ur := repo.NewUserRepo(d)
+	lr := repo.NewLibraryRepo(d)
+	br := repo.NewBookRepo(d)
+	sr := repo.NewShelfRepo(d)
+	ctx := context.Background()
+
+	alice, err := ur.Create(ctx, "shelfreader@example.com", "Alice", "hash", model.RoleUser)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	lib, err := lr.CreateLibrary(ctx, "Lib", "shelflib", "/tmp/shelflib", nil)
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	book, err := br.Create(ctx, model.Book{LibraryID: lib.ID, Title: "Shelved Book", Format: "EPUB"})
+	if err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+
+	shelf, err := sr.Create(ctx, alice.ID, "Favourites", "accent", "library", nil)
+	if err != nil {
+		t.Fatalf("create shelf: %v", err)
+	}
+	if err := sr.AddBook(ctx, alice.ID, shelf.Slug, book.ID); err != nil {
+		t.Fatalf("add book: %v", err)
+	}
+
+	got, err := sr.BooksInShelfForUser(ctx, alice.ID, shelf.Slug, "")
+	if err != nil {
+		t.Fatalf("BooksInShelfForUser: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d books, want 1", len(got))
+	}
+	if got[0].ID != book.ID {
+		t.Errorf("got book %q, want %q", got[0].Title, book.Title)
+	}
+
+	// Another user's identically-slugged shelf must not leak in — the
+	// user_id predicate is what the type mismatch was sitting on.
+	bob, err := ur.Create(ctx, "shelfreader-bob@example.com", "Bob", "hash", model.RoleUser)
+	if err != nil {
+		t.Fatalf("create bob: %v", err)
+	}
+	if _, err := sr.Create(ctx, bob.ID, "Favourites", "accent", "library", nil); err != nil {
+		t.Fatalf("create bob shelf: %v", err)
+	}
+	bobBooks, err := sr.BooksInShelfForUser(ctx, bob.ID, shelf.Slug, "")
+	if err != nil {
+		t.Fatalf("BooksInShelfForUser(bob): %v", err)
+	}
+	if len(bobBooks) != 0 {
+		t.Errorf("bob sees %d books on his empty shelf, want 0", len(bobBooks))
+	}
+}
