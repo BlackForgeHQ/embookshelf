@@ -30,7 +30,7 @@ func selectionHarness(readErr error) (*EnrichmentService, *countingProvider) {
 	settings := newFakeProviderSettings()
 	settings.readErr = readErr
 	svc := NewEnrichmentService(
-		[]provider.Provider{p}, settings, &fakeBookStore{}, &fakeCoverStore{}, nil,
+		[]provider.Provider{p}, settings, &fakeBookStore{}, &fakeCoverStore{},
 	)
 	return svc, p
 }
@@ -113,7 +113,7 @@ func TestSelectionQueriesEnabledProvider(t *testing.T) {
 	settings := newFakeProviderSettings()
 	settings.enabled["amazon"] = true
 	svc := NewEnrichmentService(
-		[]provider.Provider{p}, settings, &fakeBookStore{}, &fakeCoverStore{}, nil,
+		[]provider.Provider{p}, settings, &fakeBookStore{}, &fakeCoverStore{},
 	)
 
 	res, err := svc.Search(context.Background(), provider.Query{Title: "Dune"})
@@ -137,7 +137,7 @@ func TestLookupByISBNTreatsNoRowsAsNothingEnabled(t *testing.T) {
 	p := &countingProvider{id: provider.Source("amazon")}
 	settings := newFakeProviderSettings() // no enabled entries → no rows
 	svc := NewEnrichmentService(
-		[]provider.Provider{p}, settings, &fakeBookStore{}, &fakeCoverStore{}, nil,
+		[]provider.Provider{p}, settings, &fakeBookStore{}, &fakeCoverStore{},
 	)
 
 	match, _, err := svc.LookupByISBN(context.Background(), "9780441013593")

@@ -51,9 +51,10 @@ func (f *fakeProviderSettings) List(context.Context) ([]repo.ProviderSetting, er
 	}
 	// Returns a nil slice when empty, matching what the repo yields for a
 	// table with no rows — the case the old `rows != nil` guard inverted.
+	// Config rides along already decrypted, as the repo now returns it.
 	var rows []repo.ProviderSetting
 	for id, on := range f.enabled {
-		rows = append(rows, repo.ProviderSetting{ID: id, Enabled: on})
+		rows = append(rows, repo.ProviderSetting{ID: id, Enabled: on, Config: f.configs[id]})
 	}
 	return rows, nil
 }
@@ -141,7 +142,7 @@ func newEnrichForTest(t *testing.T) (*EnrichmentService, *fakeBookStore, *fakeCo
 	t.Helper()
 	books := &fakeBookStore{}
 	covers := &fakeCoverStore{}
-	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, covers, nil)
+	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, covers)
 	return svc, books, covers
 }
 
@@ -286,7 +287,7 @@ func TestApplyMatchMergesOrReplacesCategories(t *testing.T) {
 func TestApplyMatchPropagatesWriteFailure(t *testing.T) {
 	t.Parallel()
 	books := &fakeBookStore{updateErr: errors.New("db down")}
-	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, &fakeCoverStore{}, nil)
+	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, &fakeCoverStore{})
 
 	if _, err := svc.ApplyMatch(context.Background(), model.Book{ID: "b1"},
 		provider.Match{Title: "x"}, ApplyOptions{}, TriggerManualEdit); err == nil {
@@ -489,7 +490,7 @@ func TestCountDigits(t *testing.T) {
 func TestProviderHealthWritesAreRecorded(t *testing.T) {
 	t.Parallel()
 	settings := newFakeProviderSettings()
-	svc := NewEnrichmentService(nil, settings, &fakeBookStore{}, &fakeCoverStore{}, nil)
+	svc := NewEnrichmentService(nil, settings, &fakeBookStore{}, &fakeCoverStore{})
 
 	svc.recordProviderSuccess(provider.Source("googlebooks"))
 	svc.recordProviderError(provider.Source("amazon"), errors.New("rate limited"))

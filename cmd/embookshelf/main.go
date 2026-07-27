@@ -246,7 +246,12 @@ database must be empty; migrations are applied to it automatically.
 		}
 		providers = append(providers, p)
 	}
-	providerSettingsRepo := repo.NewProviderSettingsRepo(dbh)
+	// The repo owns provider-config encryption (ADR-0010 §4), so it needs
+	// the Cipher and a way to find each provider's secret slots. The
+	// lookup is derived from the built providers' schemas here, at the
+	// composition root, so the repo stays free of the provider catalog.
+	providerSettingsRepo := repo.NewProviderSettingsRepo(
+		dbh, secretCipher, provider.SecretKeyLookup(providers))
 	// Seed provider_settings on first boot using catalog defaults.
 	// ON CONFLICT DO NOTHING means subsequent restarts leave admin
 	// toggles alone — the DB is authoritative after the initial seed.
@@ -257,8 +262,8 @@ database must be empty; migrations are applied to it automatically.
 	if err := providerSettingsRepo.SeedIfAbsent(ctx, defaults); err != nil {
 		slog.Warn("seed provider settings", "err", err)
 	}
-	enrichSvc := service.NewEnrichmentService(providers, providerSettingsRepo, bookRepo, covers, secretCipher)
-	providerCfgSvc := service.NewProviderSettingsService(providers, providerSettingsRepo, secretCipher)
+	enrichSvc := service.NewEnrichmentService(providers, providerSettingsRepo, bookRepo, covers)
+	providerCfgSvc := service.NewProviderSettingsService(providers, providerSettingsRepo)
 	// Push stored per-provider config (API keys, language, …) into the
 	// running provider instances. Failure here is non-fatal — providers
 	// fall back to their no-config defaults.

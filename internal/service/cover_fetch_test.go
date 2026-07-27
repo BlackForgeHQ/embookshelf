@@ -151,7 +151,7 @@ func TestCoverRedirectPolicyCapsHops(t *testing.T) {
 // redirects and permits a scheme downgrade. A test that only exercises
 // coverRedirectPolicy() in isolation passes happily against that.
 func TestNewEnrichmentServiceInstallsRedirectPolicy(t *testing.T) {
-	svc := NewEnrichmentService(nil, newFakeProviderSettings(), &fakeBookStore{}, &fakeCoverStore{}, nil)
+	svc := NewEnrichmentService(nil, newFakeProviderSettings(), &fakeBookStore{}, &fakeCoverStore{})
 
 	client, ok := svc.http.(*http.Client)
 	if !ok {

@@ -139,3 +139,40 @@ type ConfigOption struct {
 type SchemaProvider interface {
 	ConfigSchema() []ConfigField
 }
+
+// SecretConfigKeys returns the config keys p declares password-kind —
+// the slots encrypted at rest (ADR-0010). A provider with no schema has
+// no secrets to find.
+//
+// Password-kind is the single declaration: it drives both how the admin
+// UI renders the input and whether the value is encrypted on the way to
+// the database. Splitting those into two lists is how one would drift
+// out of step with the other.
+func SecretConfigKeys(p Provider) []string {
+	sp, ok := p.(SchemaProvider)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, f := range sp.ConfigSchema() {
+		if f.Kind == ConfigFieldPassword {
+			out = append(out, f.Key)
+		}
+	}
+	return out
+}
+
+// SecretKeyLookup snapshots the password-kind keys of every built
+// provider into an id → keys function, which is what the
+// provider_settings repo needs to find its encryption slots without
+// importing this package. A schema is fixed at compile time, so
+// snapshotting once at boot loses nothing.
+func SecretKeyLookup(providers []Provider) func(id string) []string {
+	byID := make(map[string][]string, len(providers))
+	for _, p := range providers {
+		if keys := SecretConfigKeys(p); len(keys) > 0 {
+			byID[string(p.Name())] = keys
+		}
+	}
+	return func(id string) []string { return byID[id] }
+}
