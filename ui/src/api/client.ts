@@ -7,6 +7,7 @@ export type ApiErrorCode =
   | "FORMAT_NOT_SUPPORTED"
   | "EMAIL_RELOAD_FAILED"
   | "SMTP_ERROR"
+  | "GUIDES_DISABLED"
 
 // The server's error envelope is flat: `error` is always the display
 // message, `code` is present only when the case is one a client is

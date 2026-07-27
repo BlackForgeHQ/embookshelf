@@ -47,6 +47,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { ReadingGuidePanel } from "@/components/book/ReadingGuidePanel"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   DropdownMenu,
@@ -299,6 +300,9 @@ function BookDetail() {
               <TabsTrigger value="overview" className="flex-none px-3">
                 Overview
               </TabsTrigger>
+              <TabsTrigger value="guide" className="flex-none px-3">
+                Guide
+              </TabsTrigger>
               <TabsTrigger value="notes" className="flex-none px-3">
                 Notes
               </TabsTrigger>
@@ -338,6 +342,10 @@ function BookDetail() {
                   </Meta>
                 )}
               </div>
+            </TabsContent>
+
+            <TabsContent value="guide">
+              <ReadingGuidePanel bookId={id} />
             </TabsContent>
 
             <TabsContent value="notes">
