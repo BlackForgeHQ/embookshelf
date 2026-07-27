@@ -67,6 +67,17 @@ func registry(deps Deps) []registration {
 		Hub:      deps.Hub,
 	}
 
+	// Settings is read per job so an admin can change model, language or
+	// cap without a restart. Registered unconditionally, like the email
+	// jobs: the worker itself refuses when the feature is disabled.
+	readingGuide := task.ReadingGuideDeps{
+		Settings: deps.AppSettings,
+		Guides:   deps.Guides,
+		Books:    deps.Books,
+		LibStore: deps.LibStore,
+		Hub:      deps.Hub,
+	}
+
 	return []registration{
 		register(func(ctx context.Context, a task.BookDropIngestArgs) error {
 			return task.BookDropIngest(ctx, a, bookdrop)
@@ -76,6 +87,9 @@ func registry(deps Deps) []registration {
 		}),
 		register(func(ctx context.Context, a task.SendToKindleArgs) error {
 			return task.SendToKindle(ctx, a, sendToKindle)
+		}),
+		register(func(ctx context.Context, a task.ReadingGuideArgs) error {
+			return task.ReadingGuide(ctx, a, readingGuide)
 		}),
 	}
 }

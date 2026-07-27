@@ -47,6 +47,7 @@ func TestRegistryCoversEveryJobKindExactlyOnce(t *testing.T) {
 		task.BookDropIngestArgs{}.Kind(),
 		task.LibraryScanArgs{}.Kind(),
 		task.SendToKindleArgs{}.Kind(),
+		task.ReadingGuideArgs{}.Kind(),
 	}
 
 	seen := map[string]int{}

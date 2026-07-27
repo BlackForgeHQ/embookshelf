@@ -55,6 +55,10 @@ type Deps struct {
 	Users       *repo.UserRepo
 	Notifier    *service.Notifier
 	Hub         *sse.Hub
+	// Reading guides (ADR-0024). AppSettings is read per job so config
+	// changes take effect without a restart.
+	AppSettings *repo.AppSettingsRepo
+	Guides      *repo.BookReadingGuideRepo
 }
 
 // New constructs the River-backed Client. Postgres is the only supported

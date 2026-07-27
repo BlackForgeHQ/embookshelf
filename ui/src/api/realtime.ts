@@ -4,7 +4,7 @@ import { useNavigate, useRouterState } from "@tanstack/react-router"
 import { toast } from "sonner"
 
 import { bookdropQueryKey } from "./bookdrop"
-import { booksQueryKey, librariesQueryKey, shelvesQueryKey } from "./books"
+import { bookQueryKey, booksQueryKey, librariesQueryKey, shelvesQueryKey } from "./books"
 import { settingsUsersQueryKey } from "./settings"
 
 // Event names the server publishes. Keep the union narrow so the dispatch
@@ -17,12 +17,23 @@ type RealtimeEvent =
   | "shelf.public.removed"
   | "kindle.sent"
   | "kindle.failed"
+  | "guide.updated"
 
 type Handler = (data: string) => void
 
 type SharedShelfPayload = { slug: string }
 
 type KindleResultPayload = { book_id?: string; error?: string }
+
+type ReadingGuidePayload = { bookId?: string }
+
+function parseGuidePayload(raw: string): ReadingGuidePayload {
+  try {
+    return JSON.parse(raw) as ReadingGuidePayload
+  } catch {
+    return {}
+  }
+}
 
 function parseKindlePayload(raw: string): KindleResultPayload {
   try {
@@ -125,6 +136,15 @@ export function useRealtime() {
       "kindle.failed": (raw) => {
         const { error } = parseKindlePayload(raw)
         toast.error(error ? `Send to Kindle failed: ${error}` : "Send to Kindle failed.")
+      },
+      // A guide finished generating. Bust that book's cache so an open
+      // detail page fills in; no toast, because a bulk run over a
+      // thousand books would otherwise bury the screen.
+      "guide.updated": (raw) => {
+        const { bookId } = parseGuidePayload(raw)
+        if (bookId) {
+          void queryClient.invalidateQueries({ queryKey: bookQueryKey(bookId) })
+        }
       },
     }
 

@@ -219,10 +219,10 @@ func TestBookReadingGuideRepo_DeletedWithBook(t *testing.T) {
 	}
 }
 
-// TestBookReadingGuideRepo_ListBookIDsNeedingGuide drives the bulk run: it
+// TestBookReadingGuideRepo_ListGuideCandidates drives the bulk run: it
 // returns books with no guide plus books whose guide is machine-written,
 // and never a book whose guide a human edited.
-func TestBookReadingGuideRepo_ListBookIDsNeedingGuide(t *testing.T) {
+func TestBookReadingGuideRepo_ListGuideCandidates(t *testing.T) {
 	d := repotest.New(t)
 	libs := repo.NewLibraryRepo(d)
 	books := repo.NewBookRepo(d)
@@ -257,13 +257,16 @@ func TestBookReadingGuideRepo_ListBookIDsNeedingGuide(t *testing.T) {
 		t.Fatalf("SaveEdit: %v", err)
 	}
 
-	ids, err := guides.ListBookIDsNeedingGuide(ctx)
+	cands, err := guides.ListGuideCandidates(ctx)
 	if err != nil {
-		t.Fatalf("ListBookIDsNeedingGuide: %v", err)
+		t.Fatalf("ListGuideCandidates: %v", err)
 	}
 	got := map[string]bool{}
-	for _, id := range ids {
-		got[id] = true
+	for _, c := range cands {
+		got[c.BookID] = true
+		if c.Format != "EPUB" {
+			t.Errorf("format for %s = %q, want it carried for the estimate", c.BookID, c.Format)
+		}
 	}
 	if !got[none] {
 		t.Error("a book with no guide was not listed")

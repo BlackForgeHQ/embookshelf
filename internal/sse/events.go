@@ -68,6 +68,17 @@ type BookDropCleared struct{}
 func (BookDropCleared) EventName() string  { return "bookdrop.cleared" }
 func (BookDropCleared) Audience() Audience { return Everyone() }
 
+// ReadingGuideUpdated fires when a book's LLM-written reading guide is
+// written or replaced (ADR-0024). Instance-wide: guides are a property of
+// the book, not of a reader, and a bulk run's progress is worth seeing on
+// whatever page is open.
+type ReadingGuideUpdated struct {
+	BookID string `json:"bookId"`
+}
+
+func (ReadingGuideUpdated) EventName() string  { return "guide.updated" }
+func (ReadingGuideUpdated) Audience() Audience { return Everyone() }
+
 // ---------------------------------------------------------------------------
 // Users / shelves
 // ---------------------------------------------------------------------------
@@ -133,4 +144,5 @@ var Catalog = []Payload{
 	SharedShelfRemoved{},
 	KindleSent{},
 	KindleFailed{},
+	ReadingGuideUpdated{},
 }

@@ -109,13 +109,21 @@ func (r *BookReadingGuideRepo) GetByBookID(ctx context.Context, bookID string) (
 	return g, nil
 }
 
-// ListBookIDsNeedingGuide returns the books a bulk Guide run should
-// process: those with no guide, plus those whose guide is machine-written
-// and can therefore be replaced. Hand-edited guides are excluded — the
-// run must not erase work someone did by hand.
-func (r *BookReadingGuideRepo) ListBookIDsNeedingGuide(ctx context.Context) ([]string, error) {
+// GuideCandidate is a book a Guide run would process. Format comes along
+// because the run's pre-flight estimate is computed from it: only EPUB
+// sends book text, so only EPUB carries the per-book text cap.
+type GuideCandidate struct {
+	BookID string
+	Format string
+}
+
+// ListGuideCandidates returns the books a bulk Guide run should process:
+// those with no guide, plus those whose guide is machine-written and can
+// therefore be replaced. Hand-edited guides are excluded — the run must
+// not erase work someone did by hand.
+func (r *BookReadingGuideRepo) ListGuideCandidates(ctx context.Context) ([]GuideCandidate, error) {
 	const q = `
-		SELECT b.id
+		SELECT b.id, b.format
 		FROM books b
 		LEFT JOIN book_reading_guides g ON g.book_id = b.id
 		WHERE b.deleted_at IS NULL
@@ -128,13 +136,13 @@ func (r *BookReadingGuideRepo) ListBookIDsNeedingGuide(ctx context.Context) ([]s
 	}
 	defer func() { _ = rows.Close() }()
 
-	var ids []string
+	var out []GuideCandidate
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var c GuideCandidate
+		if err := rows.Scan(&c.BookID, &c.Format); err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		out = append(out, c)
 	}
-	return ids, rows.Err()
+	return out, rows.Err()
 }
