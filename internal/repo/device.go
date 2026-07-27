@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/blackforge/embookshelf/internal/db"
@@ -39,17 +38,7 @@ func (r *DeviceRepo) ListForUser(ctx context.Context, userID string) ([]model.De
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []model.Device
-	for rows.Next() {
-		d, err := r.scanDevice(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, d)
-	}
-	return out, rows.Err()
+	return collect(rows, nil, r.scanDevice)
 }
 
 func (r *DeviceRepo) GetForUser(ctx context.Context, userID, id string) (model.Device, error) {
@@ -85,18 +74,7 @@ func (r *DeviceRepo) Create(ctx context.Context, d model.Device) (model.Device, 
 
 func (r *DeviceRepo) Delete(ctx context.Context, userID, id string) error {
 	const q = `DELETE FROM user_devices WHERE user_id = $1 AND id = $2`
-	res, err := r.db.SQL.ExecContext(ctx, q, userID, id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, userID, id)
 }
 
 // MarkSendResult records the outcome of a push attempt.
@@ -125,16 +103,13 @@ func (r *DeviceRepo) MarkSendResult(ctx context.Context, userID, id string, send
 
 func (r *DeviceRepo) scanDevice(s scanner) (model.Device, error) {
 	var (
-		d           model.Device
-		kind        string
-		rawCfg      []byte
-		lastSentAny any
-		createdAny  any
-		updatedAny  any
+		d      model.Device
+		kind   string
+		rawCfg []byte
 	)
 	err := s.Scan(
 		&d.ID, &d.UserID, &kind, &d.Name, &d.Secret, &rawCfg,
-		&lastSentAny, &d.LastError, &createdAny, &updatedAny,
+		&d.LastSentAt, &d.LastError, &d.CreatedAt, &d.UpdatedAt,
 	)
 	if err != nil {
 		if dberr.IsNotFound(err) {
@@ -150,15 +125,6 @@ func (r *DeviceRepo) scanDevice(s scanner) (model.Device, error) {
 	}
 	if d.Config == nil {
 		d.Config = map[string]any{}
-	}
-	if err := db.ScanNullTime(lastSentAny, &d.LastSentAt); err != nil {
-		return d, fmt.Errorf("scan last_sent_at: %w", err)
-	}
-	if err := db.ScanTime(createdAny, &d.CreatedAt); err != nil {
-		return d, fmt.Errorf("scan created_at: %w", err)
-	}
-	if err := db.ScanTime(updatedAny, &d.UpdatedAt); err != nil {
-		return d, fmt.Errorf("scan updated_at: %w", err)
 	}
 	return d, nil
 }

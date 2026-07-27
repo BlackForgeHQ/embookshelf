@@ -4,8 +4,6 @@ package repo
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -51,8 +49,7 @@ func (r *AnnotationRepo) ListForBook(ctx context.Context, userID, bookID string)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	return r.collectAnnotations(rows)
+	return collect(rows, make([]model.Annotation, 0), r.scanAnnotation)
 }
 
 // ListRecent returns every annotation the user has across every book,
@@ -72,8 +69,7 @@ func (r *AnnotationRepo) ListRecent(ctx context.Context, userID string, limit in
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	return r.collectAnnotations(rows)
+	return collect(rows, make([]model.Annotation, 0), r.scanAnnotation)
 }
 
 // Get returns a single annotation, scoped to the owner. Callers are
@@ -152,32 +148,17 @@ func (r *AnnotationRepo) Delete(ctx context.Context, userID, id string) error {
 	const q = `
         DELETE FROM annotations WHERE user_id = $1 AND id = $2
     `
-	res, err := r.db.SQL.ExecContext(ctx, q, userID, id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, userID, id)
 }
 
 // scanAnnotation hydrates a sql row into the model shape. Mirrors the
 // scanBook / scanShelf pattern.
 func (r *AnnotationRepo) scanAnnotation(s scanner) (model.Annotation, error) {
-	var (
-		a          model.Annotation
-		createdAny any
-		updatedAny any
-	)
+	var a model.Annotation
 	err := s.Scan(
 		&a.ID, &a.UserID, &a.BookID, &a.Locator,
 		&a.SelectedText, &a.Note, &a.Color,
-		&createdAny, &updatedAny,
+		&a.CreatedAt, &a.UpdatedAt,
 	)
 	if dberr.IsNotFound(err) {
 		return model.Annotation{}, ErrNotFound
@@ -185,23 +166,5 @@ func (r *AnnotationRepo) scanAnnotation(s scanner) (model.Annotation, error) {
 	if err != nil {
 		return model.Annotation{}, err
 	}
-	if err := db.ScanTime(createdAny, &a.CreatedAt); err != nil {
-		return model.Annotation{}, fmt.Errorf("scan created_at: %w", err)
-	}
-	if err := db.ScanTime(updatedAny, &a.UpdatedAt); err != nil {
-		return model.Annotation{}, fmt.Errorf("scan updated_at: %w", err)
-	}
 	return a, nil
-}
-
-func (r *AnnotationRepo) collectAnnotations(rows *sql.Rows) ([]model.Annotation, error) {
-	out := make([]model.Annotation, 0)
-	for rows.Next() {
-		a, err := r.scanAnnotation(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	return out, rows.Err()
 }

@@ -27,21 +27,11 @@ func (r *SessionRepo) Create(ctx context.Context, userID, userAgent string, ttl 
 		RETURNING id, user_id, expires_at, user_agent, created_at, last_used_at
 	`
 	var s model.Session
-	var expiresAny, createdAny, lastUsedAny any
 	err := r.db.SQL.QueryRowContext(ctx, q, userID, ttl.String(), userAgent).Scan(
-		&s.ID, &s.UserID, &expiresAny, &s.UserAgent, &createdAny, &lastUsedAny,
+		&s.ID, &s.UserID, &s.ExpiresAt, &s.UserAgent, &s.CreatedAt, &s.LastUsedAt,
 	)
 	if err != nil {
 		return s, err
-	}
-	if err := db.ScanTime(expiresAny, &s.ExpiresAt); err != nil {
-		return s, fmt.Errorf("scan expires_at: %w", err)
-	}
-	if err := db.ScanTime(createdAny, &s.CreatedAt); err != nil {
-		return s, fmt.Errorf("scan created_at: %w", err)
-	}
-	if err := db.ScanTime(lastUsedAny, &s.LastUsedAt); err != nil {
-		return s, fmt.Errorf("scan last_used_at: %w", err)
 	}
 	return s, nil
 }
@@ -58,22 +48,12 @@ func (r *SessionRepo) GetActive(ctx context.Context, id string) (model.Session, 
 	`
 
 	var s model.Session
-	var expiresAny, createdAny, lastUsedAny any
 	row := r.db.SQL.QueryRowContext(ctx, q, id)
-	if err := row.Scan(&s.ID, &s.UserID, &expiresAny, &s.UserAgent, &createdAny, &lastUsedAny); err != nil {
+	if err := row.Scan(&s.ID, &s.UserID, &s.ExpiresAt, &s.UserAgent, &s.CreatedAt, &s.LastUsedAt); err != nil {
 		if dberr.IsNotFound(err) {
 			return s, model.User{}, ErrNotFound
 		}
 		return s, model.User{}, err
-	}
-	if err := db.ScanTime(expiresAny, &s.ExpiresAt); err != nil {
-		return s, model.User{}, fmt.Errorf("scan expires_at: %w", err)
-	}
-	if err := db.ScanTime(createdAny, &s.CreatedAt); err != nil {
-		return s, model.User{}, fmt.Errorf("scan created_at: %w", err)
-	}
-	if err := db.ScanTime(lastUsedAny, &s.LastUsedAt); err != nil {
-		return s, model.User{}, fmt.Errorf("scan last_used_at: %w", err)
 	}
 
 	const uq = `SELECT ` + userCols + ` FROM users WHERE id = $1`

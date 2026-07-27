@@ -78,9 +78,9 @@ func DetectDialect(url string) (Dialect, error) {
 	}
 }
 
-// Open builds a *DB from configuration. In this plan only DialectPostgres
-// is implemented; SQLite returns an explicit error so anyone running on
-// SQLite during Plan 1 fails loudly. Plan 2 adds the SQLite branch.
+// Open builds a *DB from configuration. Postgres is the server's only
+// backend (ADR-0023); the SQLite branch serves `import-sqlite` alone and
+// `cmd/embookshelf` refuses a sqlite:// DSN before reaching it.
 func Open(ctx context.Context, cfg config.Config) (*DB, error) {
 	d, err := DetectDialect(cfg.DatabaseURL)
 	if err != nil {
@@ -116,10 +116,10 @@ func openPostgres(ctx context.Context, cfg config.Config) (*DB, error) {
 		return nil, fmt.Errorf("pg ping: %w", err)
 	}
 
-	// stdlib.OpenDBFromPool registers pgx's type codecs (including text[]
-	// → []string) with the *sql.DB. Repos that scan PostgreSQL array
-	// columns rely on this. Plan 2's SQLite branch will need its own
-	// equivalent or per-column manual decoding.
+	// stdlib.OpenDBFromPool wires pgx's decoding into the *sql.DB.
+	// Timestamps arrive as time.Time and scan straight into a model field;
+	// text[] does not — see db.TextArray for the one column type that
+	// still needs an adapter.
 	return &DB{
 		SQL:     stdlib.OpenDBFromPool(pool),
 		Dialect: DialectPostgres,

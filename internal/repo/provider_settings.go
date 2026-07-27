@@ -139,25 +139,24 @@ func (r *ProviderSettingsRepo) List(ctx context.Context) ([]ProviderSetting, err
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	out := make([]ProviderSetting, 0)
-	for rows.Next() {
-		s, err := r.scanProviderSetting(rows)
+	// collect drains and closes; the decrypt rides inside the scan so
+	// every row leaves this method as plaintext. Decrypting here rather
+	// than at the call site is the point of ADR-0010 §4: List is read by
+	// both the admin surface and the ISBN chain walk, and the latter's
+	// happening to touch only Enabled/Priority is what let the missing
+	// decrypt go unnoticed.
+	return collect(rows, make([]ProviderSetting, 0), func(sc scanner) (ProviderSetting, error) {
+		row, err := r.scanProviderSetting(sc)
 		if err != nil {
-			return nil, err
+			return row, err
 		}
-		// Decrypt here rather than at the call site: List is read by both
-		// the admin surface and the ISBN chain walk, and the latter's
-		// happening to touch only Enabled/Priority is what let the missing
-		// decrypt go unnoticed.
-		cfg, err := r.transformConfig(s.ID, s.Config, r.cipher.Decrypt)
+		cfg, err := r.transformConfig(row.ID, row.Config, r.cipher.Decrypt)
 		if err != nil {
-			return nil, fmt.Errorf("decrypt %s config: %w", s.ID, err)
+			return row, fmt.Errorf("decrypt %s config: %w", row.ID, err)
 		}
-		s.Config = cfg
-		out = append(out, s)
-	}
-	return out, rows.Err()
+		row.Config = cfg
+		return row, nil
+	})
 }
 
 // AllConfigs returns id → config for every known provider, secrets
@@ -308,27 +307,15 @@ func (r *ProviderSettingsRepo) SeedIfAbsent(ctx context.Context, defaults map[st
 
 func (r *ProviderSettingsRepo) scanProviderSetting(s scanner) (ProviderSetting, error) {
 	var (
-		ps             ProviderSetting
-		cfg            []byte
-		updatedAny     any
-		lastSuccessAny any
-		lastErrorAtAny any
+		ps  ProviderSetting
+		cfg []byte
 	)
 	if err := s.Scan(
-		&ps.ID, &ps.Enabled, &cfg, &ps.Priority, &updatedAny,
-		&lastSuccessAny, &lastErrorAtAny, &ps.LastError,
+		&ps.ID, &ps.Enabled, &cfg, &ps.Priority, &ps.UpdatedAt,
+		&ps.LastSuccessAt, &ps.LastErrorAt, &ps.LastError,
 	); err != nil {
 		return ps, err
 	}
 	ps.Config = json.RawMessage(cfg)
-	if err := db.ScanTime(updatedAny, &ps.UpdatedAt); err != nil {
-		return ps, fmt.Errorf("scan updated_at: %w", err)
-	}
-	if err := db.ScanNullTime(lastSuccessAny, &ps.LastSuccessAt); err != nil {
-		return ps, fmt.Errorf("scan last_success_at: %w", err)
-	}
-	if err := db.ScanNullTime(lastErrorAtAny, &ps.LastErrorAt); err != nil {
-		return ps, fmt.Errorf("scan last_error_at: %w", err)
-	}
 	return ps, nil
 }

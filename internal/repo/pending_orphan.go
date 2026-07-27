@@ -106,29 +106,11 @@ func (r *PendingOrphanRepo) SelectDue(ctx context.Context, now time.Time, limit 
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []model.PendingOrphan
-	for rows.Next() {
-		var (
-			po           model.PendingOrphan
-			eligibleAny  any
-			createdAny   any
-			bookIDNullSt *string
-		)
-		if err := rows.Scan(&po.ID, &po.LibraryID, &po.Key, &eligibleAny, &po.Reason, &bookIDNullSt, &createdAny); err != nil {
-			return nil, err
-		}
-		if err := db.ScanTime(eligibleAny, &po.EligibleAt); err != nil {
-			return nil, fmt.Errorf("scan eligible_at: %w", err)
-		}
-		if err := db.ScanTime(createdAny, &po.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan created_at: %w", err)
-		}
-		po.BookID = bookIDNullSt
-		out = append(out, po)
-	}
-	return out, rows.Err()
+	return collect(rows, nil, func(s scanner) (model.PendingOrphan, error) {
+		var po model.PendingOrphan
+		err := s.Scan(&po.ID, &po.LibraryID, &po.Key, &po.EligibleAt, &po.Reason, &po.BookID, &po.CreatedAt)
+		return po, err
+	})
 }
 
 // Delete removes a row by id. Used by the sweeper after the key has

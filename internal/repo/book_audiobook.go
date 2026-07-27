@@ -99,14 +99,13 @@ func (r *BookAudiobookRepo) GetByBookID(ctx context.Context, bookID string) (mod
 	const q = `SELECT ` + audiobookCols + ` FROM book_audiobooks WHERE book_id = $1`
 
 	var (
-		ab                   model.Audiobook
-		state                string
-		createdAt, updatedAt any
+		ab    model.Audiobook
+		state string
 	)
 	row := r.db.SQL.QueryRowContext(ctx, q, bookID)
 	if err := row.Scan(
 		&ab.BookID, &state, &ab.Engine, &ab.Voice, &ab.Model, &ab.SourceContentHash,
-		&ab.FileID, &ab.Error, &ab.TotalChars, &ab.DurationMS, &createdAt, &updatedAt,
+		&ab.FileID, &ab.Error, &ab.TotalChars, &ab.DurationMS, &ab.CreatedAt, &ab.UpdatedAt,
 	); err != nil {
 		if dberr.IsNotFound(err) {
 			return model.Audiobook{}, ErrNotFound
@@ -114,12 +113,6 @@ func (r *BookAudiobookRepo) GetByBookID(ctx context.Context, bookID string) (mod
 		return model.Audiobook{}, err
 	}
 	ab.State = model.AudiobookState(state)
-	if err := db.ScanTime(createdAt, &ab.CreatedAt); err != nil {
-		return model.Audiobook{}, fmt.Errorf("scan created_at: %w", err)
-	}
-	if err := db.ScanTime(updatedAt, &ab.UpdatedAt); err != nil {
-		return model.Audiobook{}, fmt.Errorf("scan updated_at: %w", err)
-	}
 	return ab, nil
 }
 
@@ -130,17 +123,7 @@ func (r *BookAudiobookRepo) ListSegments(ctx context.Context, bookID string) ([]
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []model.AudiobookSegment
-	for rows.Next() {
-		s, err := scanSegment(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
+	return collect(rows, nil, scanSegment)
 }
 
 // GetSegment reads one segment by (book, seq) — the address a job carries.
@@ -171,17 +154,7 @@ func (r *BookAudiobookRepo) ListUnfinishedSegments(ctx context.Context, bookID s
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []model.AudiobookSegment
-	for rows.Next() {
-		s, err := scanSegment(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
+	return collect(rows, nil, scanSegment)
 }
 
 // MarkSegmentRunning claims a segment. Reports whether the claim landed:
@@ -324,18 +297,7 @@ func scanCoverage(ctx context.Context, q rowQuerier, bookID string) (model.Audio
 // SetState moves the run. msg is the failure reason; empty otherwise.
 func (r *BookAudiobookRepo) SetState(ctx context.Context, bookID string, state model.AudiobookState, msg string) error {
 	const q = `UPDATE book_audiobooks SET state = $2, error = $3, updated_at = now() WHERE book_id = $1`
-	res, err := r.db.SQL.ExecContext(ctx, q, bookID, string(state), msg)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, bookID, string(state), msg)
 }
 
 // SetReady completes a run: the file exists, the duration is known.
@@ -393,25 +355,14 @@ func (r *BookAudiobookRepo) ListStaleStaging(ctx context.Context, olderThanDays 
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []string
-	for rows.Next() {
+	return collect(rows, nil, func(s scanner) (string, error) {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
+		err := s.Scan(&id)
+		return id, err
+	})
 }
 
-// scanner is satisfied by both *sql.Row and *sql.Rows.
-type segmentScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanSegment(s segmentScanner) (model.AudiobookSegment, error) {
+func scanSegment(s scanner) (model.AudiobookSegment, error) {
 	var (
 		seg   model.AudiobookSegment
 		state string

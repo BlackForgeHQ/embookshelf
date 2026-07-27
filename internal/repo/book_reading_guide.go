@@ -4,7 +4,6 @@ package repo
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/db/dberr"
@@ -70,32 +69,20 @@ func (r *BookReadingGuideRepo) SaveEdit(ctx context.Context, bookID string, t mo
 		    edited_by_user = true
 		WHERE book_id = $1
 	`
-	res, err := r.db.SQL.ExecContext(ctx, q, bookID, t.About, t.Audience, t.NotFor, t.Problems)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, bookID, t.About, t.Audience, t.NotFor, t.Problems)
 }
 
 func (r *BookReadingGuideRepo) GetByBookID(ctx context.Context, bookID string) (model.ReadingGuide, error) {
 	const q = `SELECT ` + readingGuideCols + ` FROM book_reading_guides WHERE book_id = $1`
 
 	var (
-		g           model.ReadingGuide
-		sourceKind  string
-		generatedAt any
+		g          model.ReadingGuide
+		sourceKind string
 	)
 	row := r.db.SQL.QueryRowContext(ctx, q, bookID)
 	if err := row.Scan(
 		&g.BookID, &g.About, &g.Audience, &g.NotFor, &g.Problems,
-		&sourceKind, &g.Model, &g.Language, &generatedAt, &g.EditedByUser,
+		&sourceKind, &g.Model, &g.Language, &g.GeneratedAt, &g.EditedByUser,
 	); err != nil {
 		if dberr.IsNotFound(err) {
 			return model.ReadingGuide{}, ErrNotFound
@@ -103,9 +90,6 @@ func (r *BookReadingGuideRepo) GetByBookID(ctx context.Context, bookID string) (
 		return model.ReadingGuide{}, err
 	}
 	g.SourceKind = model.GuideSource(sourceKind)
-	if err := db.ScanTime(generatedAt, &g.GeneratedAt); err != nil {
-		return model.ReadingGuide{}, fmt.Errorf("scan generated_at: %w", err)
-	}
 	return g, nil
 }
 
@@ -134,17 +118,11 @@ func (r *BookReadingGuideRepo) ListGuideCandidates(ctx context.Context) ([]Guide
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []GuideCandidate
-	for rows.Next() {
+	return collect(rows, nil, func(s scanner) (GuideCandidate, error) {
 		var c GuideCandidate
-		if err := rows.Scan(&c.BookID, &c.Format); err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
+		err := s.Scan(&c.BookID, &c.Format)
+		return c, err
+	})
 }
 
 // CountCoverage reports how many books exist and how many already have a

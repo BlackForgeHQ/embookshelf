@@ -4,7 +4,6 @@ package repo
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -71,18 +70,7 @@ func (r *UserInviteRepo) MarkAccepted(ctx context.Context, hash []byte, userID s
 		SET accepted_at = $2, user_id = $3
 		WHERE token_hash = $1 AND accepted_at IS NULL AND expires_at > $2
 	`
-	res, err := r.db.SQL.ExecContext(ctx, q, hash, now.UTC(), userID)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, hash, now.UTC(), userID)
 }
 
 // ListPending returns every unaccepted, unexpired invite ordered by
@@ -98,17 +86,7 @@ func (r *UserInviteRepo) ListPending(ctx context.Context, now time.Time) ([]User
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []UserInvite
-	for rows.Next() {
-		inv, err := r.scan(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, inv)
-	}
-	return out, rows.Err()
+	return collect(rows, nil, r.scan)
 }
 
 // Revoke deletes a pending invite. Idempotent — no-op if the hash is
@@ -132,14 +110,11 @@ func (r *UserInviteRepo) PurgeExpired(ctx context.Context, now time.Time) (int64
 
 func (r *UserInviteRepo) scan(s scanner) (UserInvite, error) {
 	var (
-		inv         UserInvite
-		role        string
-		userID      *string
-		createdAny  any
-		expiresAny  any
-		acceptedAny any
+		inv    UserInvite
+		role   string
+		userID *string
 	)
-	if err := s.Scan(&inv.TokenHash, &inv.Email, &role, &inv.InvitedBy, &createdAny, &expiresAny, &acceptedAny, &userID); err != nil {
+	if err := s.Scan(&inv.TokenHash, &inv.Email, &role, &inv.InvitedBy, &inv.CreatedAt, &inv.ExpiresAt, &inv.AcceptedAt, &userID); err != nil {
 		if dberr.IsNotFound(err) {
 			return UserInvite{}, ErrNotFound
 		}
@@ -147,14 +122,5 @@ func (r *UserInviteRepo) scan(s scanner) (UserInvite, error) {
 	}
 	inv.Role = model.Role(role)
 	inv.UserID = userID
-	if err := db.ScanTime(createdAny, &inv.CreatedAt); err != nil {
-		return UserInvite{}, fmt.Errorf("scan created_at: %w", err)
-	}
-	if err := db.ScanTime(expiresAny, &inv.ExpiresAt); err != nil {
-		return UserInvite{}, fmt.Errorf("scan expires_at: %w", err)
-	}
-	if err := db.ScanNullTime(acceptedAny, &inv.AcceptedAt); err != nil {
-		return UserInvite{}, fmt.Errorf("scan accepted_at: %w", err)
-	}
 	return inv, nil
 }
