@@ -45,7 +45,9 @@ var allowedDivergence = map[string]bool{
 	"books_fts_docsize": true,
 	"jobs":              true, // SQLite-only; PG uses River's river_job
 
-	"book_reading_guides": true, // PG-only, post-freeze (ADR-0023, ADR-0024)
+	"book_reading_guides":     true, // PG-only, post-freeze (ADR-0023, ADR-0024)
+	"book_audiobooks":         true, // PG-only, post-freeze (ADR-0023, ADR-0025)
+	"book_audiobook_segments": true, // PG-only, post-freeze (ADR-0023, ADR-0028)
 }
 
 // TestSchemaEquivalence migrates both trees end-to-end against

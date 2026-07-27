@@ -16,6 +16,9 @@ import (
 // is derived rather than hand-written per job.
 type registration struct {
 	kind string
+	// queue is where jobs of this kind run, read off the args type so it
+	// cannot disagree with what Enqueue routes to.
+	queue string
 	// addToRiver registers the typed worker with River's registry.
 	addToRiver func(*river.Workers) error
 }
@@ -37,7 +40,8 @@ func (w *riverWorker[T]) Work(ctx context.Context, job *river.Job[T]) error {
 func register[T JobArgs](work func(context.Context, T) error) registration {
 	var zero T
 	return registration{
-		kind: zero.Kind(),
+		kind:  zero.Kind(),
+		queue: queueOf(zero),
 		addToRiver: func(w *river.Workers) error {
 			return river.AddWorkerSafely(w, &riverWorker[T]{work: work})
 		},
@@ -78,6 +82,22 @@ func registry(deps Deps) []registration {
 		Hub:      deps.Hub,
 	}
 
+	// Audiobook generation runs on its own queue, declared by its args
+	// types. Dispatch is a pointer the composition root fills in after
+	// queue.New returns, because the finalize dispatcher closes over the
+	// very client this registry is being built for.
+	audiobook := task.AudiobookDeps{
+		Settings:   deps.AppSettings,
+		Audiobooks: deps.Audiobooks,
+		Books:      deps.Books,
+		Files:      deps.FileRepo,
+		LibStore:   deps.LibStore,
+		Covers:     deps.Covers,
+		Hub:        deps.Hub,
+		Dispatch:   deps.AudiobookDispatch,
+		DataPath:   deps.DataPath,
+	}
+
 	return []registration{
 		register(func(ctx context.Context, a task.BookDropIngestArgs) error {
 			return task.BookDropIngest(ctx, a, bookdrop)
@@ -90,6 +110,12 @@ func registry(deps Deps) []registration {
 		}),
 		register(func(ctx context.Context, a task.ReadingGuideArgs) error {
 			return task.ReadingGuide(ctx, a, readingGuide)
+		}),
+		register(func(ctx context.Context, a task.AudiobookSegmentArgs) error {
+			return task.AudiobookSegment(ctx, a, audiobook)
+		}),
+		register(func(ctx context.Context, a task.AudiobookFinalizeArgs) error {
+			return task.AudiobookFinalize(ctx, a, audiobook)
 		}),
 	}
 }

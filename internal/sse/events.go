@@ -79,6 +79,22 @@ type ReadingGuideUpdated struct {
 func (ReadingGuideUpdated) EventName() string  { return "guide.updated" }
 func (ReadingGuideUpdated) Audience() Audience { return Everyone() }
 
+// AudiobookUpdated fires when a book's generated narration reaches a
+// state a reader would notice: ready, failed, cancelled, or deleted
+// (ADR-0028 §7).
+//
+// One terminal event, not one per segment. A book is tens of segments and
+// a run is tens of minutes, so per-segment events would be forty messages
+// for real-time-ness nobody needs; live progress is a coverage count the
+// open page polls instead. Instance-wide for the same reason guides are:
+// the narration belongs to the book, not to whoever started it.
+type AudiobookUpdated struct {
+	BookID string `json:"bookId"`
+}
+
+func (AudiobookUpdated) EventName() string  { return "audiobook.updated" }
+func (AudiobookUpdated) Audience() Audience { return Everyone() }
+
 // ---------------------------------------------------------------------------
 // Users / shelves
 // ---------------------------------------------------------------------------
@@ -145,4 +161,5 @@ var Catalog = []Payload{
 	KindleSent{},
 	KindleFailed{},
 	ReadingGuideUpdated{},
+	AudiobookUpdated{},
 }

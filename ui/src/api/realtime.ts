@@ -18,6 +18,7 @@ type RealtimeEvent =
   | "kindle.sent"
   | "kindle.failed"
   | "guide.updated"
+  | "audiobook.updated"
 
 type Handler = (data: string) => void
 
@@ -141,6 +142,16 @@ export function useRealtime() {
       // detail page fills in; no toast, because a bulk run over a
       // thousand books would otherwise bury the screen.
       "guide.updated": (raw) => {
+        const { bookId } = parseGuidePayload(raw)
+        if (bookId) {
+          void queryClient.invalidateQueries({ queryKey: bookQueryKey(bookId) })
+        }
+      },
+      // A narration reached a terminal state. Bust the book's cache so an
+      // open detail page swaps its progress bar for a player or an error.
+      // No toast: a run takes tens of minutes and the user is rarely
+      // looking at the page it finishes on.
+      "audiobook.updated": (raw) => {
         const { bookId } = parseGuidePayload(raw)
         if (bookId) {
           void queryClient.invalidateQueries({ queryKey: bookQueryKey(bookId) })

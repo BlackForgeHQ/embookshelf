@@ -349,6 +349,9 @@ database must be empty; migrations are applied to it automatically.
 	if err := appSettingsRepo.SeedReadingGuideIfAbsent(ctx); err != nil {
 		slog.Warn("seed reading guide settings", "err", err)
 	}
+	if err := appSettingsRepo.SeedAudiobookIfAbsent(ctx); err != nil {
+		slog.Warn("seed audiobook settings", "err", err)
+	}
 	if err := appSettingsRepo.SeedEmailIfAbsent(ctx); err != nil {
 		slog.Warn("seed email settings", "err", err)
 	}
@@ -368,6 +371,7 @@ database must be empty; migrations are applied to it automatically.
 		AppSettings: appSettingsRepo,
 	})
 	guideRepo := repo.NewBookReadingGuideRepo(dbh)
+	audiobookRepo := repo.NewBookAudiobookRepo(dbh)
 	resetSvc := service.NewPasswordResetService(userRepo, resetRepo, sessionRepo, notifier)
 	if err := notifier.Reload(ctx); err != nil {
 		slog.Warn("email subsystem disabled — reload failed", "err", err)
@@ -376,18 +380,27 @@ database must be empty; migrations are applied to it automatically.
 	}
 
 	// Background queue. PG → River; SQLite → polling worker (queue.New dispatches by dialect).
+	// The audiobook workers need to enqueue each other — a finishing
+	// segment dispatches the finalize job — but those dispatchers close
+	// over the very client being constructed here. The holder is passed
+	// in empty and filled immediately after New returns.
+	audiobookDispatch := &service.AudiobookDispatch{}
 	q, err := queue.New(ctx, dbh, queue.Deps{
-		BookDropSvc: bdropSvc,
-		LibSvc:      libSvc,
-		Resolver:    storageResolver,
-		LibStore:    libStore,
-		FileRepo:    fileRepo,
-		Books:       bookRepo,
-		Users:       userRepo,
-		Notifier:    notifier,
-		Hub:         hub,
-		AppSettings: appSettingsRepo,
-		Guides:      guideRepo,
+		BookDropSvc:       bdropSvc,
+		LibSvc:            libSvc,
+		Resolver:          storageResolver,
+		LibStore:          libStore,
+		FileRepo:          fileRepo,
+		Books:             bookRepo,
+		Users:             userRepo,
+		Notifier:          notifier,
+		Hub:               hub,
+		AppSettings:       appSettingsRepo,
+		Guides:            guideRepo,
+		Audiobooks:        audiobookRepo,
+		Covers:            covers,
+		DataPath:          cfg.DataPath,
+		AudiobookDispatch: audiobookDispatch,
 	})
 	if err != nil {
 		slog.Error("queue", "err", err)
@@ -406,6 +419,33 @@ database must be empty; migrations are applied to it automatically.
 	// takes bdropSvc as a dependency, so the two can only be joined here.
 	bdropSvc.WithIngestDispatcher(func(ctx context.Context, itemID string) error {
 		return q.Enqueue(ctx, task.BookDropIngestArgs{ItemID: itemID})
+	})
+
+	// Close the audiobook dispatch loop now that the client exists. Both
+	// halves are set together: a segment dispatcher without a finalize
+	// dispatcher produces runs that reach 100% and never publish.
+	audiobookDispatch.Segment = func(ctx context.Context, bookID string, seq int) error {
+		return q.Enqueue(ctx, task.AudiobookSegmentArgs{BookID: bookID, Seq: seq})
+	}
+	audiobookDispatch.Finalize = func(ctx context.Context, bookID string) error {
+		return q.Enqueue(ctx, task.AudiobookFinalizeArgs{BookID: bookID})
+	}
+	audiobookSvc := service.NewAudiobookService(
+		audiobookRepo,
+		service.NewLibraryBookOpener(libStore),
+		audiobookDispatch.Segment,
+	).WithStagingSweeper(func(bookID string) {
+		if err := os.RemoveAll(task.StagingDir(cfg.DataPath, bookID)); err != nil {
+			slog.Warn("audiobook: sweep staging after cancel", "book", bookID, "err", err)
+		}
+	})
+
+	// Staging for abandoned failed or cancelled runs is dead weight after
+	// a week. Hourly loop, same shape as the missing-file and
+	// orphaned-key sweepers.
+	go task.LoopAudiobookStagingSweep(ctx, task.AudiobookDeps{
+		Audiobooks: audiobookRepo,
+		DataPath:   cfg.DataPath,
 	})
 
 	// Reading guide bulk runs dispatch one job per book, so the runner is
@@ -483,6 +523,7 @@ database must be empty; migrations are applied to it automatically.
 			enrichSvc, providerCfgSvc, searchSvc,
 			statsSvc, readingStatsSvc, annotationSvc,
 			guideRepo, guideRunner,
+			audiobookSvc, audiobookRepo,
 		),
 		handler.NewAccountDeps(authSvc, userRepo, deviceSvc, appSettingsRepo),
 		handler.NewEmailDeps(notifier, resetSvc, inviteRepo, secretCipher, emailTpl),

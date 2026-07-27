@@ -33,6 +33,13 @@ const (
 	// CodeGuidesDisabled — no LLM endpoint is configured, so reading
 	// guides cannot be generated (ADR-0024).
 	CodeGuidesDisabled = "GUIDES_DISABLED"
+	// CodeAudiobooksDisabled — no TTS engine is configured, so narration
+	// cannot be generated (ADR-0026).
+	CodeAudiobooksDisabled = "AUDIOBOOKS_DISABLED"
+	// CodeFormatNotNarratable — the book's format is outside the
+	// Narratable set, which is EPUB alone (ADR-0028 §4). Distinct from
+	// CodeFormatNotSupported, which is Send-to-Kindle's different gate.
+	CodeFormatNotNarratable = "FORMAT_NOT_NARRATABLE"
 )
 
 // AllErrorCodes lists every declared code. Kept beside the constants so a
@@ -44,6 +51,8 @@ var AllErrorCodes = []string{
 	CodeEmailReloadFailed,
 	CodeSMTPError,
 	CodeGuidesDisabled,
+	CodeAudiobooksDisabled,
+	CodeFormatNotNarratable,
 }
 
 // errorBody is the JSON shape every non-2xx response uses.

@@ -693,6 +693,15 @@ func (h *Handler) BookFile(c *gin.Context) {
 		writeServerError(c, "book file lookup", err)
 		return
 	}
+	// A book can be consumed as text or as narration — two renditions of
+	// one book (ADR-0025 §3). books.format names the primary one, so the
+	// caller has to say when it wants the other; without this selector
+	// the generated MP3 is unreachable and Listen has no source.
+	if c.Query("rendition") == renditionAudio {
+		h.serveNarrationRendition(c, book)
+		return
+	}
+
 	if book.Path == "" {
 		writeError(c, http.StatusNotFound, "no file on disk for this book")
 		return

@@ -140,6 +140,23 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.POST("/books/:id/guide", h.BookGuideGenerate)
 			authed.PUT("/books/:id/guide", h.BookGuideEdit)
 
+			// Generated narration (ADR-0025 — ADR-0028). Reading the
+			// status is open to any signed-in user, because anyone can
+			// play a finished audiobook; everything that spends money is
+			// admin-gated, since only the key's owner should be able to
+			// spend it (ADR-0028 §1). There is deliberately no bulk run.
+			authed.GET("/books/:id/audiobook", h.BookAudiobookGet)
+			authed.GET("/books/:id/audiobook/estimate",
+				auth.RequireRole(model.RoleAdmin), h.BookAudiobookEstimate)
+			authed.POST("/books/:id/audiobook",
+				auth.RequireRole(model.RoleAdmin), h.BookAudiobookGenerate)
+			authed.POST("/books/:id/audiobook/cancel",
+				auth.RequireRole(model.RoleAdmin), h.BookAudiobookCancel)
+			authed.POST("/books/:id/audiobook/retry",
+				auth.RequireRole(model.RoleAdmin), h.BookAudiobookRetry)
+			authed.DELETE("/books/:id/audiobook",
+				auth.RequireRole(model.RoleAdmin), h.BookAudiobookDelete)
+
 			// Library statistics dashboard
 			authed.GET("/stats", h.Stats)
 			authed.GET("/stats/reading", h.ReadingStats)
@@ -180,6 +197,11 @@ func (h *Handler) Engine() *gin.Engine {
 				admin.POST("/reading-guide/test", h.SettingsReadingGuideTest)
 				admin.GET("/reading-guide/estimate", h.SettingsReadingGuideEstimate)
 				admin.POST("/reading-guide/run", h.SettingsReadingGuideRun)
+				admin.GET("/audiobook", h.SettingsAudiobookGet)
+				admin.PUT("/audiobook", h.SettingsAudiobookUpdate)
+				admin.GET("/audiobook/voices", h.SettingsAudiobookVoices)
+				admin.POST("/audiobook/test", h.SettingsAudiobookTest)
+
 				admin.GET("/providers", h.SettingsProvidersList)
 				admin.PATCH("/providers/:id", h.SettingsProviderUpdate)
 

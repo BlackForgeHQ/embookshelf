@@ -30,6 +30,15 @@ type opfSpineDoc struct {
 			IDRef string `xml:"idref,attr"`
 		} `xml:"itemref"`
 	} `xml:"spine"`
+	// Guide is the EPUB 2 declaration of which documents are front
+	// matter. Unused by the reading-guide text path, which wants every
+	// word; narration uses it to avoid reading the copyright page aloud.
+	Guide struct {
+		References []struct {
+			Type string `xml:"type,attr"`
+			Href string `xml:"href,attr"`
+		} `xml:"reference"`
+	} `xml:"guide"`
 }
 
 // textualMediaTypes are the spine document types worth reading. A spine

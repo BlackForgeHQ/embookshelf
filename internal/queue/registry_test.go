@@ -48,6 +48,8 @@ func TestRegistryCoversEveryJobKindExactlyOnce(t *testing.T) {
 		task.LibraryScanArgs{}.Kind(),
 		task.SendToKindleArgs{}.Kind(),
 		task.ReadingGuideArgs{}.Kind(),
+		task.AudiobookSegmentArgs{}.Kind(),
+		task.AudiobookFinalizeArgs{}.Kind(),
 	}
 
 	seen := map[string]int{}
@@ -69,5 +71,27 @@ func TestRegistryCoversEveryJobKindExactlyOnce(t *testing.T) {
 	}
 	if len(seen) != len(want) {
 		t.Errorf("registry has %d kinds, want %d — a job was added without a test", len(seen), len(want))
+	}
+}
+
+// A job routed to a queue the client does not poll sits forever with no
+// error anywhere, so the queue a job declares has to be the queue the
+// registry reports for it.
+func TestRegistryRecordsEachJobsQueue(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]string{
+		task.BookDropIngestArgs{}.Kind():    "default",
+		task.LibraryScanArgs{}.Kind():       "default",
+		task.SendToKindleArgs{}.Kind():      "default",
+		task.ReadingGuideArgs{}.Kind():      "default",
+		task.AudiobookSegmentArgs{}.Kind():  task.AudiobookQueue,
+		task.AudiobookFinalizeArgs{}.Kind(): task.AudiobookQueue,
+	}
+
+	for _, reg := range registry(Deps{}) {
+		if got := want[reg.kind]; got != reg.queue {
+			t.Errorf("kind %q runs on queue %q, want %q", reg.kind, reg.queue, got)
+		}
 	}
 }
