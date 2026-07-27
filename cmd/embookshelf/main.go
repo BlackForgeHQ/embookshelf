@@ -434,11 +434,12 @@ database must be empty; migrations are applied to it automatically.
 		audiobookRepo,
 		service.NewLibraryBookOpener(libStore),
 		audiobookDispatch.Segment,
-	).WithStagingSweeper(func(bookID string) {
-		if err := os.RemoveAll(task.StagingDir(cfg.DataPath, bookID)); err != nil {
-			slog.Warn("audiobook: sweep staging after cancel", "book", bookID, "err", err)
-		}
-	})
+	).WithFinalizeDispatcher(audiobookDispatch.Finalize).
+		WithStagingSweeper(func(bookID string) {
+			if err := os.RemoveAll(task.StagingDir(cfg.DataPath, bookID)); err != nil {
+				slog.Warn("audiobook: sweep staging after cancel", "book", bookID, "err", err)
+			}
+		})
 
 	// Staging for abandoned failed or cancelled runs is dead weight after
 	// a week. Hourly loop, same shape as the missing-file and

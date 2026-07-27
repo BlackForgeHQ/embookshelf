@@ -71,18 +71,17 @@ func (h *Handler) BookAudiobookGet(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	run, err := h.audiobookRepo.GetByBookID(c.Request.Context(), id)
+	// Status rather than a repo read, because it reconciles the run with
+	// its segments before answering: this endpoint is the poll a live run
+	// is watched through, so it is also where a run that lost its
+	// finalize job gets it back (#157).
+	run, cov, err := h.audiobooks.Status(c.Request.Context(), id)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "this book has no generated narration")
 			return
 		}
 		writeServerError(c, "audiobook get", err)
-		return
-	}
-	cov, err := h.audiobookRepo.Coverage(c.Request.Context(), id)
-	if err != nil {
-		writeServerError(c, "audiobook coverage", err)
 		return
 	}
 	// Best effort: a book we cannot load costs the staleness badge, not

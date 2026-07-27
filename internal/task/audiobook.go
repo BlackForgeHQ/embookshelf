@@ -141,11 +141,10 @@ func AudiobookSegment(ctx context.Context, a AudiobookSegmentArgs, deps Audioboo
 		return nil
 	}
 	if err != nil {
-		msg := err.Error()
-		if merr := deps.Audiobooks.MarkSegmentFailed(ctx, a.BookID, a.Seq, msg); merr != nil {
-			slog.Warn("audiobook: mark segment failed", "book", a.BookID, "seq", a.Seq, "err", merr)
-		}
-		advanceRun(ctx, a.BookID, deps)
+		recordSegment(ctx, deps, a, model.SegmentResult{
+			State: model.SegmentFailed,
+			Error: err.Error(),
+		})
 		if errors.Is(err, tts.ErrPermanent) || errors.Is(err, service.ErrNotNarratable) {
 			// Returning nil stops River retrying something that cannot
 			// improve; the failed row and its message carry the outcome.
@@ -162,21 +161,59 @@ func AudiobookSegment(ctx context.Context, a AudiobookSegmentArgs, deps Audioboo
 	path := segmentPath(dir, a.Seq)
 	frames, durationMS, err := audio.Payload(audioBytes)
 	if err != nil {
-		msg := fmt.Sprintf("engine returned unusable audio: %v", err)
-		_ = deps.Audiobooks.MarkSegmentFailed(ctx, a.BookID, a.Seq, msg)
-		advanceRun(ctx, a.BookID, deps)
+		recordSegment(ctx, deps, a, model.SegmentResult{
+			State: model.SegmentFailed,
+			Error: fmt.Sprintf("engine returned unusable audio: %v", err),
+		})
 		publishAudiobook(deps, a.BookID)
 		return nil
 	}
 	if err := os.WriteFile(path, frames, 0o600); err != nil {
 		return fmt.Errorf("stage segment %d: %w", a.Seq, err)
 	}
-	if err := deps.Audiobooks.MarkSegmentDone(ctx, a.BookID, a.Seq, path, durationMS); err != nil {
-		return fmt.Errorf("record segment %d: %w", a.Seq, err)
-	}
 
-	advanceRun(ctx, a.BookID, deps)
+	recordSegment(ctx, deps, a, model.SegmentResult{
+		State:      model.SegmentDone,
+		StagedPath: path,
+		DurationMS: durationMS,
+	})
 	return nil
+}
+
+// recordSegment writes a segment's result and carries out whatever the
+// run needs as a consequence.
+//
+// The write and the transition are one operation in the repo, so this is
+// no longer a pair of calls a worker has to sequence — the only thing
+// left outside the transaction is the enqueue, which is a different
+// system and cannot join it. A crash between the commit and the dispatch
+// still loses the finalize job, but no longer loses the *fact*: the
+// segment rows say the run is complete, and AudiobookService.Status
+// re-derives the same transition on every read, so whoever next looks at
+// the book dispatches what this dropped (#157).
+//
+// Deliberately does not return an error. A failure here is worth a log
+// and nothing more: returning it would hand River a segment to retry
+// whose audio is already staged and already paid for.
+func recordSegment(ctx context.Context, deps AudiobookDeps, a AudiobookSegmentArgs, res model.SegmentResult) {
+	outcome, err := deps.Audiobooks.RecordSegment(ctx, a.BookID, a.Seq, res)
+	if err != nil {
+		slog.Warn("audiobook: record segment", "book", a.BookID, "seq", a.Seq, "err", err)
+		return
+	}
+	switch outcome.Next {
+	case model.AudiobookNextFinalize:
+		if deps.Dispatch == nil || deps.Dispatch.Finalize == nil {
+			slog.Warn("audiobook: no finalize dispatcher", "book", a.BookID)
+			return
+		}
+		if err := deps.Dispatch.Finalize(ctx, a.BookID); err != nil {
+			slog.Warn("audiobook: dispatch finalize", "book", a.BookID, "err", err)
+		}
+	case model.AudiobookNextFail:
+		publishAudiobook(deps, a.BookID)
+	case model.AudiobookNextNothing:
+	}
 }
 
 // synthesizeSegment turns one segment's text into MP3 bytes.
@@ -258,39 +295,6 @@ func joinParts(parts [][]byte) ([]byte, error) {
 		buf = append(buf, frames...)
 	}
 	return buf, nil
-}
-
-// advanceRun moves the run's own state after a segment changed.
-//
-// Derived from the counts rather than tracked incrementally, so a
-// concurrent worker finishing at the same moment cannot leave the run
-// disagreeing with its segments. Finalize is dispatched exactly when the
-// last segment lands.
-func advanceRun(ctx context.Context, bookID string, deps AudiobookDeps) {
-	cov, err := deps.Audiobooks.Coverage(ctx, bookID)
-	if err != nil {
-		slog.Warn("audiobook: coverage", "book", bookID, "err", err)
-		return
-	}
-	switch {
-	case cov.Total > 0 && cov.Done == cov.Total:
-		if deps.Dispatch == nil || deps.Dispatch.Finalize == nil {
-			slog.Warn("audiobook: no finalize dispatcher", "book", bookID)
-			return
-		}
-		if err := deps.Dispatch.Finalize(ctx, bookID); err != nil {
-			slog.Warn("audiobook: dispatch finalize", "book", bookID, "err", err)
-		}
-	case cov.Failed > 0 && cov.Done+cov.Failed == cov.Total:
-		// Every segment has been attempted and some did not make it. The
-		// staging directory is deliberately left alone: Retry re-enqueues
-		// only the missing pieces, so the paid-for ones must survive.
-		msg := fmt.Sprintf("%d of %d segments failed", cov.Failed, cov.Total)
-		if err := deps.Audiobooks.SetState(ctx, bookID, model.AudiobookFailed, msg); err != nil {
-			slog.Warn("audiobook: mark run failed", "book", bookID, "err", err)
-		}
-		publishAudiobook(deps, bookID)
-	}
 }
 
 func publishAudiobook(deps AudiobookDeps, bookID string) {

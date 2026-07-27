@@ -27,6 +27,7 @@ type fakeAudiobookStore struct {
 	getErr     error
 	startErr   error
 	unfinished []model.AudiobookSegment
+	coverage   model.AudiobookCoverage
 }
 
 func (f *fakeAudiobookStore) Start(_ context.Context, ab model.Audiobook, segs []model.AudiobookSegment) error {
@@ -55,6 +56,10 @@ func (f *fakeAudiobookStore) ListUnfinishedSegments(context.Context, string) ([]
 	return f.unfinished, nil
 }
 
+func (f *fakeAudiobookStore) Coverage(context.Context, string) (model.AudiobookCoverage, error) {
+	return f.coverage, nil
+}
+
 type recordingDispatcher struct {
 	segments []int
 	err      error
@@ -65,6 +70,21 @@ func (d *recordingDispatcher) dispatch(_ context.Context, _ string, seq int) err
 		return d.err
 	}
 	d.segments = append(d.segments, seq)
+	return nil
+}
+
+// recordingFinalizer counts the finalize enqueues a run attracts — the
+// one thing a stranded run never got.
+type recordingFinalizer struct {
+	calls int
+	err   error
+}
+
+func (f *recordingFinalizer) dispatch(context.Context, string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.calls++
 	return nil
 }
 
@@ -396,10 +416,177 @@ func TestRetryRefusesARunWithNothingLeftToDo(t *testing.T) {
 	store := &fakeAudiobookStore{
 		run:        model.Audiobook{BookID: "b1", State: model.AudiobookFailed},
 		unfinished: nil,
+		// No plan at all: nothing to finalize and nothing to re-enqueue.
+		coverage: model.AudiobookCoverage{},
 	}
 	svc := NewAudiobookService(store, &epubOpener{}, (&recordingDispatcher{}).dispatch)
 
 	if err := svc.Retry(context.Background(), "b1"); err == nil {
 		t.Fatal("want an error retrying a run with no outstanding segments, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Reconcile-on-read — the run whose segments and state disagree (#157)
+// ---------------------------------------------------------------------------
+
+// The whole defect in one test. Every segment landed, the process died
+// before the finalize job was enqueued, and the state column still says
+// running. Nothing else recovers this: River saw a job that succeeded,
+// so reading the run has to be what notices.
+func TestStatusFinalizesARunStrandedWithCompleteCoverage(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeAudiobookStore{
+		run:      model.Audiobook{BookID: "b1", State: model.AudiobookRunning},
+		coverage: model.AudiobookCoverage{Total: 12, Done: 12},
+	}
+	fin := &recordingFinalizer{}
+	svc := NewAudiobookService(store, &epubOpener{}, nil).WithFinalizeDispatcher(fin.dispatch)
+
+	run, cov, err := svc.Status(context.Background(), "b1")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if fin.calls != 1 {
+		t.Fatalf("finalize dispatched %d times, want 1 — the run is stranded", fin.calls)
+	}
+	if cov.Done != 12 || cov.Total != 12 {
+		t.Errorf("coverage = %d/%d, want 12/12", cov.Done, cov.Total)
+	}
+	// The status read must not invent a state of its own; finalize is what
+	// moves the run to ready, once the file actually exists.
+	if run.State != model.AudiobookRunning {
+		t.Errorf("state = %q, want it left to finalize", run.State)
+	}
+}
+
+// A run still working is not stranded, and dispatching finalize for it
+// would concatenate a book that is missing its last chapters.
+func TestStatusLeavesARunWithOutstandingSegmentsAlone(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeAudiobookStore{
+		run:      model.Audiobook{BookID: "b1", State: model.AudiobookRunning},
+		coverage: model.AudiobookCoverage{Total: 12, Done: 5},
+	}
+	fin := &recordingFinalizer{}
+	svc := NewAudiobookService(store, &epubOpener{}, nil).WithFinalizeDispatcher(fin.dispatch)
+
+	if _, _, err := svc.Status(context.Background(), "b1"); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if fin.calls != 0 {
+		t.Fatalf("finalize dispatched for a run at %d/%d", 5, 12)
+	}
+	if store.state != "" {
+		t.Errorf("state written as %q, want a live run left alone", store.state)
+	}
+}
+
+// Cancel is the only stop-loss on a $170 run. A cancel that arrived after
+// the last segment landed must stay a cancel — publishing the partial
+// would be the ADR-0028 §6 semantics exactly inverted.
+func TestStatusDoesNotResurrectACanceledRun(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeAudiobookStore{
+		run:      model.Audiobook{BookID: "b1", State: model.AudiobookCanceled},
+		coverage: model.AudiobookCoverage{Total: 12, Done: 12},
+	}
+	fin := &recordingFinalizer{}
+	svc := NewAudiobookService(store, &epubOpener{}, nil).WithFinalizeDispatcher(fin.dispatch)
+
+	if _, _, err := svc.Status(context.Background(), "b1"); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if fin.calls != 0 {
+		t.Fatal("a canceled run was finalized")
+	}
+}
+
+// Every segment has been attempted and some gave up: the run fails, and
+// it says how many. Staging is not this seam's to touch — failure keeps
+// the paid-for work (ADR-0028 §6), which the absence of a sweep here is
+// what guarantees.
+func TestStatusFailsARunWhoseSegmentsHaveAllSettledWithFailures(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeAudiobookStore{
+		run:      model.Audiobook{BookID: "b1", State: model.AudiobookRunning},
+		coverage: model.AudiobookCoverage{Total: 12, Done: 9, Failed: 3},
+	}
+	fin := &recordingFinalizer{}
+	swept := 0
+	svc := NewAudiobookService(store, &epubOpener{}, nil).
+		WithFinalizeDispatcher(fin.dispatch).
+		WithStagingSweeper(func(string) { swept++ })
+
+	run, _, err := svc.Status(context.Background(), "b1")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if store.state != model.AudiobookFailed {
+		t.Fatalf("state = %q, want failed", store.state)
+	}
+	if !strings.Contains(store.stateMsg, "3 of 12") {
+		t.Errorf("failure message %q does not say how much was lost", store.stateMsg)
+	}
+	if run.State != model.AudiobookFailed || run.Error != store.stateMsg {
+		t.Errorf("returned run = %q/%q, want the reconciled failure", run.State, run.Error)
+	}
+	if fin.calls != 0 {
+		t.Error("an incomplete run was finalized")
+	}
+	if swept != 0 {
+		t.Error("a failed run's staging was swept — Retry would have to buy nine segments again")
+	}
+}
+
+// A queue that is down costs the recovery, not the read. A status
+// endpoint that 500s hides the very progress it exists to report.
+func TestStatusStillAnswersWhenFinalizeCannotBeDispatched(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeAudiobookStore{
+		run:      model.Audiobook{BookID: "b1", State: model.AudiobookRunning},
+		coverage: model.AudiobookCoverage{Total: 4, Done: 4},
+	}
+	fin := &recordingFinalizer{err: errors.New("queue is down")}
+	svc := NewAudiobookService(store, &epubOpener{}, nil).WithFinalizeDispatcher(fin.dispatch)
+
+	_, cov, err := svc.Status(context.Background(), "b1")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if cov.Done != 4 {
+		t.Errorf("coverage = %d, want the progress reported regardless", cov.Done)
+	}
+}
+
+// Retry is the button a user reaches for when a run looks stuck. On a
+// stranded run both of its guards used to fire — "already running", then
+// "no outstanding segments" — so the one available action reported there
+// was nothing to do.
+func TestRetryFinalizesAStrandedRunInsteadOfRefusing(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeAudiobookStore{
+		run:        model.Audiobook{BookID: "b1", State: model.AudiobookRunning},
+		coverage:   model.AudiobookCoverage{Total: 12, Done: 12},
+		unfinished: nil,
+	}
+	disp := &recordingDispatcher{}
+	fin := &recordingFinalizer{}
+	svc := NewAudiobookService(store, &epubOpener{}, disp.dispatch).WithFinalizeDispatcher(fin.dispatch)
+
+	if err := svc.Retry(context.Background(), "b1"); err != nil {
+		t.Fatalf("Retry on a stranded run: %v", err)
+	}
+	if fin.calls != 1 {
+		t.Fatalf("finalize dispatched %d times, want 1", fin.calls)
+	}
+	if len(disp.segments) != 0 {
+		t.Errorf("re-synthesized %v — every one of those segments is already paid for", disp.segments)
 	}
 }

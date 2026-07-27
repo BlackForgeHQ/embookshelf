@@ -201,25 +201,87 @@ func (r *BookAudiobookRepo) MarkSegmentRunning(ctx context.Context, bookID strin
 	return n > 0, err
 }
 
-// MarkSegmentDone records a finished segment and where its audio landed.
-func (r *BookAudiobookRepo) MarkSegmentDone(ctx context.Context, bookID string, seq int, stagedPath string, durationMS int64) error {
-	const q = `
-		UPDATE book_audiobook_segments
-		SET state = 'done', staged_path = $3, duration_ms = $4, error = '', updated_at = now()
-		WHERE book_id = $1 AND seq = $2
-	`
-	_, err := r.db.SQL.ExecContext(ctx, q, bookID, seq, stagedPath, durationMS)
-	return err
-}
+// RecordSegment writes one segment's result, reads the coverage it
+// produced, and moves the run — all in one transaction — returning what
+// the run needs next.
+//
+// One operation rather than the write-then-advance pair it replaces. A
+// worker that recorded a segment and was killed before advancing left
+// every segment done, the run running, and no finalize job: River saw a
+// job that had succeeded, Retry refused because nothing was outstanding,
+// and the staging sweeper matched only failed and canceled runs, so the
+// book sat at 0% and its staging was never reclaimed. Folding the
+// coverage read and the state transition into the segment's own write
+// closes the window and, more to the point, removes the sequencing a
+// caller had to remember: there is no longer a second call to forget.
+//
+// The run row is locked FOR UPDATE before the segment is written, which
+// is what makes the derived transition correct under the concurrent
+// segment workers ADR-0028 §3 puts on this queue. Without the lock, two
+// segments completing at the same instant each read a snapshot missing
+// the other's uncommitted write, both conclude the run is unfinished,
+// and neither dispatches finalize — the same strand reached by a
+// different route.
+func (r *BookAudiobookRepo) RecordSegment(
+	ctx context.Context,
+	bookID string,
+	seq int,
+	res model.SegmentResult,
+) (model.AudiobookOutcome, error) {
+	var zero model.AudiobookOutcome
 
-func (r *BookAudiobookRepo) MarkSegmentFailed(ctx context.Context, bookID string, seq int, msg string) error {
-	const q = `
+	tx, err := r.db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return zero, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var state string
+	err = tx.QueryRowContext(ctx,
+		`SELECT state FROM book_audiobooks WHERE book_id = $1 FOR UPDATE`, bookID).Scan(&state)
+	if err != nil {
+		if dberr.IsNotFound(err) {
+			return zero, ErrNotFound
+		}
+		return zero, fmt.Errorf("lock audiobook %s: %w", bookID, err)
+	}
+
+	// staged_path and duration_ms are written unconditionally rather than
+	// preserved on the failure branch: a segment is claimed only while it
+	// is not already done (MarkSegmentRunning), so nothing that has audio
+	// can arrive here reporting a failure.
+	const writeSeg = `
 		UPDATE book_audiobook_segments
-		SET state = 'failed', error = $3, updated_at = now()
+		SET state = $3, staged_path = $4, duration_ms = $5, error = $6, updated_at = now()
 		WHERE book_id = $1 AND seq = $2
 	`
-	_, err := r.db.SQL.ExecContext(ctx, q, bookID, seq, msg)
-	return err
+	if _, err := tx.ExecContext(ctx, writeSeg, bookID, seq,
+		string(res.State), res.StagedPath, res.DurationMS, res.Error); err != nil {
+		return zero, fmt.Errorf("record segment %d: %w", seq, err)
+	}
+
+	cov, err := scanCoverage(ctx, tx, bookID)
+	if err != nil {
+		return zero, fmt.Errorf("coverage for %s: %w", bookID, err)
+	}
+
+	next := model.NextForRun(model.AudiobookState(state), cov)
+	if next == model.AudiobookNextFail {
+		// The staging directory is deliberately untouched. Retry
+		// re-enqueues only the segments that never finished, so every
+		// paid-for one has to survive the failure that stopped the run
+		// (ADR-0028 §6) — failure keeps the work, cancel does not.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE book_audiobooks SET state = 'failed', error = $2, updated_at = now() WHERE book_id = $1`,
+			bookID, cov.FailureMessage()); err != nil {
+			return zero, fmt.Errorf("mark run failed: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return zero, err
+	}
+	return model.AudiobookOutcome{Coverage: cov, Next: next}, nil
 }
 
 // SetSegmentStart records where a segment sits in the finished file.
@@ -234,7 +296,18 @@ func (r *BookAudiobookRepo) SetSegmentStart(ctx context.Context, bookID string, 
 // assembled from two reads taken a moment apart. Same shape as the
 // reading-guide run's CountCoverage, for the same reason.
 func (r *BookAudiobookRepo) Coverage(ctx context.Context, bookID string) (model.AudiobookCoverage, error) {
-	const q = `
+	return scanCoverage(ctx, r.db.SQL, bookID)
+}
+
+// rowQuerier is satisfied by both *sql.DB and *sql.Tx, so the coverage
+// query has one text whether it is read on its own or inside the
+// transaction that just wrote a segment.
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func scanCoverage(ctx context.Context, q rowQuerier, bookID string) (model.AudiobookCoverage, error) {
+	const sel = `
 		SELECT count(*) AS total,
 		       count(*) FILTER (WHERE state = 'done')   AS done,
 		       count(*) FILTER (WHERE state = 'failed') AS failed
@@ -242,7 +315,7 @@ func (r *BookAudiobookRepo) Coverage(ctx context.Context, bookID string) (model.
 		WHERE book_id = $1
 	`
 	var c model.AudiobookCoverage
-	if err := r.db.SQL.QueryRowContext(ctx, q, bookID).Scan(&c.Total, &c.Done, &c.Failed); err != nil {
+	if err := q.QueryRowContext(ctx, sel, bookID).Scan(&c.Total, &c.Done, &c.Failed); err != nil {
 		return model.AudiobookCoverage{}, err
 	}
 	return c, nil
@@ -282,14 +355,39 @@ func (r *BookAudiobookRepo) Delete(ctx context.Context, bookID string) error {
 	return err
 }
 
-// ListStaleTerminal returns runs left in a terminal-but-not-done state
-// long enough that their staging is dead weight. Feeds the sweeper that
-// keeps abandoned retries from parking gigabytes indefinitely.
-func (r *BookAudiobookRepo) ListStaleTerminal(ctx context.Context, olderThanDays int) ([]string, error) {
+// ListStaleStaging returns runs whose staged segments have become dead
+// weight. Feeds the sweeper that keeps abandoned runs from parking
+// gigabytes indefinitely.
+//
+// Keyed on what the segments say rather than on the state column, which
+// is the same correction NextForRun makes. The predicate used to be
+// `state IN ('failed','canceled')`, so a run stranded at running — every
+// segment done, no finalize job — matched nothing and kept its staging
+// forever, the third of the three ways #157 made such a run
+// unrecoverable.
+//
+// The one case deliberately withheld is a pending or running run whose
+// coverage is complete: that run is a single finalize away from a
+// finished book, and reclaiming its staging would convert something
+// recoverable into eight dollars of audio that has to be bought again.
+// Everything else is fair game once it is older than the TTL — a
+// published run's staging is redundant, and a run still missing segments
+// has passed the window in which someone was going to retry it.
+func (r *BookAudiobookRepo) ListStaleStaging(ctx context.Context, olderThanDays int) ([]string, error) {
+	// make_interval rather than `($1 || ' days')::interval`: the
+	// concatenation types the placeholder as text, and the driver refuses
+	// to encode an int into it, so the previous query returned an error on
+	// every call and the sweep had never once run.
 	const q = `
-		SELECT book_id FROM book_audiobooks
-		WHERE state IN ('failed', 'canceled')
-		  AND updated_at < now() - ($1 || ' days')::interval
+		SELECT a.book_id FROM book_audiobooks a
+		WHERE a.updated_at < now() - make_interval(days => $1)
+		  AND (
+		        a.state IN ('ready', 'failed', 'canceled')
+		     OR EXISTS (
+		          SELECT 1 FROM book_audiobook_segments s
+		          WHERE s.book_id = a.book_id AND s.state <> 'done'
+		        )
+		  )
 	`
 	rows, err := r.db.SQL.QueryContext(ctx, q, olderThanDays)
 	if err != nil {
