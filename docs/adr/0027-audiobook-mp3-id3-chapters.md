@@ -10,11 +10,13 @@ accepted (2026-07-27)
 
 ### 1. Every engine emits MP3; none emits M4B
 
-ElevenLabs returns `mp3_44100_128`, OpenAI returns `mp3`, Azure returns `audio-44khz-*-mono-mp3`. Only OpenAI offers AAC, and AAC is what an M4B actually needs — MP3 inside an MP4 container is legal and badly supported in the wild.
+ElevenLabs returns `mp3_44100_128`, OpenAI returns `mp3`, Azure returns `audio-24khz-*-mono-mp3`. Only OpenAI offers AAC, and AAC is what an M4B actually needs — MP3 inside an MP4 container is legal and badly supported in the wild.
 
 So any M4B path requires encoding AAC ourselves, and there is no pure-Go AAC encoder worth depending on. That is not a preference; it is the blocker, and it is not routable around.
 
 MP3 has the property that makes the rest of this feature cheap: frames concatenate. Given the same engine, voice and settings — which holds for every segment of one generation — the per-segment responses can be joined byte-wise into one valid file with no transcode, no muxer, and no new dependency. The concatenation is the entire "finalize" step.
+
+**"MP3" is not one format, and an earlier draft of this section assumed it was.** A first run against a local Kokoro returned MPEG-2 Layer III at 24 kHz (`FF F3`), not the MPEG-1 44.1 kHz the sample rates above imply, and MPEG-2 carries 576 samples per frame against MPEG-1's 1152 with a frame-size coefficient of 72 against 144. A frame parser that assumed MPEG-1 would not fail — it would mis-measure every chapter by a factor of two and write confidently wrong chapter marks. Both versions are handled, and the concatenation argument is unaffected: what it needs is uniformity *within* a run, which holds because one run is one engine at one setting. Uniformity *across* engines was never true and is not required.
 
 ### 2. Chapters live in the file *and* in the database
 
@@ -48,9 +50,9 @@ Free, and correct inside embookshelf. Rejected per §2 — it makes the download
 
 ## Open questions
 
-- Bitrate and mono/stereo. Engines default to 128 kbps stereo-ish output; mono at 64 kbps would roughly quarter a 500 MB file at no real cost for speech, if every engine can be made to agree.
-- Whether ID3v2.4 is preferable to 2.3 for `CHAP`; 2.3 is more widely read, 2.4 is cleaner.
-- Whether a segment boundary can ever land mid-frame in a way that produces an audible click, and whether frame-aligned trimming is needed.
+- Bitrate and mono/stereo. Engines default to 128 kbps stereo-ish output; mono at 64 kbps would roughly quarter a 500 MB file at no real cost for speech, if every engine can be made to agree. A first real run measured roughly 16 kB/s, so a four-minute chapter is about 4 MB and an eight-hour book lands near 460 MB — the estimate this ADR was written against.
+- Whether ID3v2.4 is preferable to 2.3 for `CHAP`; 2.3 is more widely read, 2.4 is cleaner. Unresolved, but 2.3 has now been round-tripped: a real generated file parses back with its `CTOC`, its three `CHAP` frames and their nested titles intact, and the audio region begins exactly at the declared tag size on a valid frame sync.
+- Whether a segment boundary can ever land mid-frame in a way that produces an audible click, and whether frame-aligned trimming is needed. Still open, and still the most likely defect nobody has heard yet — every check so far has been structural, and a click is not something a byte comparison can find.
 
 ## Companion artifacts
 

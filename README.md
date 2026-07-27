@@ -160,7 +160,9 @@ there is no Node/Bun runtime in production.
   Audiobook (MP3/M4B via `<audio>` + range requests, duration +
   narrator from `dhowden/tag`). One `user_book_progress.resume_cfi`
   column carries every format's resume token, prefix-discriminated
-  (`epubcfi(...)`, `page:N`, `time:Ns`).
+  (`epubcfi(...)`, `page:N`, `time:Ns`). An EPUB that has been narrated
+  gets a Read/Listen switch — the audio is a second rendition of the same
+  book, not a second book.
 - **Reading sessions + stats** — per-user time-spent rollups feed the
   Stats heatmap and `/stats/reading` endpoint; updates broadcast via
   SSE.
@@ -267,6 +269,34 @@ Left-nav panels at `/settings`:
   sends one short prompt and shows what came back. Generation never
   happens on its own: it is a button on a book, or an admin run over
   the library that shows a token estimate first.
+- **Audiobooks** — reads an EPUB aloud with a text-to-speech engine and
+  saves the result beside the book as an MP3 with chapter marks
+  (ADR-0025 – ADR-0028). **Off by default and configured here, not by
+  env var.** Pick one engine — OpenAI-compatible, ElevenLabs, or Azure
+  Speech — and give it a key, a model and a voice; `Load voices` lists
+  what the engine actually offers, and `Test connection` synthesizes one
+  short phrase so a wrong key surfaces now rather than forty minutes
+  into a run.
+
+  Pointing the OpenAI-compatible engine at a local
+  [Kokoro](https://github.com/remsky/Kokoro-FastAPI) costs nothing and
+  keeps every book on your own hardware — the same escape hatch reading
+  guides have, and the configuration this feature was developed against.
+
+  **Generation is admin-only and always one book at a time.** There is
+  deliberately no bulk run: at cloud rates a thousand-book library is
+  thousands of dollars, so each run is a decision someone makes in front
+  of an estimate. The estimate is priced from a `$/1M characters` you
+  set per engine, prefilled with what each charged when this version
+  shipped — prices move, so correct it if it drifts, and set it to zero
+  for a local engine.
+
+  Only EPUB can be narrated; nothing else in the library carries
+  extractable text. The book keeps its EPUB and stays readable as text —
+  the narration is a second way to consume the same book, with a
+  Read/Listen switch in the reader, and the MP3 is a normal library file
+  you can download and take with you. Chapter marks are written into the
+  file, so a podcast player shows them too.
 - **Metadata defaults** — instance-wide defaults that flow into
   newly-imported books (language, default tags, …).
 - **OIDC / SSO** — DB-backed config (issuer, client id/secret,
@@ -376,12 +406,12 @@ Worth knowing:
 All env vars are optional unless marked required; sensible defaults
 live in [internal/config/config.go](internal/config/config.go).
 
-Not everything is an env var. Metadata providers, OIDC, email and
-**reading guides** are configured in the admin UI and stored in
-`app_settings`, so they can be changed without a restart and their
-credentials are encrypted at rest. The only env var reading guides care
-about is `EMBOOKSHELF_SECRET_KEY`, which is what encrypts the LLM key
-you paste into the panel.
+Not everything is an env var. Metadata providers, OIDC, email,
+**reading guides** and **audiobooks** are configured in the admin UI and
+stored in `app_settings`, so they can be changed without a restart and
+their credentials are encrypted at rest. The only env var either of the
+AI features cares about is `EMBOOKSHELF_SECRET_KEY`, which is what
+encrypts the LLM and text-to-speech keys you paste into the panels.
 
 **Server / DB**
 
@@ -401,7 +431,7 @@ you paste into the panel.
 
 | Var | Default | Notes |
 | --- | --- | --- |
-| `EMBOOKSHELF_SECRET_KEY` | _(unset — dev only)_ | Base64-encoded 32 bytes (`openssl rand -base64 32`). Encrypts provider API keys / OIDC client secrets / the reading-guide LLM key / cookies at rest with AES-256-GCM (ADR-0010). Unset = plaintext storage + loud boot warning |
+| `EMBOOKSHELF_SECRET_KEY` | _(unset — dev only)_ | Base64-encoded 32 bytes (`openssl rand -base64 32`). Encrypts provider API keys / OIDC client secrets / the reading-guide LLM key / text-to-speech engine keys / cookies at rest with AES-256-GCM (ADR-0010). Unset = plaintext storage + loud boot warning |
 
 **S3 storage** (only needed if you create `kind=s3` libraries)
 
