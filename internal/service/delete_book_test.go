@@ -188,7 +188,8 @@ func (f *deleteFixture) svc(handle *LibraryHandle, deps LibraryServiceDeps) *Lib
 	if handle != nil {
 		deps.LibStore = &stubLibStore{handle: handle}
 	}
-	return NewLibraryService(f.libs, f.books, deps)
+	// nil writer: deletion never runs the edit-side pipeline.
+	return NewLibraryService(f.libs, f.books, deps, nil)
 }
 
 // newBackend inserts a storage_backends row so a library can point at one.
@@ -398,7 +399,7 @@ func TestDeleteBookDegradesWhenTheLibraryHandleIsUnavailable(t *testing.T) {
 	fx := newDeleteFixture(t, false)
 	svc := NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{
 		LibStore: &stubLibStore{err: errors.New("backend unreachable")},
-	})
+	}, nil)
 
 	out, err := svc.DeleteBook(context.Background(), fx.book)
 	if err != nil {
@@ -416,7 +417,7 @@ func TestDeleteBookDegradesWhenTheLibraryHandleIsUnavailable(t *testing.T) {
 // documented degrade, not an error.
 func TestDeleteBookWithoutALibraryStoreStillDeletesTheRow(t *testing.T) {
 	fx := newDeleteFixture(t, false)
-	out, err := NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{}).
+	out, err := NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{}, nil).
 		DeleteBook(context.Background(), fx.book)
 	if err != nil {
 		t.Fatalf("DeleteBook: %v", err)
@@ -472,7 +473,7 @@ func TestDeleteBookUnlinksTheLegacyPathInsideTheSandbox(t *testing.T) {
 	book := fx.book
 	book.Path = path
 
-	out, err := NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{}).
+	out, err := NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{}, nil).
 		DeleteBook(context.Background(), book)
 	if err != nil {
 		t.Fatalf("DeleteBook: %v", err)
@@ -496,7 +497,7 @@ func TestDeleteBookRefusesALegacyPathOutsideTheSandbox(t *testing.T) {
 	book := fx.book
 	book.Path = outside
 
-	out, err := NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{}).
+	out, err := NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{}, nil).
 		DeleteBook(context.Background(), book)
 	if err != nil {
 		t.Fatalf("DeleteBook: %v", err)
@@ -524,7 +525,7 @@ func TestDeleteBookUnlinksALegacyPathUnderBookDrop(t *testing.T) {
 	book := fx.book
 	book.Path = path
 
-	out, err := NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{BookDropPath: drop}).
+	out, err := NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{BookDropPath: drop}, nil).
 		DeleteBook(context.Background(), book)
 	if err != nil {
 		t.Fatalf("DeleteBook: %v", err)

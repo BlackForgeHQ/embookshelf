@@ -99,6 +99,16 @@ func (f *fakeBookStore) SetCoverHash(_ context.Context, _ string, hash []byte) e
 	return nil
 }
 
+// SetFolderPath and RenameFolderTx round the fake out to
+// BookMetadataWriter, so the same object can back the MetadataWriter the
+// enrichment service now writes through. That is deliberate: assertions
+// on f.updated therefore observe the DB step of the real pipeline, not a
+// direct repo call that only ever existed in tests.
+func (f *fakeBookStore) SetFolderPath(_ context.Context, _, _, _ string) error { return nil }
+func (f *fakeBookStore) RenameFolderTx(_ context.Context, _ repo.RenameFolderTxArgs) error {
+	return nil
+}
+
 type fakeCoverStore struct {
 	saved   []byte
 	mime    string
@@ -142,7 +152,8 @@ func newEnrichForTest(t *testing.T) (*EnrichmentService, *fakeBookStore, *fakeCo
 	t.Helper()
 	books := &fakeBookStore{}
 	covers := &fakeCoverStore{}
-	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, covers)
+	writer, _ := newPipelineWriter(t, books, &recordingSidecarWriter{}, nil)
+	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, covers, writer)
 	return svc, books, covers
 }
 
@@ -154,7 +165,7 @@ func TestApplyMatchFillsUnlockedFields(t *testing.T) {
 	t.Parallel()
 	svc, books, _ := newEnrichForTest(t)
 
-	got, err := svc.ApplyMatch(context.Background(),
+	got, _, err := svc.ApplyMatch(context.Background(),
 		model.Book{ID: "b1", Title: "old"},
 		provider.Match{
 			Title:       "Deep Work",
@@ -192,7 +203,7 @@ func TestApplyMatchRespectsLocks(t *testing.T) {
 	book.Locks.Title = true
 	book.Locks.Author = true
 
-	got, err := svc.ApplyMatch(context.Background(), book,
+	got, _, err := svc.ApplyMatch(context.Background(), book,
 		provider.Match{Title: "Overwrite", Authors: []string{"Someone"}},
 		ApplyOptions{}, TriggerManualEdit)
 	if err != nil {
@@ -233,7 +244,7 @@ func TestApplyMatchRoutesISBNByDigitCount(t *testing.T) {
 			book.Locks.ISBN = tc.lockISBN
 			book.Locks.ISBN10 = tc.lockISBN10
 
-			got, err := svc.ApplyMatch(context.Background(), book,
+			got, _, err := svc.ApplyMatch(context.Background(), book,
 				provider.Match{ISBN: tc.isbn}, ApplyOptions{}, TriggerManualEdit)
 			if err != nil {
 				t.Fatalf("ApplyMatch: %v", err)
@@ -254,7 +265,7 @@ func TestApplyMatchMergesOrReplacesCategories(t *testing.T) {
 	t.Run("replace by default", func(t *testing.T) {
 		t.Parallel()
 		svc, _, _ := newEnrichForTest(t)
-		got, err := svc.ApplyMatch(context.Background(),
+		got, _, err := svc.ApplyMatch(context.Background(),
 			model.Book{ID: "b1", Genres: []string{"Existing"}},
 			provider.Match{Categories: []string{"Productivity"}},
 			ApplyOptions{}, TriggerManualEdit)
@@ -269,7 +280,7 @@ func TestApplyMatchMergesOrReplacesCategories(t *testing.T) {
 	t.Run("union when MergeCategories", func(t *testing.T) {
 		t.Parallel()
 		svc, _, _ := newEnrichForTest(t)
-		got, err := svc.ApplyMatch(context.Background(),
+		got, _, err := svc.ApplyMatch(context.Background(),
 			model.Book{ID: "b1", Genres: []string{"Existing"}},
 			provider.Match{Categories: []string{"Productivity"}},
 			ApplyOptions{MergeCategories: true}, TriggerManualEdit)
@@ -287,9 +298,10 @@ func TestApplyMatchMergesOrReplacesCategories(t *testing.T) {
 func TestApplyMatchPropagatesWriteFailure(t *testing.T) {
 	t.Parallel()
 	books := &fakeBookStore{updateErr: errors.New("db down")}
-	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, &fakeCoverStore{})
+	writer, _ := newPipelineWriter(t, books, &recordingSidecarWriter{}, nil)
+	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, &fakeCoverStore{}, writer)
 
-	if _, err := svc.ApplyMatch(context.Background(), model.Book{ID: "b1"},
+	if _, _, err := svc.ApplyMatch(context.Background(), model.Book{ID: "b1"},
 		provider.Match{Title: "x"}, ApplyOptions{}, TriggerManualEdit); err == nil {
 		t.Fatal("want the write error surfaced, got nil")
 	}
@@ -490,7 +502,9 @@ func TestCountDigits(t *testing.T) {
 func TestProviderHealthWritesAreRecorded(t *testing.T) {
 	t.Parallel()
 	settings := newFakeProviderSettings()
-	svc := NewEnrichmentService(nil, settings, &fakeBookStore{}, &fakeCoverStore{})
+	books := &fakeBookStore{}
+	writer, _ := newPipelineWriter(t, books, &recordingSidecarWriter{}, nil)
+	svc := NewEnrichmentService(nil, settings, books, &fakeCoverStore{}, writer)
 
 	svc.recordProviderSuccess(provider.Source("googlebooks"))
 	svc.recordProviderError(provider.Source("amazon"), errors.New("rate limited"))

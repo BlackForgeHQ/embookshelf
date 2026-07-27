@@ -25,7 +25,13 @@ func newLibSvc(t *testing.T, deps service.LibraryServiceDeps) *service.LibrarySe
 	bookr := repo.NewBookRepo(d)
 	br := repo.NewStorageBackendRepo(d)
 	deps.Backends = br
-	return service.NewLibraryService(lr, bookr, deps)
+	// The writer is a required argument, so the lifecycle tests build the
+	// real one over the same test DB. Nothing here edits a book, but the
+	// service cannot be constructed without the edit-side pipeline any
+	// more — which is the point: there is no wiring that skips it.
+	return service.NewLibraryService(lr, bookr, deps, service.NewMetadataWriter(
+		service.MetadataWriterDeps{Books: bookr},
+	))
 }
 
 // TestLibraryService_Create_local verifies that creating a local library

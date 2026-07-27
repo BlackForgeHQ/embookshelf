@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -262,7 +261,7 @@ func (h *Handler) EnrichApplyMatch(c *gin.Context) {
 		CoverURL:    body.CoverURL,
 	}
 
-	updated, err := h.enrich.ApplyMatch(c.Request.Context(), book, match, service.ApplyOptions{
+	updated, outcome, err := h.enrich.ApplyMatch(c.Request.Context(), book, match, service.ApplyOptions{
 		MergeCategories: body.MergeCategories,
 		ApplyCover:      body.ApplyCover,
 	}, service.TriggerApplyEnrichment)
@@ -290,12 +289,14 @@ func (h *Handler) EnrichApplyMatch(c *gin.Context) {
 	if shelves == nil {
 		shelves = []string{}
 	}
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"book": bookDetailDTO{
 			bookDTO: toBookDTO(fresh),
 			Shelves: shelves,
 		},
-	})
+	}
+	attachWarnings(resp, outcome, "apply match write degraded", updated.ID)
+	c.JSON(http.StatusOK, resp)
 }
 
 // toggleFieldLocksReq flips the lock flag for one or more metadata
@@ -372,10 +373,7 @@ func (h *Handler) EnrichToggleFieldLocks(c *gin.Context) {
 			Shelves: shelves,
 		},
 	}
-	if warnings := lockOutcome.Warnings(); len(warnings) > 0 {
-		slog.Warn("lock update write degraded", "book", id, "warnings", warnings)
-		resp["warnings"] = warnings
-	}
+	attachWarnings(resp, lockOutcome, "lock update write degraded", id)
 	c.JSON(http.StatusOK, resp)
 }
 

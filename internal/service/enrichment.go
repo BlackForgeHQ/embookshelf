@@ -53,10 +53,11 @@ type providerSettingsStore interface {
 	RecordError(ctx context.Context, id, msg string) error
 }
 
-// bookMetadataStore is the book surface enrichment writes through when no
-// MetadataWriter is wired.
+// bookMetadataStore is the cover surface enrichment writes through.
+// Metadata itself no longer travels this way — it goes through the
+// MetadataWriter — so UpdateMetadata is deliberately absent: a caller
+// that reaches for it would be bypassing ADR-0001.
 type bookMetadataStore interface {
-	UpdateMetadata(ctx context.Context, b model.Book) error
 	SetCover(ctx context.Context, bookID string, hasCover bool, mime string) error
 	SetCoverHash(ctx context.Context, bookID string, hash []byte) error
 }
@@ -94,8 +95,8 @@ type EnrichmentService struct {
 	cache    map[string]cacheEntry
 	cacheTTL time.Duration
 
-	// writer routes metadata writes through the DB → sidecar → file
-	// pipeline. Optional; nil falls back to direct repo write.
+	// writer routes metadata writes through the ADR-0001 pipeline
+	// (DB → in-file embed → sidecar → folder rename). Required.
 	writer *MetadataWriter
 
 	// healthWrites tracks the detached provider-health goroutines so a
@@ -109,15 +110,6 @@ type EnrichmentService struct {
 // finished. Test-only; production deliberately lets them run detached.
 func (s *EnrichmentService) awaitHealthWrites() { s.healthWrites.Wait() }
 
-// WithMetadataWriter wires a MetadataWriter into the service so that
-// ApplyMatch routes through the DB → sidecar → file pipeline instead
-// of going straight to the book repo. Returns the receiver so it can
-// be chained at construction time.
-func (s *EnrichmentService) WithMetadataWriter(w *MetadataWriter) *EnrichmentService {
-	s.writer = w
-	return s
-}
-
 type cacheEntry struct {
 	matches []provider.Match
 	at      time.Time
@@ -127,17 +119,26 @@ const (
 	enrichCacheTTL = 5 * time.Minute
 )
 
+// NewEnrichmentService builds the service. The MetadataWriter is a
+// positional argument, not an optional setter: applying a match is an
+// edit like any other, so there is no configuration in which it should
+// skip the ADR-0001 pipeline. It used to be installed post-construction
+// by WithMetadataWriter, which only the composition root ever called —
+// every test therefore drove a direct-repo fallback that never ran in
+// production, which is where ADR-0012's lock-corruption bug lived.
 func NewEnrichmentService(
 	providers []provider.Provider,
 	settings providerSettingsStore,
 	books bookMetadataStore,
 	covers coverFileStore,
+	writer *MetadataWriter,
 ) *EnrichmentService {
 	return &EnrichmentService{
 		providers: providers,
 		settings:  settings,
 		books:     books,
 		covers:    covers,
+		writer:    writer,
 		http: &http.Client{
 			Timeout:       15 * time.Second,
 			CheckRedirect: coverRedirectPolicy(),
@@ -449,13 +450,20 @@ type ApplyOptions struct {
 
 // ApplyMatch merges the provider candidate onto the book and persists
 // the result. Locked fields are preserved; categories merge or replace
-// depending on options. Returns the refreshed book.
+// depending on options. Returns the refreshed book and the write's
+// Outcome.
+//
+// A nil error means the books row was updated and nothing more, exactly
+// as for a manual edit: the Outcome says whether the Sidecar and in-file
+// copies kept up, so the caller can tell the user their applied match did
+// not reach the file. This used to be discarded here, which left the
+// handler with nothing to report.
 //
 // The cover import, when requested, is best-effort: failure is logged
 // and the response still returns 200 with the metadata update applied.
 // That matches how the UI already handles "Use cover" — users can retry
 // independently.
-func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m provider.Match, opts ApplyOptions, trigger Trigger) (model.Book, error) {
+func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m provider.Match, opts ApplyOptions, trigger Trigger) (model.Book, Outcome, error) {
 	locks := book.Locks
 
 	// writable reports whether this apply may touch a field: never when
@@ -513,14 +521,9 @@ func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m p
 		}
 	}
 
-	if s.writer != nil {
-		if _, err := s.writer.Write(ctx, book, trigger); err != nil {
-			return model.Book{}, err
-		}
-	} else {
-		if err := s.books.UpdateMetadata(ctx, book); err != nil {
-			return model.Book{}, err
-		}
+	outcome, err := s.writer.Write(ctx, book, trigger)
+	if err != nil {
+		return model.Book{}, Outcome{}, err
 	}
 
 	if opts.ApplyCover && writable(locks.Cover, book.HasCover) && strings.TrimSpace(m.CoverURL) != "" {
@@ -529,7 +532,7 @@ func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m p
 		}
 	}
 
-	return book, nil
+	return book, outcome, nil
 }
 
 // AutoEnrich is the headless variant of ApplyMatch used by the
@@ -589,7 +592,10 @@ func (s *EnrichmentService) AutoEnrich(ctx context.Context, book model.Book) (bo
 	// populated field, which the write step persisted — permanently
 	// locking every auto-enriched book on every field it already had,
 	// against both the comment here and ADR-0012.
-	if _, err := s.ApplyMatch(ctx, book, *match, ApplyOptions{
+	// The Outcome is discarded here and only here: auto-enrichment is
+	// DB-only by ADR-0001 §3, so there is no Sidecar or in-file step that
+	// could have degraded, and no user waiting on a response to tell.
+	if _, _, err := s.ApplyMatch(ctx, book, *match, ApplyOptions{
 		MergeCategories: true,
 		OnlyEmpty:       true,
 		ApplyCover:      !book.Locks.Cover && !book.HasCover,
