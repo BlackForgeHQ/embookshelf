@@ -14,9 +14,14 @@ import (
 )
 
 // ReasonOrphanRename is the reason value written by the S3 folder
-// rename pipeline (ADR-0005). Future reasons (delete, library-removed)
-// will live alongside this constant.
+// rename pipeline (ADR-0005).
 const ReasonOrphanRename = "rename"
+
+// ReasonOrphanBookDelete is written when a book is deleted from a
+// backend-backed library. The bytes are queued rather than removed
+// inline for the same reason a rename defers: a presigned URL already
+// handed to a browser would otherwise 404 mid-download.
+const ReasonOrphanBookDelete = "book_delete"
 
 // PendingOrphanRepo provides write/select access to the
 // pending_orphans table.

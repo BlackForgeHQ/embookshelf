@@ -65,6 +65,7 @@ type LibraryHandle struct {
 	PlacerErr error
 
 	files           bookFileLister
+	orphans         PendingOrphansEnqueuer
 	presignTTL      time.Duration
 	presignFallback string
 }
@@ -118,6 +119,91 @@ func (h *LibraryHandle) OpenBook(ctx context.Context, book model.Book) (io.Reade
 		return nil, 0, nil, err
 	}
 	return file, info.Size(), file, nil
+}
+
+// BookDeleteGrace is how long a deleted book's bytes linger on a
+// backend-backed library before the sweeper removes them. Comfortably
+// longer than any presigned URL this application issues, so a download
+// already in flight when the row went finishes rather than 404s.
+const BookDeleteGrace = time.Hour
+
+// BookFileLocations lists the storage keys belonging to a book.
+//
+// Split from DeleteBookBytes on purpose. Deleting a book cascades its
+// files rows, so the keys must be read *before* the row goes and the
+// bytes removed *after* it has — a single method taking only a book
+// would have to pick one side of that and would be wrong either way.
+// A nil error with no keys is the normal answer for a book whose files
+// were never backfilled.
+func (h *LibraryHandle) BookFileLocations(ctx context.Context, bookID string) ([]string, error) {
+	if h.files == nil {
+		return nil, nil
+	}
+	list, err := h.files.ListByBook(ctx, bookID)
+	if err != nil {
+		return nil, fmt.Errorf("list files for book %s: %w", bookID, err)
+	}
+	out := make([]string, 0, len(list))
+	for _, f := range list {
+		if f.Location != "" {
+			out = append(out, f.Location)
+		}
+	}
+	return out, nil
+}
+
+// DeleteBookBytes removes the objects a book owned, given the keys
+// BookFileLocations returned before the row was deleted.
+//
+// Exists because deleting a book used to unlink only books.path — the
+// legacy single-path field — so a book on a backend-backed library left
+// its objects behind entirely, and a book with more than one file left
+// all but one. Tolerable while a book was one 2 MB EPUB; not once a
+// generated narration is half a gigabyte (ADR-0025 §6).
+//
+// Local libraries delete inline. Backend-backed ones enqueue the keys
+// for the orphan sweeper instead (ADR-0005), because the bytes may still
+// be serving a presigned URL. Best-effort per key: one unreachable
+// object does not strand the rest, and every failure is reported in the
+// returned error. Callers treat that error as a warning — the row is
+// already gone and lying about it would be worse.
+func (h *LibraryHandle) DeleteBookBytes(ctx context.Context, bookID string, locations []string) error {
+	if len(locations) == 0 {
+		return nil
+	}
+
+	if h.IsBackendBacked() {
+		if h.orphans == nil {
+			return nil
+		}
+		id := bookID
+		rows := make([]repo.PendingOrphanInsert, 0, len(locations))
+		eligible := time.Now().Add(BookDeleteGrace)
+		for _, key := range locations {
+			rows = append(rows, repo.PendingOrphanInsert{
+				LibraryID:  h.Library.ID,
+				Key:        key,
+				EligibleAt: eligible,
+				Reason:     repo.ReasonOrphanBookDelete,
+				BookID:     &id,
+			})
+		}
+		if err := h.orphans.Insert(ctx, rows); err != nil {
+			return fmt.Errorf("enqueue orphans for book %s: %w", bookID, err)
+		}
+		return nil
+	}
+
+	if h.Storage == nil {
+		return nil
+	}
+	var failures []error
+	for _, key := range locations {
+		if derr := h.Storage.Delete(ctx, key); derr != nil && !errors.Is(derr, storage.ErrNotFound) {
+			failures = append(failures, fmt.Errorf("delete %s: %w", key, derr))
+		}
+	}
+	return errors.Join(failures...)
 }
 
 // OpenBookSource is OpenBook for callers that need random access — the
@@ -269,10 +355,14 @@ type Presigner interface {
 // LibraryHandle. PresignTTL and PresignFallback feed BookSource; pass
 // zero values to disable presign (handle will always pick local).
 type LibraryStoreDeps struct {
-	Libs            *repo.LibraryRepo
-	Resolver        storage.Resolver
-	NewPlacer       PlacerBuilder
-	Files           *repo.FileRepo
+	Libs      *repo.LibraryRepo
+	Resolver  storage.Resolver
+	NewPlacer PlacerBuilder
+	Files     *repo.FileRepo
+	// Orphans defers byte deletion on backend-backed libraries. Optional:
+	// when nil, DeleteBookBytes degrades to leaving the bytes for a human
+	// rather than deleting something a presigned URL may still be serving.
+	Orphans         PendingOrphansEnqueuer
 	PresignTTL      time.Duration
 	PresignFallback string
 }
@@ -340,6 +430,7 @@ func (s *defaultLibraryStore) For(ctx context.Context, libraryID string) (*Libra
 		Placer:          placer,
 		PlacerErr:       placerErr,
 		files:           files,
+		orphans:         s.deps.Orphans,
 		presignTTL:      s.deps.PresignTTL,
 		presignFallback: s.deps.PresignFallback,
 	}, nil

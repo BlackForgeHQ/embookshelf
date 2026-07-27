@@ -500,6 +500,26 @@ func (h *Handler) BookDelete(c *gin.Context) {
 		return
 	}
 
+	// Snapshot the storage keys before the row goes: files rows cascade on
+	// delete, so afterwards nothing says which objects belonged to this
+	// book. Read-only — a storage failure must not block the delete.
+	var (
+		handle    *service.LibraryHandle
+		locations []string
+	)
+	if h.libStore != nil {
+		if lh, herr := h.libStore.For(c.Request.Context(), book.LibraryID); herr == nil {
+			handle = lh
+			if locs, lerr := handle.BookFileLocations(c.Request.Context(), id); lerr == nil {
+				locations = locs
+			} else {
+				slog.Warn("book delete: list files", "id", id, "err", lerr)
+			}
+		} else {
+			slog.Warn("book delete: library handle", "id", id, "err", herr)
+		}
+	}
+
 	if err := h.lib.DeleteBook(c.Request.Context(), id); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
@@ -507,6 +527,12 @@ func (h *Handler) BookDelete(c *gin.Context) {
 		}
 		writeServerError(c, "book delete", err)
 		return
+	}
+
+	if handle != nil {
+		if err := handle.DeleteBookBytes(c.Request.Context(), id, locations); err != nil {
+			slog.Warn("book delete: byte cleanup", "id", id, "err", err)
+		}
 	}
 
 	if h.covers != nil {

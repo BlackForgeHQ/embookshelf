@@ -217,11 +217,13 @@ database must be empty; migrations are applied to it automatically.
 	shelfSvc := service.NewShelfService(shelfRepo, hub)
 	searchSvc := service.NewSearchService(libRepo, bookRepo, shelfRepo)
 	authSvc := service.NewAuthService(userRepo, sessionRepo, hub)
+	pendingOrphansRepo := repo.NewPendingOrphanRepo(dbh)
 	libStore := service.NewLibraryStore(service.LibraryStoreDeps{
 		Libs:            libRepo,
 		Resolver:        storageResolver,
 		NewPlacer:       service.DefaultPlacerBuilder(storageResolver),
 		Files:           fileRepo,
+		Orphans:         pendingOrphansRepo,
 		PresignTTL:      cfg.PresignTTL,
 		PresignFallback: cfg.PresignFallback,
 	})
@@ -269,7 +271,6 @@ database must be empty; migrations are applied to it automatically.
 	// auto-enrich background path passes TriggerAutoEnrichment to skip
 	// the side-effect steps and only persist the DB row.
 	sidecarWriter := sidecar.NewWriter()
-	pendingOrphansRepo := repo.NewPendingOrphanRepo(dbh)
 	renameGrace := cfg.S3RenameGrace
 	if renameGrace <= 0 {
 		// ADR-0005: 2× PresignTTL covers any URL the client could
