@@ -321,7 +321,7 @@ Crash recovery is River's JobRescuer, which reclaims jobs left `running` by a ki
 
 ### Approve
 
-`BookDropService.Approve`; the orchestration that turns a `bookdrop_items` row into a `books` row + `files` row + cover. Five side effects in sequence.
+`BookDropService.Approve`; the orchestration that turns a `bookdrop_items` row into a `books` row + `files` row + cover. Five side effects in sequence, then the [[Auto-enrich]] trigger: Approve reads the `METADATA_AUTO_ENRICH` setting itself and, when it is on, dispatches a `bookdrop.auto_enrich` job through `WithAutoEnrich`'s dispatcher rather than running the fan-out inline. The decision belongs to Approve, so every caller — the HTTP endpoint, the queue, a CLI — gets it; it used to live in the approve handler, which meant only HTTP callers enriched and the approve response waited on the providers. Degrades closed on a settings read error, and a refused dispatch is logged, never fatal — the books row is already committed.
 
 ### Bookdrop ingest
 
@@ -445,7 +445,7 @@ Candidate matches presented to the user for review before persisting. Streamed o
 
 ### Auto-enrich
 
-`EnrichmentService.AutoEnrich(ctx, book)`; headless background gap-fill triggered by bookdrop approve. Empty-only policy carried by `ApplyOptions{OnlyEmpty: true}`, an explicit argument (ADR-0012 §2): fill blank fields, leave populated ones alone. The stored `*_locked` columns are never written by this path — they record the user's intent only. The earlier implementation synthesised a lock overlay instead and persisted it, permanently locking every auto-enriched book on every field it already had. Prefers ISBN chain; falls back to `Search` with Confidence ≥ 70 threshold. Triggers `TriggerAutoEnrichment` — ADR-0001 §3 keeps this off the in-file embedded write path.
+`EnrichmentService.AutoEnrich(ctx, book)`; headless background gap-fill triggered by [[Approve]], which reads the enable setting and queues a `bookdrop.auto_enrich` job (`task.BookDropAutoEnrich`) — the worker re-reads the book row and calls this, so nothing runs on the approving caller's goroutine and a provider that was down is retried by River. Empty-only policy carried by `ApplyOptions{OnlyEmpty: true}`, an explicit argument (ADR-0012 §2): fill blank fields, leave populated ones alone. The stored `*_locked` columns are never written by this path — they record the user's intent only. The earlier implementation synthesised a lock overlay instead and persisted it, permanently locking every auto-enriched book on every field it already had. Prefers ISBN chain; falls back to `Search` with Confidence ≥ 70 threshold. Triggers `TriggerAutoEnrichment` — ADR-0001 §3 keeps this off the in-file embedded write path.
 
 ### ProviderSettingsService
 

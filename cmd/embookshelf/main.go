@@ -387,6 +387,7 @@ database must be empty; migrations are applied to it automatically.
 	audiobookDispatch := &service.AudiobookDispatch{}
 	q, err := queue.New(ctx, dbh, queue.Deps{
 		BookDropSvc:       bdropSvc,
+		Enrich:            enrichSvc,
 		LibSvc:            libSvc,
 		Resolver:          storageResolver,
 		LibStore:          libStore,
@@ -419,6 +420,13 @@ database must be empty; migrations are applied to it automatically.
 	// takes bdropSvc as a dependency, so the two can only be joined here.
 	bdropSvc.WithIngestDispatcher(func(ctx context.Context, itemID string) error {
 		return q.Enqueue(ctx, task.BookDropIngestArgs{ItemID: itemID})
+	})
+
+	// Close the approve loop the same way: Approve reads the Auto-enrich
+	// setting and hands the new book to the pool, so the gap-fill runs in
+	// the background rather than inside whatever called Approve (ADR-0012).
+	bdropSvc.WithAutoEnrich(appSettingsRepo, func(ctx context.Context, bookID string) error {
+		return q.Enqueue(ctx, task.BookDropAutoEnrichArgs{BookID: bookID})
 	})
 
 	// Close the audiobook dispatch loop now that the client exists. Both

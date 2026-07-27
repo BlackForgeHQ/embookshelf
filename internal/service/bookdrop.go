@@ -57,6 +57,40 @@ type BookDropService struct {
 	// dispatch hands a freshly-tracked item to the worker pool. nil means
 	// no pool is wired — the row is still written.
 	dispatch IngestDispatcher
+
+	// enrichPolicy answers "is Auto-enrich enabled on this instance?" for
+	// Approve. nil means no policy source, which reads as off.
+	enrichPolicy autoEnrichPolicy
+	// enrichDispatch hands a freshly-approved book to the worker pool for
+	// Auto-enrich. nil means no pool is wired — the book is still imported.
+	enrichDispatch EnrichDispatcher
+}
+
+// EnrichDispatcher hands a freshly-approved book to the worker pool for
+// Auto-enrich. A function rather than a queue.Client because
+// internal/queue imports this package; main.go supplies a closure over
+// the river client. Same shape as IngestDispatcher and GuideDispatcher.
+//
+// nil is valid and means "no worker pool": the book is imported, it just
+// never gets the background gap-fill.
+type EnrichDispatcher func(ctx context.Context, bookID string) error
+
+// autoEnrichPolicy is the slice of AppSettingsRepo the approve path
+// reads — one flag, one method. Narrow so the decision is exercisable
+// without the settings table.
+type autoEnrichPolicy interface {
+	GetBool(ctx context.Context, key string) (bool, error)
+}
+
+// WithAutoEnrich wires the Auto-enrich trigger Approve owns: the setting
+// that enables it and the worker-pool handoff that carries it off the
+// caller's goroutine. Both travel together because either one alone is
+// inert — a policy with nowhere to dispatch, or a dispatcher no policy
+// ever authorises.
+func (s *BookDropService) WithAutoEnrich(p autoEnrichPolicy, d EnrichDispatcher) *BookDropService {
+	s.enrichPolicy = p
+	s.enrichDispatch = d
+	return s
 }
 
 func NewBookDropService(
@@ -319,7 +353,45 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 		return created, err
 	}
 	s.broadcast(item.ID)
+	s.requestAutoEnrich(ctx, created.ID)
 	return created, nil
+}
+
+// requestAutoEnrich asks the worker pool to gap-fill the new book's
+// metadata from external providers, subject to the instance setting
+// (ADR-0012).
+//
+// The decision lives inside Approve because it is part of what approving
+// a book means, not part of what one caller happens to do afterwards.
+// It used to sit in the HTTP handler, so the queue, the CLI and any bulk
+// import silently got no enrichment at all and could not see the policy
+// that governed it.
+//
+// Dispatch rather than call: Auto-enrich is a provider fan-out or an
+// ISBN chain — seconds of upstream I/O — and running it here would hold
+// the caller for the whole of it. Queued, it also survives a restart and
+// retries a provider that was briefly down, neither of which an inline
+// call could do.
+//
+// Every failure is logged and swallowed. The books row is committed by
+// the time this runs; losing the gap-fill must not lose the import.
+func (s *BookDropService) requestAutoEnrich(ctx context.Context, bookID string) {
+	if s.enrichPolicy == nil || s.enrichDispatch == nil {
+		return
+	}
+	on, err := s.enrichPolicy.GetBool(ctx, repo.SettingMetadataAutoEnrich)
+	if err != nil {
+		// Degrade closed, as the provider fan-out does: enriching a book
+		// whose owner may have opted out is worse than not enriching one.
+		slog.Warn("auto-enrich policy read", "book", bookID, "err", err)
+		return
+	}
+	if !on {
+		return
+	}
+	if err := s.enrichDispatch(ctx, bookID); err != nil {
+		slog.Warn("dispatch auto-enrich", "book", bookID, "err", err)
+	}
 }
 
 // promoteBookDropCover hashes the staged cover, moves it under the

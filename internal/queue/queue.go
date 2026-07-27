@@ -72,14 +72,18 @@ type Client interface {
 // new workers (Send-to-Kindle, future jobs) join.
 type Deps struct {
 	BookDropSvc *service.BookDropService
-	LibSvc      *service.LibraryService
-	Resolver    storage.Resolver
-	LibStore    service.LibraryStore
-	FileRepo    *repo.FileRepo
-	Books       *repo.BookRepo
-	Users       *repo.UserRepo
-	Notifier    *service.Notifier
-	Hub         *sse.Hub
+	// Enrich runs the post-approve Auto-enrich fan-out (ADR-0012).
+	// Approve decides whether a job is enqueued at all; this only does
+	// the provider work.
+	Enrich   *service.EnrichmentService
+	LibSvc   *service.LibraryService
+	Resolver storage.Resolver
+	LibStore service.LibraryStore
+	FileRepo *repo.FileRepo
+	Books    *repo.BookRepo
+	Users    *repo.UserRepo
+	Notifier *service.Notifier
+	Hub      *sse.Hub
 	// Reading guides (ADR-0024). AppSettings is read per job so config
 	// changes take effect without a restart.
 	AppSettings *repo.AppSettingsRepo

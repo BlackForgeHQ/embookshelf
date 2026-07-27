@@ -56,6 +56,12 @@ func registry(deps Deps) []registration {
 		Svc:      deps.BookDropSvc,
 		Resolver: deps.Resolver,
 	}
+	// Auto-enrich is requested by BookDropService.Approve, which has
+	// already read the enable setting — the worker only does the fan-out.
+	autoEnrich := task.BookDropAutoEnrichDeps{
+		Books:  deps.Books,
+		Enrich: deps.Enrich,
+	}
 	libraryScan := task.LibraryScanDeps{
 		Lib:      deps.LibSvc,
 		LibStore: deps.LibStore,
@@ -101,6 +107,9 @@ func registry(deps Deps) []registration {
 	return []registration{
 		register(func(ctx context.Context, a task.BookDropIngestArgs) error {
 			return task.BookDropIngest(ctx, a, bookdrop)
+		}),
+		register(func(ctx context.Context, a task.BookDropAutoEnrichArgs) error {
+			return task.BookDropAutoEnrich(ctx, a, autoEnrich)
 		}),
 		register(func(ctx context.Context, a task.LibraryScanArgs) error {
 			return task.LibraryScan(ctx, a, libraryScan)
