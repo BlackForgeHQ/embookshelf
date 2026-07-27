@@ -127,17 +127,7 @@ func (r *FileRepo) GetByContentHash(ctx context.Context, hash []byte) ([]model.F
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	out := []model.File{}
-	for rows.Next() {
-		f, err := r.scanFile(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, f)
-	}
-	return out, rows.Err()
+	return collect(rows, []model.File{}, r.scanFile)
 }
 
 // ExistsByLocation answers whether there is already a file at this
@@ -163,18 +153,7 @@ func (r *FileRepo) SetContentHash(ctx context.Context, fileID string, hash []byt
 		WHERE id = $1
 	`
 
-	res, err := r.db.SQL.ExecContext(ctx, q, fileID, hash, size, mtime)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, fileID, hash, size, mtime)
 }
 
 // ListPendingHash returns up to batchSize files whose content_hash is
@@ -191,35 +170,14 @@ func (r *FileRepo) ListPendingHash(ctx context.Context, batchSize int) ([]model.
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []model.File
-	for rows.Next() {
-		f, err := r.scanFile(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, f)
-	}
-	return out, rows.Err()
+	return collect(rows, nil, r.scanFile)
 }
 
 // MarkScanned bumps last_scanned to now without changing the hash. Used
 // by the scan worker to record that a file was inspected.
 func (r *FileRepo) MarkScanned(ctx context.Context, fileID string) error {
 	const q = `UPDATE files SET last_scanned = now() WHERE id = $1`
-	res, err := r.db.SQL.ExecContext(ctx, q, fileID)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, fileID)
 }
 
 // MarkMissing records that the file is no longer present in storage.
@@ -228,18 +186,7 @@ func (r *FileRepo) MarkScanned(ctx context.Context, fileID string) error {
 func (r *FileRepo) MarkMissing(ctx context.Context, fileID string, when time.Time) error {
 	const q = `UPDATE files SET missing_since = $2 WHERE id = $1`
 
-	res, err := r.db.SQL.ExecContext(ctx, q, fileID, when)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, fileID, when)
 }
 
 // ClearMissing flips missing_since back to NULL when a previously
@@ -247,18 +194,7 @@ func (r *FileRepo) MarkMissing(ctx context.Context, fileID string, when time.Tim
 func (r *FileRepo) ClearMissing(ctx context.Context, fileID string) error {
 	const q = `UPDATE files SET missing_since = NULL WHERE id = $1`
 
-	res, err := r.db.SQL.ExecContext(ctx, q, fileID)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, fileID)
 }
 
 // DeleteMissingOlderThan purges rows whose missing_since is more
@@ -293,17 +229,7 @@ func (r *FileRepo) ListByLibrary(ctx context.Context, libraryID string) ([]model
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []model.File
-	for rows.Next() {
-		f, err := r.scanFile(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, f)
-	}
-	return out, rows.Err()
+	return collect(rows, nil, r.scanFile)
 }
 
 // ListByBook returns all files rows for bookID ordered by id.
@@ -319,17 +245,7 @@ func (r *FileRepo) ListByBook(ctx context.Context, bookID string) ([]model.File,
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	out := []model.File{}
-	for rows.Next() {
-		f, err := r.scanFile(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, f)
-	}
-	return out, rows.Err()
+	return collect(rows, []model.File{}, r.scanFile)
 }
 
 // UpdateLocation moves a row to a new location within the same
@@ -338,19 +254,11 @@ func (r *FileRepo) ListByBook(ctx context.Context, bookID string) ([]model.File,
 func (r *FileRepo) UpdateLocation(ctx context.Context, fileID, newLocation string) error {
 	const q = `UPDATE files SET location = $2 WHERE id = $1`
 
-	res, err := r.db.SQL.ExecContext(ctx, q, fileID, newLocation)
-	if err != nil {
+	if err := execOne(ctx, r.db.SQL, q, fileID, newLocation); err != nil {
 		if ok, _ := dberr.IsUniqueViolation(err); ok {
 			return ErrFileLocationTaken
 		}
 		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
 	}
 	return nil
 }

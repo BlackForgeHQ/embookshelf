@@ -94,17 +94,11 @@ func (r *ReadingSessionRepo) Heatmap(ctx context.Context, userID string, days in
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	out := make([]int, 0, days)
-	for rows.Next() {
+	return collect(rows, make([]int, 0, days), func(s scanner) (int, error) {
 		var m int
-		if err := rows.Scan(&m); err != nil {
-			return nil, err
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
+		err := s.Scan(&m)
+		return m, err
+	})
 }
 
 // MinutesInWindow sums session durations for the last N days.
@@ -152,17 +146,12 @@ func (r *ReadingSessionRepo) CurrentStreak(ctx context.Context, userID string) (
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var days []time.Time
-	for rows.Next() {
+	days, err := collect(rows, nil, func(s scanner) (time.Time, error) {
 		var day time.Time
-		if err := rows.Scan(&day); err != nil {
-			return 0, err
-		}
-		days = append(days, day.UTC())
-	}
-	if err := rows.Err(); err != nil {
+		err := s.Scan(&day)
+		return day.UTC(), err
+	})
+	if err != nil {
 		return 0, err
 	}
 	if len(days) == 0 {

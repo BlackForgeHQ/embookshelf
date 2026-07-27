@@ -4,8 +4,8 @@ package repo
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -176,8 +176,7 @@ func (r *BookRepo) Search(ctx context.Context, userID, librarySlug string, p mod
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	return collectBooks(rows)
+	return collect(rows, nil, scanBook)
 }
 
 // BooksByLibrarySlug is retained for the home dashboard's simple count.
@@ -285,18 +284,7 @@ func (r *BookRepo) SetCover(ctx context.Context, bookID string, hasCover bool, m
 		UPDATE books SET has_cover = $2, cover_mime = $3, updated_at = now()
 		WHERE id = $1 AND deleted_at IS NULL
 	`
-	res, err := r.db.SQL.ExecContext(ctx, qPG, bookID, hasCover, mime)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, qPG, bookID, hasCover, mime)
 }
 
 // SetCoverHash records the sha256 of the cover image. NULL means
@@ -326,8 +314,7 @@ func (r *BookRepo) ListMissingCoverHash(ctx context.Context, batchSize int) ([]m
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	return collectBooks(rows)
+	return collect(rows, nil, scanBook)
 }
 
 // Delete hard-deletes a book row by id. FKs on shelf_books, annotations,
@@ -337,18 +324,7 @@ func (r *BookRepo) ListMissingCoverHash(ctx context.Context, batchSize int) ([]m
 // Returns ErrNotFound when the id is unknown (or was already deleted).
 func (r *BookRepo) Delete(ctx context.Context, id string) error {
 	const qPG = `DELETE FROM books WHERE id = $1`
-	res, err := r.db.SQL.ExecContext(ctx, qPG, id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, qPG, id)
 }
 
 // SetFolderPath updates the books.folder_path + books.path for a book.
@@ -365,18 +341,7 @@ func (r *BookRepo) SetFolderPath(ctx context.Context, bookID, folderPath, path s
 		UPDATE books SET folder_path = $2, path = $3, updated_at = now()
 		WHERE id = $1 AND deleted_at IS NULL
 	`
-	res, err := r.db.SQL.ExecContext(ctx, qPG, bookID, folderArg, path)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, qPG, bookID, folderArg, path)
 }
 
 // FileLocationUpdate is one row mutation for RenameFolderTx: the
@@ -432,16 +397,11 @@ func (r *BookRepo) RenameFolderTx(ctx context.Context, args RenameFolderTxArgs) 
 		UPDATE books SET folder_path = $2, path = $3, updated_at = now()
 		WHERE id = $1 AND deleted_at IS NULL
 	`
-	res, err := tx.ExecContext(ctx, qBookPG, args.BookID, folderArg, args.NewPath)
-	if err != nil {
+	if err := execOne(ctx, tx, qBookPG, args.BookID, folderArg, args.NewPath); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return ErrNotFound
+		}
 		return fmt.Errorf("update books folder_path: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
 	}
 
 	if len(args.Orphans) > 0 {
@@ -484,20 +444,7 @@ func (r *BookRepo) UpdateMetadata(ctx context.Context, b model.Book) error {
 		b.Tags = []string{}
 	}
 
-	res, err := r.db.SQL.ExecContext(ctx, bookUpdateMetadataQuery,
-		append(bind(bookUpdateMetadataArgs, &b), b.ID)...,
-	)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, bookUpdateMetadataQuery, append(bind(bookUpdateMetadataArgs, &b), b.ID)...)
 }
 
 // UpdateAudio writes the audiobook-specific metadata fields onto an
@@ -533,20 +480,7 @@ func (r *BookRepo) UpdateAudio(
 			updated_at       = now()
 		WHERE id = $4 AND deleted_at IS NULL
 	`
-	res, err := r.db.SQL.ExecContext(ctx, qPG,
-		durationSeconds, narrator, chaptersVal, id,
-	)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, qPG, durationSeconds, narrator, chaptersVal, id)
 }
 
 // scanner lets us reuse scanBook/scanLibrary for both Row and Rows.
@@ -560,18 +494,6 @@ func scanBook(s scanner) (model.Book, error) {
 		return b, err
 	}
 	return b, nil
-}
-
-func collectBooks(rows *sql.Rows) ([]model.Book, error) {
-	var books []model.Book
-	for rows.Next() {
-		b, err := scanBook(rows)
-		if err != nil {
-			return nil, err
-		}
-		books = append(books, b)
-	}
-	return books, rows.Err()
 }
 
 // SuggestBook is the slim shape returned by SearchSuggest. No progress,
@@ -600,14 +522,9 @@ func (r *BookRepo) SearchSuggest(ctx context.Context, q string, limit int) ([]Su
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []SuggestBook
-	for rows.Next() {
+	return collect(rows, nil, func(s scanner) (SuggestBook, error) {
 		var b SuggestBook
-		if err := rows.Scan(&b.ID, &b.Title, &b.Author, &b.HasCover); err != nil {
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	return out, rows.Err()
+		err := s.Scan(&b.ID, &b.Title, &b.Author, &b.HasCover)
+		return b, err
+	})
 }

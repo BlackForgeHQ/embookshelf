@@ -4,7 +4,6 @@ package repo
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -71,52 +70,20 @@ func (r *UserRepo) List(ctx context.Context) ([]model.User, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []model.User
-	for rows.Next() {
-		u, err := r.scanUser(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, u)
-	}
-	return out, rows.Err()
+	return collect(rows, nil, r.scanUser)
 }
 
 // UpdatePassword replaces the stored hash. Callers verify the old password first.
 func (r *UserRepo) UpdatePassword(ctx context.Context, id, hash string) error {
 	const q = `UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2`
-	res, err := r.db.SQL.ExecContext(ctx, q, hash, id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, hash, id)
 }
 
 // UpdateRole flips admin/user. The caller is responsible for preventing the
 // last admin from demoting themselves — enforced at the service layer.
 func (r *UserRepo) UpdateRole(ctx context.Context, id string, role model.Role) error {
 	const q = `UPDATE users SET role = $1, updated_at = now() WHERE id = $2`
-	res, err := r.db.SQL.ExecContext(ctx, q, string(role), id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, string(role), id)
 }
 
 // UpdateKindleEmail sets or clears the Send-to-Kindle target for the
@@ -125,51 +92,18 @@ func (r *UserRepo) UpdateRole(ctx context.Context, id string, role model.Role) e
 // ADR-0021.
 func (r *UserRepo) UpdateKindleEmail(ctx context.Context, id, email string) error {
 	const q = `UPDATE users SET kindle_email = $1, updated_at = now() WHERE id = $2`
-	res, err := r.db.SQL.ExecContext(ctx, q, strings.TrimSpace(email), id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, strings.TrimSpace(email), id)
 }
 
 // UpdateName is used by a user to edit their own display name.
 func (r *UserRepo) UpdateName(ctx context.Context, id, name string) error {
 	const q = `UPDATE users SET name = $1, updated_at = now() WHERE id = $2`
-	res, err := r.db.SQL.ExecContext(ctx, q, strings.TrimSpace(name), id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, strings.TrimSpace(name), id)
 }
 
 func (r *UserRepo) Delete(ctx context.Context, id string) error {
 	const q = `DELETE FROM users WHERE id = $1`
-	res, err := r.db.SQL.ExecContext(ctx, q, id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, id)
 }
 
 // CountByRole returns how many active users hold the given role. Used to
@@ -218,18 +152,7 @@ func (r *UserRepo) UpdateStatus(ctx context.Context, id string, status model.Use
 		SET status = $1, status_changed_at = now(), updated_at = now()
 		WHERE id = $2
 	`
-	res, err := r.db.SQL.ExecContext(ctx, q, string(status), id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, string(status), id)
 }
 
 // SyncOIDCProfile keeps name and avatar in line with the provider on every

@@ -119,16 +119,11 @@ func (r *StatsRepo) YearHistogram(ctx context.Context) ([]StatsYearBucket, error
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []StatsYearBucket
-	for rows.Next() {
+	return collect(rows, nil, func(s scanner) (StatsYearBucket, error) {
 		var b StatsYearBucket
-		if err := rows.Scan(&b.Decade, &b.Count); err != nil {
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	return out, rows.Err()
+		err := s.Scan(&b.Decade, &b.Count)
+		return b, err
+	})
 }
 
 type StatsRatingBucket struct {
@@ -150,16 +145,11 @@ func (r *StatsRepo) RatingDistribution(ctx context.Context) ([]StatsRatingBucket
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []StatsRatingBucket
-	for rows.Next() {
+	return collect(rows, nil, func(s scanner) (StatsRatingBucket, error) {
 		var b StatsRatingBucket
-		if err := rows.Scan(&b.Rating, &b.Count); err != nil {
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	return out, rows.Err()
+		err := s.Scan(&b.Rating, &b.Count)
+		return b, err
+	})
 }
 
 // UserProgressCounts returns a (reading, finished) pair for the user.
@@ -204,14 +194,9 @@ func (r *StatsRepo) query(ctx context.Context, sql string, args ...any) ([]Stats
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []StatsBucket
-	for rows.Next() {
+	return collect(rows, nil, func(s scanner) (StatsBucket, error) {
 		var b StatsBucket
-		if err := rows.Scan(&b.Label, &b.Count); err != nil {
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	return out, rows.Err()
+		err := s.Scan(&b.Label, &b.Count)
+		return b, err
+	})
 }

@@ -4,7 +4,6 @@ package repo
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -71,18 +70,7 @@ func (r *UserInviteRepo) MarkAccepted(ctx context.Context, hash []byte, userID s
 		SET accepted_at = $2, user_id = $3
 		WHERE token_hash = $1 AND accepted_at IS NULL AND expires_at > $2
 	`
-	res, err := r.db.SQL.ExecContext(ctx, q, hash, now.UTC(), userID)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, hash, now.UTC(), userID)
 }
 
 // ListPending returns every unaccepted, unexpired invite ordered by
@@ -98,17 +86,7 @@ func (r *UserInviteRepo) ListPending(ctx context.Context, now time.Time) ([]User
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []UserInvite
-	for rows.Next() {
-		inv, err := r.scan(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, inv)
-	}
-	return out, rows.Err()
+	return collect(rows, nil, r.scan)
 }
 
 // Revoke deletes a pending invite. Idempotent — no-op if the hash is

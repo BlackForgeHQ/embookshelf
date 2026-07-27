@@ -71,17 +71,7 @@ func (r *ShelfRepo) ListForUser(ctx context.Context, userID string) ([]model.She
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []model.Shelf
-	for rows.Next() {
-		s, err := r.scanShelf(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
+	return collect(rows, nil, r.scanShelf)
 }
 
 func (r *ShelfRepo) GetBySlugForUser(ctx context.Context, userID, slug string) (model.Shelf, error) {
@@ -128,8 +118,7 @@ func (r *ShelfRepo) BooksInShelfForUser(ctx context.Context, userID, shelfSlug, 
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	return collectBooks(rows)
+	return collect(rows, nil, scanBook)
 }
 
 // CountForSmartShelf runs the rule as a COUNT(*) so the sidebar can show
@@ -175,8 +164,7 @@ func (r *ShelfRepo) booksMatchingRule(ctx context.Context, userID string, rule *
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	return collectBooks(rows)
+	return collect(rows, nil, scanBook)
 }
 
 // shelfBooksOrderBy maps the API sort vocabulary to ORDER BY for regular
@@ -347,18 +335,7 @@ func (r *ShelfRepo) Update(ctx context.Context, userID, slug string, name, accen
 
 func (r *ShelfRepo) Delete(ctx context.Context, userID, slug string) error {
 	const q = `DELETE FROM shelves WHERE user_id = $1 AND slug = $2`
-	res, err := r.db.SQL.ExecContext(ctx, q, userID, slug)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, userID, slug)
 }
 
 // AddBook links a book to one of the user's regular shelves. Returns
@@ -379,19 +356,10 @@ func (r *ShelfRepo) AddBook(ctx context.Context, userID, slug, bookID string) er
 		VALUES ($1, $2)
 		ON CONFLICT DO NOTHING
 	`
-	res, err := r.db.SQL.ExecContext(ctx, q, sh.ID, bookID)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		// Row already existed — idempotent no-op.
-		return nil
-	}
-	return nil
+	// Deliberately not execOne: ON CONFLICT DO NOTHING makes zero
+	// affected rows the success case, not a missing row.
+	_, err = r.db.SQL.ExecContext(ctx, q, sh.ID, bookID)
+	return err
 }
 
 func (r *ShelfRepo) RemoveBook(ctx context.Context, userID, slug, bookID string) error {
@@ -424,16 +392,11 @@ func (r *ShelfRepo) ShelfSlugsForBook(ctx context.Context, userID, bookID string
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []string
-	for rows.Next() {
+	return collect(rows, nil, func(row scanner) (string, error) {
 		var s string
-		if err := rows.Scan(&s); err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
+		err := row.Scan(&s)
+		return s, err
+	})
 }
 
 func (r *ShelfRepo) scanShelf(s scanner) (model.Shelf, error) {
@@ -656,17 +619,7 @@ func (r *ShelfRepo) ListVisibleToUser(ctx context.Context, userID string) ([]mod
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []model.Shelf
-	for rows.Next() {
-		s, err := r.scanShelf(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
+	return collect(rows, nil, r.scanShelf)
 }
 
 // GetPublicBySlug looks up a shelf by its public-namespace slug. Used by
@@ -700,8 +653,7 @@ func (r *ShelfRepo) BooksInPublicShelf(ctx context.Context, viewerUserID, slug, 
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	return collectBooks(rows)
+	return collect(rows, nil, scanBook)
 }
 
 // SetPublic flips a shelf's is_public flag, scoped to the owner. Returns
@@ -744,16 +696,11 @@ func (r *ShelfRepo) UnpublishAllForOwner(ctx context.Context, userID string) ([]
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var slugs []string
-	for rows.Next() {
+	return collect(rows, nil, func(row scanner) (string, error) {
 		var s string
-		if err := rows.Scan(&s); err != nil {
-			return nil, err
-		}
-		slugs = append(slugs, s)
-	}
-	return slugs, rows.Err()
+		err := row.Scan(&s)
+		return s, err
+	})
 }
 
 // SuggestShelf is the slim shape returned by SearchSuggest for the
@@ -780,17 +727,12 @@ func (r *ShelfRepo) SearchSuggest(ctx context.Context, userID, q string, limit i
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []SuggestShelf
-	for rows.Next() {
+	return collect(rows, nil, func(row scanner) (SuggestShelf, error) {
 		var s SuggestShelf
-		if err := rows.Scan(&s.Slug, &s.Name, &s.Accent); err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
+		err := row.Scan(&s.Slug, &s.Name, &s.Accent)
+		return s, err
+	})
 }
 
-// ensure *sql.Rows satisfies scanner at compile time (used by collectBooks).
+// ensure *sql.Rows satisfies scanner at compile time (collect relies on it).
 var _ scanner = (*sql.Rows)(nil)

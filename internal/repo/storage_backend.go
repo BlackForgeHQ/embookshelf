@@ -81,17 +81,7 @@ func (r *StorageBackendRepo) List(ctx context.Context) ([]model.StorageBackend, 
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []model.StorageBackend
-	for rows.Next() {
-		b, err := r.scanBackend(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	return out, rows.Err()
+	return collect(rows, nil, r.scanBackend)
 }
 
 // UpdateConfig overwrites the config JSONB for a backend row. Used by
@@ -103,37 +93,18 @@ func (r *StorageBackendRepo) UpdateConfig(ctx context.Context, id string, config
 		return fmt.Errorf("encode config: %w", err)
 	}
 	const q = `UPDATE storage_backends SET config = $2::jsonb WHERE id = $1`
-	res, err := r.db.SQL.ExecContext(ctx, q, id, string(cfgJSON))
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, id, string(cfgJSON))
 }
 
 // Delete removes the backend. Returns ErrStorageBackendInUse when any
 // library still references it (FK ON DELETE RESTRICT).
 func (r *StorageBackendRepo) Delete(ctx context.Context, id string) error {
 	const q = `DELETE FROM storage_backends WHERE id = $1`
-	res, err := r.db.SQL.ExecContext(ctx, q, id)
-	if err != nil {
+	if err := execOne(ctx, r.db.SQL, q, id); err != nil {
 		if dberr.IsForeignKeyViolation(err) {
 			return ErrStorageBackendInUse
 		}
 		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
 	}
 	return nil
 }

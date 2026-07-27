@@ -123,17 +123,7 @@ func (r *BookAudiobookRepo) ListSegments(ctx context.Context, bookID string) ([]
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []model.AudiobookSegment
-	for rows.Next() {
-		s, err := scanSegment(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
+	return collect(rows, nil, scanSegment)
 }
 
 // GetSegment reads one segment by (book, seq) — the address a job carries.
@@ -164,17 +154,7 @@ func (r *BookAudiobookRepo) ListUnfinishedSegments(ctx context.Context, bookID s
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []model.AudiobookSegment
-	for rows.Next() {
-		s, err := scanSegment(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
+	return collect(rows, nil, scanSegment)
 }
 
 // MarkSegmentRunning claims a segment. Reports whether the claim landed:
@@ -244,18 +224,7 @@ func (r *BookAudiobookRepo) Coverage(ctx context.Context, bookID string) (model.
 // SetState moves the run. msg is the failure reason; empty otherwise.
 func (r *BookAudiobookRepo) SetState(ctx context.Context, bookID string, state model.AudiobookState, msg string) error {
 	const q = `UPDATE book_audiobooks SET state = $2, error = $3, updated_at = now() WHERE book_id = $1`
-	res, err := r.db.SQL.ExecContext(ctx, q, bookID, string(state), msg)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, bookID, string(state), msg)
 }
 
 // SetReady completes a run: the file exists, the duration is known.
@@ -288,25 +257,14 @@ func (r *BookAudiobookRepo) ListStaleTerminal(ctx context.Context, olderThanDays
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []string
-	for rows.Next() {
+	return collect(rows, nil, func(s scanner) (string, error) {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
+		err := s.Scan(&id)
+		return id, err
+	})
 }
 
-// scanner is satisfied by both *sql.Row and *sql.Rows.
-type segmentScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanSegment(s segmentScanner) (model.AudiobookSegment, error) {
+func scanSegment(s scanner) (model.AudiobookSegment, error) {
 	var (
 		seg   model.AudiobookSegment
 		state string

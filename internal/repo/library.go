@@ -117,17 +117,7 @@ func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var libs []model.Library
-	for rows.Next() {
-		l, err := r.scanLibrary(rows)
-		if err != nil {
-			return nil, err
-		}
-		libs = append(libs, l)
-	}
-	return libs, rows.Err()
+	return collect(rows, nil, r.scanLibrary)
 }
 
 // GetByID returns a single library row. Used by scan flows that need
@@ -159,18 +149,7 @@ func (r *LibraryRepo) TouchScan(ctx context.Context, id string, fileCount, disco
 		    discovered_count = $3
 		WHERE id = $1
 	`
-	res, err := r.db.SQL.ExecContext(ctx, q, id, fileCount, discovered)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, id, fileCount, discovered)
 }
 
 func (r *LibraryRepo) scanLibrary(s scanner) (model.Library, error) {
@@ -198,31 +177,18 @@ func (r *LibraryRepo) DeleteLibrary(ctx context.Context, id string) ([]string, e
 	if err != nil {
 		return nil, err
 	}
-	var bookIDs []string
-	for rows.Next() {
+	bookIDs, err := collect(rows, nil, func(s scanner) (string, error) {
 		var bookID string
-		if err := rows.Scan(&bookID); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		bookIDs = append(bookIDs, bookID)
-	}
-	_ = rows.Close()
-	if err := rows.Err(); err != nil {
+		err := s.Scan(&bookID)
+		return bookID, err
+	})
+	if err != nil {
 		return nil, err
 	}
 
 	const qDel = `DELETE FROM libraries WHERE id = $1`
-	res, err := tx.ExecContext(ctx, qDel, id)
-	if err != nil {
+	if err := execOne(ctx, tx, qDel, id); err != nil {
 		return nil, err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return nil, fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return nil, ErrNotFound
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -254,16 +220,11 @@ func (r *LibraryRepo) SearchSuggest(ctx context.Context, q string, limit int) ([
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []SuggestLibrary
-	for rows.Next() {
+	return collect(rows, nil, func(s scanner) (SuggestLibrary, error) {
 		var l SuggestLibrary
-		if err := rows.Scan(&l.ID, &l.Name, &l.Slug); err != nil {
-			return nil, err
-		}
-		out = append(out, l)
-	}
-	return out, rows.Err()
+		err := s.Scan(&l.ID, &l.Name, &l.Slug)
+		return l, err
+	})
 }
 
 // LibraryBackend returns the storage_backends row associated with the given
@@ -312,16 +273,5 @@ func (r *LibraryRepo) SetBackendID(ctx context.Context, libraryID, backendID str
 	if backendID != "" {
 		nilableBackend = backendID
 	}
-	res, err := r.db.SQL.ExecContext(ctx, q, libraryID, nilableBackend)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, libraryID, nilableBackend)
 }

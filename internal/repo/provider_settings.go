@@ -48,16 +48,7 @@ func (r *ProviderSettingsRepo) List(ctx context.Context) ([]ProviderSetting, err
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	out := make([]ProviderSetting, 0)
-	for rows.Next() {
-		s, err := r.scanProviderSetting(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
+	return collect(rows, make([]ProviderSetting, 0), r.scanProviderSetting)
 }
 
 // AllConfigs returns id → config for every known provider. Used on

@@ -4,7 +4,6 @@ package repo
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,8 +72,7 @@ func (r *BookDropRepo) List(ctx context.Context) ([]model.BookDropItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	return r.collectBookDrop(rows)
+	return collect(rows, nil, r.scanBookDrop)
 }
 
 func (r *BookDropRepo) SetState(ctx context.Context, id string, state model.BookDropState, progress int, errorMsg string) error {
@@ -130,16 +128,11 @@ func (r *BookDropRepo) DeleteProcessed(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var ids []string
-	for rows.Next() {
+	return collect(rows, nil, func(s scanner) (string, error) {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+		err := s.Scan(&id)
+		return id, err
+	})
 }
 
 // ProcessingPaths returns the file paths of every row currently in 'processing'
@@ -153,16 +146,11 @@ func (r *BookDropRepo) ProcessingPaths(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []string
-	for rows.Next() {
+	return collect(rows, nil, func(s scanner) (string, error) {
 		var p string
-		if err := rows.Scan(&p); err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
+		err := s.Scan(&p)
+		return p, err
+	})
 }
 
 // ListNonProcessing returns id+path for every bookdrop row not in
@@ -178,22 +166,17 @@ func (r *BookDropRepo) ListNonProcessing(ctx context.Context) ([]struct {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []struct {
+	return collect(rows, nil, func(s scanner) (struct {
 		ID   string
 		Path string
-	}
-	for rows.Next() {
-		var r struct {
+	}, error) {
+		var row struct {
 			ID   string
 			Path string
 		}
-		if err := rows.Scan(&r.ID, &r.Path); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
+		err := s.Scan(&row.ID, &row.Path)
+		return row, err
+	})
 }
 
 // DeleteByID removes a single bookdrop row by id. Used by Wipe's orphan
@@ -283,18 +266,7 @@ func (r *BookDropRepo) SetAudio(
 		    updated_at = now()
 		WHERE id = $1
 	`
-	res, err := r.db.SQL.ExecContext(ctx, q, itemID, durationSeconds, narrator, chaptersVal)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return execOne(ctx, r.db.SQL, q, itemID, durationSeconds, narrator, chaptersVal)
 }
 
 // SetContentHash records the sha256 computed during ingest.
@@ -305,28 +277,5 @@ func (r *BookDropRepo) SetContentHash(ctx context.Context, itemID string, hash [
 		SET content_hash = $2, updated_at = now()
 		WHERE id = $1
 	`
-	res, err := r.db.SQL.ExecContext(ctx, q, itemID, hash)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-func (r *BookDropRepo) collectBookDrop(rows *sql.Rows) ([]model.BookDropItem, error) {
-	var out []model.BookDropItem
-	for rows.Next() {
-		item, err := r.scanBookDrop(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, item)
-	}
-	return out, rows.Err()
+	return execOne(ctx, r.db.SQL, q, itemID, hash)
 }
