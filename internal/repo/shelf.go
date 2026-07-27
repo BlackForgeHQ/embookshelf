@@ -430,12 +430,11 @@ func (r *ShelfRepo) ShelfSlugsForBook(ctx context.Context, userID, bookID string
 
 func (r *ShelfRepo) scanShelf(s scanner) (model.Shelf, error) {
 	var (
-		sh         model.Shelf
-		ruleJS     []byte
-		createdAny any
+		sh     model.Shelf
+		ruleJS []byte
 	)
 	err := s.Scan(
-		&sh.ID, &sh.UserID, &sh.Name, &sh.Slug, &sh.Accent, &sh.Icon, &createdAny,
+		&sh.ID, &sh.UserID, &sh.Name, &sh.Slug, &sh.Accent, &sh.Icon, &sh.CreatedAt,
 		&sh.IsSmart, &ruleJS, &sh.IsPublic, &sh.BookCount, &sh.OwnerName,
 	)
 	if err != nil {
@@ -443,9 +442,6 @@ func (r *ShelfRepo) scanShelf(s scanner) (model.Shelf, error) {
 			return sh, ErrNotFound
 		}
 		return sh, err
-	}
-	if err := db.ScanTime(createdAny, &sh.CreatedAt); err != nil {
-		return sh, fmt.Errorf("scan created_at: %w", err)
 	}
 	if len(ruleJS) > 0 {
 		var r model.ShelfRule

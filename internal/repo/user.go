@@ -258,20 +258,16 @@ func (r *UserRepo) scanUser(s scanner) (model.User, error) {
 // (which needs to re-hydrate the user after fetching an active session).
 func scanUser(s scanner) (model.User, error) {
 	var (
-		u                model.User
-		role             string
-		status           string
-		statusChangedAny any
-		createdAny       any
-		updatedAny       any
-		lastSeenAny      any
+		u      model.User
+		role   string
+		status string
 	)
 	var passwordHash *string
 	err := s.Scan(
 		&u.ID, &u.Email, &passwordHash, &u.Name, &role,
 		&u.AvatarURL,
-		&status, &statusChangedAny,
-		&createdAny, &updatedAny, &lastSeenAny,
+		&status, &u.StatusChangedAt,
+		&u.CreatedAt, &u.UpdatedAt, &u.LastSeenAt,
 		&u.KindleEmail,
 	)
 	if passwordHash != nil {
@@ -285,17 +281,5 @@ func scanUser(s scanner) (model.User, error) {
 	}
 	u.Role = model.Role(role)
 	u.Status = model.UserStatus(status)
-	if err := db.ScanNullTime(statusChangedAny, &u.StatusChangedAt); err != nil {
-		return u, fmt.Errorf("scan status_changed_at: %w", err)
-	}
-	if err := db.ScanTime(createdAny, &u.CreatedAt); err != nil {
-		return u, fmt.Errorf("scan created_at: %w", err)
-	}
-	if err := db.ScanTime(updatedAny, &u.UpdatedAt); err != nil {
-		return u, fmt.Errorf("scan updated_at: %w", err)
-	}
-	if err := db.ScanNullTime(lastSeenAny, &u.LastSeenAt); err != nil {
-		return u, fmt.Errorf("scan last_seen_at: %w", err)
-	}
 	return u, nil
 }

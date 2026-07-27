@@ -125,16 +125,13 @@ func (r *DeviceRepo) MarkSendResult(ctx context.Context, userID, id string, send
 
 func (r *DeviceRepo) scanDevice(s scanner) (model.Device, error) {
 	var (
-		d           model.Device
-		kind        string
-		rawCfg      []byte
-		lastSentAny any
-		createdAny  any
-		updatedAny  any
+		d      model.Device
+		kind   string
+		rawCfg []byte
 	)
 	err := s.Scan(
 		&d.ID, &d.UserID, &kind, &d.Name, &d.Secret, &rawCfg,
-		&lastSentAny, &d.LastError, &createdAny, &updatedAny,
+		&d.LastSentAt, &d.LastError, &d.CreatedAt, &d.UpdatedAt,
 	)
 	if err != nil {
 		if dberr.IsNotFound(err) {
@@ -150,15 +147,6 @@ func (r *DeviceRepo) scanDevice(s scanner) (model.Device, error) {
 	}
 	if d.Config == nil {
 		d.Config = map[string]any{}
-	}
-	if err := db.ScanNullTime(lastSentAny, &d.LastSentAt); err != nil {
-		return d, fmt.Errorf("scan last_sent_at: %w", err)
-	}
-	if err := db.ScanTime(createdAny, &d.CreatedAt); err != nil {
-		return d, fmt.Errorf("scan created_at: %w", err)
-	}
-	if err := db.ScanTime(updatedAny, &d.UpdatedAt); err != nil {
-		return d, fmt.Errorf("scan updated_at: %w", err)
 	}
 	return d, nil
 }

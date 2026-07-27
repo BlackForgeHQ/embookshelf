@@ -174,22 +174,15 @@ func (r *LibraryRepo) TouchScan(ctx context.Context, id string, fileCount, disco
 
 func (r *LibraryRepo) scanLibrary(s scanner) (model.Library, error) {
 	var l model.Library
-	var lastScannedAny, createdAny any
 	var backendID, root sql.NullString
 	err := s.Scan(
 		&l.ID, &l.Name, &l.Slug, &l.Path,
-		&lastScannedAny, &l.FileCount, &l.DiscoveredCount,
-		&createdAny, &l.BookCount,
+		&l.LastScannedAt, &l.FileCount, &l.DiscoveredCount,
+		&l.CreatedAt, &l.BookCount,
 		&backendID, &root,
 	)
 	if err != nil {
 		return l, err
-	}
-	if err := db.ScanNullTime(lastScannedAny, &l.LastScannedAt); err != nil {
-		return l, fmt.Errorf("scan last_scanned_at: %w", err)
-	}
-	if err := db.ScanTime(createdAny, &l.CreatedAt); err != nil {
-		return l, fmt.Errorf("scan created_at: %w", err)
 	}
 	if backendID.Valid {
 		s := backendID.String
@@ -301,8 +294,8 @@ func (r *LibraryRepo) LibraryBackend(ctx context.Context, libraryID string) (mod
 
 	// Re-use the same scan logic as StorageBackendRepo to avoid duplication.
 	var b model.StorageBackend
-	var configRaw, createdAny any
-	if err := row.Scan(&b.ID, &b.Kind, &configRaw, &createdAny); err != nil {
+	var configRaw any
+	if err := row.Scan(&b.ID, &b.Kind, &configRaw, &b.CreatedAt); err != nil {
 		if dberr.IsNotFound(err) {
 			return model.StorageBackend{}, ErrNotFound
 		}
@@ -320,9 +313,6 @@ func (r *LibraryRepo) LibraryBackend(ctx context.Context, libraryID string) (mod
 	}
 	if err := json.Unmarshal(raw, &b.Config); err != nil {
 		return model.StorageBackend{}, fmt.Errorf("decode config: %w", err)
-	}
-	if err := db.ScanTime(createdAny, &b.CreatedAt); err != nil {
-		return model.StorageBackend{}, fmt.Errorf("scan created_at: %w", err)
 	}
 	return b, nil
 }

@@ -169,27 +169,17 @@ func (r *AnnotationRepo) Delete(ctx context.Context, userID, id string) error {
 // scanAnnotation hydrates a sql row into the model shape. Mirrors the
 // scanBook / scanShelf pattern.
 func (r *AnnotationRepo) scanAnnotation(s scanner) (model.Annotation, error) {
-	var (
-		a          model.Annotation
-		createdAny any
-		updatedAny any
-	)
+	var a model.Annotation
 	err := s.Scan(
 		&a.ID, &a.UserID, &a.BookID, &a.Locator,
 		&a.SelectedText, &a.Note, &a.Color,
-		&createdAny, &updatedAny,
+		&a.CreatedAt, &a.UpdatedAt,
 	)
 	if dberr.IsNotFound(err) {
 		return model.Annotation{}, ErrNotFound
 	}
 	if err != nil {
 		return model.Annotation{}, err
-	}
-	if err := db.ScanTime(createdAny, &a.CreatedAt); err != nil {
-		return model.Annotation{}, fmt.Errorf("scan created_at: %w", err)
-	}
-	if err := db.ScanTime(updatedAny, &a.UpdatedAt); err != nil {
-		return model.Annotation{}, fmt.Errorf("scan updated_at: %w", err)
 	}
 	return a, nil
 }

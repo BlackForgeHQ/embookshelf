@@ -25,24 +25,21 @@ func NewProgressRepo(db *db.DB) *ProgressRepo {
 func (r *ProgressRepo) LatestForBook(ctx context.Context, bookID string) (time.Time, error) {
 	const q = `SELECT MAX(last_read_at) FROM user_book_progress WHERE book_id = $1`
 
-	var raw any
-	err := r.db.SQL.QueryRowContext(ctx, q, bookID).Scan(&raw)
+	// MAX() over no rows is SQL NULL, so the destination has to be
+	// nullable even though the column is not: a book nobody has opened
+	// yields the zero time rather than an error.
+	var latest *time.Time
+	err := r.db.SQL.QueryRowContext(ctx, q, bookID).Scan(&latest)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return time.Time{}, nil
 		}
 		return time.Time{}, err
 	}
-	if raw == nil {
-		// No rows matched — book has never been read.
+	if latest == nil {
 		return time.Time{}, nil
 	}
-
-	var t time.Time
-	if err := db.ScanTime(raw, &t); err != nil {
-		return time.Time{}, err
-	}
-	return t, nil
+	return *latest, nil
 }
 
 // Set records a user's progress for a book. The CFI argument is optional; an

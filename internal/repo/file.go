@@ -339,14 +339,11 @@ func (r *FileRepo) scanFile(s scanner) (model.File, error) {
 	var bookIDAny any
 	var etagAny any
 	var contentHashAny any
-	var mtimeAny any
-	var lastScannedAny any
-	var missingSinceAny any
 
 	err := s.Scan(
 		&f.ID, &f.LibraryID, &bookIDAny, &f.Location,
-		&f.Size, &mtimeAny, &etagAny, &contentHashAny,
-		&f.Format, &lastScannedAny, &missingSinceAny,
+		&f.Size, &f.Mtime, &etagAny, &contentHashAny,
+		&f.Format, &f.LastScanned, &f.MissingSince,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -383,21 +380,6 @@ func (r *FileRepo) scanFile(s scanner) (model.File, error) {
 		case string:
 			f.ContentHash = []byte(v)
 		}
-	}
-
-	// mtime: non-nullable TIMESTAMPTZ
-	if err := db.ScanTime(mtimeAny, &f.Mtime); err != nil {
-		return f, fmt.Errorf("scan mtime: %w", err)
-	}
-
-	// last_scanned: non-nullable
-	if err := db.ScanTime(lastScannedAny, &f.LastScanned); err != nil {
-		return f, fmt.Errorf("scan last_scanned: %w", err)
-	}
-
-	// missing_since: nullable
-	if err := db.ScanNullTime(missingSinceAny, &f.MissingSince); err != nil {
-		return f, fmt.Errorf("scan missing_since: %w", err)
 	}
 
 	return f, nil

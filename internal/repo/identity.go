@@ -209,26 +209,16 @@ func (r *IdentityRepo) DeleteWithGuard(ctx context.Context, userID, provider str
 }
 
 func (r *IdentityRepo) scan(s scanner) (model.Identity, error) {
-	var (
-		i              model.Identity
-		linkedAtAny    any
-		lastLoginAtAny any
-	)
+	var i model.Identity
 	err := s.Scan(
 		&i.ID, &i.UserID, &i.Provider, &i.Issuer, &i.Subject, &i.Email,
-		&linkedAtAny, &lastLoginAtAny,
+		&i.LinkedAt, &i.LastLoginAt,
 	)
 	if err != nil {
 		if dberr.IsNotFound(err) {
 			return i, ErrNotFound
 		}
 		return i, err
-	}
-	if err := db.ScanTime(linkedAtAny, &i.LinkedAt); err != nil {
-		return i, fmt.Errorf("scan linked_at: %w", err)
-	}
-	if err := db.ScanNullTime(lastLoginAtAny, &i.LastLoginAt); err != nil {
-		return i, fmt.Errorf("scan last_login_at: %w", err)
 	}
 	return i, nil
 }

@@ -217,17 +217,15 @@ func (r *BookDropRepo) MarkImported(ctx context.Context, id, bookID string) erro
 
 func (r *BookDropRepo) scanBookDrop(s scanner) (model.BookDropItem, error) {
 	var (
-		item          model.BookDropItem
-		state         string
-		discoveredAny any
-		updatedAny    any
-		durationAny   any
-		chaptersAny   any
+		item        model.BookDropItem
+		state       string
+		durationAny any
+		chaptersAny any
 	)
 	err := s.Scan(
 		&item.ID, &item.Path, &item.FileSize, &item.Format, &state, &item.Progress, &item.ErrorMsg,
 		&item.Title, &item.Author, &item.Description, &item.Language, &item.ISBN, &item.HasCover, &item.CoverMime, &item.BookID,
-		&discoveredAny, &updatedAny, &item.ContentHash,
+		&item.DiscoveredAt, &item.UpdatedAt, &item.ContentHash,
 		&durationAny, &item.Narrator, &chaptersAny,
 	)
 	if err != nil {
@@ -237,12 +235,6 @@ func (r *BookDropRepo) scanBookDrop(s scanner) (model.BookDropItem, error) {
 		return item, err
 	}
 	item.State = model.BookDropState(state)
-	if err := db.ScanTime(discoveredAny, &item.DiscoveredAt); err != nil {
-		return item, fmt.Errorf("scan discovered_at: %w", err)
-	}
-	if err := db.ScanTime(updatedAny, &item.UpdatedAt); err != nil {
-		return item, fmt.Errorf("scan updated_at: %w", err)
-	}
 	if v, ok := durationAny.(int64); ok {
 		n := int(v)
 		item.DurationSeconds = &n

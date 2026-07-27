@@ -224,14 +224,10 @@ func seedFilesFromBooks(ctx context.Context, d *db.DB) (int, error) {
 	var batch []bookForFile
 	for rows.Next() {
 		var bf bookForFile
-		var rawUpdatedAt any
 		if err := rows.Scan(
-			&bf.bookID, &bf.libraryID, &bf.path, &bf.libRoot, &bf.format, &rawUpdatedAt,
+			&bf.bookID, &bf.libraryID, &bf.path, &bf.libRoot, &bf.format, &bf.updatedAt,
 		); err != nil {
 			return 0, err
-		}
-		if err := db.ScanTime(rawUpdatedAt, &bf.updatedAt); err != nil {
-			return 0, fmt.Errorf("scan updated_at for book %s: %w", bf.bookID, err)
 		}
 		batch = append(batch, bf)
 	}

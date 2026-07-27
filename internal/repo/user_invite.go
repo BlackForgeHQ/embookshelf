@@ -132,14 +132,11 @@ func (r *UserInviteRepo) PurgeExpired(ctx context.Context, now time.Time) (int64
 
 func (r *UserInviteRepo) scan(s scanner) (UserInvite, error) {
 	var (
-		inv         UserInvite
-		role        string
-		userID      *string
-		createdAny  any
-		expiresAny  any
-		acceptedAny any
+		inv    UserInvite
+		role   string
+		userID *string
 	)
-	if err := s.Scan(&inv.TokenHash, &inv.Email, &role, &inv.InvitedBy, &createdAny, &expiresAny, &acceptedAny, &userID); err != nil {
+	if err := s.Scan(&inv.TokenHash, &inv.Email, &role, &inv.InvitedBy, &inv.CreatedAt, &inv.ExpiresAt, &inv.AcceptedAt, &userID); err != nil {
 		if dberr.IsNotFound(err) {
 			return UserInvite{}, ErrNotFound
 		}
@@ -147,14 +144,5 @@ func (r *UserInviteRepo) scan(s scanner) (UserInvite, error) {
 	}
 	inv.Role = model.Role(role)
 	inv.UserID = userID
-	if err := db.ScanTime(createdAny, &inv.CreatedAt); err != nil {
-		return UserInvite{}, fmt.Errorf("scan created_at: %w", err)
-	}
-	if err := db.ScanTime(expiresAny, &inv.ExpiresAt); err != nil {
-		return UserInvite{}, fmt.Errorf("scan expires_at: %w", err)
-	}
-	if err := db.ScanNullTime(acceptedAny, &inv.AcceptedAt); err != nil {
-		return UserInvite{}, fmt.Errorf("scan accepted_at: %w", err)
-	}
 	return inv, nil
 }

@@ -99,14 +99,13 @@ func (r *BookAudiobookRepo) GetByBookID(ctx context.Context, bookID string) (mod
 	const q = `SELECT ` + audiobookCols + ` FROM book_audiobooks WHERE book_id = $1`
 
 	var (
-		ab                   model.Audiobook
-		state                string
-		createdAt, updatedAt any
+		ab    model.Audiobook
+		state string
 	)
 	row := r.db.SQL.QueryRowContext(ctx, q, bookID)
 	if err := row.Scan(
 		&ab.BookID, &state, &ab.Engine, &ab.Voice, &ab.Model, &ab.SourceContentHash,
-		&ab.FileID, &ab.Error, &ab.TotalChars, &ab.DurationMS, &createdAt, &updatedAt,
+		&ab.FileID, &ab.Error, &ab.TotalChars, &ab.DurationMS, &ab.CreatedAt, &ab.UpdatedAt,
 	); err != nil {
 		if dberr.IsNotFound(err) {
 			return model.Audiobook{}, ErrNotFound
@@ -114,12 +113,6 @@ func (r *BookAudiobookRepo) GetByBookID(ctx context.Context, bookID string) (mod
 		return model.Audiobook{}, err
 	}
 	ab.State = model.AudiobookState(state)
-	if err := db.ScanTime(createdAt, &ab.CreatedAt); err != nil {
-		return model.Audiobook{}, fmt.Errorf("scan created_at: %w", err)
-	}
-	if err := db.ScanTime(updatedAt, &ab.UpdatedAt); err != nil {
-		return model.Audiobook{}, fmt.Errorf("scan updated_at: %w", err)
-	}
 	return ab, nil
 }
 

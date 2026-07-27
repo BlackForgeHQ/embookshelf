@@ -5,7 +5,6 @@ package repo
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/db"
@@ -200,27 +199,15 @@ func (r *ProviderSettingsRepo) SeedIfAbsent(ctx context.Context, defaults map[st
 
 func (r *ProviderSettingsRepo) scanProviderSetting(s scanner) (ProviderSetting, error) {
 	var (
-		ps             ProviderSetting
-		cfg            []byte
-		updatedAny     any
-		lastSuccessAny any
-		lastErrorAtAny any
+		ps  ProviderSetting
+		cfg []byte
 	)
 	if err := s.Scan(
-		&ps.ID, &ps.Enabled, &cfg, &ps.Priority, &updatedAny,
-		&lastSuccessAny, &lastErrorAtAny, &ps.LastError,
+		&ps.ID, &ps.Enabled, &cfg, &ps.Priority, &ps.UpdatedAt,
+		&ps.LastSuccessAt, &ps.LastErrorAt, &ps.LastError,
 	); err != nil {
 		return ps, err
 	}
 	ps.Config = json.RawMessage(cfg)
-	if err := db.ScanTime(updatedAny, &ps.UpdatedAt); err != nil {
-		return ps, fmt.Errorf("scan updated_at: %w", err)
-	}
-	if err := db.ScanNullTime(lastSuccessAny, &ps.LastSuccessAt); err != nil {
-		return ps, fmt.Errorf("scan last_success_at: %w", err)
-	}
-	if err := db.ScanNullTime(lastErrorAtAny, &ps.LastErrorAt); err != nil {
-		return ps, fmt.Errorf("scan last_error_at: %w", err)
-	}
 	return ps, nil
 }

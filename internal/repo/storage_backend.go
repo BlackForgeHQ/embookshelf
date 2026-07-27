@@ -144,9 +144,8 @@ func (r *StorageBackendRepo) Delete(ctx context.Context, id string) error {
 func (r *StorageBackendRepo) scanBackend(s scanner) (model.StorageBackend, error) {
 	var b model.StorageBackend
 	var configRaw any
-	var createdAny any
 
-	err := s.Scan(&b.ID, &b.Kind, &configRaw, &createdAny)
+	err := s.Scan(&b.ID, &b.Kind, &configRaw, &b.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return b, sql.ErrNoRows
@@ -167,10 +166,6 @@ func (r *StorageBackendRepo) scanBackend(s scanner) (model.StorageBackend, error
 	}
 	if err := json.Unmarshal(raw, &b.Config); err != nil {
 		return b, fmt.Errorf("decode config: %w", err)
-	}
-
-	if err := db.ScanTime(createdAny, &b.CreatedAt); err != nil {
-		return b, fmt.Errorf("scan created_at: %w", err)
 	}
 	return b, nil
 }

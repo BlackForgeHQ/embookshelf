@@ -4,7 +4,6 @@ package repo
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/db"
@@ -58,27 +57,13 @@ func (r *PasswordResetTokenRepo) Consume(ctx context.Context, hash []byte, now t
 		  AND expires_at > $2
 		RETURNING user_id, created_at, expires_at, used_at
 	`
-	var (
-		t          PasswordResetToken
-		createdAny any
-		expiresAny any
-		usedAny    any
-	)
+	var t PasswordResetToken
 	row := r.db.SQL.QueryRowContext(ctx, q, hash, now.UTC())
-	if err := row.Scan(&t.UserID, &createdAny, &expiresAny, &usedAny); err != nil {
+	if err := row.Scan(&t.UserID, &t.CreatedAt, &t.ExpiresAt, &t.UsedAt); err != nil {
 		if dberr.IsNotFound(err) {
 			return PasswordResetToken{}, ErrNotFound
 		}
 		return PasswordResetToken{}, err
-	}
-	if err := db.ScanTime(createdAny, &t.CreatedAt); err != nil {
-		return PasswordResetToken{}, fmt.Errorf("scan created_at: %w", err)
-	}
-	if err := db.ScanTime(expiresAny, &t.ExpiresAt); err != nil {
-		return PasswordResetToken{}, fmt.Errorf("scan expires_at: %w", err)
-	}
-	if err := db.ScanNullTime(usedAny, &t.UsedAt); err != nil {
-		return PasswordResetToken{}, fmt.Errorf("scan used_at: %w", err)
 	}
 	return t, nil
 }
@@ -93,26 +78,12 @@ func (r *PasswordResetTokenRepo) Verify(ctx context.Context, hash []byte, now ti
 		FROM password_reset_tokens
 		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2
 	`
-	var (
-		t          PasswordResetToken
-		createdAny any
-		expiresAny any
-		usedAny    any
-	)
+	var t PasswordResetToken
 	row := r.db.SQL.QueryRowContext(ctx, q, hash, now.UTC())
-	if err := row.Scan(&t.UserID, &createdAny, &expiresAny, &usedAny); err != nil {
+	if err := row.Scan(&t.UserID, &t.CreatedAt, &t.ExpiresAt, &t.UsedAt); err != nil {
 		if dberr.IsNotFound(err) {
 			return PasswordResetToken{}, ErrNotFound
 		}
-		return PasswordResetToken{}, err
-	}
-	if err := db.ScanTime(createdAny, &t.CreatedAt); err != nil {
-		return PasswordResetToken{}, err
-	}
-	if err := db.ScanTime(expiresAny, &t.ExpiresAt); err != nil {
-		return PasswordResetToken{}, err
-	}
-	if err := db.ScanNullTime(usedAny, &t.UsedAt); err != nil {
 		return PasswordResetToken{}, err
 	}
 	return t, nil

@@ -156,26 +156,11 @@ func (r *ReadingSessionRepo) CurrentStreak(ctx context.Context, userID string) (
 
 	var days []time.Time
 	for rows.Next() {
-		var dayAny any
-		if err := rows.Scan(&dayAny); err != nil {
+		var day time.Time
+		if err := rows.Scan(&day); err != nil {
 			return 0, err
 		}
-		// DATE columns normally arrive as time.Time, but accept the
-		// "YYYY-MM-DD" string form too in case the driver hands one over.
-		var d time.Time
-		switch v := dayAny.(type) {
-		case time.Time:
-			d = v.UTC()
-		case string:
-			t, err := time.Parse("2006-01-02", v)
-			if err != nil {
-				return 0, fmt.Errorf("parse day %q: %w", v, err)
-			}
-			d = t.UTC()
-		default:
-			return 0, fmt.Errorf("unexpected day type %T", dayAny)
-		}
-		days = append(days, d)
+		days = append(days, day.UTC())
 	}
 	if err := rows.Err(); err != nil {
 		return 0, err

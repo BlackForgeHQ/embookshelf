@@ -561,19 +561,18 @@ type scanner interface {
 
 func scanBook(s scanner) (model.Book, error) {
 	var b model.Book
-	var genresAny, moodsAny, tagsAny, publishDateAny, createdAny any
 	var durationAny, chaptersAny any
 	var coverHashAny any
 	var bookUUID, folderPath sql.NullString
 	err := s.Scan(
 		&b.ID, &b.LibraryID, &b.Title, &b.Subtitle, &b.Author, &b.Format, &b.Year,
-		&publishDateAny, &b.Language,
+		&b.PublishDate, &b.Language,
 		&b.Progress, &b.Rating, &b.CoverPalette,
 		&b.Description, &b.ISBN, &b.ISBN10, &b.Publisher,
 		&b.Series, &b.SeriesIndex, &b.SeriesTotal,
-		&genresAny, &moodsAny, &tagsAny,
+		db.TextArray{Dst: &b.Genres}, db.TextArray{Dst: &b.Moods}, db.TextArray{Dst: &b.Tags},
 		&b.AgeRating, &b.ContentRating, &b.Pages, &b.PublicReviews,
-		&createdAny, &b.Path,
+		&b.CreatedAt, &b.Path,
 		&b.HasCover, &b.CoverMime, &coverHashAny,
 		&b.ResumeCFI,
 		&b.Locks.Title, &b.Locks.Subtitle, &b.Locks.Author,
@@ -586,21 +585,6 @@ func scanBook(s scanner) (model.Book, error) {
 	)
 	if err != nil {
 		return b, err
-	}
-	if err := db.ScanNullTime(publishDateAny, &b.PublishDate); err != nil {
-		return b, fmt.Errorf("scan publish_date: %w", err)
-	}
-	if err := db.ScanTime(createdAny, &b.CreatedAt); err != nil {
-		return b, fmt.Errorf("scan created_at: %w", err)
-	}
-	if err := db.ScanStringSlice(genresAny, &b.Genres); err != nil {
-		return b, fmt.Errorf("scan genres: %w", err)
-	}
-	if err := db.ScanStringSlice(moodsAny, &b.Moods); err != nil {
-		return b, fmt.Errorf("scan moods: %w", err)
-	}
-	if err := db.ScanStringSlice(tagsAny, &b.Tags); err != nil {
-		return b, fmt.Errorf("scan tags: %w", err)
 	}
 	if v, ok := durationAny.(int64); ok {
 		n := int(v)

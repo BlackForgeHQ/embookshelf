@@ -88,14 +88,13 @@ func (r *BookReadingGuideRepo) GetByBookID(ctx context.Context, bookID string) (
 	const q = `SELECT ` + readingGuideCols + ` FROM book_reading_guides WHERE book_id = $1`
 
 	var (
-		g           model.ReadingGuide
-		sourceKind  string
-		generatedAt any
+		g          model.ReadingGuide
+		sourceKind string
 	)
 	row := r.db.SQL.QueryRowContext(ctx, q, bookID)
 	if err := row.Scan(
 		&g.BookID, &g.About, &g.Audience, &g.NotFor, &g.Problems,
-		&sourceKind, &g.Model, &g.Language, &generatedAt, &g.EditedByUser,
+		&sourceKind, &g.Model, &g.Language, &g.GeneratedAt, &g.EditedByUser,
 	); err != nil {
 		if dberr.IsNotFound(err) {
 			return model.ReadingGuide{}, ErrNotFound
@@ -103,9 +102,6 @@ func (r *BookReadingGuideRepo) GetByBookID(ctx context.Context, bookID string) (
 		return model.ReadingGuide{}, err
 	}
 	g.SourceKind = model.GuideSource(sourceKind)
-	if err := db.ScanTime(generatedAt, &g.GeneratedAt); err != nil {
-		return model.ReadingGuide{}, fmt.Errorf("scan generated_at: %w", err)
-	}
 	return g, nil
 }
 
