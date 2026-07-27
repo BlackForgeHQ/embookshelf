@@ -37,8 +37,9 @@ type Props = {
 // we preload n+1 (and a tiny window backwards) so a normal page-turn is
 // instant while not paying memory for the whole book up front.
 //
-// Progress = current page / (total - 1). Persisted as `page:N` (0-indexed)
-// to mirror PDF's existing scheme.
+// Progress = current page / (total - 1). Pages are 0-indexed throughout
+// this component; the shell converts to the 1-indexed page a locator
+// token carries, so this indexing never leaves the file.
 export const ComicReader = forwardRef<ComicReaderHandle, Props>(
   function ComicReaderImpl(
     { bookId, initialPage, fitMode = "page", onReady, onProgress, onError },

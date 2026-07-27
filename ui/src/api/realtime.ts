@@ -1,6 +1,6 @@
 import { useEffect } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { useNavigate, useRouterState } from "@tanstack/react-router"
+import { useNavigate, useRouter } from "@tanstack/react-router"
 import { toast } from "sonner"
 
 import { bookdropQueryKey } from "./bookdrop"
@@ -63,7 +63,17 @@ function parseSharedShelfPayload(raw: string): SharedShelfPayload | null {
 export function useRealtime() {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const router = useRouterState()
+  // The router instance, not a slice of its state. Only the two
+  // shared-shelf handlers below need the location, and they need it at
+  // event time — so they read `router.state.location`, a live getter, at
+  // the moment the event arrives. Subscribing to the location instead
+  // (useRouterState) put a value that changes on every navigation into
+  // this effect's dependency array, which tore the EventSource down and
+  // reopened it on each one, costing a reconnect round-trip and
+  // defeating the single-connection-per-session property in
+  // ARCHITECTURE.md §5.7. `router` and `navigate` both keep one identity
+  // for the life of the app, so the effect now runs exactly once.
+  const router = useRouter()
 
   useEffect(() => {
     // Dispatch table: event name → list of queryKeys to bust. Bookdrop
@@ -112,10 +122,13 @@ export function useRealtime() {
       "shelf.public.removed": (raw) => {
         queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
         const payload = parseSharedShelfPayload(raw)
-        const search = router.location.search as { shelf?: string }
+        // Read at event time: the viewer may have navigated many times
+        // since this listener was attached.
+        const location = router.state.location
+        const search = location.search as { shelf?: string }
         if (
           payload &&
-          router.location.pathname.startsWith("/library") &&
+          location.pathname.startsWith("/library") &&
           search.shelf === payload.slug
         ) {
           toast.info("Shared shelf is no longer available.")

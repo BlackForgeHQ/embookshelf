@@ -33,6 +33,7 @@ import {
   fetchDevices,
   sendBookToDevice,
 } from "@/api/devices"
+import { locatorLabel } from "@/lib/locator"
 import { Cover, StarRating } from "@/components/Cover"
 import { Icon } from "@/components/Icon"
 import { Button } from "@/components/ui/button"
@@ -983,7 +984,7 @@ function NotesPanel({ bookId }: { bookId: string }) {
                   : kind === "highlight+note"
                     ? "Highlight · Note"
                     : "Note"}
-                {a.locator && ` · ${shortLocator(a.locator)}`}
+                {a.locator && ` · ${locatorLabel(a.locator)}`}
               </span>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span className="t-micro">
@@ -1024,12 +1025,6 @@ function NotesPanel({ bookId }: { bookId: string }) {
       })}
     </div>
   )
-}
-
-function shortLocator(locator: string): string {
-  if (locator.startsWith("page:")) return `p.${locator.slice(5)}`
-  if (locator.startsWith("epubcfi")) return "EPUB"
-  return locator
 }
 
 // SendToKindleButton fires the book at the user's @kindle.com address.

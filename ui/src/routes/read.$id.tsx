@@ -21,6 +21,12 @@ import type {
 import type { PdfProgress, PdfReaderHandle } from "@/components/PdfReader"
 import { useReadingPosition } from "@/hooks/useReadingPosition"
 import {
+  decodeLocator,
+  encodeLocator,
+  formatHMS,
+  locatorLabel,
+} from "@/lib/locator"
+import {
   annotationKind,
   bookAnnotationsQueryKey,
   createAnnotation,
@@ -59,26 +65,6 @@ const PROGRESS_DEBOUNCE_MS = 600
 const AUDIO_PROGRESS_DEBOUNCE_MS = 5000
 
 type TocItem = { label: string; href: string }
-
-// parseResumeToken separates the two resume-token shapes we store in the
-// database: raw CFI strings (EPUB) and page:N tokens (PDF). Unknown tokens
-// fall back to "start from the beginning".
-function parseResumeToken(raw?: string): {
-  cfi?: string
-  page?: number
-  seconds?: number
-} {
-  if (!raw) return {}
-  if (raw.startsWith("page:")) {
-    const page = Number.parseInt(raw.slice(5), 10)
-    return Number.isFinite(page) ? { page } : {}
-  }
-  if (raw.startsWith("time:")) {
-    const seconds = Number.parseFloat(raw.slice(5))
-    return Number.isFinite(seconds) ? { seconds } : {}
-  }
-  return { cfi: raw }
-}
 
 function Reader() {
   const { id } = Route.useParams()
@@ -207,7 +193,12 @@ function RenditionSwitch({
 function ReaderShell({ book }: { book: BookDetail }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { cfi: resumeCfi, page: resumePage } = parseResumeToken(book.resumeCfi)
+  // This shell drives EPUB and PDF, so it takes the kind that matches the
+  // format and ignores the other — a token of the wrong kind means "start
+  // from the beginning" rather than a coerced position.
+  const resume = decodeLocator(book.resumeCfi)
+  const resumeCfi = resume?.kind === "cfi" ? resume.cfi : undefined
+  const resumePage = resume?.kind === "page" ? resume.page : undefined
 
   const [chromeVisible, setChromeVisible] = useState(true)
   const [tocOpen, setTocOpen] = useState(false)
@@ -297,9 +288,9 @@ function ReaderShell({ book }: { book: BookDetail }) {
   const onBookmark = () => {
     const locator =
       book.format === "PDF" && pageState
-        ? `page:${pageState.current}`
+        ? encodeLocator({ kind: "page", page: pageState.current })
         : book.format === "EPUB" && cfiState
-          ? cfiState
+          ? encodeLocator({ kind: "cfi", cfi: cfiState })
           : ""
     if (!locator) {
       toast.info("Open the book first, then bookmark.")
@@ -314,7 +305,9 @@ function ReaderShell({ book }: { book: BookDetail }) {
   const epubHighlights = useMemo<Array<EpubHighlight>>(() => {
     if (book.format !== "EPUB") return []
     return (annotations.data ?? [])
-      .filter((a) => !!a.selectedText && !!a.locator?.startsWith("epubcfi"))
+      .filter(
+        (a) => !!a.selectedText && decodeLocator(a.locator)?.kind === "cfi"
+      )
       .map((a) => ({ cfiRange: a.locator!, color: "oklch(0.92 0.07 85)" }))
   }, [book.format, annotations.data])
 
@@ -326,7 +319,7 @@ function ReaderShell({ book }: { book: BookDetail }) {
   const onPdfProgress = (p: PdfProgress) => {
     setPercent(p.percent)
     setPageState({ current: p.page, total: p.totalPages })
-    queueProgress(p.percent, `page:${p.page}`)
+    queueProgress(p.percent, encodeLocator({ kind: "page", page: p.page }))
   }
 
   const closePanels = () => {
@@ -668,7 +661,10 @@ function ReaderShell({ book }: { book: BookDetail }) {
                   )
                   if (!note || !note.trim()) return
                   createAnnotationMut.mutate({
-                    locator: `page:${pageState.current}`,
+                    locator: encodeLocator({
+                      kind: "page",
+                      page: pageState.current,
+                    }),
                     note: note.trim(),
                   })
                 }}
@@ -694,6 +690,7 @@ function ReaderShell({ book }: { book: BookDetail }) {
 
             {(annotations.data ?? []).map((a) => {
               const kind = annotationKind(a)
+              const locator = decodeLocator(a.locator)
               return (
                 <div
                   key={a.id}
@@ -716,44 +713,39 @@ function ReaderShell({ book }: { book: BookDetail }) {
                         : kind === "highlight+note"
                           ? "Highlight · Note"
                           : "Note"}
-                      {a.locator &&
-                        a.locator.startsWith("page:") &&
-                        ` · p.${a.locator.slice(5)}`}
+                      {/* A CFI reduces to "EPUB", which says nothing the
+                          reader you are already inside doesn't — so only
+                          a page carries a label worth showing here. */}
+                      {locator?.kind === "page" &&
+                        ` · ${locatorLabel(a.locator)}`}
                     </span>
                     <div
                       style={{ display: "flex", alignItems: "center", gap: 6 }}
                     >
-                      {a.locator?.startsWith("epubcfi") &&
-                        book.format === "EPUB" && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            onClick={() => epubRef.current?.goTo(a.locator!)}
-                            title="Go to highlight"
-                          >
-                            <Icon name="arrow-right" size={10} />
-                          </Button>
-                        )}
-                      {a.locator?.startsWith("page:") &&
-                        book.format === "PDF" && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            onClick={() => {
-                              const page = Number.parseInt(
-                                a.locator!.slice(5),
-                                10
-                              )
-                              if (Number.isFinite(page))
-                                pdfRef.current?.goTo(page)
-                            }}
-                            title="Go to page"
-                          >
-                            <Icon name="arrow-right" size={10} />
-                          </Button>
-                        )}
+                      {locator?.kind === "cfi" && book.format === "EPUB" && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={() => epubRef.current?.goTo(locator.cfi)}
+                          title="Go to highlight"
+                        >
+                          <Icon name="arrow-right" size={10} />
+                        </Button>
+                      )}
+                      {locator?.kind === "page" && book.format === "PDF" && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          // Decoding already rejected an unreadable page,
+                          // so there is nothing left to re-validate here.
+                          onClick={() => pdfRef.current?.goTo(locator.page)}
+                          title="Go to page"
+                        >
+                          <Icon name="arrow-right" size={10} />
+                        </Button>
+                      )}
                       <Button
                         type="button"
                         variant="ghost"
@@ -885,12 +877,13 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
-  // Initial page (0-indexed) parsed out of the same `page:N` token
-  // PDF readers persist; comics happen to also use 0-indexed pages
-  // internally so we re-use the parser without translation.
+  // ComicReader counts pages from 0; a page token carries the human page
+  // number. The shell converts at its own boundary — the alternative,
+  // storing this reader's indexing in the token, is what made `page:7`
+  // mean p.8 in the reader chrome and p.7 in the notebook.
   const initialPage = useMemo(() => {
-    const t = parseResumeToken(book.resumeCfi)
-    return typeof t.page === "number" ? Math.max(0, t.page) : 0
+    const resume = decodeLocator(book.resumeCfi)
+    return resume?.kind === "page" ? Math.max(0, resume.page - 1) : 0
   }, [book.resumeCfi])
 
   const [chromeVisible, setChromeVisible] = useState(true)
@@ -928,7 +921,7 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
   const onComicProgress = (p: ComicProgress) => {
     setPage(p.page)
     setTotal(p.totalPages)
-    queueProgress(p.percent, `page:${p.page}`)
+    queueProgress(p.percent, encodeLocator({ kind: "page", page: p.page + 1 }))
   }
 
   const exit = () => {
@@ -1012,7 +1005,11 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
             size="icon-sm"
             aria-label="Bookmark"
             disabled={bookmarkMut.isPending}
-            onClick={() => bookmarkMut.mutate(`page:${page}`)}
+            onClick={() =>
+              bookmarkMut.mutate(
+                encodeLocator({ kind: "page", page: page + 1 })
+              )
+            }
           >
             <Icon name="bookmark" size={14} />
           </Button>
@@ -1147,8 +1144,8 @@ function AudioReaderShell({
   const queryClient = useQueryClient()
 
   const initialSeconds = useMemo(() => {
-    const t = parseResumeToken(book.resumeCfi)
-    return typeof t.seconds === "number" ? Math.max(0, t.seconds) : 0
+    const resume = decodeLocator(book.resumeCfi)
+    return resume?.kind === "time" ? Math.max(0, resume.seconds) : 0
   }, [book.resumeCfi])
 
   const [seconds, setSeconds] = useState(initialSeconds)
@@ -1188,7 +1185,10 @@ function AudioReaderShell({
   const onAudioProgress = (p: AudioProgress) => {
     setSeconds(p.seconds)
     setDuration(p.duration)
-    queueProgress(p.percent, `time:${p.seconds.toFixed(2)}`)
+    queueProgress(
+      p.percent,
+      encodeLocator({ kind: "time", seconds: p.seconds })
+    )
   }
 
   const exit = () => {
@@ -1243,7 +1243,9 @@ function AudioReaderShell({
           size="icon-sm"
           aria-label="Bookmark"
           disabled={bookmarkMut.isPending}
-          onClick={() => bookmarkMut.mutate(`time:${seconds.toFixed(2)}`)}
+          onClick={() =>
+            bookmarkMut.mutate(encodeLocator({ kind: "time", seconds }))
+          }
         >
           <Icon name="bookmark" size={14} />
         </Button>
@@ -1517,18 +1519,6 @@ function AudioReaderShell({
       />
     </div>
   )
-}
-
-// formatHMS renders a seconds count as H:MM:SS (or M:SS for short
-// clips). NaN / negative values render as "—:—".
-function formatHMS(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return "—:—"
-  const total = Math.floor(seconds)
-  const h = Math.floor(total / 3600)
-  const m = Math.floor((total % 3600) / 60)
-  const s = total % 60
-  const pad = (n: number) => n.toString().padStart(2, "0")
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
 }
 
 function FullScreenMessage({ children }: { children: React.ReactNode }) {

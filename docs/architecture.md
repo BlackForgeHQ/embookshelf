@@ -820,14 +820,25 @@ network dependency on first paint.
 #### 5.6.1 Progress tokens
 
 One column (`user_book_progress.resume_cfi`) carries every reader's
-resume marker; format is prefix-discriminated:
+resume marker, and `annotations.locator` carries the same vocabulary for
+bookmarks and highlights; format is prefix-discriminated:
 
-| Format | Token | Example |
-|--------|-------|---------|
-| EPUB | `epubcfi(...)` | `epubcfi(/6/14[chap03]!/4/1:0)` |
-| PDF | `page:N` | `page:42` |
-| Comic / CBZ | `page:N` (0-indexed) | `page:7` |
-| Audiobook | `time:Ns` | `time:3600s` |
+| Kind | Token | Example |
+|------|-------|---------|
+| EPUB CFI | `epubcfi(...)` | `epubcfi(/6/14[chap03]!/4/1:0)` |
+| Page (PDF, Comic / CBZ) | `page:N` (1-indexed) | `page:42` |
+| Time (audiobook) | `time:S.SS` | `time:3600.00` |
+| Unknown | anything else | preserved verbatim, labelled as itself |
+
+[`ui/src/lib/locator.ts`](../ui/src/lib/locator.ts) is the only module
+that encodes, decodes or labels one of these, so adding a kind is one
+file and every consumer — the reader shells, the notebook, the book
+page annotation list — picks up its human label for free.
+
+A page token is the **human** page number, the one `p.N` prints
+unchanged. The comic reader counts from 0 internally and converts at
+the shell boundary; it used to write its own indexing into the token,
+so `page:7` meant p.8 in the reader chrome and p.7 everywhere else.
 
 [`read.$id.tsx`](../ui/src/routes/read.$id.tsx) dispatches to the
 right component by `book.format`, debounces progress writes by
@@ -862,6 +873,16 @@ automatically; the hook only wires teardown (`removeEventListener` +
 `es.close()`) on unmount. A future slice could add a connection-status
 indicator for cases where the reverse proxy severs the stream with no
 retry budget left.
+
+One connection per session means the subscribing effect must run once,
+so nothing that changes during a session may enter its dependency
+array. The two shared-shelf handlers do need the current route — they
+redirect a viewer sitting on a shelf that was just un-published — and
+they read it at *event* time from `useRouter().state.location`, a live
+getter on a router instance whose identity never changes. Subscribing
+to the location with `useRouterState` instead would put a
+navigation-scoped value in the deps and reopen the stream on every
+route change.
 
 ---
 
