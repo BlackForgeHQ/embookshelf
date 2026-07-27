@@ -1,6 +1,7 @@
 import { api } from "./client"
 import { bookQueryKey } from "./books"
 import { defineMutation } from "./mutation"
+import { defineQuery } from "./query"
 
 // Mirrors internal/handler/reading_guide.go readingGuideDTO.
 export type ReadingGuide = {
@@ -76,6 +77,9 @@ export type ReadingGuideSettings = {
   requestJsonMode: boolean
 }
 
+export const bookGuideQuery = (id: string) =>
+  defineQuery({ key: bookGuideQueryKey(id), fn: () => fetchBookGuide(id) })
+
 export const readingGuideSettingsQueryKey = ["reading-guide-settings"] as const
 
 export async function fetchReadingGuideSettings(): Promise<ReadingGuideSettings> {
@@ -105,6 +109,19 @@ export type GuideRunEstimate = {
 }
 
 export const guideEstimateQueryKey = ["reading-guide-estimate"] as const
+
+export const readingGuideSettingsQuery = defineQuery({
+  key: readingGuideSettingsQueryKey,
+  fn: fetchReadingGuideSettings,
+})
+
+// Estimating walks the library, so it is asked for only when a panel is
+// open and the admin has signalled intent.
+export const guideEstimateQuery = defineQuery({
+  key: guideEstimateQueryKey,
+  fn: fetchGuideEstimate,
+  staleTime: 60_000,
+})
 
 export async function fetchGuideEstimate(): Promise<GuideRunEstimate> {
   return api<GuideRunEstimate>("/api/v1/settings/reading-guide/estimate")

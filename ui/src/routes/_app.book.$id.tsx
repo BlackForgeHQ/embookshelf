@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 
@@ -7,32 +7,31 @@ import type { ApiError } from "@/api/client"
 import type { BookDetail as BookDetailPayload } from "@/api/books"
 import {
   annotationKind,
-  bookAnnotationsQueryKey,
+  bookAnnotationsQuery,
   createAnnotation,
   deleteAnnotation,
-  fetchBookAnnotations,
 } from "@/api/annotations"
-import { fetchMe, meQueryKey } from "@/api/auth"
+import { meQuery } from "@/api/auth"
 import { useApiMutation } from "@/api/mutation"
 import {
   addBookToShelf,
+  bookQuery,
   bookQueryKey,
   deleteBook,
-  fetchBook,
-  fetchShelves,
   isKindleEligibleFormat,
   patchBook,
   removeBookFromShelf,
   sendBookToKindle,
+  shelvesQuery,
   shelvesQueryKey,
 } from "@/api/books"
-import { appConfigQueryKey, fetchAppConfig } from "@/api/settings"
+import { appConfigQuery } from "@/api/settings"
 import {
   DEVICE_KIND_LABELS,
-  devicesQueryKey,
-  fetchDevices,
+  devicesQuery,
   sendBookToDevice,
 } from "@/api/devices"
+import { useApiQuery } from "@/api/query"
 import { locatorLabel } from "@/lib/locator"
 import { ConfirmPhraseDialog } from "@/components/ConfirmPhraseDialog"
 import { Cover, StarRating } from "@/components/Cover"
@@ -76,15 +75,8 @@ function BookDetail() {
   const [tab, setTab] = useState<Tab>("overview")
   const [deleteOpen, setDeleteOpen] = useState(false)
 
-  const book = useQuery({
-    queryKey: bookQueryKey(id),
-    queryFn: () => fetchBook(id),
-  })
-  const me = useQuery({
-    queryKey: meQueryKey,
-    queryFn: fetchMe,
-    staleTime: 60_000,
-  })
+  const book = useApiQuery(bookQuery(id))
+  const me = useApiQuery(meQuery)
   const isAdmin = me.data?.role === "admin"
 
   const deleteMut = useApiMutation(deleteBook, {
@@ -493,7 +485,7 @@ function Meta({ label, children }: { label: string; children: ReactNode }) {
 // are surfaced read-only with a rule hint so users learn why they can't
 // be edited directly.
 function ShelfCard({ book }: { book: BookDetailPayload }) {
-  const shelves = useQuery({ queryKey: shelvesQueryKey, queryFn: fetchShelves })
+  const shelves = useApiQuery(shelvesQuery)
   const [pickerOpen, setPickerOpen] = useState(false)
 
   const addMut = useApiMutation(addBookToShelf, {
@@ -867,10 +859,7 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
 // (`selectedText` stays empty) — highlights come from the EPUB reader's
 // selection flow, not from typing here.
 function NotesPanel({ bookId }: { bookId: string }) {
-  const annotations = useQuery({
-    queryKey: bookAnnotationsQueryKey(bookId),
-    queryFn: () => fetchBookAnnotations(bookId),
-  })
+  const annotations = useApiQuery(bookAnnotationsQuery(bookId))
 
   const createMut = useApiMutation(createAnnotation)
   const deleteMut = useApiMutation(deleteAnnotation)
@@ -1032,11 +1021,7 @@ function SendToKindleButton({
   kindleEmail: string
 }) {
   const navigate = useNavigate()
-  const cfg = useQuery({
-    queryKey: appConfigQueryKey,
-    queryFn: fetchAppConfig,
-    staleTime: 5 * 60_000,
-  })
+  const cfg = useApiQuery(appConfigQuery)
 
   const sendMut = useApiMutation(sendBookToKindle, {
     successToast: "Send-to-Kindle queued.",
@@ -1099,7 +1084,7 @@ function SendToKindleButton({
 // paired, the button navigates to the account page on the Devices section.
 function SendToDeviceButton({ bookId }: { bookId: string }) {
   const navigate = useNavigate()
-  const devices = useQuery({ queryKey: devicesQueryKey, queryFn: fetchDevices })
+  const devices = useApiQuery(devicesQuery)
   const [open, setOpen] = useState(false)
 
   const sendMut = useApiMutation(sendBookToDevice, {

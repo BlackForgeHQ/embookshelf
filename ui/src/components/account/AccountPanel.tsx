@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQueryClient } from "@tanstack/react-query"
 import { useNavigate, useSearch } from "@tanstack/react-router"
 import { toast } from "sonner"
 
 import {
-  accountIdentitiesQueryKey,
-  fetchAccountIdentities,
+  accountIdentitiesQuery,
   linkOIDC,
   setInitialPassword,
   unlinkOIDC,
@@ -13,15 +12,13 @@ import {
 } from "@/api/account"
 import {
   changePassword,
-  fetchMe,
+  meQuery,
   meQueryKey,
   updateDisplayName,
 } from "@/api/auth"
-import {
-  appConfigQueryKey,
-  fetchAppConfig,
-} from "@/api/settings"
+import { appConfigQuery } from "@/api/settings"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
 import { Avatar, Card, Field } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -59,17 +56,9 @@ export function AccountPanel() {
     })
   }, [search.linked, search.error])
 
-  const me = useQuery({
-    queryKey: meQueryKey,
-    queryFn: fetchMe,
-    staleTime: 60_000,
-  })
+  const me = useApiQuery(meQuery)
   const user = me.data
-  const identities = useQuery({
-    queryKey: accountIdentitiesQueryKey,
-    queryFn: fetchAccountIdentities,
-    staleTime: 30_000,
-  })
+  const identities = useApiQuery(accountIdentitiesQuery)
 
   const [editing, setEditing] = useState(false)
   const [nameDraft, setNameDraft] = useState("")
@@ -423,11 +412,7 @@ export function AccountPanel() {
 // the panel just trims whitespace and reflects the saved value back so
 // the form can be cleared by saving an empty string.
 function SendToKindleSection({ currentEmail }: { currentEmail: string }) {
-  const cfg = useQuery({
-    queryKey: appConfigQueryKey,
-    queryFn: fetchAppConfig,
-    staleTime: 5 * 60_000,
-  })
+  const cfg = useApiQuery(appConfigQuery)
   const [draft, setDraft] = useState(currentEmail)
 
   // Keep the input synced when the cached `me` updates from elsewhere

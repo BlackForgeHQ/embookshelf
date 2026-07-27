@@ -1,5 +1,4 @@
 import { useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 import { Link, useRouterState } from "@tanstack/react-router"
 
 import { Icon } from "./Icon"
@@ -8,20 +7,20 @@ import { ShelfIcon } from "./ShelfIcon"
 import type { ShelfAccent } from "./AccentPicker"
 import type { IconName } from "./Icon"
 import type { ReactNode } from "react"
+
 import type { AuthUser } from "@/api/auth"
 import type { Shelf } from "@/api/books"
 import {
   createSmartShelf,
   deleteShelf,
-  fetchLibraries,
-  fetchShelves,
-  librariesQueryKey,
+  librariesQuery,
   publishShelf,
-  shelvesQueryKey,
+  shelvesQuery,
   updateShelf,
 } from "@/api/books"
 import { useApiMutation } from "@/api/mutation"
-import { fetchMe, meQueryKey } from "@/api/auth"
+import { meQuery } from "@/api/auth"
+import { useApiQuery } from "@/api/query"
 import { useLogout } from "@/hooks/useLogout"
 import { useShelfDraftDialog } from "@/components/ShelfDraftProvider"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -53,19 +52,9 @@ export function AppSidebar() {
     unshelved?: string
   }
 
-  const me = useQuery({
-    queryKey: meQueryKey,
-    queryFn: fetchMe,
-    staleTime: 60_000,
-  })
-  const libraries = useQuery({
-    queryKey: librariesQueryKey,
-    queryFn: fetchLibraries,
-  })
-  const shelves = useQuery({
-    queryKey: shelvesQueryKey,
-    queryFn: fetchShelves,
-  })
+  const me = useApiQuery(meQuery)
+  const libraries = useApiQuery(librariesQuery)
+  const shelves = useApiQuery(shelvesQuery)
   const logoutMut = useLogout()
   const shelfDraft = useShelfDraftDialog()
 

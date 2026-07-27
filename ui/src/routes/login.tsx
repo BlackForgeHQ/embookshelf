@@ -1,16 +1,10 @@
 import { useEffect, useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
-import { Link, createFileRoute, redirect } from "@tanstack/react-router"
+import { createFileRoute, Link, redirect } from "@tanstack/react-router"
 import type { FormEvent } from "react"
 
 import type { ApiError } from "@/api/client"
-import {
-  fetchMe,
-  meQueryKey,
-  oidcConfig,
-  oidcConfigQueryKey,
-  signupStatus,
-} from "@/api/auth"
+import { meQuery, oidcConfigQuery, signupStatusQuery } from "@/api/auth"
+import { apiQueryOptions, useApiQuery } from "@/api/query"
 import { useLogin } from "@/hooks/useLogin"
 import { useSignup } from "@/hooks/useSignup"
 import { Button } from "@/components/ui/button"
@@ -46,11 +40,9 @@ export const Route = createFileRoute("/login")({
   }),
   // Skip rendering the page entirely for already-authenticated users.
   beforeLoad: async ({ context, search }) => {
-    const me = await context.queryClient.ensureQueryData({
-      queryKey: meQueryKey,
-      queryFn: fetchMe,
-      staleTime: 60_000,
-    })
+    const me = await context.queryClient.ensureQueryData(
+      apiQueryOptions(meQuery)
+    )
     if (me) {
       throw redirect({ to: safeNext(search.next) })
     }
@@ -72,17 +64,9 @@ function LoginPage() {
 
   // /auth/signup reports whether the first-run bootstrap is still available.
   // Shown as a toggle at the bottom of the card when it is.
-  const signupOpen = useQuery({
-    queryKey: ["signup-status"],
-    queryFn: signupStatus,
-    staleTime: 5 * 60_000,
-  })
+  const signupOpen = useApiQuery(signupStatusQuery)
 
-  const oidc = useQuery({
-    queryKey: oidcConfigQueryKey,
-    queryFn: oidcConfig,
-    staleTime: 5 * 60_000,
-  })
+  const oidc = useApiQuery(oidcConfigQuery)
 
   const [mode, setMode] = useState<"login" | "signup">(modeSearch ?? "login")
   const [email, setEmail] = useState("")

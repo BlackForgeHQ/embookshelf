@@ -4,14 +4,10 @@ import type { ReactNode } from "react"
 
 import type { Book, Library } from "@/api/books"
 import type { ReadingStats } from "@/api/reading"
-import { fetchMe, meQueryKey } from "@/api/auth"
-import {
-  booksQueryKey,
-  fetchBooks,
-  fetchLibraries,
-  librariesQueryKey,
-} from "@/api/books"
-import { fetchReadingStats, readingStatsQueryKey } from "@/api/reading"
+import { meQuery } from "@/api/auth"
+import { booksQuery, librariesQuery } from "@/api/books"
+import { readingStatsQuery } from "@/api/reading"
+import { apiQueryOptions } from "@/api/query"
 import { Cover } from "@/components/Cover"
 import { TopBar } from "@/components/TopBar"
 
@@ -34,20 +30,11 @@ function Dashboard() {
 
   const [me, libraries, reading, recent, readingStats] = useQueries({
     queries: [
-      { queryKey: meQueryKey, queryFn: fetchMe, staleTime: 60_000 },
-      { queryKey: librariesQueryKey, queryFn: fetchLibraries },
-      {
-        queryKey: booksQueryKey({ shelf: "reading" }),
-        queryFn: () => fetchBooks({ shelf: "reading" }),
-      },
-      {
-        queryKey: booksQueryKey({ sort: "recent" }),
-        queryFn: () => fetchBooks({ sort: "recent" }),
-      },
-      {
-        queryKey: readingStatsQueryKey(84),
-        queryFn: () => fetchReadingStats(84),
-      },
+      apiQueryOptions(meQuery),
+      apiQueryOptions(librariesQuery),
+      apiQueryOptions(booksQuery({ shelf: "reading" })),
+      apiQueryOptions(booksQuery({ sort: "recent" })),
+      apiQueryOptions(readingStatsQuery(84)),
     ],
   })
 

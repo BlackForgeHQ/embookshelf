@@ -1,5 +1,4 @@
 import { useMemo } from "react"
-import { useQuery } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 
@@ -9,8 +8,9 @@ import type {
   StatsRatingBucket,
   StatsYearBucket,
 } from "@/api/stats"
-import { fetchStats, statsQueryKey } from "@/api/stats"
-import { fetchReadingStats, readingStatsQueryKey } from "@/api/reading"
+import { statsQuery } from "@/api/stats"
+import { readingStatsQuery } from "@/api/reading"
+import { useApiQuery } from "@/api/query"
 import { TopBar } from "@/components/TopBar"
 
 export const Route = createFileRoute("/_app/stats")({
@@ -18,11 +18,8 @@ export const Route = createFileRoute("/_app/stats")({
 })
 
 function StatsPage() {
-  const stats = useQuery({ queryKey: statsQueryKey, queryFn: fetchStats })
-  const reading = useQuery({
-    queryKey: readingStatsQueryKey(84),
-    queryFn: () => fetchReadingStats(84),
-  })
+  const stats = useApiQuery(statsQuery)
+  const reading = useApiQuery(readingStatsQuery(84))
 
   // Cover coverage makes more sense as a percentage than a raw count.
   const coverPct = useMemo(() => {

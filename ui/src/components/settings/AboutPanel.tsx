@@ -1,13 +1,9 @@
-import { useQuery } from "@tanstack/react-query"
-
-import { fetchInstanceInfo, instanceInfoQueryKey } from "@/api/settings"
+import { instanceInfoQuery } from "@/api/settings"
+import { useApiQuery } from "@/api/query"
 import { Card, DefRow } from "@/components/SettingsShared"
 
 export function AboutPanel() {
-  const info = useQuery({
-    queryKey: instanceInfoQueryKey,
-    queryFn: fetchInstanceInfo,
-  })
+  const info = useApiQuery(instanceInfoQuery)
 
   return (
     <>

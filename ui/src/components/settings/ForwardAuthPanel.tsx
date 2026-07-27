@@ -3,8 +3,7 @@ import type { FormEvent } from "react"
 
 import type { ForwardAuthSettings } from "@/api/forwardAuth"
 import {
-  fetchForwardAuthSettings,
-  forwardAuthSettingsQueryKey,
+  forwardAuthSettingsQuery,
   saveForwardAuthSettings,
 } from "@/api/forwardAuth"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
@@ -48,8 +47,8 @@ const INTRO = (
 
 export function ForwardAuthPanel() {
   const draft = useSettingsDraft({
-    queryKey: forwardAuthSettingsQueryKey,
-    queryFn: fetchForwardAuthSettings,
+    queryKey: forwardAuthSettingsQuery.key,
+    queryFn: forwardAuthSettingsQuery.fn,
     initial: emptyForm,
     save: saveForwardAuthSettings,
     successToast: "Forward auth saved.",

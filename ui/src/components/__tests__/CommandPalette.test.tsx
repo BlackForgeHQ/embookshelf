@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -21,9 +27,16 @@ vi.mock("@tanstack/react-router", () => ({
 }))
 
 const searchSuggestMock = vi.fn()
+// The palette reads the search *spec*, so the mock supplies one — key,
+// fetcher and policy together, exactly as the api module declares it.
 vi.mock("@/api/search", () => ({
   searchQueryKey: (q: string, limit: number) => ["search", q, limit] as const,
   searchSuggest: (q: string, limit: number) => searchSuggestMock(q, limit),
+  searchQuery: (q: string, limit = 8) => ({
+    key: ["search", q, limit] as const,
+    fn: () => searchSuggestMock(q, limit),
+    staleTime: 30_000,
+  }),
 }))
 
 function renderPalette(open = true) {

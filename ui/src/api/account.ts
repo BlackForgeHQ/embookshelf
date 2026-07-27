@@ -1,6 +1,7 @@
 import { api } from "./client"
 import { meQueryKey } from "./auth"
 import { defineMutation } from "./mutation"
+import { defineQuery } from "./query"
 
 // Mirrors internal/handler/account_identities.go accountIdentitiesDTO.
 // `proxy` is the forward-auth slug — managed by the upstream reverse
@@ -21,6 +22,11 @@ export type AccountIdentities = {
 }
 
 export const accountIdentitiesQueryKey = ["account-identities"] as const
+
+export const accountIdentitiesQuery = defineQuery({
+  key: accountIdentitiesQueryKey,
+  fn: fetchAccountIdentities,
+})
 
 export async function fetchAccountIdentities(): Promise<AccountIdentities> {
   return api<AccountIdentities>("/api/v1/account/identities")

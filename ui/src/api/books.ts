@@ -1,5 +1,6 @@
 import { api } from "./client"
 import { defineMutation } from "./mutation"
+import { defineQuery } from "./query"
 
 // Mirrors internal/handler/library.go libraryDTO.
 export type Library = {
@@ -321,6 +322,28 @@ export const shelvesQueryKey = ["shelves"] as const
 export const booksQueryKey = (params: BooksQuery = {}) =>
   ["books", params] as const
 export const bookQueryKey = (id: string) => ["book", id] as const
+
+export const librariesQuery = defineQuery({
+  key: librariesQueryKey,
+  fn: fetchLibraries,
+})
+
+export const shelvesQuery = defineQuery({
+  key: shelvesQueryKey,
+  fn: fetchShelves,
+})
+
+// The library grid. `placeholderData: (prev) => prev` at the call site is
+// what keeps the previous page on screen while a filter changes; the key
+// carries the filter, so the two are different queries.
+export const booksQuery = (params: BooksQuery = {}) =>
+  defineQuery({
+    key: booksQueryKey(params),
+    fn: () => fetchBooks(params),
+  })
+
+export const bookQuery = (id: string) =>
+  defineQuery({ key: bookQueryKey(id), fn: () => fetchBook(id) })
 
 export const createShelf = defineMutation({
   fn: async (args: {

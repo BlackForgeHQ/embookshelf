@@ -1,5 +1,6 @@
 import { api } from "./client"
 import { defineMutation } from "./mutation"
+import { INSTANCE_STALE_TIME, SESSION_STALE_TIME, defineQuery } from "./query"
 import type { ApiError } from "./client"
 
 export type UserStatus = "active" | "pending" | "denied"
@@ -109,9 +110,35 @@ export async function oidcConfig(): Promise<OIDCConfig> {
 
 export const oidcConfigQueryKey = ["oidc-config"] as const
 
+// What the login page may offer. Fixed for the life of a session unless
+// an admin is editing OIDC in another tab, and that save invalidates the
+// key, so a long stale time costs nothing.
+export const oidcConfigQuery = defineQuery({
+  key: oidcConfigQueryKey,
+  fn: oidcConfig,
+  staleTime: INSTANCE_STALE_TIME,
+})
+
+export const signupStatusQuery = defineQuery({
+  key: ["signup-status"] as const,
+  fn: signupStatus,
+  staleTime: INSTANCE_STALE_TIME,
+})
+
 // Shared react-query key for the current user. Export so every mutation can
 // invalidate it in one line.
 export const meQueryKey = ["me"] as const
+
+// The current user. Read by the sidebar, both settings hubs, the account
+// panels, the book page and two route guards — the read that made query
+// specs worth having. Every mutation that can change the user lists
+// `meQueryKey` in `invalidates`, so the session policy is safe: a stale
+// row is corrected by the write that staled it, not by a poll.
+export const meQuery = defineQuery({
+  key: meQueryKey,
+  fn: fetchMe,
+  staleTime: SESSION_STALE_TIME,
+})
 
 export const changePassword = defineMutation({
   fn: (args: { current: string; next: string }): Promise<void> =>
@@ -141,6 +168,15 @@ export type PasswordResetVerify = {
   email?: string
   expiresAt?: string
 }
+
+// A token check answers "invalid" for unknown, expired and spent alike;
+// that is an answer, not an outage, so there is nothing to retry.
+export const passwordResetVerifyQuery = (token: string) =>
+  defineQuery({
+    key: ["password-reset-verify", token] as const,
+    fn: () => verifyPasswordReset(token),
+    retry: false,
+  })
 
 export const requestPasswordReset = defineMutation({
   fn: (email: string): Promise<void> =>

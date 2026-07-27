@@ -1,16 +1,11 @@
 import { useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 
 import type { ApiError } from "@/api/client"
 import type { ReadingGuide } from "@/api/guides"
-import {
-  bookGuideQueryKey,
-  fetchBookGuide,
-  generateBookGuide,
-  saveBookGuide,
-} from "@/api/guides"
-import { fetchMe, meQueryKey } from "@/api/auth"
+import { bookGuideQuery, generateBookGuide, saveBookGuide } from "@/api/guides"
+import { meQuery } from "@/api/auth"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/Icon"
 
@@ -40,13 +35,10 @@ function toDraft(g: ReadingGuide): EditDraft {
 }
 
 export function ReadingGuidePanel({ bookId }: { bookId: string }) {
-  const me = useQuery({ queryKey: meQueryKey, queryFn: fetchMe })
+  const me = useApiQuery(meQuery)
   const isAdmin = me.data?.role === "admin"
 
-  const guide = useQuery({
-    queryKey: bookGuideQueryKey(bookId),
-    queryFn: () => fetchBookGuide(bookId),
-  })
+  const guide = useApiQuery(bookGuideQuery(bookId))
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<EditDraft | null>(null)
@@ -218,8 +210,8 @@ function GuideProvenance({ guide }: { guide: ReadingGuide }) {
         <>Edited by hand.</>
       ) : metadataOnly ? (
         <>
-          Written from catalog metadata only — the model did not read this
-          book, so treat specifics with care.
+          Written from catalog metadata only — the model did not read this book,
+          so treat specifics with care.
         </>
       ) : (
         <>Written from the book's own text.</>

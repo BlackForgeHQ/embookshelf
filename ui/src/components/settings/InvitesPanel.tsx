@@ -1,25 +1,20 @@
 import { useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 
 import {
   createInvite,
-  emailSettingsQueryKey,
-  fetchEmailSettings,
-  fetchInvites,
-  invitesQueryKey,
+  emailSettingsQuery,
+  invitesQuery,
   revokeInvite,
 } from "@/api/email"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
 import { Icon } from "@/components/Icon"
 import { Card, Field, Select } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
 export function InvitesPanel() {
-  const emailSettings = useQuery({
-    queryKey: emailSettingsQueryKey,
-    queryFn: fetchEmailSettings,
-  })
+  const emailSettings = useApiQuery(emailSettingsQuery)
 
   // Every invites endpoint answers 503 EMAIL_DISABLED while SMTP is off.
   // This is that same rule, read once from the email settings and used
@@ -29,9 +24,7 @@ export function InvitesPanel() {
   // permission to fetch nor grounds to claim email is disabled.
   const emailEnabled = emailSettings.data?.enabled
 
-  const invites = useQuery({
-    queryKey: invitesQueryKey,
-    queryFn: fetchInvites,
+  const invites = useApiQuery(invitesQuery, {
     enabled: emailEnabled === true,
   })
 

@@ -1,18 +1,18 @@
 import { useMemo, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
-
+import { useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 
 import type { ProviderConfigField, ProviderInfo } from "@/api/settings"
 import {
-  fetchMetadataSettings,
-  fetchProviderSettings,
+  metadataSettingsQuery,
   metadataSettingsQueryKey,
+  providerSettingsQuery,
   providerSettingsQueryKey,
   updateMetadataSettings,
   updateProviderSetting,
 } from "@/api/settings"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
 import { useDraft } from "@/hooks/useSettingsDraft"
 import { Icon } from "@/components/Icon"
 import { NotebookEmpty, QuillMark } from "@/components/SettingsShared"
@@ -23,15 +23,9 @@ import { cn } from "@/lib/utils"
 
 export function ProvidersPanel() {
   const queryClient = useQueryClient()
-  const providersQuery = useQuery({
-    queryKey: providerSettingsQueryKey,
-    queryFn: fetchProviderSettings,
-  })
+  const providersQuery = useApiQuery(providerSettingsQuery)
 
-  const metaQuery = useQuery({
-    queryKey: metadataSettingsQueryKey,
-    queryFn: fetchMetadataSettings,
-  })
+  const metaQuery = useApiQuery(metadataSettingsQuery)
 
   const metaMut = useApiMutation(updateMetadataSettings, {
     successToast: (data) =>

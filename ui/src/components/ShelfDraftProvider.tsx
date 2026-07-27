@@ -1,10 +1,11 @@
 import { createContext, useContext, useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+
 import { ShelfCreatorDialog } from "./ShelfCreatorDialog"
 import type { ReactNode } from "react"
 
-import { createShelf, fetchShelves, shelvesQueryKey } from "@/api/books"
+import { createShelf, shelvesQuery } from "@/api/books"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
 
 type ShelfDraftDialogContextValue = {
   open: () => void
@@ -32,12 +33,9 @@ export function ShelfDraftProvider({ children }: { children: ReactNode }) {
   const [isOpen, setOpen] = useState(false)
 
   // Pull the shelf list to power duplicate-name validation in the dialog.
-  // Reuses the same shelvesQueryKey the Sidebar already fetches, so this
+  // Reuses the same shelves spec the Sidebar already reads, so this
   // hook subscribes to the cached result without an extra request.
-  const shelves = useQuery({
-    queryKey: shelvesQueryKey,
-    queryFn: fetchShelves,
-  })
+  const shelves = useApiQuery(shelvesQuery)
 
   const createShelfMut = useApiMutation(createShelf, {
     onSuccess: () => setOpen(false),

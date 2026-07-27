@@ -1,37 +1,29 @@
 import { useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 
 import type { AuthUser } from "@/api/auth"
-import { fetchMe, meQueryKey } from "@/api/auth"
+import { meQuery } from "@/api/auth"
 import {
   approveSettingsUser,
   createSettingsUser,
   deleteSettingsUser,
   denySettingsUser,
-  fetchSettingsUsers,
-  settingsUsersQueryKey,
+  settingsUsersQuery,
   updateSettingsUserRole,
 } from "@/api/settings"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
 import { Icon } from "@/components/Icon"
 import { Avatar, Card, Field, Select } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
 export function UsersPanel() {
-  const users = useQuery({
-    queryKey: settingsUsersQueryKey,
-    queryFn: fetchSettingsUsers,
-  })
+  const users = useApiQuery(settingsUsersQuery)
 
   // "Which row is me" is the panel's own question, so it asks — the same
   // cached /me the route already holds, not a prop threaded through the
   // section table.
-  const me = useQuery({
-    queryKey: meQueryKey,
-    queryFn: fetchMe,
-    staleTime: 60_000,
-  }).data
+  const me = useApiQuery(meQuery).data
 
   const sortedUsers = useMemo(() => {
     const all = users.data ?? []

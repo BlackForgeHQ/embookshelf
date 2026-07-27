@@ -1,17 +1,15 @@
 import { useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 
 import type { BookDropItem } from "@/api/bookdrop"
 import {
-  bookdropFilesQueryKey,
-  bookdropQueryKey,
+  bookdropFilesQuery,
+  bookdropQuery,
   clearProcessedBookDrop,
-  fetchBookDrop,
-  previewBookDropFiles,
   wipeBookDropFiles,
 } from "@/api/bookdrop"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
 import { ConfirmPhraseDialog } from "@/components/ConfirmPhraseDialog"
 import {
   Card,
@@ -30,15 +28,9 @@ import {
 } from "@/components/ui/dialog"
 
 export function BookDropPanel() {
-  const queue = useQuery({
-    queryKey: bookdropQueryKey,
-    queryFn: fetchBookDrop,
-  })
+  const queue = useApiQuery(bookdropQuery)
 
-  const files = useQuery({
-    queryKey: bookdropFilesQueryKey,
-    queryFn: previewBookDropFiles,
-  })
+  const files = useApiQuery(bookdropFilesQuery)
 
   const processed = useMemo(
     () =>

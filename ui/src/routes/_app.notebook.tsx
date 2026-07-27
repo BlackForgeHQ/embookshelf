@@ -6,11 +6,11 @@ import type { Book } from "@/api/books"
 import {
   annotationKind,
   deleteAnnotation,
-  fetchRecentAnnotations,
-  recentAnnotationsQueryKey,
+  recentAnnotationsQuery,
 } from "@/api/annotations"
-import { booksQueryKey, fetchBooks } from "@/api/books"
+import { booksQuery } from "@/api/books"
 import { useApiMutation } from "@/api/mutation"
+import { apiQueryOptions } from "@/api/query"
 import { locatorLabel } from "@/lib/locator"
 import { Cover } from "@/components/Cover"
 import { Icon } from "@/components/Icon"
@@ -32,11 +32,8 @@ function Notebook() {
   // user's annotated collection.
   const [annotations, books] = useQueries({
     queries: [
-      {
-        queryKey: recentAnnotationsQueryKey,
-        queryFn: () => fetchRecentAnnotations(),
-      },
-      { queryKey: booksQueryKey(), queryFn: () => fetchBooks() },
+      apiQueryOptions(recentAnnotationsQuery()),
+      apiQueryOptions(booksQuery()),
     ],
   })
 

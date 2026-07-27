@@ -1,17 +1,15 @@
 import { useEffect, useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 
 import type { LibraryKind, SettingsLibrary } from "@/api/settings"
 import {
-  appConfigQueryKey,
+  appConfigQuery,
   createLibrary,
   deleteLibrary,
-  fetchAppConfig,
-  fetchSettingsLibraries,
   rescanLibrary,
-  settingsLibrariesQueryKey,
+  settingsLibrariesQuery,
 } from "@/api/settings"
 import { useApiMutation } from "@/api/mutation"
+import { useApiQuery } from "@/api/query"
 import { ConfirmPhraseDialog } from "@/components/ConfirmPhraseDialog"
 import { Icon } from "@/components/Icon"
 import { NotebookEmpty } from "@/components/SettingsShared"
@@ -38,15 +36,9 @@ import { slugify } from "@/lib/utils"
 export function LibrariesPanel() {
   const [creatorOpen, setCreatorOpen] = useState(false)
 
-  const libraries = useQuery({
-    queryKey: settingsLibrariesQueryKey,
-    queryFn: fetchSettingsLibraries,
-  })
+  const libraries = useApiQuery(settingsLibrariesQuery)
 
-  const appConfig = useQuery({
-    queryKey: appConfigQueryKey,
-    queryFn: fetchAppConfig,
-  })
+  const appConfig = useApiQuery(appConfigQuery)
 
   const rescanMut = useApiMutation(rescanLibrary, {
     successToast: "Rescan started.",

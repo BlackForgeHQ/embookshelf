@@ -1,5 +1,6 @@
 import { api } from "./client"
 import { defineMutation } from "./mutation"
+import { defineQuery } from "./query"
 
 // Mirrors internal/handler/settings_email.go emailSettingsDTO. The wire
 // shape never carries the SMTP password back to the client — `passwordSet`
@@ -71,6 +72,16 @@ export type Invite = {
 }
 
 export const invitesQueryKey = ["settings", "invites"] as const
+
+export const emailSettingsQuery = defineQuery({
+  key: emailSettingsQueryKey,
+  fn: fetchEmailSettings,
+})
+
+export const invitesQuery = defineQuery({
+  key: invitesQueryKey,
+  fn: fetchInvites,
+})
 
 export async function fetchInvites(): Promise<Array<Invite>> {
   const { invites } = await api<{ invites: Array<Invite> }>(
