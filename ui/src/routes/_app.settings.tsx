@@ -12,6 +12,7 @@ import { UsersPanel } from "@/components/settings/UsersPanel"
 import { EmailPanel } from "@/components/settings/EmailPanel"
 import { InvitesPanel } from "@/components/settings/InvitesPanel"
 import { ProvidersPanel } from "@/components/settings/ProvidersPanel"
+import { ReadingGuidesPanel } from "@/components/settings/ReadingGuidesPanel"
 import { LibrariesPanel } from "@/components/settings/LibrariesPanel"
 import {
   fetchSettingsUsers,
@@ -31,6 +32,7 @@ type SectionKey =
   | "libraries"
   | "bookdrop"
   | "providers"
+  | "readingGuides"
   | "email"
   | "invites"
   | "users"
@@ -50,6 +52,7 @@ const SECTIONS: Array<SectionSpec> = [
   { key: "libraries", label: "Libraries", adminOnly: true },
   { key: "bookdrop", label: "BookDrop", adminOnly: true },
   { key: "providers", label: "Metadata providers", adminOnly: true },
+  { key: "readingGuides", label: "Reading guides", adminOnly: true },
   { key: "email", label: "Email delivery", adminOnly: true },
   { key: "invites", label: "Invites", adminOnly: true },
   { key: "users", label: "Users & roles", adminOnly: true },
@@ -105,6 +108,7 @@ function Admin() {
         {active === "libraries" && <LibrariesPanel isAdmin={isAdmin} />}
         {active === "bookdrop" && <BookDropPanel isAdmin={isAdmin} />}
         {active === "providers" && <ProvidersPanel isAdmin={isAdmin} />}
+        {active === "readingGuides" && <ReadingGuidesPanel isAdmin={isAdmin} />}
         {active === "email" && <EmailPanel isAdmin={isAdmin} />}
         {active === "invites" && <InvitesPanel isAdmin={isAdmin} />}
         {active === "users" && (
