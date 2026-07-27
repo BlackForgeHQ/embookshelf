@@ -277,15 +277,7 @@ func (h *Handler) SettingsReadingGuideTest(c *gin.Context) {
 		return
 	}
 
-	client, err := llm.New(llm.Config{
-		BaseURL:         cfg.BaseURL,
-		Model:           cfg.Model,
-		APIKey:          cfg.APIKey,
-		AuthStyle:       llm.AuthStyle(cfg.AuthStyle),
-		RequestJSONMode: cfg.RequestJSONMode,
-		// Short: a test that hangs for five minutes teaches nothing.
-		Timeout: 30 * time.Second,
-	})
+	client, err := cfg.ProbeClient()
 	if err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return

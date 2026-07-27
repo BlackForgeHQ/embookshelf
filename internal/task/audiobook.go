@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"time"
 
 	"github.com/blackforge/embookshelf/internal/audio"
 	"github.com/blackforge/embookshelf/internal/coverstore"
@@ -201,25 +200,15 @@ func synthesizeSegment(
 		return nil, fmt.Errorf("%w: %s is %s", service.ErrNotNarratable, book.ID, book.Format)
 	}
 
-	id, engineCfg, err := cfg.SelectedEngine()
+	sel, err := cfg.SelectEngine()
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", tts.ErrPermanent, err)
 	}
 	// The run records what it started with. An admin switching engines
 	// mid-run must not produce a book narrated half in one voice and half
 	// in another, so the run's own choice wins over the current setting.
-	if run.Engine != "" && run.Engine != string(id) {
-		return nil, fmt.Errorf("%w: run uses %s but %s is now selected", tts.ErrPermanent, run.Engine, id)
-	}
-	info, _ := tts.Lookup(id)
-
-	engine, err := tts.New(id, tts.Config{
-		BaseURL: engineCfg.BaseURL,
-		APIKey:  engineCfg.APIKey,
-		Timeout: cfgTimeout(cfg),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", tts.ErrPermanent, err)
+	if run.Engine != "" && run.Engine != string(sel.ID) {
+		return nil, fmt.Errorf("%w: run uses %s but %s is now selected", tts.ErrPermanent, run.Engine, sel.ID)
 	}
 
 	text, err := segmentText(ctx, book, cfg, a.Seq, deps)
@@ -230,7 +219,7 @@ func synthesizeSegment(
 	// A segment is a job, not a request. Every engine caps a single call
 	// far below the segment size, so one segment is several calls whose
 	// audio is joined the same way the whole book is.
-	chunks := fileproc.SplitForSynthesis(text, info.MaxRequestChars)
+	chunks := fileproc.SplitForSynthesis(text, sel.Info.MaxRequestChars)
 	parts := make([][]byte, 0, len(chunks))
 	for _, chunk := range chunks {
 		if err := ctx.Err(); err != nil {
@@ -243,7 +232,7 @@ func synthesizeSegment(
 		if canceled(ctx, a.BookID, deps) {
 			return nil, errCanceled
 		}
-		part, err := engine.Synthesize(ctx, tts.Request{
+		part, err := sel.Engine.Synthesize(ctx, tts.Request{
 			Text:  chunk,
 			Voice: run.Voice,
 			Model: run.Model,
@@ -302,10 +291,6 @@ func advanceRun(ctx context.Context, bookID string, deps AudiobookDeps) {
 		}
 		publishAudiobook(deps, bookID)
 	}
-}
-
-func cfgTimeout(cfg repo.AudiobookConfig) time.Duration {
-	return time.Duration(cfg.RequestTimeoutSeconds) * time.Second
 }
 
 func publishAudiobook(deps AudiobookDeps, bookID string) {

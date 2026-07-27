@@ -128,11 +128,11 @@ func (h *Handler) SettingsAudiobookUpdate(c *gin.Context) {
 // Uncached: voice lists change when someone clones a voice, and the call
 // happens once per dialog open rather than once per page.
 func (h *Handler) SettingsAudiobookVoices(c *gin.Context) {
-	engine, _, ok := h.buildConfiguredEngine(c)
+	sel, ok := h.probeEngine(c)
 	if !ok {
 		return
 	}
-	voices, err := engine.ListVoices(c.Request.Context())
+	voices, err := sel.Engine.ListVoices(c.Request.Context())
 	if err != nil {
 		writeError(c, http.StatusBadGateway, err.Error())
 		return
@@ -147,51 +147,44 @@ func (h *Handler) SettingsAudiobookVoices(c *gin.Context) {
 // SettingsAudiobookTest synthesizes one short phrase so an admin finds
 // out the key is wrong now rather than forty minutes into a run.
 func (h *Handler) SettingsAudiobookTest(c *gin.Context) {
-	engine, cfg, ok := h.buildConfiguredEngine(c)
+	sel, ok := h.probeEngine(c)
 	if !ok {
 		return
 	}
-	id, engineCfg, err := cfg.SelectedEngine()
-	if err != nil {
-		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled, err.Error())
-		return
-	}
-	audio, err := engine.Synthesize(c.Request.Context(), tts.Request{
+	audio, err := sel.Engine.Synthesize(c.Request.Context(), tts.Request{
 		Text:  "This is a test of audiobook narration.",
-		Voice: engineCfg.DefaultVoice,
-		Model: engineCfg.Model,
+		Voice: sel.Settings.DefaultVoice,
+		Model: sel.Settings.Model,
 	})
 	if err != nil {
 		writeError(c, http.StatusBadGateway, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "engine": string(id), "bytes": len(audio)})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "engine": string(sel.ID), "bytes": len(audio)})
 }
 
-// buildConfiguredEngine constructs the selected engine from the stored
-// settings, writing the error response itself when it cannot.
-func (h *Handler) buildConfiguredEngine(c *gin.Context) (tts.Engine, repo.AudiobookConfig, bool) {
-	var zero repo.AudiobookConfig
+// probeEngine builds the selected engine for an admin-facing probe,
+// writing the error response itself when it cannot.
+//
+// The row owns the construction, so this surface and the queue worker
+// cannot disagree about which stored fields reach the adapter.
+func (h *Handler) probeEngine(c *gin.Context) (repo.ConfiguredEngine, bool) {
+	var zero repo.ConfiguredEngine
 	if h.appSettings == nil {
 		writeError(c, http.StatusServiceUnavailable, "settings are unavailable")
-		return nil, zero, false
+		return zero, false
 	}
 	cfg, err := h.appSettings.GetAudiobook(c.Request.Context())
 	if err != nil {
 		writeServerError(c, "audiobook settings", err)
-		return nil, zero, false
+		return zero, false
 	}
-	id, engineCfg, err := cfg.SelectedEngine()
+	sel, err := cfg.ProbeEngine()
 	if err != nil {
 		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled, err.Error())
-		return nil, zero, false
+		return zero, false
 	}
-	engine, err := tts.New(id, tts.Config{BaseURL: engineCfg.BaseURL, APIKey: engineCfg.APIKey})
-	if err != nil {
-		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled, err.Error())
-		return nil, zero, false
-	}
-	return engine, cfg, true
+	return sel, true
 }
 
 // audiobookSettingsToDTO walks the catalog rather than the config, so the

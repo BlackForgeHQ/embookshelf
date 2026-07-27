@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/blackforge/embookshelf/internal/llm"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sse"
@@ -54,12 +53,7 @@ func ReadingGuide(ctx context.Context, a ReadingGuideArgs, deps ReadingGuideDeps
 		return ErrReadingGuidesDisabled
 	}
 
-	client, err := llm.New(llm.Config{
-		BaseURL:         cfg.BaseURL,
-		Model:           cfg.Model,
-		APIKey:          cfg.APIKey,
-		RequestJSONMode: cfg.RequestJSONMode,
-	})
+	client, err := cfg.Client()
 	if err != nil {
 		return fmt.Errorf("configure model: %w", err)
 	}
