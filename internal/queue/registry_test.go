@@ -45,6 +45,7 @@ func TestRegistryCoversEveryJobKindExactlyOnce(t *testing.T) {
 
 	want := []string{
 		task.BookDropIngestArgs{}.Kind(),
+		task.BookDropAutoEnrichArgs{}.Kind(),
 		task.LibraryScanArgs{}.Kind(),
 		task.SendToKindleArgs{}.Kind(),
 		task.ReadingGuideArgs{}.Kind(),
@@ -81,12 +82,13 @@ func TestRegistryRecordsEachJobsQueue(t *testing.T) {
 	t.Parallel()
 
 	want := map[string]string{
-		task.BookDropIngestArgs{}.Kind():    "default",
-		task.LibraryScanArgs{}.Kind():       "default",
-		task.SendToKindleArgs{}.Kind():      "default",
-		task.ReadingGuideArgs{}.Kind():      "default",
-		task.AudiobookSegmentArgs{}.Kind():  task.AudiobookQueue,
-		task.AudiobookFinalizeArgs{}.Kind(): task.AudiobookQueue,
+		task.BookDropIngestArgs{}.Kind():     "default",
+		task.BookDropAutoEnrichArgs{}.Kind(): "default",
+		task.LibraryScanArgs{}.Kind():        "default",
+		task.SendToKindleArgs{}.Kind():       "default",
+		task.ReadingGuideArgs{}.Kind():       "default",
+		task.AudiobookSegmentArgs{}.Kind():   task.AudiobookQueue,
+		task.AudiobookFinalizeArgs{}.Kind():  task.AudiobookQueue,
 	}
 
 	for _, reg := range registry(Deps{}) {

@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
+	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
@@ -39,6 +41,53 @@ type BookDropDeps struct {
 	// for libraries on non-default backends are not read during ingest.
 	// Plan F2 addresses this when bookdrop carries library_id.
 	Resolver storage.Resolver
+}
+
+// BookDropAutoEnrichArgs is the payload for the gap-fill Approve
+// requests once a book leaves BookDrop. BookID only — the worker
+// re-reads the row, so an edit made between approve and dispatch reaches
+// the providers rather than a snapshot taken at enqueue time.
+type BookDropAutoEnrichArgs struct {
+	BookID string `json:"book_id"`
+}
+
+// Kind is the stable job name. Must not change — renaming it orphans
+// in-flight jobs.
+func (BookDropAutoEnrichArgs) Kind() string { return "bookdrop.auto_enrich" }
+
+// BookDropAutoEnrichDeps groups the seams the auto-enrich worker needs.
+// The enable setting is deliberately absent: Approve owns that decision
+// (ADR-0012) and a job only exists because Approve already said yes.
+type BookDropAutoEnrichDeps struct {
+	Books  *repo.BookRepo
+	Enrich *service.EnrichmentService
+}
+
+// BookDropAutoEnrich runs Auto-enrich for one freshly approved book.
+//
+// Errors are returned so River retries them: a provider or a database
+// that was down when the job first ran is usually up a backoff later,
+// which is the durability an inline call in the approve request could
+// never offer. A book deleted between approve and dispatch is terminal,
+// not a failure — there is nothing left to enrich.
+func BookDropAutoEnrich(ctx context.Context, a BookDropAutoEnrichArgs, deps BookDropAutoEnrichDeps) error {
+	if deps.Books == nil || deps.Enrich == nil {
+		return errors.New("auto-enrich: worker not configured")
+	}
+	book, err := deps.Books.GetByID(ctx, "", a.BookID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			slog.Debug("auto-enrich skipped: book gone", "book", a.BookID)
+			return nil
+		}
+		return fmt.Errorf("auto-enrich: load book %s: %w", a.BookID, err)
+	}
+	applied, err := deps.Enrich.AutoEnrich(ctx, book)
+	if err != nil {
+		return fmt.Errorf("auto-enrich %s: %w", a.BookID, err)
+	}
+	slog.Debug("auto-enrich finished", "book", a.BookID, "applied", applied)
+	return nil
 }
 
 // BookDropIngest runs the ingest pipeline for one bookdrop item:
