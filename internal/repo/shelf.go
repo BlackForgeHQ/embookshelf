@@ -27,33 +27,41 @@ func NewShelfRepo(d *db.DB) *ShelfRepo {
 	return &ShelfRepo{db: d}
 }
 
-// shelfCols keeps the book_count cheap for regular shelves by pulling it
-// from shelf_books; smart shelves return 0 here and the service fills in
-// the live count via CountForSmartShelf. The trailing empty owner_name
-// is overridden in queries that JOIN users; left blank for own-only
-// queries to avoid a needless join.
-const shelfCols = `s.id, s.user_id, s.name, s.slug, s.accent, s.icon, s.created_at,
-                  s.is_smart, s.rule, s.is_public,
-                  CASE
-                    WHEN s.is_smart THEN 0
-                    ELSE (SELECT count(*) FROM shelf_books sb WHERE sb.shelf_id = s.id)
-                  END AS book_count,
-                  '' AS owner_name`
+// shelfProjection is the shelves row, declared once. Two entries are
+// computed rather than stored: book_count keeps the count cheap for
+// regular shelves by pulling it from shelf_books (smart shelves return 0
+// and the service fills in the live count via CountForSmartShelf), and
+// owner_name is blank by default so own-only queries pay for no join.
+var shelfProjection = projection[model.Shelf]{
+	{name: "id", dest: func(s *model.Shelf) any { return &s.ID }},
+	{name: "user_id", dest: func(s *model.Shelf) any { return &s.UserID }},
+	{name: "name", dest: func(s *model.Shelf) any { return &s.Name }},
+	{name: "slug", dest: func(s *model.Shelf) any { return &s.Slug }},
+	{name: "accent", dest: func(s *model.Shelf) any { return &s.Accent }},
+	{name: "icon", dest: func(s *model.Shelf) any { return &s.Icon }},
+	{name: "created_at", dest: func(s *model.Shelf) any { return &s.CreatedAt }},
+	{name: "is_smart", dest: func(s *model.Shelf) any { return &s.IsSmart }},
+	{name: "rule", dest: func(s *model.Shelf) any { return shelfRuleJSON{Dst: &s.Rule} }},
+	{name: "is_public", dest: func(s *model.Shelf) any { return &s.IsPublic }},
+	{
+		name: "book_count",
+		expr: `CASE WHEN ` + aliasToken + `.is_smart THEN 0 ` +
+			`ELSE (SELECT count(*) FROM shelf_books sb WHERE sb.shelf_id = ` + aliasToken + `.id) END AS book_count`,
+		dest: func(s *model.Shelf) any { return &s.BookCount },
+	},
+	{name: "owner_name", expr: `'' AS owner_name`, dest: func(s *model.Shelf) any { return &s.OwnerName }},
+}
 
-// shelfColsReturning is the same projection for INSERT/UPDATE ... RETURNING
-// clauses, which can't use a table alias — they reference columns on the
-// target table directly. Kept in sync with shelfCols column order so
-// scanShelf handles rows from either.
-const shelfColsReturning = `id, user_id, name, slug, accent, icon, created_at,
-                           is_smart, rule, is_public,
-                           CASE
-                             WHEN is_smart THEN 0
-                             ELSE (SELECT count(*) FROM shelf_books sb WHERE sb.shelf_id = shelves.id)
-                           END AS book_count,
-                           '' AS owner_name`
+// shelfCols is the projection rendered for queries aliasing shelves as s.
+var shelfCols = shelfProjection.selectList("s")
+
+// shelfColsReturning is the same projection for INSERT/UPDATE ...
+// RETURNING clauses, which have no alias in scope and reference columns
+// on the target table directly.
+var shelfColsReturning = shelfProjection.returningList("shelves")
 
 func (r *ShelfRepo) ListForUser(ctx context.Context, userID string) ([]model.Shelf, error) {
-	const q = `
+	q := `
 		SELECT ` + shelfCols + `
 		FROM shelves s
 		WHERE s.user_id = $1
@@ -77,7 +85,7 @@ func (r *ShelfRepo) ListForUser(ctx context.Context, userID string) ([]model.She
 }
 
 func (r *ShelfRepo) GetBySlugForUser(ctx context.Context, userID, slug string) (model.Shelf, error) {
-	const q = `
+	q := `
 		SELECT ` + shelfCols + `
 		FROM shelves s
 		WHERE s.user_id = $1 AND s.slug = $2
@@ -242,7 +250,7 @@ func (r *ShelfRepo) Create(ctx context.Context, userID, name, accent, icon strin
 	}
 
 	id := db.NewID()
-	const q = `
+	q := `
 		INSERT INTO shelves (id, user_id, name, slug, accent, icon, is_smart, rule)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (user_id, slug) DO NOTHING
@@ -429,26 +437,12 @@ func (r *ShelfRepo) ShelfSlugsForBook(ctx context.Context, userID, bookID string
 }
 
 func (r *ShelfRepo) scanShelf(s scanner) (model.Shelf, error) {
-	var (
-		sh     model.Shelf
-		ruleJS []byte
-	)
-	err := s.Scan(
-		&sh.ID, &sh.UserID, &sh.Name, &sh.Slug, &sh.Accent, &sh.Icon, &sh.CreatedAt,
-		&sh.IsSmart, &ruleJS, &sh.IsPublic, &sh.BookCount, &sh.OwnerName,
-	)
-	if err != nil {
+	var sh model.Shelf
+	if err := shelfProjection.scan(s, &sh); err != nil {
 		if dberr.IsNotFound(err) {
 			return sh, ErrNotFound
 		}
 		return sh, err
-	}
-	if len(ruleJS) > 0 {
-		var r model.ShelfRule
-		if err := json.Unmarshal(ruleJS, &r); err != nil {
-			return sh, fmt.Errorf("decode rule: %w", err)
-		}
-		sh.Rule = &r
 	}
 	return sh, nil
 }
@@ -638,25 +632,20 @@ func (r *ShelfRepo) CountUnshelvedForUser(ctx context.Context, userID string) (i
 	return n, nil
 }
 
-// shelfColsVisible mirrors shelfCols but populates owner_name for public
-// shelves the viewer doesn't own (LEFT JOIN users so private rows still
-// match without paying the join cost). $1 is bound to userID.
-const shelfColsVisible = `s.id, s.user_id, s.name, s.slug, s.accent, s.icon, s.created_at,
-                  s.is_smart, s.rule, s.is_public,
-                  CASE
-                    WHEN s.is_smart THEN 0
-                    ELSE (SELECT count(*) FROM shelf_books sb WHERE sb.shelf_id = s.id)
-                  END AS book_count,
-                  CASE
-                    WHEN s.user_id = $1 THEN ''
-                    ELSE COALESCE(NULLIF(u.name, ''), u.email, '')
-                  END AS owner_name`
+// shelfColsVisible is the same projection with owner_name filled in for
+// public shelves the viewer doesn't own (LEFT JOIN users so private rows
+// still match without paying the join cost). $1 is bound to userID. Only
+// the one entry changes, so scanShelf reads rows from either form.
+var shelfColsVisible = shelfProjection.with("owner_name",
+	`CASE WHEN `+aliasToken+`.user_id = $1 THEN '' `+
+		`ELSE COALESCE(NULLIF(u.name, ''), u.email, '') END AS owner_name`,
+).selectList("s")
 
 // ListVisibleToUser returns the user's own shelves plus every public
 // shelf in the system. Own shelves come first; public ones land after,
 // ordered by creation date — same shape sidebar UI expects.
 func (r *ShelfRepo) ListVisibleToUser(ctx context.Context, userID string) ([]model.Shelf, error) {
-	const q = `
+	q := `
 		SELECT ` + shelfColsVisible + `
 		FROM shelves s
 		LEFT JOIN users u ON u.id = s.user_id
@@ -684,7 +673,7 @@ func (r *ShelfRepo) ListVisibleToUser(ctx context.Context, userID string) ([]mod
 // the read-only viewer paths that resolve `public:<slug>`. Returns
 // ErrNotFound when the slug doesn't exist or the shelf is not public.
 func (r *ShelfRepo) GetPublicBySlug(ctx context.Context, slug string) (model.Shelf, error) {
-	const q = `
+	q := `
 		SELECT ` + shelfCols + `
 		FROM shelves s
 		WHERE s.slug = $1 AND s.is_public = true

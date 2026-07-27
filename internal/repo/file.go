@@ -18,6 +18,29 @@ import (
 // already exists in the files table.
 var ErrFileLocationTaken = errors.New("file location already taken in this library")
 
+// fileProjection is the files row, declared once. Its eleven columns
+// used to be retyped inline at six query sites plus scanFile's
+// destinations; every SELECT and the INSERT's RETURNING render from here.
+//
+// files queries never alias the table, so the bare form serves both the
+// SELECT lists and the RETURNING clause.
+var fileProjection = projection[model.File]{
+	{name: "id", dest: func(f *model.File) any { return &f.ID }},
+	{name: "library_id", dest: func(f *model.File) any { return &f.LibraryID }},
+	{name: "book_id", dest: func(f *model.File) any { return nullText{Dst: &f.BookID} }},
+	{name: "location", dest: func(f *model.File) any { return &f.Location }},
+	{name: "size", dest: func(f *model.File) any { return &f.Size }},
+	{name: "mtime", dest: func(f *model.File) any { return &f.Mtime }},
+	{name: "etag", dest: func(f *model.File) any { return nullText{Dst: &f.ETag} }},
+	{name: "content_hash", dest: func(f *model.File) any { return &f.ContentHash }},
+	{name: "format", dest: func(f *model.File) any { return &f.Format }},
+	{name: "last_scanned", dest: func(f *model.File) any { return &f.LastScanned }},
+	{name: "missing_since", dest: func(f *model.File) any { return &f.MissingSince }},
+}
+
+// fileCols is the projection rendered for the unaliased files queries.
+var fileCols = fileProjection.returningList("files")
+
 // FileRepo provides access to the files table.
 type FileRepo struct {
 	db *db.DB
@@ -50,10 +73,10 @@ func (r *FileRepo) Insert(ctx context.Context, f model.File) (model.File, error)
 		contentHash = f.ContentHash
 	}
 
-	const q = `
+	q := `
 		INSERT INTO files (id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
+		RETURNING ` + fileCols + `
 	`
 
 	// mtime and last_scanned: passed as time.Time (pgx handles TIMESTAMPTZ).
@@ -75,8 +98,8 @@ func (r *FileRepo) Insert(ctx context.Context, f model.File) (model.File, error)
 // GetByLocation returns the file at (library_id, location). Returns
 // ErrNotFound when missing.
 func (r *FileRepo) GetByLocation(ctx context.Context, libraryID, location string) (model.File, error) {
-	const q = `
-		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
+	q := `
+		SELECT ` + fileCols + `
 		FROM files
 		WHERE library_id = $1 AND location = $2
 	`
@@ -95,8 +118,8 @@ func (r *FileRepo) GetByLocation(ctx context.Context, libraryID, location string
 // Used for duplicate detection at scan time. An empty slice (not nil) is
 // returned when no rows match.
 func (r *FileRepo) GetByContentHash(ctx context.Context, hash []byte) ([]model.File, error) {
-	const q = `
-		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
+	q := `
+		SELECT ` + fileCols + `
 		FROM files
 		WHERE content_hash = $1
 	`
@@ -157,8 +180,8 @@ func (r *FileRepo) SetContentHash(ctx context.Context, fileID string, hash []byt
 // ListPendingHash returns up to batchSize files whose content_hash is
 // still NULL. Used by the backfill worker to drain the queue.
 func (r *FileRepo) ListPendingHash(ctx context.Context, batchSize int) ([]model.File, error) {
-	const q = `
-		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
+	q := `
+		SELECT ` + fileCols + `
 		FROM files
 		WHERE content_hash IS NULL
 		ORDER BY id
@@ -260,8 +283,8 @@ func (r *FileRepo) DeleteMissingOlderThan(ctx context.Context, ttl time.Duration
 // ListByLibrary returns every files row for libraryID (including
 // missing ones). Used by the scan worker to diff against the live walk.
 func (r *FileRepo) ListByLibrary(ctx context.Context, libraryID string) ([]model.File, error) {
-	const q = `
-		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
+	q := `
+		SELECT ` + fileCols + `
 		FROM files
 		WHERE library_id = $1
 		ORDER BY location
@@ -286,8 +309,8 @@ func (r *FileRepo) ListByLibrary(ctx context.Context, libraryID string) ([]model
 // ListByBook returns all files rows for bookID ordered by id.
 // Returns an empty slice (not nil) when no rows match.
 func (r *FileRepo) ListByBook(ctx context.Context, bookID string) ([]model.File, error) {
-	const q = `
-		SELECT id, library_id, book_id, location, size, mtime, etag, content_hash, format, last_scanned, missing_since
+	q := `
+		SELECT ` + fileCols + `
 		FROM files
 		WHERE book_id = $1
 		ORDER BY id
@@ -336,51 +359,11 @@ func (r *FileRepo) UpdateLocation(ctx context.Context, fileID, newLocation strin
 // *sql.Rows — both implement the scanner interface.
 func (r *FileRepo) scanFile(s scanner) (model.File, error) {
 	var f model.File
-	var bookIDAny any
-	var etagAny any
-	var contentHashAny any
-
-	err := s.Scan(
-		&f.ID, &f.LibraryID, &bookIDAny, &f.Location,
-		&f.Size, &f.Mtime, &etagAny, &contentHashAny,
-		&f.Format, &f.LastScanned, &f.MissingSince,
-	)
-	if err != nil {
+	if err := fileProjection.scan(s, &f); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return f, sql.ErrNoRows
 		}
 		return f, err
 	}
-
-	// Nullable book_id
-	if bookIDAny != nil {
-		switch v := bookIDAny.(type) {
-		case string:
-			f.BookID = v
-		case []byte:
-			f.BookID = string(v)
-		}
-	}
-
-	// Nullable etag
-	if etagAny != nil {
-		switch v := etagAny.(type) {
-		case string:
-			f.ETag = v
-		case []byte:
-			f.ETag = string(v)
-		}
-	}
-
-	// Nullable content_hash — BYTEA, maps to []byte.
-	if contentHashAny != nil {
-		switch v := contentHashAny.(type) {
-		case []byte:
-			f.ContentHash = v
-		case string:
-			f.ContentHash = []byte(v)
-		}
-	}
-
 	return f, nil
 }

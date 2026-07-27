@@ -269,11 +269,23 @@ Says nothing about origin: it answers "is this file audio", not "did we make it"
 
 ### Column-order coupling
 
-The hazard that survives in `internal/repo`: several positionally ordered lists that must agree by hand — a `*Cols` constant's SELECT order, its `scan*` function's `Scan` destinations, and for `books` a 39-column `UPDATE` against its argument slice. ADR-0023 removed the *dialect* axis of this duplication; the *column-position* axis is untouched.
+The hazard this codebase used to carry: several positionally ordered lists that had to agree by hand — a `*Cols` constant's SELECT order, its `scan*` function's `Scan` destinations, and for `books` a 39-column `UPDATE` against its argument slice. A count mismatch failed loudly at runtime, but swapping two **same-type adjacent** columns in one list did not: it compiled, it ran, and every row silently got those fields crossed. `909f6bf` fixed exactly this in five `UserRepo` methods. ADR-0023 removed the *dialect* axis of the duplication; the *column-position* axis went with [[Projection]].
 
-A count mismatch fails loudly at runtime. Swapping two **same-type adjacent** columns in one list does not: it compiles, it runs, and every row silently gets those fields crossed. `909f6bf` fixed exactly this in five `UserRepo` methods, and `TouchLastSeen` still numbers `$2` before `$1` on purpose so its `(id, at)` argument order works — correct, and a trap for anyone tidying it, especially since every caller discards its error.
+**Still live where no Projection exists.** `users`, `annotations`, `devices`, `bookdrop_items`, `sessions`, `user_invites` and the rest still state their column list and their scan destinations separately. `UserRepo.TouchLastSeen` still numbers `$2` before `$1` on purpose so its `(id, at)` argument order works — correct, and a trap for anyone tidying it, especially since every caller discards its error.
 
 Guarded by round-trip tests in `book_test.go` and `user_test.go`: every field gets a value distinct from every other field of its type, so a crossing surfaces as a mismatch. The 15 lock flags alternate rather than being uniform, which catches any adjacent swap. Both tests were verified by deliberately introducing a crossing and confirming they fail — a positional test that passes proves nothing until you have seen it fail for the right reason.
+
+### Projection
+
+`repo.projection[T]`; a table's column list declared once, as an ordered slice of entries that each carry a column's name, its SQL rendering, its scan destination and — where the table has a full-row update — its bound argument. Four tables have one: `books`, `shelves`, `libraries`, `files`.
+
+Every SQL context is derived from it rather than restated: `selectList(alias)` for aliased SELECTs, `returningList(table)` for RETURNING clauses that have no alias in scope, `scan(row, &dst)` for the destinations, and `updateSet(first)` for the SET text plus its argument accessors in one traversal. A computed column (`book_count`, `owner_name`, `progress`) carries an `expr` with the `{alias}` token where the table alias belongs; `with(name, expr)` swaps one entry in place for a query that genuinely computes it differently — the visible-shelves query filling in `owner_name`, the create-book CTE that has no progress row to join.
+
+What this buys is that a column's position and its destination cannot be stated separately, so the adjacent-swap failure is unrepresentable within a projection. What it does not buy is *correctness of the pairing*: nothing in Go knows that `isbn` belongs in `Book.ISBN`. That still takes a round-trip test against a real row. `projection_test.go` covers the shape — golden SQL text, ascending placeholder numbering, one distinct destination per column — with no database.
+
+Scan destinations are always the model field. Anything that used to happen after the `Scan` is an `sql.Scanner` adapter instead (`db.TextArray`, `nullText`, `chaptersJSON`, `shelfRuleJSON`), because a post-scan fixup is a second positional list by another name.
+
+Deliberately **not** an ORM (ADR-0023): it renders column lists, never joins, predicates or ordering. The `INSERT` column lists are also outside it — those name the insertable subset, which is a third membership question, and `Create`'s round-trip test already guards them.
 
 ### Error envelope
 

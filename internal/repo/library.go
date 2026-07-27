@@ -4,7 +4,6 @@ package repo
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,33 +34,35 @@ func NewLibraryRepo(d *db.DB) *LibraryRepo {
 	return &LibraryRepo{db: d}
 }
 
-// libCols is the shared SELECT list for library rows. Keep the scan
-// order in scanLibrary() in sync if you add columns here.
-const libCols = `
-	l.id, l.name, l.slug, l.path,
-	l.last_scanned_at, l.file_count, l.discovered_count,
-	l.created_at,
-	COALESCE(
-		(SELECT COUNT(*) FROM books b
-		 WHERE b.library_id = l.id AND b.deleted_at IS NULL),
-		0
-	) AS book_count,
-	l.backend_id, l.root
-`
+// libProjection is the libraries row, declared once. book_count is a
+// correlated subquery rather than a stored column, so it carries an expr
+// naming the table it counts against; aliasToken is what lets the SELECT
+// form and the RETURNING form come from this one declaration instead of
+// two constants that had to agree by hand.
+var libProjection = projection[model.Library]{
+	{name: "id", dest: func(l *model.Library) any { return &l.ID }},
+	{name: "name", dest: func(l *model.Library) any { return &l.Name }},
+	{name: "slug", dest: func(l *model.Library) any { return &l.Slug }},
+	{name: "path", dest: func(l *model.Library) any { return &l.Path }},
+	{name: "last_scanned_at", dest: func(l *model.Library) any { return &l.LastScannedAt }},
+	{name: "file_count", dest: func(l *model.Library) any { return &l.FileCount }},
+	{name: "discovered_count", dest: func(l *model.Library) any { return &l.DiscoveredCount }},
+	{name: "created_at", dest: func(l *model.Library) any { return &l.CreatedAt }},
+	{
+		name: "book_count",
+		expr: `COALESCE((SELECT COUNT(*) FROM books b WHERE b.library_id = ` + aliasToken + `.id AND b.deleted_at IS NULL), 0) AS book_count`,
+		dest: func(l *model.Library) any { return &l.BookCount },
+	},
+	{name: "backend_id", dest: func(l *model.Library) any { return &l.BackendID }},
+	{name: "root", dest: func(l *model.Library) any { return &l.Root }},
+}
 
-// libColsReturning is the same projection for RETURNING clauses where
-// no table alias is available.
-const libColsReturning = `
-	id, name, slug, path,
-	last_scanned_at, file_count, discovered_count,
-	created_at,
-	COALESCE(
-		(SELECT COUNT(*) FROM books b
-		 WHERE b.library_id = libraries.id AND b.deleted_at IS NULL),
-		0
-	) AS book_count,
-	backend_id, root
-`
+// libCols is the projection rendered for queries aliasing libraries as l.
+var libCols = libProjection.selectList("l")
+
+// libColsReturning is the same projection for RETURNING clauses, which
+// have no alias in scope.
+var libColsReturning = libProjection.returningList("libraries")
 
 // CreateLibrary inserts a new library row and returns the persisted
 // record. `slug` is UNIQUE (000001) and `path` is UNIQUE (000018, partial
@@ -85,7 +86,7 @@ func (r *LibraryRepo) CreateLibrary(ctx context.Context, name, slug, path string
 	if backendID != nil {
 		root = ""
 	}
-	const q = `
+	q := `
 		INSERT INTO libraries (id, name, slug, path, backend_id, root)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING ` + libColsReturning
@@ -132,7 +133,7 @@ func (r *LibraryRepo) List(ctx context.Context) ([]model.Library, error) {
 // GetByID returns a single library row. Used by scan flows that need
 // the current path without a full listing.
 func (r *LibraryRepo) GetByID(ctx context.Context, id string) (model.Library, error) {
-	const q = `
+	q := `
 		SELECT ` + libCols + `
 		FROM libraries l
 		WHERE l.id = $1
@@ -174,23 +175,8 @@ func (r *LibraryRepo) TouchScan(ctx context.Context, id string, fileCount, disco
 
 func (r *LibraryRepo) scanLibrary(s scanner) (model.Library, error) {
 	var l model.Library
-	var backendID, root sql.NullString
-	err := s.Scan(
-		&l.ID, &l.Name, &l.Slug, &l.Path,
-		&l.LastScannedAt, &l.FileCount, &l.DiscoveredCount,
-		&l.CreatedAt, &l.BookCount,
-		&backendID, &root,
-	)
-	if err != nil {
+	if err := libProjection.scan(s, &l); err != nil {
 		return l, err
-	}
-	if backendID.Valid {
-		s := backendID.String
-		l.BackendID = &s
-	}
-	if root.Valid {
-		s := root.String
-		l.Root = &s
 	}
 	return l, nil
 }

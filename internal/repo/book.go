@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/blackforge/embookshelf/internal/db"
@@ -14,30 +15,74 @@ import (
 	"github.com/blackforge/embookshelf/internal/model"
 )
 
-// bookCols is the SELECT column list shared by every book-returning query.
-// The trailing `COALESCE(ubp.progress, 0)` comes from a LEFT JOIN on
-// user_book_progress; callers must alias that join as `ubp` and bind the
-// user id as the first parameter ($1).
-const bookCols = `
-	b.id, b.library_id, b.title, b.subtitle, b.author, b.format, b.year,
-	b.publish_date, b.language,
-	COALESCE(ubp.progress, 0) AS progress,
-	b.rating, b.cover_palette,
-	b.description, b.isbn, b.isbn10, b.publisher,
-	b.series, b.series_index, b.series_total,
-	b.genres, b.moods, b.tags,
-	b.age_rating, b.content_rating, b.pages, b.public_reviews,
-	b.created_at, b.path,
-	b.has_cover, b.cover_mime, b.cover_hash,
-	COALESCE(ubp.resume_cfi, '') AS resume_cfi,
-	b.title_locked, b.subtitle_locked, b.author_locked,
-	b.description_locked, b.publisher_locked, b.series_locked,
-	b.isbn_locked, b.isbn10_locked, b.language_locked,
-	b.publish_date_locked, b.genres_locked, b.moods_locked,
-	b.tags_locked, b.pages_locked, b.cover_locked,
-	b.duration_seconds, b.narrator, b.chapters,
-	b.uuid, b.folder_path
-`
+// bookProjection is the books row, declared once. Every book-returning
+// query's SELECT list, scanBook's destinations and UpdateMetadata's SET
+// list plus its argument slice are derived from it.
+//
+// The two `ubp.` entries come from a LEFT JOIN on user_book_progress;
+// callers must alias that join as `ubp` and bind the user id as $1.
+//
+// The `arg` column marks the user-editable fields UpdateMetadata writes:
+// everything the metadata editor and the apply-metadata flow can touch,
+// plus the fifteen lock flags. Identity, timestamps, per-user progress,
+// on-disk location and the audio fields are read-only from here.
+var bookProjection = projection[model.Book]{
+	{name: "id", dest: func(b *model.Book) any { return &b.ID }},
+	{name: "library_id", dest: func(b *model.Book) any { return &b.LibraryID }},
+	{name: "title", dest: func(b *model.Book) any { return &b.Title }, arg: func(b *model.Book) any { return b.Title }},
+	{name: "subtitle", dest: func(b *model.Book) any { return &b.Subtitle }, arg: func(b *model.Book) any { return b.Subtitle }},
+	{name: "author", dest: func(b *model.Book) any { return &b.Author }, arg: func(b *model.Book) any { return b.Author }},
+	{name: "format", dest: func(b *model.Book) any { return &b.Format }, arg: func(b *model.Book) any { return b.Format }},
+	{name: "year", dest: func(b *model.Book) any { return &b.Year }, arg: func(b *model.Book) any { return b.Year }},
+	{name: "publish_date", dest: func(b *model.Book) any { return &b.PublishDate }, arg: func(b *model.Book) any { return b.PublishDate }},
+	{name: "language", dest: func(b *model.Book) any { return &b.Language }, arg: func(b *model.Book) any { return b.Language }},
+	{name: "progress", expr: `COALESCE(ubp.progress, 0) AS progress`, dest: func(b *model.Book) any { return &b.Progress }},
+	{name: "rating", dest: func(b *model.Book) any { return &b.Rating }, arg: func(b *model.Book) any { return b.Rating }},
+	{name: "cover_palette", dest: func(b *model.Book) any { return &b.CoverPalette }, arg: func(b *model.Book) any { return b.CoverPalette }},
+	{name: "description", dest: func(b *model.Book) any { return &b.Description }, arg: func(b *model.Book) any { return b.Description }},
+	{name: "isbn", dest: func(b *model.Book) any { return &b.ISBN }, arg: func(b *model.Book) any { return b.ISBN }},
+	{name: "isbn10", dest: func(b *model.Book) any { return &b.ISBN10 }, arg: func(b *model.Book) any { return b.ISBN10 }},
+	{name: "publisher", dest: func(b *model.Book) any { return &b.Publisher }, arg: func(b *model.Book) any { return b.Publisher }},
+	{name: "series", dest: func(b *model.Book) any { return &b.Series }, arg: func(b *model.Book) any { return b.Series }},
+	{name: "series_index", dest: func(b *model.Book) any { return &b.SeriesIndex }, arg: func(b *model.Book) any { return b.SeriesIndex }},
+	{name: "series_total", dest: func(b *model.Book) any { return &b.SeriesTotal }, arg: func(b *model.Book) any { return b.SeriesTotal }},
+	{name: "genres", dest: func(b *model.Book) any { return db.TextArray{Dst: &b.Genres} }, arg: func(b *model.Book) any { return b.Genres }},
+	{name: "moods", dest: func(b *model.Book) any { return db.TextArray{Dst: &b.Moods} }, arg: func(b *model.Book) any { return b.Moods }},
+	{name: "tags", dest: func(b *model.Book) any { return db.TextArray{Dst: &b.Tags} }, arg: func(b *model.Book) any { return b.Tags }},
+	{name: "age_rating", dest: func(b *model.Book) any { return &b.AgeRating }, arg: func(b *model.Book) any { return b.AgeRating }},
+	{name: "content_rating", dest: func(b *model.Book) any { return &b.ContentRating }, arg: func(b *model.Book) any { return b.ContentRating }},
+	{name: "pages", dest: func(b *model.Book) any { return &b.Pages }, arg: func(b *model.Book) any { return b.Pages }},
+	{name: "public_reviews", dest: func(b *model.Book) any { return &b.PublicReviews }, arg: func(b *model.Book) any { return b.PublicReviews }},
+	{name: "created_at", dest: func(b *model.Book) any { return &b.CreatedAt }},
+	{name: "path", dest: func(b *model.Book) any { return &b.Path }},
+	{name: "has_cover", dest: func(b *model.Book) any { return &b.HasCover }},
+	{name: "cover_mime", dest: func(b *model.Book) any { return &b.CoverMime }},
+	{name: "cover_hash", dest: func(b *model.Book) any { return &b.CoverHash }},
+	{name: "resume_cfi", expr: `COALESCE(ubp.resume_cfi, '') AS resume_cfi`, dest: func(b *model.Book) any { return &b.ResumeCFI }},
+	{name: "title_locked", dest: func(b *model.Book) any { return &b.Locks.Title }, arg: func(b *model.Book) any { return b.Locks.Title }},
+	{name: "subtitle_locked", dest: func(b *model.Book) any { return &b.Locks.Subtitle }, arg: func(b *model.Book) any { return b.Locks.Subtitle }},
+	{name: "author_locked", dest: func(b *model.Book) any { return &b.Locks.Author }, arg: func(b *model.Book) any { return b.Locks.Author }},
+	{name: "description_locked", dest: func(b *model.Book) any { return &b.Locks.Description }, arg: func(b *model.Book) any { return b.Locks.Description }},
+	{name: "publisher_locked", dest: func(b *model.Book) any { return &b.Locks.Publisher }, arg: func(b *model.Book) any { return b.Locks.Publisher }},
+	{name: "series_locked", dest: func(b *model.Book) any { return &b.Locks.Series }, arg: func(b *model.Book) any { return b.Locks.Series }},
+	{name: "isbn_locked", dest: func(b *model.Book) any { return &b.Locks.ISBN }, arg: func(b *model.Book) any { return b.Locks.ISBN }},
+	{name: "isbn10_locked", dest: func(b *model.Book) any { return &b.Locks.ISBN10 }, arg: func(b *model.Book) any { return b.Locks.ISBN10 }},
+	{name: "language_locked", dest: func(b *model.Book) any { return &b.Locks.Language }, arg: func(b *model.Book) any { return b.Locks.Language }},
+	{name: "publish_date_locked", dest: func(b *model.Book) any { return &b.Locks.PublishDate }, arg: func(b *model.Book) any { return b.Locks.PublishDate }},
+	{name: "genres_locked", dest: func(b *model.Book) any { return &b.Locks.Genres }, arg: func(b *model.Book) any { return b.Locks.Genres }},
+	{name: "moods_locked", dest: func(b *model.Book) any { return &b.Locks.Moods }, arg: func(b *model.Book) any { return b.Locks.Moods }},
+	{name: "tags_locked", dest: func(b *model.Book) any { return &b.Locks.Tags }, arg: func(b *model.Book) any { return b.Locks.Tags }},
+	{name: "pages_locked", dest: func(b *model.Book) any { return &b.Locks.Pages }, arg: func(b *model.Book) any { return b.Locks.Pages }},
+	{name: "cover_locked", dest: func(b *model.Book) any { return &b.Locks.Cover }, arg: func(b *model.Book) any { return b.Locks.Cover }},
+	{name: "duration_seconds", dest: func(b *model.Book) any { return &b.DurationSeconds }},
+	{name: "narrator", dest: func(b *model.Book) any { return &b.Narrator }},
+	{name: "chapters", dest: func(b *model.Book) any { return chaptersJSON{Dst: &b.Chapters} }},
+	{name: "uuid", dest: func(b *model.Book) any { return &b.UUID }},
+	{name: "folder_path", dest: func(b *model.Book) any { return &b.FolderPath }},
+}
+
+// bookCols is the projection rendered for the joined read path.
+var bookCols = bookProjection.selectList("b")
 
 // bookFromPG is the FROM + LEFT JOIN clause for book queries, where
 // the user_id parameter is $1.
@@ -140,6 +185,32 @@ func (r *BookRepo) BooksByLibrarySlug(ctx context.Context, userID, slug string) 
 	return r.Search(ctx, userID, slug, model.SearchParams{})
 }
 
+// bookCreateQuery inserts a row and reads it back through the same
+// projection every other book query uses, so Create cannot return a
+// differently-ordered row than GetByID. The two per-user entries are
+// overridden rather than joined: a book that did not exist a moment ago
+// has no user_book_progress row for anybody.
+var bookCreateQuery = `
+	WITH inserted AS (
+		INSERT INTO books (id, library_id, title, subtitle, author, format, year,
+		                   publish_date, language,
+		                   rating, cover_palette,
+		                   description, isbn, isbn10, publisher,
+		                   series, series_index, series_total,
+		                   genres, moods, tags,
+		                   age_rating, content_rating, pages, public_reviews,
+		                   path, has_cover, cover_mime, folder_path)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
+		        $19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
+		RETURNING *
+	)
+	SELECT ` + bookProjection.
+	with("progress", `0 AS progress`).
+	with("resume_cfi", `'' AS resume_cfi`).
+	selectList("b") + `
+	FROM inserted b
+`
+
 // Create inserts a new book row. Progress is not a column anymore — callers
 // that want to record progress for the creator should call ProgressRepo.Set.
 func (r *BookRepo) Create(ctx context.Context, b model.Book) (model.Book, error) {
@@ -177,52 +248,17 @@ func (r *BookRepo) Create(ctx context.Context, b model.Book) (model.Book, error)
 		b.Path, b.HasCover, b.CoverMime, folderPathArg,
 	}
 
-	const qPG = `
-		WITH inserted AS (
-			INSERT INTO books (id, library_id, title, subtitle, author, format, year,
-			                   publish_date, language,
-			                   rating, cover_palette,
-			                   description, isbn, isbn10, publisher,
-			                   series, series_index, series_total,
-			                   genres, moods, tags,
-			                   age_rating, content_rating, pages, public_reviews,
-			                   path, has_cover, cover_mime, folder_path)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
-			        $19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
-			RETURNING *
-		)
-		SELECT b.id, b.library_id, b.title, b.subtitle, b.author, b.format, b.year,
-		       b.publish_date, b.language,
-		       0 AS progress,
-		       b.rating, b.cover_palette,
-		       b.description, b.isbn, b.isbn10, b.publisher,
-		       b.series, b.series_index, b.series_total,
-		       b.genres, b.moods, b.tags,
-		       b.age_rating, b.content_rating, b.pages, b.public_reviews,
-		       b.created_at, b.path,
-		       b.has_cover, b.cover_mime, b.cover_hash,
-		       '' AS resume_cfi,
-		       b.title_locked, b.subtitle_locked, b.author_locked,
-		       b.description_locked, b.publisher_locked, b.series_locked,
-		       b.isbn_locked, b.isbn10_locked, b.language_locked,
-		       b.publish_date_locked, b.genres_locked, b.moods_locked,
-		       b.tags_locked, b.pages_locked, b.cover_locked,
-		       b.duration_seconds, b.narrator, b.chapters,
-		       b.uuid, b.folder_path
-		FROM inserted b
-	`
-
-	row := r.db.SQL.QueryRowContext(ctx, qPG, args...)
+	row := r.db.SQL.QueryRowContext(ctx, bookCreateQuery, args...)
 	return scanBook(row)
 }
 
 func (r *BookRepo) GetByID(ctx context.Context, userID, id string) (model.Book, error) {
-	const qPG = `
+	q := `
 		SELECT ` + bookCols + `
 		` + bookFromPG + `
 		WHERE b.id = $2 AND b.deleted_at IS NULL
 	`
-	row := r.db.SQL.QueryRowContext(ctx, qPG, userID, id)
+	row := r.db.SQL.QueryRowContext(ctx, q, userID, id)
 	b, err := scanBook(row)
 	if err != nil {
 		if dberr.IsNotFound(err) {
@@ -280,13 +316,13 @@ func (r *BookRepo) ListMissingCoverHash(ctx context.Context, batchSize int) ([]m
 	if batchSize <= 0 {
 		batchSize = 100
 	}
-	const qPG = `SELECT ` + bookCols + ` ` + bookFromPG + `
+	q := `SELECT ` + bookCols + ` ` + bookFromPG + `
 		WHERE b.has_cover = TRUE AND b.cover_hash IS NULL AND b.deleted_at IS NULL
 		LIMIT $2`
 	// user_id = NULL never matches user_book_progress; the backfill only needs
 	// cover data, not per-user progress. Empty string would 22P02 against the
 	// UUID column on Postgres.
-	rows, err := r.db.SQL.QueryContext(ctx, qPG, nil, batchSize)
+	rows, err := r.db.SQL.QueryContext(ctx, q, nil, batchSize)
 	if err != nil {
 		return nil, err
 	}
@@ -417,6 +453,21 @@ func (r *BookRepo) RenameFolderTx(ctx context.Context, args RenameFolderTxArgs) 
 	return tx.Commit()
 }
 
+// The SET list and its argument accessors come out of one walk over the
+// projection's `arg` columns, so a column's placeholder number and the
+// value bound to it can no longer be stated separately. The row id
+// follows as the last placeholder.
+var bookUpdateMetadataQuery, bookUpdateMetadataArgs = func() (string, []func(*model.Book) any) {
+	sets, args := bookProjection.updateSet(1)
+	q := `
+		UPDATE books SET
+			` + sets + `,
+			updated_at = now()
+		WHERE id = $` + strconv.Itoa(len(args)+1) + ` AND deleted_at IS NULL
+	`
+	return q, args
+}()
+
 // UpdateMetadata applies the user-editable metadata fields for a book,
 // including the per-field lock flags. Manual edits (PATCH /books/:id)
 // flow through here; the apply-metadata path (PUT /books/:id/metadata)
@@ -433,64 +484,8 @@ func (r *BookRepo) UpdateMetadata(ctx context.Context, b model.Book) error {
 		b.Tags = []string{}
 	}
 
-	const qPG = `
-		UPDATE books SET
-			title          = $1,
-			subtitle       = $2,
-			author         = $3,
-			format         = $4,
-			year           = $5,
-			publish_date   = $6,
-			language       = $7,
-			rating         = $8,
-			cover_palette  = $9,
-			description    = $10,
-			isbn           = $11,
-			isbn10         = $12,
-			publisher      = $13,
-			series         = $14,
-			series_index   = $15,
-			series_total   = $16,
-			genres         = $17,
-			moods          = $18,
-			tags           = $19,
-			age_rating     = $20,
-			content_rating = $21,
-			pages          = $22,
-			public_reviews = $23,
-			title_locked          = $24,
-			subtitle_locked       = $25,
-			author_locked         = $26,
-			description_locked    = $27,
-			publisher_locked      = $28,
-			series_locked         = $29,
-			isbn_locked           = $30,
-			isbn10_locked         = $31,
-			language_locked       = $32,
-			publish_date_locked   = $33,
-			genres_locked         = $34,
-			moods_locked          = $35,
-			tags_locked           = $36,
-			pages_locked          = $37,
-			cover_locked          = $38,
-			updated_at     = now()
-		WHERE id = $39 AND deleted_at IS NULL
-	`
-
-	res, err := r.db.SQL.ExecContext(ctx, qPG,
-		b.Title, b.Subtitle, b.Author, b.Format, b.Year,
-		b.PublishDate, b.Language,
-		b.Rating, b.CoverPalette,
-		b.Description, b.ISBN, b.ISBN10, b.Publisher,
-		b.Series, b.SeriesIndex, b.SeriesTotal,
-		b.Genres, b.Moods, b.Tags,
-		b.AgeRating, b.ContentRating, b.Pages, b.PublicReviews,
-		b.Locks.Title, b.Locks.Subtitle, b.Locks.Author,
-		b.Locks.Description, b.Locks.Publisher, b.Locks.Series,
-		b.Locks.ISBN, b.Locks.ISBN10, b.Locks.Language,
-		b.Locks.PublishDate, b.Locks.Genres, b.Locks.Moods,
-		b.Locks.Tags, b.Locks.Pages, b.Locks.Cover,
-		b.ID,
+	res, err := r.db.SQL.ExecContext(ctx, bookUpdateMetadataQuery,
+		append(bind(bookUpdateMetadataArgs, &b), b.ID)...,
 	)
 	if err != nil {
 		return err
@@ -561,65 +556,8 @@ type scanner interface {
 
 func scanBook(s scanner) (model.Book, error) {
 	var b model.Book
-	var durationAny, chaptersAny any
-	var coverHashAny any
-	var bookUUID, folderPath sql.NullString
-	err := s.Scan(
-		&b.ID, &b.LibraryID, &b.Title, &b.Subtitle, &b.Author, &b.Format, &b.Year,
-		&b.PublishDate, &b.Language,
-		&b.Progress, &b.Rating, &b.CoverPalette,
-		&b.Description, &b.ISBN, &b.ISBN10, &b.Publisher,
-		&b.Series, &b.SeriesIndex, &b.SeriesTotal,
-		db.TextArray{Dst: &b.Genres}, db.TextArray{Dst: &b.Moods}, db.TextArray{Dst: &b.Tags},
-		&b.AgeRating, &b.ContentRating, &b.Pages, &b.PublicReviews,
-		&b.CreatedAt, &b.Path,
-		&b.HasCover, &b.CoverMime, &coverHashAny,
-		&b.ResumeCFI,
-		&b.Locks.Title, &b.Locks.Subtitle, &b.Locks.Author,
-		&b.Locks.Description, &b.Locks.Publisher, &b.Locks.Series,
-		&b.Locks.ISBN, &b.Locks.ISBN10, &b.Locks.Language,
-		&b.Locks.PublishDate, &b.Locks.Genres, &b.Locks.Moods,
-		&b.Locks.Tags, &b.Locks.Pages, &b.Locks.Cover,
-		&durationAny, &b.Narrator, &chaptersAny,
-		&bookUUID, &folderPath,
-	)
-	if err != nil {
+	if err := bookProjection.scan(s, &b); err != nil {
 		return b, err
-	}
-	if v, ok := durationAny.(int64); ok {
-		n := int(v)
-		b.DurationSeconds = &n
-	}
-	if chaptersAny != nil {
-		var raw []byte
-		switch v := chaptersAny.(type) {
-		case []byte:
-			raw = v
-		case string:
-			raw = []byte(v)
-		}
-		if len(raw) > 0 {
-			var ch []model.Chapter
-			if err := json.Unmarshal(raw, &ch); err == nil && len(ch) > 0 {
-				b.Chapters = ch
-			}
-		}
-	}
-	if coverHashAny != nil {
-		switch v := coverHashAny.(type) {
-		case []byte:
-			if len(v) > 0 {
-				b.CoverHash = v
-			}
-		}
-	}
-	if bookUUID.Valid {
-		s := bookUUID.String
-		b.UUID = &s
-	}
-	if folderPath.Valid {
-		s := folderPath.String
-		b.FolderPath = &s
 	}
 	return b, nil
 }
