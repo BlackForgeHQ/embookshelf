@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useMemo } from "react"
 import type { FormEvent } from "react"
 
 import type { ForwardAuthSettings } from "@/api/forwardAuth"
@@ -8,8 +7,14 @@ import {
   forwardAuthSettingsQueryKey,
   saveForwardAuthSettings,
 } from "@/api/forwardAuth"
-import { useApiMutation } from "@/api/mutation"
-import { Card, Field, Toggle } from "@/components/SettingsShared"
+import { useSettingsDraft } from "@/hooks/useSettingsDraft"
+import {
+  Card,
+  Field,
+  PanelHeader,
+  PanelLoading,
+  Toggle,
+} from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -29,94 +34,79 @@ const emptyForm: ForwardAuthSettings = {
   hideLocalLogin: false,
 }
 
+// The intro sits outside the component so the loading state and the form
+// open with the same words.
+const INTRO = (
+  <>
+    Trust identity headers from an upstream reverse proxy that already
+    terminates SSO (Authelia, oauth2-proxy, Traefik forwardAuth, Cloudflare
+    Access). Headers are read only when the request's immediate TCP peer matches
+    one of the trusted CIDRs — <code>X-Forwarded-For</code> is ignored.
+    ADR-0022.
+  </>
+)
+
 export function ForwardAuthPanel() {
-  const settings = useQuery({
+  const draft = useSettingsDraft({
     queryKey: forwardAuthSettingsQueryKey,
     queryFn: fetchForwardAuthSettings,
-  })
-
-  const [form, setForm] = useState<ForwardAuthSettings>(emptyForm)
-  // Edit the CIDR list as a single textarea (one per line) so admins
-  // can paste from compose files and we re-serialise on save. Keeping
-  // a separate string state avoids array splice gymnastics on every
-  // keystroke.
-  const [cidrText, setCidrText] = useState("")
-
-  useEffect(() => {
-    if (settings.data) {
-      // Deliberate: setState inside an effect, syncing React state from an
-      // external source. Was suppressed via react-hooks/set-state-in-effect;
-      // Biome has no equivalent rule yet, so there is nothing to suppress.
-      setForm(settings.data)
-      setCidrText(settings.data.trustedProxyCIDRs.join("\n"))
-    }
-  }, [settings.data])
-
-  const saveMut = useApiMutation(saveForwardAuthSettings, {
+    initial: emptyForm,
+    save: saveForwardAuthSettings,
     successToast: "Forward auth saved.",
-    errorToast: (err) => err.message || "Could not save forward auth.",
+    // Blank lines are an editing artefact, not a CIDR. They live in the
+    // draft so the textarea round-trips exactly what was typed, and are
+    // dropped on the way out.
+    toPayload: (form) => ({ ...form, trustedProxyCIDRs: cidrsOf(form) }),
   })
 
-  const cidrList = useMemo(
-    () =>
-      cidrText
-        .split(/\r?\n/)
-        .map((s) => s.trim())
-        .filter(Boolean),
-    [cidrText]
-  )
+  const form = draft.value
 
+  // The CIDR list is edited as one textarea (admins paste from compose
+  // files) and stored as the array the API takes. Splitting on newline in
+  // both directions keeps the two in step without a second piece of state
+  // to hydrate — including the trailing newline mid-typing, which a
+  // filtered round-trip would eat.
+  const cidrList = useMemo(() => cidrsOf(form), [form])
   const cidrInvalid = useMemo(
     () => cidrList.filter((c) => !looksLikeCidr(c)),
     [cidrList]
   )
-
   const enabledWithoutCidrs = form.enabled && cidrList.length === 0
-
-  if (settings.isLoading) {
-    return (
-      <>
-        <h2 className="t-h2" style={{ marginBottom: 8 }}>
-          Forward auth
-        </h2>
-        <p className="t-small" style={{ fontStyle: "italic" }}>
-          Loading…
-        </p>
-      </>
-    )
-  }
 
   function update<TKey extends keyof ForwardAuthSettings>(
     key: TKey,
     value: ForwardAuthSettings[TKey]
   ) {
-    setForm((prev) => ({ ...prev, [key]: value }))
+    draft.patch(key, value)
   }
   function updateHeader<TKey extends keyof ForwardAuthSettings["headers"]>(
     key: TKey,
     value: ForwardAuthSettings["headers"][TKey]
   ) {
-    setForm((prev) => ({ ...prev, headers: { ...prev.headers, [key]: value } }))
+    draft.set((prev) => ({
+      ...prev,
+      headers: { ...prev.headers, [key]: value },
+    }))
   }
 
   function onSave(e: FormEvent) {
     e.preventDefault()
     if (enabledWithoutCidrs || cidrInvalid.length > 0) return
-    saveMut.mutate({ ...form, trustedProxyCIDRs: cidrList })
+    draft.save()
+  }
+
+  if (draft.loading) {
+    return (
+      <>
+        <PanelHeader title="Forward auth">{INTRO}</PanelHeader>
+        <PanelLoading />
+      </>
+    )
   }
 
   return (
     <>
-      <h2 className="t-h2" style={{ marginBottom: 8 }}>
-        Forward auth
-      </h2>
-      <p className="t-small" style={{ marginBottom: 24, fontStyle: "italic" }}>
-        Trust identity headers from an upstream reverse proxy that already
-        terminates SSO (Authelia, oauth2-proxy, Traefik forwardAuth, Cloudflare
-        Access). Headers are read only when the request's immediate TCP peer
-        matches one of the trusted CIDRs — <code>X-Forwarded-For</code> is
-        ignored. ADR-0022.
-      </p>
+      <PanelHeader title="Forward auth">{INTRO}</PanelHeader>
 
       <form onSubmit={onSave} className="flex flex-col gap-4">
         <Card>
@@ -137,8 +127,10 @@ export function ForwardAuthPanel() {
         <Card>
           <Field label="Trusted proxy CIDRs (one per line)">
             <textarea
-              value={cidrText}
-              onChange={(e) => setCidrText(e.target.value)}
+              value={form.trustedProxyCIDRs.join("\n")}
+              onChange={(e) =>
+                update("trustedProxyCIDRs", e.target.value.split(/\r?\n/))
+              }
               rows={4}
               spellCheck={false}
               className="rounded-md border border-input bg-transparent px-3 py-2 font-mono text-[13px] shadow-xs"
@@ -219,15 +211,22 @@ export function ForwardAuthPanel() {
           <Button
             type="submit"
             disabled={
-              saveMut.isPending || enabledWithoutCidrs || cidrInvalid.length > 0
+              draft.saving || enabledWithoutCidrs || cidrInvalid.length > 0
             }
           >
-            {saveMut.isPending ? "Saving…" : "Save"}
+            {draft.saving ? "Saving…" : "Save"}
           </Button>
         </div>
       </form>
     </>
   )
+}
+
+// cidrsOf reads the meaningful entries out of the textarea-backed list —
+// trimmed, blanks dropped. What the draft holds is what was typed; this
+// is what the rest of the panel and the server reason about.
+function cidrsOf(form: ForwardAuthSettings): Array<string> {
+  return form.trustedProxyCIDRs.map((s) => s.trim()).filter(Boolean)
 }
 
 // looksLikeCidr is a quick "did the admin paste something CIDR-shaped"

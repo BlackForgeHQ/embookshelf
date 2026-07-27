@@ -1,11 +1,7 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 
-import type {
-  AudiobookEngine,
-  AudiobookSettings,
-  AudiobookTestResult,
-} from "@/api/audiobooks"
+import type { AudiobookEngine, AudiobookSettings } from "@/api/audiobooks"
 import {
   audiobookSettingsQueryKey,
   audiobookVoicesQueryKey,
@@ -14,12 +10,26 @@ import {
   saveAudiobookSettings,
   testAudiobook,
 } from "@/api/audiobooks"
-import { useApiMutation } from "@/api/mutation"
-import { Card, Field, Select, Toggle } from "@/components/SettingsShared"
+import type { SecretField } from "@/hooks/useSettingsDraft"
+import { useConnectionTest } from "@/hooks/useConnectionTest"
+import { useSettingsDraft } from "@/hooks/useSettingsDraft"
+import {
+  Card,
+  ConnectionTestReport,
+  Field,
+  PanelHeader,
+  PanelLoading,
+  Select,
+  Toggle,
+} from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
-const emptyForm: AudiobookSettings = { enabled: false, engine: "openai", engines: [] }
+const emptyForm: AudiobookSettings = {
+  enabled: false,
+  engine: "openai",
+  engines: [],
+}
 
 // What each engine is actually for, in the terms that decide the choice:
 // what it costs and what it gets you. The catalog carries the mechanics
@@ -34,84 +44,79 @@ const ENGINE_NOTES: Record<string, string> = {
 }
 
 export function AudiobooksPanel() {
-  const settings = useQuery({
+  // One secret per engine, named by engine id. The panel no longer keeps
+  // its own record of typed keys, and no longer decides what an empty one
+  // means — `secrets.value` answers both.
+  const draft = useSettingsDraft({
     queryKey: audiobookSettingsQueryKey,
     queryFn: fetchAudiobookSettings,
-  })
-
-  const [form, setForm] = useState<AudiobookSettings>(emptyForm)
-  // Keys are write-only: the server sends keySet instead of the value, so
-  // the draft holds only what the admin typed this session. An untouched
-  // field submits empty, which the server reads as "keep the stored key".
-  const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({})
-  const [testResult, setTestResult] = useState<AudiobookTestResult | null>(null)
-
-  useEffect(() => {
-    if (settings.data) {
-      // Deliberate: setState inside an effect, syncing React state from an
-      // external source. Was suppressed via react-hooks/set-state-in-effect;
-      // Biome has no equivalent rule yet, so there is nothing to suppress.
-      setForm(settings.data)
-      setKeyDrafts({})
-    }
-  }, [settings.data])
-
-  const saveMut = useApiMutation(saveAudiobookSettings, {
+    initial: emptyForm,
+    save: saveAudiobookSettings,
     successToast: "Audiobook settings saved.",
-    onSuccess: () => setKeyDrafts({}),
-  })
-  const testMut = useApiMutation(testAudiobook, {
-    onSuccess: (res) => setTestResult(res),
-    errorToast: (err) => {
-      setTestResult(null)
-      return err.message
-    },
+    toPayload: (form, secrets) => ({
+      ...form,
+      engines: form.engines.map((e) => ({
+        ...e,
+        apiKey: secrets.value(e.id),
+        keySet: secrets.stillSet(e.id, e.keySet),
+      })),
+    }),
   })
 
-  if (settings.isLoading) return <p className="t-small">Loading…</p>
+  const test = useConnectionTest({
+    test: testAudiobook,
+    read: (res) => ({
+      ok: res.ok,
+      message: `${res.engine} returned ${res.bytes.toLocaleString()} bytes of audio — the engine works.`,
+    }),
+  })
 
+  const form = draft.value
   const selected = form.engines.find((e) => e.id === form.engine)
 
   function updateEngine(id: string, patch: Partial<AudiobookEngine>) {
-    setForm((f) => ({
+    draft.set((f) => ({
       ...f,
       engines: f.engines.map((e) => (e.id === id ? { ...e, ...patch } : e)),
     }))
   }
 
-  function submit() {
-    saveMut.mutate({
-      ...form,
-      engines: form.engines.map((e) => ({
-        ...e,
-        apiKey: keyDrafts[e.id]?.trim() ? keyDrafts[e.id] : "",
-      })),
-    })
+  if (draft.loading) {
+    return (
+      <>
+        <PanelHeader title="Audiobooks" />
+        <PanelLoading />
+      </>
+    )
   }
 
   return (
     <>
+      <PanelHeader title="Audiobooks" />
       <Card>
         <h3 className="t-h3 mb-2">Audiobook narration</h3>
         <p className="t-small mb-4">
-          Reads an EPUB aloud with a text-to-speech engine and saves the
-          result beside the book as an MP3 with chapter marks. Generation is
-          admin-only and always per book — there is no bulk run, because
-          narrating a thousand-book library would cost thousands of dollars.
+          Reads an EPUB aloud with a text-to-speech engine and saves the result
+          beside the book as an MP3 with chapter marks. Generation is admin-only
+          and always per book — there is no bulk run, because narrating a
+          thousand-book library would cost thousands of dollars.
         </p>
 
         <Toggle
           label="Enable narration"
           checked={form.enabled}
-          onChange={(v) => setForm({ ...form, enabled: v })}
+          onChange={(v) => draft.patch("enabled", v)}
         />
 
         <div className="mt-4">
           <Field label="Engine">
             <Select
               value={form.engine}
-              onChange={(v) => setForm({ ...form, engine: v })}
-              options={form.engines.map((e) => ({ value: e.id, label: e.label }))}
+              onChange={(v) => draft.patch("engine", v)}
+              options={form.engines.map((e) => ({
+                value: e.id,
+                label: e.label,
+              }))}
             />
           </Field>
           <p className="t-small" style={{ marginTop: 4 }}>
@@ -126,40 +131,39 @@ export function AudiobooksPanel() {
           key={engine.id}
           engine={engine}
           isSelected={engine.id === form.engine}
-          keyDraft={keyDrafts[engine.id] ?? ""}
-          onKeyDraft={(v) => setKeyDrafts((d) => ({ ...d, [engine.id]: v }))}
+          apiKey={draft.secret(engine.id)}
           onChange={(patch) => updateEngine(engine.id, patch)}
         />
       ))}
 
       <Card className="mt-6">
         <div className="flex items-center gap-2">
-          <Button disabled={saveMut.isPending} onClick={submit}>
-            Save
+          <Button disabled={draft.saving} onClick={draft.save}>
+            {draft.saving ? "Saving…" : "Save"}
           </Button>
           <Button
             variant="outline"
-            disabled={testMut.isPending || !selected?.enabled}
-            onClick={() => testMut.mutate(undefined)}
+            disabled={test.running || !selected?.enabled}
+            onClick={() => test.run(undefined)}
             title="Synthesizes one short phrase with the selected engine"
           >
-            {testMut.isPending ? "Testing…" : "Test connection"}
+            {test.running ? "Testing…" : "Test connection"}
           </Button>
         </div>
-        {testResult && (
-          <p className="t-small mt-2">
-            {testResult.engine} returned {testResult.bytes.toLocaleString()} bytes
-            of audio — the engine works.
-          </p>
-        )}
+        <ConnectionTestReport outcome={test.outcome} />
         {selected && !selected.enabled && (
-          <p className="t-small mt-2" style={{ color: "var(--color-warn, #92400e)" }}>
+          <p
+            className="t-small mt-2"
+            style={{ color: "var(--color-warn, #92400e)" }}
+          >
             {selected.label} is selected but switched off below.
           </p>
         )}
       </Card>
 
-      {form.enabled && selected?.enabled && <VoicePicker engineLabel={selected.label} />}
+      {form.enabled && selected?.enabled && (
+        <VoicePicker engineLabel={selected.label} />
+      )}
     </>
   )
 }
@@ -167,23 +171,27 @@ export function AudiobooksPanel() {
 function EngineCard({
   engine,
   isSelected,
-  keyDraft,
-  onKeyDraft,
+  apiKey,
   onChange,
 }: {
   engine: AudiobookEngine
   isSelected: boolean
-  keyDraft: string
-  onKeyDraft: (v: string) => void
+  apiKey: SecretField
   onChange: (patch: Partial<AudiobookEngine>) => void
 }) {
   return (
     <Card className="mt-6">
-      <div className="mb-2 flex items-baseline justify-between" style={{ gap: 12 }}>
+      <div
+        className="mb-2 flex items-baseline justify-between"
+        style={{ gap: 12 }}
+      >
         <h3 className="t-h3" style={{ margin: 0 }}>
           {engine.label}
           {isSelected && (
-            <span className="t-small" style={{ marginLeft: 8, fontWeight: 400 }}>
+            <span
+              className="t-small"
+              style={{ marginLeft: 8, fontWeight: 400 }}
+            >
               · in use
             </span>
           )}
@@ -210,7 +218,7 @@ function EngineCard({
       <Field label="API key">
         <Input
           type="password"
-          value={keyDraft}
+          value={apiKey.value}
           placeholder={
             engine.keySet
               ? "stored — leave blank to keep it"
@@ -218,13 +226,16 @@ function EngineCard({
                 ? "optional for a local engine"
                 : "required"
           }
-          onChange={(e) => onKeyDraft(e.target.value)}
+          onChange={(e) => apiKey.set(e.target.value)}
         />
       </Field>
 
       {engine.needsModel && (
         <Field label="Model">
-          <Input value={engine.model} onChange={(e) => onChange({ model: e.target.value })} />
+          <Input
+            value={engine.model}
+            onChange={(e) => onChange({ model: e.target.value })}
+          />
         </Field>
       )}
 
@@ -242,7 +253,9 @@ function EngineCard({
           min={0}
           step="0.01"
           value={String(engine.pricePerMillionChars)}
-          onChange={(e) => onChange({ pricePerMillionChars: Number(e.target.value) })}
+          onChange={(e) =>
+            onChange({ pricePerMillionChars: Number(e.target.value) })
+          }
         />
       </Field>
       <p className="t-small" style={{ marginTop: -4 }}>
@@ -278,7 +291,8 @@ function VoicePicker({ engineLabel }: { engineLabel: string }) {
         <p className="t-small">Asking {engineLabel}…</p>
       ) : voices.error ? (
         <p className="t-small" style={{ color: "var(--color-warn, #92400e)" }}>
-          Could not list voices: {(voices.error as { message?: string }).message}
+          Could not list voices:{" "}
+          {(voices.error as { message?: string }).message}
         </p>
       ) : (
         <>

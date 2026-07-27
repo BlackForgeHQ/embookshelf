@@ -1,9 +1,5 @@
-import { useEffect, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { toast } from "sonner"
 import type { ReactNode } from "react"
 
-import type { ApiError } from "@/api/client"
 import type {
   OidcAdminSettings,
   OidcTestCheck,
@@ -16,87 +12,114 @@ import {
   saveOidcAdminSettings,
   testOidcProvider,
 } from "@/api/oidc"
-import { useApiMutation } from "@/api/mutation"
-import { Card, Field, Select } from "@/components/SettingsShared"
+import type { SecretField } from "@/hooks/useSettingsDraft"
+import { useConnectionTest } from "@/hooks/useConnectionTest"
+import { useSettingsDraft } from "@/hooks/useSettingsDraft"
+import {
+  Card,
+  ConnectionTestReport,
+  Field,
+  PanelHeader,
+  PanelLoading,
+  Select,
+} from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 
+// The shape rendered before the first payload lands. Mirrors the server's
+// defaults so a fresh instance with no row stored looks the same as one
+// that answered.
+const emptyForm: OidcAdminSettings = {
+  forceOnly: false,
+  autoProvision: {
+    enableAutoProvisioning: false,
+    allowLocalAccountLinking: false,
+    defaultRole: "user",
+    requireAdminApproval: true,
+  },
+  google: { enabled: false, clientId: "", clientSecretSet: false },
+  github: { enabled: false, clientId: "", clientSecretSet: false },
+  generic: {
+    enabled: false,
+    providerName: "",
+    clientId: "",
+    clientSecretSet: false,
+    issuerUri: "",
+    scopes: "openid profile email",
+    claimMapping: {
+      username: "preferred_username",
+      email: "email",
+      name: "name",
+    },
+  },
+  redirectUri: "",
+}
+
+const INTRO = `Enable Google, GitHub, and a custom OpenID Connect provider independently — the login page shows a button for each one you turn on. Changes take effect on the next login, no restart required.`
+
 export function OidcPanel() {
-  const queryClient = useQueryClient()
-  const query = useQuery({
+  // Three write-only secrets, one per slug. The panel used to carry a
+  // parallel record of "was this one touched" precisely because the draft
+  // could not tell an untouched field from an erased one; the module
+  // makes that distinction part of the secret itself.
+  const draft = useSettingsDraft({
     queryKey: oidcAdminSettingsQueryKey,
     queryFn: fetchOidcAdminSettings,
-  })
-
-  const [draft, setDraft] = useState<OidcAdminSettings | null>(null)
-  // Per-provider "secret was touched" flags so an empty secret field
-  // only clears the stored secret when the admin explicitly typed in
-  // it (or clicked the clear button).
-  const [secretTouched, setSecretTouched] = useState<
-    Record<ProviderSlug, boolean>
-  >({
-    google: false,
-    github: false,
-    generic: false,
-  })
-
-  useEffect(() => {
-    if (query.data && !draft) {
-      // Prop→state sync on first load; not a cascading render.
-      // Deliberate: setState inside an effect, syncing React state from an
-      // external source. Was suppressed via react-hooks/set-state-in-effect;
-      // Biome has no equivalent rule yet, so there is nothing to suppress.
-      setDraft(query.data)
-    }
-  }, [query.data, draft])
-
-  const saveMut = useApiMutation(saveOidcAdminSettings, {
+    initial: emptyForm,
+    save: saveOidcAdminSettings,
     successToast: "OIDC settings saved.",
-    onSuccess: (data) => {
-      queryClient.setQueryData(oidcAdminSettingsQueryKey, data)
-      setDraft(data)
-      setSecretTouched({ google: false, github: false, generic: false })
-    },
+    toPayload: (form, secrets) => ({
+      ...form,
+      google: withSecret(
+        form.google,
+        secrets.value("google"),
+        secrets.stillSet("google", form.google.clientSecretSet)
+      ),
+      github: withSecret(
+        form.github,
+        secrets.value("github"),
+        secrets.stillSet("github", form.github.clientSecretSet)
+      ),
+      generic: withSecret(
+        form.generic,
+        secrets.value("generic"),
+        secrets.stillSet("generic", form.generic.clientSecretSet)
+      ),
+    }),
   })
 
-  if (query.isLoading || !draft) {
+  const form = draft.value
+
+  if (draft.loading) {
     return (
       <>
-        <h2 className="t-h2" style={{ marginBottom: 8 }}>
-          OIDC / SSO
-        </h2>
-        <p className="t-small" style={{ fontStyle: "italic" }}>
-          Loading…
-        </p>
+        <PanelHeader title="OIDC / SSO">{INTRO}</PanelHeader>
+        <PanelLoading />
       </>
     )
   }
 
-  const someEnabled =
-    (draft.google.enabled &&
-      draft.google.clientId !== "" &&
-      (draft.google.clientSecretSet ||
-        (draft.google.clientSecret ?? "") !== "")) ||
-    (draft.github.enabled &&
-      draft.github.clientId !== "" &&
-      (draft.github.clientSecretSet ||
-        (draft.github.clientSecret ?? "") !== "")) ||
-    (draft.generic.enabled &&
-      draft.generic.clientId !== "" &&
-      draft.generic.issuerUri !== "")
-  const canForceOnly = someEnabled
+  // Force-SSO is only safe once at least one provider could actually sign
+  // someone in — a stored secret, or one typed but not yet saved.
+  const usable = (slug: ProviderSlug) => {
+    const p = form[slug]
+    return (
+      p.enabled &&
+      p.clientId !== "" &&
+      (p.clientSecretSet || draft.secret(slug).value !== "")
+    )
+  }
+  const canForceOnly =
+    usable("google") ||
+    usable("github") ||
+    (form.generic.enabled &&
+      form.generic.clientId !== "" &&
+      form.generic.issuerUri !== "")
 
   return (
     <>
-      <h2 className="t-h2" style={{ marginBottom: 8 }}>
-        OIDC / SSO
-      </h2>
-      <p className="t-small" style={{ marginBottom: 24, fontStyle: "italic" }}>
-        Enable Google, GitHub, and a custom OpenID Connect provider
-        independently — the login page shows a button for each one you turn on.
-        Changes take effect on the next login, no restart required.
-      </p>
+      <PanelHeader title="OIDC / SSO">{INTRO}</PanelHeader>
 
       <Card>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -109,38 +132,33 @@ export function OidcPanel() {
             </div>
           </div>
           <Switch
-            checked={draft.forceOnly}
+            checked={form.forceOnly}
             disabled={!canForceOnly}
-            onCheckedChange={(v) => setDraft({ ...draft, forceOnly: v })}
+            onCheckedChange={(v) => draft.patch("forceOnly", v)}
             aria-label="Force OIDC"
           />
         </div>
       </Card>
 
       <GooglePanel
-        value={draft.google}
-        onChange={(next) => setDraft({ ...draft, google: next })}
-        redirectUri={draft.redirectUri}
-        secretTouched={secretTouched.google}
-        onSecretTouch={(v) => setSecretTouched({ ...secretTouched, google: v })}
+        value={form.google}
+        onChange={(next) => draft.patch("google", next)}
+        redirectUri={form.redirectUri}
+        secret={draft.secret("google")}
       />
 
       <GitHubPanel
-        value={draft.github}
-        onChange={(next) => setDraft({ ...draft, github: next })}
-        redirectUri={draft.redirectUri}
-        secretTouched={secretTouched.github}
-        onSecretTouch={(v) => setSecretTouched({ ...secretTouched, github: v })}
+        value={form.github}
+        onChange={(next) => draft.patch("github", next)}
+        redirectUri={form.redirectUri}
+        secret={draft.secret("github")}
       />
 
       <GenericOidcPanel
-        value={draft.generic}
-        onChange={(next) => setDraft({ ...draft, generic: next })}
-        redirectUri={draft.redirectUri}
-        secretTouched={secretTouched.generic}
-        onSecretTouch={(v) =>
-          setSecretTouched({ ...secretTouched, generic: v })
-        }
+        value={form.generic}
+        onChange={(next) => draft.patch("generic", next)}
+        redirectUri={form.redirectUri}
+        secret={draft.secret("generic")}
       />
 
       <h3 className="t-h3" style={{ marginTop: 24, marginBottom: 8 }}>
@@ -159,14 +177,11 @@ export function OidcPanel() {
               </div>
             </div>
             <Switch
-              checked={draft.autoProvision.enableAutoProvisioning}
+              checked={form.autoProvision.enableAutoProvisioning}
               onCheckedChange={(v) =>
-                setDraft({
-                  ...draft,
-                  autoProvision: {
-                    ...draft.autoProvision,
-                    enableAutoProvisioning: v,
-                  },
+                draft.patch("autoProvision", {
+                  ...form.autoProvision,
+                  enableAutoProvisioning: v,
                 })
               }
             />
@@ -180,14 +195,11 @@ export function OidcPanel() {
               </div>
             </div>
             <Switch
-              checked={draft.autoProvision.allowLocalAccountLinking}
+              checked={form.autoProvision.allowLocalAccountLinking}
               onCheckedChange={(v) =>
-                setDraft({
-                  ...draft,
-                  autoProvision: {
-                    ...draft.autoProvision,
-                    allowLocalAccountLinking: v,
-                  },
+                draft.patch("autoProvision", {
+                  ...form.autoProvision,
+                  allowLocalAccountLinking: v,
                 })
               }
             />
@@ -202,29 +214,23 @@ export function OidcPanel() {
               </div>
             </div>
             <Switch
-              checked={draft.autoProvision.requireAdminApproval}
-              disabled={!draft.autoProvision.enableAutoProvisioning}
+              checked={form.autoProvision.requireAdminApproval}
+              disabled={!form.autoProvision.enableAutoProvisioning}
               onCheckedChange={(v) =>
-                setDraft({
-                  ...draft,
-                  autoProvision: {
-                    ...draft.autoProvision,
-                    requireAdminApproval: v,
-                  },
+                draft.patch("autoProvision", {
+                  ...form.autoProvision,
+                  requireAdminApproval: v,
                 })
               }
             />
           </div>
           <Field label="Default role for new users">
             <Select
-              value={draft.autoProvision.defaultRole}
+              value={form.autoProvision.defaultRole}
               onChange={(v) =>
-                setDraft({
-                  ...draft,
-                  autoProvision: {
-                    ...draft.autoProvision,
-                    defaultRole: v === "admin" ? "admin" : "user",
-                  },
+                draft.patch("autoProvision", {
+                  ...form.autoProvision,
+                  defaultRole: v === "admin" ? "admin" : "user",
                 })
               }
               options={[
@@ -237,11 +243,8 @@ export function OidcPanel() {
       </Card>
 
       <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-        <Button
-          onClick={() => saveMut.mutate(draft)}
-          disabled={saveMut.isPending}
-        >
-          {saveMut.isPending ? "Saving…" : "Save all"}
+        <Button onClick={draft.save} disabled={draft.saving}>
+          {draft.saving ? "Saving…" : "Save all"}
         </Button>
       </div>
     </>
@@ -249,6 +252,76 @@ export function OidcPanel() {
 }
 
 type OAuthPresetValue = OidcAdminSettings["google"]
+
+// withSecret folds a secret draft back into a provider block. The pair
+// (`clientSecret`, `clientSecretSet`) is what `resolveSecret` on the
+// server reads: non-empty wins, empty-and-set keeps, empty-and-unset
+// clears. Written once here rather than three times inline.
+function withSecret<TValue extends { clientSecretSet: boolean }>(
+  value: TValue,
+  clientSecret: string,
+  clientSecretSet: boolean
+): TValue & { clientSecret: string } {
+  return { ...value, clientSecret, clientSecretSet }
+}
+
+// useOidcTest is the connection test for one provider. All three probes
+// answer the same shape, so the verdict sentence lives here rather than
+// in each panel.
+function useOidcTest(slug: ProviderSlug) {
+  return useConnectionTest({
+    test: {
+      fn: (body: Record<string, unknown>) => testOidcProvider(slug, body),
+    },
+    read: (res: OidcTestResult) => ({
+      ok: res.success,
+      message: res.success
+        ? "All critical checks passed."
+        : "One or more checks failed.",
+    }),
+  })
+}
+
+// SecretInput is the one write-only secret control in this panel. The
+// field shows only what was typed this session; leaving it alone keeps
+// the stored secret, and dropping it is the separate, explicit act below.
+function SecretInput({
+  secret,
+  stored,
+}: {
+  secret: SecretField
+  stored: boolean
+}) {
+  return (
+    <>
+      <Input
+        type="password"
+        autoComplete="new-password"
+        value={secret.value}
+        placeholder={stored ? "••••••••" : ""}
+        onChange={(e) => secret.set(e.target.value)}
+      />
+      {stored && !secret.touched && (
+        <button
+          type="button"
+          className="t-small"
+          style={{
+            marginTop: 4,
+            background: "none",
+            border: "none",
+            padding: 0,
+            cursor: "pointer",
+            color: "var(--color-accent)",
+            alignSelf: "flex-start",
+          }}
+          onClick={secret.clear}
+        >
+          Clear stored secret
+        </button>
+      )}
+    </>
+  )
+}
 
 function PresetProviderPanel({
   title,
@@ -258,8 +331,7 @@ function PresetProviderPanel({
   redirectUri,
   registerUrl,
   intro,
-  secretTouched,
-  onSecretTouch,
+  secret,
 }: {
   title: string
   slug: ProviderSlug
@@ -268,28 +340,15 @@ function PresetProviderPanel({
   redirectUri: string
   registerUrl: string
   intro: ReactNode
-  secretTouched: boolean
-  onSecretTouch: (v: boolean) => void
+  secret: SecretField
 }) {
-  const [testResult, setTestResult] = useState<OidcTestResult | null>(null)
-  const testMut = useMutation({
-    mutationFn: () =>
-      testOidcProvider(slug, {
-        [slug]: {
-          clientId: value.clientId,
-          clientSecret: value.clientSecret ?? "",
-        },
-      }),
-    onSuccess: (res) => {
-      setTestResult(res)
-      if (res.success) {
-        toast.success("All critical checks passed.")
-      } else {
-        toast.error("One or more checks failed.")
-      }
-    },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
-  })
+  const test = useOidcTest(slug)
+  // The probe runs against what is on screen, not what is stored — that is
+  // the point of testing before saving. An untouched secret sends empty,
+  // and the server falls back to the stored one.
+  const testBody = {
+    [slug]: { clientId: value.clientId, clientSecret: secret.value },
+  }
 
   return (
     <>
@@ -313,7 +372,7 @@ function PresetProviderPanel({
             checked={value.enabled}
             disabled={
               value.clientId === "" ||
-              (!value.clientSecretSet && (value.clientSecret ?? "") === "")
+              (!value.clientSecretSet && secret.value === "")
             }
             onCheckedChange={(v) => onChange({ ...value, enabled: v })}
           />
@@ -339,51 +398,20 @@ function PresetProviderPanel({
         <Field
           label={`Client secret${value.clientSecretSet ? " (stored — leave blank to keep)" : ""}`}
         >
-          <Input
-            type="password"
-            autoComplete="new-password"
-            placeholder={value.clientSecretSet ? "••••••••" : ""}
-            onChange={(e) => {
-              onSecretTouch(true)
-              onChange({
-                ...value,
-                clientSecret: e.target.value,
-                clientSecretSet: e.target.value !== "" || value.clientSecretSet,
-              })
-            }}
-          />
-          {value.clientSecretSet && !secretTouched && (
-            <button
-              type="button"
-              className="t-small"
-              style={{
-                marginTop: 4,
-                background: "none",
-                border: "none",
-                padding: 0,
-                cursor: "pointer",
-                color: "var(--color-accent)",
-                alignSelf: "flex-start",
-              }}
-              onClick={() => {
-                onSecretTouch(true)
-                onChange({ ...value, clientSecret: "", clientSecretSet: false })
-              }}
-            >
-              Clear stored secret
-            </button>
-          )}
+          <SecretInput secret={secret} stored={value.clientSecretSet} />
         </Field>
         <div style={{ marginTop: 10 }}>
           <Button
             variant="outline"
-            onClick={() => testMut.mutate()}
-            disabled={testMut.isPending}
+            onClick={() => test.run(testBody)}
+            disabled={test.running}
           >
-            {testMut.isPending ? "Testing…" : "Test connection"}
+            {test.running ? "Testing…" : "Test connection"}
           </Button>
         </div>
-        {testResult && <TestResultBlock result={testResult} />}
+        <ConnectionTestReport outcome={test.outcome}>
+          {test.outcome?.data && <TestChecks result={test.outcome.data} />}
+        </ConnectionTestReport>
       </Card>
     </>
   )
@@ -393,8 +421,7 @@ function GooglePanel(props: {
   value: OAuthPresetValue
   onChange: (v: OAuthPresetValue) => void
   redirectUri: string
-  secretTouched: boolean
-  onSecretTouch: (v: boolean) => void
+  secret: SecretField
 }) {
   return (
     <PresetProviderPanel
@@ -411,8 +438,7 @@ function GitHubPanel(props: {
   value: OAuthPresetValue
   onChange: (v: OAuthPresetValue) => void
   redirectUri: string
-  secretTouched: boolean
-  onSecretTouch: (v: boolean) => void
+  secret: SecretField
 }) {
   return (
     <PresetProviderPanel
@@ -429,37 +455,23 @@ function GenericOidcPanel({
   value,
   onChange,
   redirectUri,
-  secretTouched,
-  onSecretTouch,
+  secret,
 }: {
   value: OidcAdminSettings["generic"]
   onChange: (v: OidcAdminSettings["generic"]) => void
   redirectUri: string
-  secretTouched: boolean
-  onSecretTouch: (v: boolean) => void
+  secret: SecretField
 }) {
-  const [testResult, setTestResult] = useState<OidcTestResult | null>(null)
-  const testMut = useMutation({
-    mutationFn: () =>
-      testOidcProvider("generic", {
-        generic: {
-          clientId: value.clientId,
-          clientSecret: value.clientSecret ?? "",
-          issuerUri: value.issuerUri,
-          scopes: value.scopes,
-          claimMapping: value.claimMapping,
-        },
-      }),
-    onSuccess: (res) => {
-      setTestResult(res)
-      if (res.success) {
-        toast.success("All critical checks passed.")
-      } else {
-        toast.error("One or more checks failed.")
-      }
+  const test = useOidcTest("generic")
+  const testBody = {
+    generic: {
+      clientId: value.clientId,
+      clientSecret: secret.value,
+      issuerUri: value.issuerUri,
+      scopes: value.scopes,
+      claimMapping: value.claimMapping,
     },
-    onError: (e) => toast.error((e as unknown as ApiError).message),
-  })
+  }
 
   const canEnable =
     value.clientId.trim() !== "" &&
@@ -522,40 +534,7 @@ function GenericOidcPanel({
         <Field
           label={`Client secret${value.clientSecretSet ? " (stored — leave blank to keep)" : ""}`}
         >
-          <Input
-            type="password"
-            autoComplete="new-password"
-            placeholder={value.clientSecretSet ? "••••••••" : ""}
-            onChange={(e) => {
-              onSecretTouch(true)
-              onChange({
-                ...value,
-                clientSecret: e.target.value,
-                clientSecretSet: e.target.value !== "" || value.clientSecretSet,
-              })
-            }}
-          />
-          {value.clientSecretSet && !secretTouched && (
-            <button
-              type="button"
-              className="t-small"
-              style={{
-                marginTop: 4,
-                background: "none",
-                border: "none",
-                padding: 0,
-                cursor: "pointer",
-                color: "var(--color-accent)",
-                alignSelf: "flex-start",
-              }}
-              onClick={() => {
-                onSecretTouch(true)
-                onChange({ ...value, clientSecret: "", clientSecretSet: false })
-              }}
-            >
-              Clear stored secret
-            </button>
-          )}
+          <SecretInput secret={secret} stored={value.clientSecretSet} />
         </Field>
         <Field label="Scopes (space-separated)">
           <Input
@@ -610,24 +589,27 @@ function GenericOidcPanel({
         <div style={{ marginTop: 10 }}>
           <Button
             variant="outline"
-            onClick={() => testMut.mutate()}
-            disabled={testMut.isPending}
+            onClick={() => test.run(testBody)}
+            disabled={test.running}
           >
-            {testMut.isPending ? "Testing…" : "Test connection"}
+            {test.running ? "Testing…" : "Test connection"}
           </Button>
         </div>
-        {testResult && <TestResultBlock result={testResult} />}
+        <ConnectionTestReport outcome={test.outcome}>
+          {test.outcome?.data && <TestChecks result={test.outcome.data} />}
+        </ConnectionTestReport>
       </Card>
     </>
   )
 }
 
-function TestResultBlock({ result }: { result: OidcTestResult }) {
+// TestChecks is the OIDC-specific detail under the shared report: one
+// row per probe the server ran, so a failure names which step failed.
+function TestChecks({ result }: { result: OidcTestResult }) {
   return (
-    <div style={{ marginTop: 14 }}>
+    <div>
       <div
         style={{
-          marginTop: 10,
           display: "flex",
           flexDirection: "column",
           gap: 6,

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import { cn } from "@/lib/utils"
 
+import type { ConnectionTestOutcome } from "@/hooks/useConnectionTest"
 import { AvatarFallback, Avatar as ShadcnAvatar } from "@/components/ui/avatar"
 import {
   SelectContent,
@@ -101,6 +102,65 @@ export function Toggle({
         {hint && <div className="text-sm text-muted-foreground">{hint}</div>}
       </div>
     </label>
+  )
+}
+
+// PanelHeader is the title block every settings panel opens with. Five
+// panels spelled the same h2 + italic intro out by hand with inline
+// styles, drifting on the margins; the shell knows the label, but the
+// panel owns the sentence explaining what the section is for.
+export function PanelHeader({
+  title,
+  children,
+}: {
+  title: string
+  children?: ReactNode
+}) {
+  return (
+    <>
+      <h2 className="t-h2 mb-2">{title}</h2>
+      {children && (
+        <p className="t-small mb-6 max-w-[62ch] italic">{children}</p>
+      )}
+    </>
+  )
+}
+
+// PanelLoading is the one loading state for a settings panel. It used to
+// render four ways — a bare <p>, a Card, skeleton rows, an ellipsis —
+// which read as four different kinds of wait rather than one.
+export function PanelLoading() {
+  return (
+    <p className="t-small text-muted-foreground italic" role="status">
+      Loading…
+    </p>
+  )
+}
+
+// ConnectionTestReport renders whatever `useConnectionTest` last observed.
+// One block, one tone rule: a test that ran and passed is quiet, anything
+// else is warned about. `children` carries a panel's extra detail (the
+// OIDC per-check list) under the same heading rather than beside it.
+export function ConnectionTestReport({
+  outcome,
+  children,
+}: {
+  outcome: ConnectionTestOutcome<unknown> | null
+  children?: ReactNode
+}) {
+  if (!outcome) return null
+  return (
+    <div className="mt-3 flex flex-col gap-2" role="status">
+      <p
+        className={cn(
+          "t-small",
+          outcome.ok ? undefined : "text-(--color-accent-ink)"
+        )}
+      >
+        {outcome.message}
+      </p>
+      {children}
+    </div>
   )
 }
 

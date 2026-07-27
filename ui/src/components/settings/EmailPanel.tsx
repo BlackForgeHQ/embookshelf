@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useMemo, useState } from "react"
 
 import type { EmailSettings, EmailTLS } from "@/api/email"
 import {
@@ -8,11 +7,15 @@ import {
   sendEmailTest,
   updateEmailSettings,
 } from "@/api/email"
-import { useApiMutation } from "@/api/mutation"
+import { useConnectionTest } from "@/hooks/useConnectionTest"
+import { useSettingsDraft } from "@/hooks/useSettingsDraft"
 import { Icon } from "@/components/Icon"
 import {
   Card,
+  ConnectionTestReport,
   Field,
+  PanelHeader,
+  PanelLoading,
   Select,
   Toggle,
 } from "@/components/SettingsShared"
@@ -36,39 +39,33 @@ const emptyForm: EmailSettings = {
   passwordSet: false,
 }
 
+const INTRO = `SMTP configuration powers password resets, admin invites, and Send-to-Kindle. Disable to silence all outbound mail without losing the credentials.`
+
 export function EmailPanel() {
-  const settings = useQuery({
+  const draft = useSettingsDraft({
     queryKey: emailSettingsQueryKey,
     queryFn: fetchEmailSettings,
-  })
-
-  const [form, setForm] = useState<EmailSettings>(emptyForm)
-  const [pwDraft, setPwDraft] = useState("")
-  const [testTo, setTestTo] = useState("")
-
-  // Sync server state into the form whenever a new payload lands. The
-  // password field is intentionally left out of `form` — it lives in
-  // `pwDraft` so an empty submit means "leave alone" without us
-  // accidentally clobbering a value the server never sent us.
-  useEffect(() => {
-    if (settings.data) {
-      // Deliberate: setState inside an effect, syncing React state from an
-      // external source. Was suppressed via react-hooks/set-state-in-effect;
-      // Biome has no equivalent rule yet, so there is nothing to suppress.
-      setForm({ ...settings.data, smtp: { ...settings.data.smtp, password: "" } })
-      setPwDraft("")
-    }
-  }, [settings.data])
-
-  const saveMut = useApiMutation(updateEmailSettings, {
+    initial: emptyForm,
+    save: updateEmailSettings,
     successToast: "Email settings saved.",
-    errorToast: (err) => err.message || "Could not save email settings.",
+    toPayload: (form, secrets) => ({
+      ...form,
+      smtp: { ...form.smtp, password: secrets.value("smtpPassword") },
+      passwordSet: secrets.stillSet("smtpPassword", form.passwordSet),
+    }),
   })
 
-  const testMut = useApiMutation(sendEmailTest, {
-    successToast: (_, to) => `Test email sent to ${to}.`,
-    errorToast: (err) => err.message || "Test email failed.",
+  const [testTo, setTestTo] = useState("")
+  const test = useConnectionTest({
+    test: sendEmailTest,
+    // The endpoint answers 204 on success, so the recipient is the only
+    // thing worth saying back.
+    read: (_result, to) => ({ ok: true, message: `Test email sent to ${to}.` }),
+    unreachable: (err) => err.message || "Test email failed.",
   })
+
+  const form = draft.value
+  const password = draft.secret("smtpPassword")
 
   const publicUrlInvalid = useMemo(() => {
     const value = form.publicUrl.trim()
@@ -80,41 +77,39 @@ export function EmailPanel() {
     key: TKey,
     value: EmailSettings[TKey]
   ) {
-    setForm((prev) => ({ ...prev, [key]: value }))
+    draft.patch(key, value)
   }
   function updateSMTP<TKey extends keyof EmailSettings["smtp"]>(
     key: TKey,
     value: EmailSettings["smtp"][TKey]
   ) {
-    setForm((prev) => ({ ...prev, smtp: { ...prev.smtp, [key]: value } }))
+    draft.set((prev) => ({ ...prev, smtp: { ...prev.smtp, [key]: value } }))
   }
   function updateFrom<TKey extends keyof EmailSettings["from"]>(
     key: TKey,
     value: EmailSettings["from"][TKey]
   ) {
-    setForm((prev) => ({ ...prev, from: { ...prev.from, [key]: value } }))
+    draft.set((prev) => ({ ...prev, from: { ...prev.from, [key]: value } }))
   }
 
   function onSave(e: React.FormEvent) {
     e.preventDefault()
     if (publicUrlInvalid) return
-    // Empty password = "leave existing alone" by server contract.
-    saveMut.mutate({
-      ...form,
-      smtp: { ...form.smtp, password: pwDraft },
-    })
+    draft.save()
+  }
+
+  if (draft.loading) {
+    return (
+      <>
+        <PanelHeader title="Email delivery">{INTRO}</PanelHeader>
+        <PanelLoading />
+      </>
+    )
   }
 
   return (
     <>
-      <h2 className="t-h2" style={{ marginBottom: 8 }}>
-        Email delivery
-      </h2>
-      <p className="t-small" style={{ marginBottom: 24, fontStyle: "italic" }}>
-        SMTP configuration powers password resets, admin invites, and
-        Send-to-Kindle. Disable to silence all outbound mail without losing
-        the credentials.
-      </p>
+      <PanelHeader title="Email delivery">{INTRO}</PanelHeader>
 
       <form onSubmit={onSave}>
         <Card>
@@ -185,8 +180,8 @@ export function EmailPanel() {
             </span>
             <Input
               type="password"
-              value={pwDraft}
-              onChange={(e) => setPwDraft(e.target.value)}
+              value={password.value}
+              onChange={(e) => password.set(e.target.value)}
               placeholder={
                 form.passwordSet
                   ? "Leave blank to keep existing"
@@ -236,8 +231,7 @@ export function EmailPanel() {
             </p>
           )}
           <p className="t-small" style={{ fontSize: 12 }}>
-            Used to build absolute links in outbound mail (reset / invite
-            URLs).
+            Used to build absolute links in outbound mail (reset / invite URLs).
           </p>
         </Card>
 
@@ -245,9 +239,9 @@ export function EmailPanel() {
           <Button
             type="submit"
             size="sm"
-            disabled={saveMut.isPending || publicUrlInvalid}
+            disabled={draft.saving || publicUrlInvalid}
           >
-            {saveMut.isPending ? "Saving…" : "Save email settings"}
+            {draft.saving ? "Saving…" : "Save email settings"}
           </Button>
         </div>
       </form>
@@ -257,15 +251,15 @@ export function EmailPanel() {
       </div>
       <Card>
         <p className="t-small" style={{ fontSize: 12, lineHeight: 1.55 }}>
-          Save your settings first, then send a probe through the live SMTP
-          path to confirm credentials and DNS.
+          Save your settings first, then send a probe through the live SMTP path
+          to confirm credentials and DNS.
         </p>
         <form
           onSubmit={(e) => {
             e.preventDefault()
             const to = testTo.trim()
             if (!to) return
-            testMut.mutate(to)
+            test.run(to)
           }}
           className="flex items-end gap-2"
         >
@@ -283,12 +277,13 @@ export function EmailPanel() {
             type="submit"
             size="sm"
             variant="outline"
-            disabled={testMut.isPending || testTo.trim() === ""}
+            disabled={test.running || testTo.trim() === ""}
           >
             <Icon name="upload" size={13} />{" "}
-            {testMut.isPending ? "Sending…" : "Send test"}
+            {test.running ? "Sending…" : "Send test"}
           </Button>
         </form>
+        <ConnectionTestReport outcome={test.outcome} />
       </Card>
     </>
   )
