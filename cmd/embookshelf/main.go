@@ -208,16 +208,10 @@ database must be empty; migrations are applied to it automatically.
 
 	// Services.
 	backendRepo := repo.NewStorageBackendRepo(dbh)
-	libSvc := service.NewLibraryService(libRepo, bookRepo, service.LibraryServiceDeps{
-		Backends: backendRepo,
-		SharedS3: cfg.SharedS3,
-		Resolver: storageResolver,
-		DataPath: cfg.DataPath,
-	})
-	shelfSvc := service.NewShelfService(shelfRepo, hub)
-	searchSvc := service.NewSearchService(libRepo, bookRepo, shelfRepo)
-	authSvc := service.NewAuthService(userRepo, sessionRepo, hub)
 	pendingOrphansRepo := repo.NewPendingOrphanRepo(dbh)
+	// Built before LibraryService: book deletion needs a LibraryHandle to
+	// find the bytes a book owned, and the handle has to exist before the
+	// row it describes is gone.
 	libStore := service.NewLibraryStore(service.LibraryStoreDeps{
 		Libs:            libRepo,
 		Resolver:        storageResolver,
@@ -227,6 +221,18 @@ database must be empty; migrations are applied to it automatically.
 		PresignTTL:      cfg.PresignTTL,
 		PresignFallback: cfg.PresignFallback,
 	})
+	libSvc := service.NewLibraryService(libRepo, bookRepo, service.LibraryServiceDeps{
+		Backends:     backendRepo,
+		SharedS3:     cfg.SharedS3,
+		Resolver:     storageResolver,
+		DataPath:     cfg.DataPath,
+		LibStore:     libStore,
+		Covers:       covers,
+		BookDropPath: cfg.BookDropPath,
+	})
+	shelfSvc := service.NewShelfService(shelfRepo, hub)
+	searchSvc := service.NewSearchService(libRepo, bookRepo, shelfRepo)
+	authSvc := service.NewAuthService(userRepo, sessionRepo, hub)
 	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, bookRepo, covers, hub, fileRepo).
 		WithLibraryStore(libStore).
 		WithBookDropPath(cfg.BookDropPath)

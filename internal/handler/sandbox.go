@@ -4,43 +4,18 @@ package handler
 
 import (
 	"context"
-	"errors"
-	"path/filepath"
-	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/blackforge/embookshelf/internal/service"
 )
 
-// ErrPathOutsideRoots is returned when a path does not resolve inside
-// any configured root. Serving and deleting share the rule, so a
-// change to the sandbox cannot apply to one and miss the other.
-var ErrPathOutsideRoots = errors.New("path outside allowed roots")
-
-// sandboxPath resolves path and confirms it lands inside one of roots,
-// returning the cleaned absolute path. Fails closed: an empty root list
-// admits nothing. Comparison is on cleaned absolute paths with a
-// separator-terminated prefix, so a traversal escape is rejected and
-// `/data/lib` never admits `/data/lib-backup`.
+// sandboxPath is the serve side of the Book file sandbox. The rule
+// itself lives in service.SandboxPath, because the delete side moved
+// down into book deletion; keeping one implementation is the reason the
+// sandbox is a named thing at all.
 func sandboxPath(path string, roots []string) (string, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", errors.New("bad path")
-	}
-
-	sep := string(filepath.Separator)
-	for _, root := range roots {
-		if root == "" {
-			continue
-		}
-		absRoot, err := filepath.Abs(root)
-		if err != nil {
-			continue
-		}
-		if abs == absRoot || strings.HasPrefix(abs, absRoot+sep) {
-			return abs, nil
-		}
-	}
-	return "", ErrPathOutsideRoots
+	return service.SandboxPath(path, roots)
 }
 
 // bookFileRoots is the allow-list of directories the app may read book
@@ -64,8 +39,8 @@ func (h *Handler) bookFileRoots(ctx context.Context) []string {
 	return roots
 }
 
-// sandboxedBookPath is the one gate both the serve and delete paths go
-// through before touching a file named by a books.path value.
+// sandboxedBookPath is the gate every handler read of a file named by a
+// books.path value goes through.
 func (h *Handler) sandboxedBookPath(c *gin.Context, path string) (string, error) {
 	return sandboxPath(path, h.bookFileRoots(c.Request.Context()))
 }

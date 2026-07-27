@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -470,19 +469,21 @@ func (h *Handler) BookAddShelf(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// BookDelete hard-deletes a book and best-effort removes its cover + source
-// file from disk. Admin-gated at the router; books are a shared instance
-// resource (no per-user ownership), so letting any reader nuke a book
-// everyone else can see is the wrong default.
+// BookDelete hard-deletes a book. Admin-gated at the router; books are a
+// shared instance resource (no per-user ownership), so letting any reader
+// nuke a book everyone else can see is the wrong default.
 //
-// The DB row is authoritative — if that succeeds, we 204 even if the
-// filesystem cleanup hiccups (permission, already-gone, etc.). Leaving
-// orphan bytes on disk is fixable; leaving the row in while lying that
-// we deleted it is not.
+// The handler's whole job here is the HTTP contract: authorize, resolve
+// the id to a row so an unknown book is a 404 rather than a silent 204,
+// and map the one fatal error to a status. The delete sequence — snapshot
+// the storage keys, drop the row, then remove the bytes, the cover art
+// and any legacy on-disk file — belongs to LibraryService.DeleteBook,
+// which is where its ordering invariant can be tested.
 //
-// Source-file unlink is sandboxed to BOOKDROP_PATH + registered library
-// paths, same allowlist BookFile / OPDS download use, so a stray path
-// smuggled into the books row can't escape to somewhere unrelated.
+// A degraded cleanup does not change the status code. The row is gone,
+// so 204 is the truth as far as the client is concerned, and 204 carries
+// no body to put warnings in; what is left behind is bytes nothing
+// references, which is an operator's problem and goes to the log.
 func (h *Handler) BookDelete(c *gin.Context) {
 	userID := requireUserID(c)
 	if userID == "" {
@@ -500,27 +501,8 @@ func (h *Handler) BookDelete(c *gin.Context) {
 		return
 	}
 
-	// Snapshot the storage keys before the row goes: files rows cascade on
-	// delete, so afterwards nothing says which objects belonged to this
-	// book. Read-only — a storage failure must not block the delete.
-	var (
-		handle    *service.LibraryHandle
-		locations []string
-	)
-	if h.libStore != nil {
-		if lh, herr := h.libStore.For(c.Request.Context(), book.LibraryID); herr == nil {
-			handle = lh
-			if locs, lerr := handle.BookFileLocations(c.Request.Context(), id); lerr == nil {
-				locations = locs
-			} else {
-				slog.Warn("book delete: list files", "id", id, "err", lerr)
-			}
-		} else {
-			slog.Warn("book delete: library handle", "id", id, "err", herr)
-		}
-	}
-
-	if err := h.lib.DeleteBook(c.Request.Context(), id); err != nil {
+	outcome, err := h.lib.DeleteBook(c.Request.Context(), book)
+	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
 			return
@@ -528,39 +510,11 @@ func (h *Handler) BookDelete(c *gin.Context) {
 		writeServerError(c, "book delete", err)
 		return
 	}
-
-	if handle != nil {
-		if err := handle.DeleteBookBytes(c.Request.Context(), id, locations); err != nil {
-			slog.Warn("book delete: byte cleanup", "id", id, "err", err)
-		}
-	}
-
-	if h.covers != nil {
-		if err := h.covers.DeleteBook(id); err != nil {
-			slog.Warn("book delete: cover cleanup", "id", id, "err", err)
-		}
-	}
-	if book.Path != "" {
-		if err := h.deleteBookFile(c, book.Path); err != nil {
-			slog.Warn("book delete: file cleanup", "id", id, "path", book.Path, "err", err)
-		}
+	if warnings := outcome.Warnings(); len(warnings) > 0 {
+		slog.Warn("book delete degraded", "book", id, "warnings", warnings)
 	}
 
 	c.Status(http.StatusNoContent)
-}
-
-// deleteBookFile unlinks the on-disk book bytes, but only when path is
-// rooted under a configured library root — mirrors the serveBookFile
-// sandbox so a malformed books.path can't let delete escape the tree.
-func (h *Handler) deleteBookFile(c *gin.Context, path string) error {
-	absPath, err := h.sandboxedBookPath(c, path)
-	if err != nil {
-		return err
-	}
-	if err := os.Remove(absPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
 }
 
 // BookRemoveShelf takes a book off a shelf. No-op when the book isn't on
