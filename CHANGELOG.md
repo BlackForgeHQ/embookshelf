@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.6.0](https://github.com/BlackForgeHQ/embookshelf/compare/v0.5.0...v0.6.0) (2026-07-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** changing your password now signs you out on every device, including the session you changed it from. Previously other sessions kept working. This is deliberate — a password reset is the remedy for a compromised account, and leaving an intruder's session alive defeats it — but anyone scripting against the API should expect to re-authenticate after POST /api/v1/me/password. Set-initial-password for OIDC-only accounts is unaffected: there is no old credential to invalidate.
+
+### Features
+
+* **audio:** centralize audio format detection and streamline related logic ([4bb6ed2](https://github.com/BlackForgeHQ/embookshelf/commit/4bb6ed21a0e57936c615592b0d665687aa3987a4))
+* **errors:** implement flat error envelope with machine-readable codes ([67b06e7](https://github.com/BlackForgeHQ/embookshelf/commit/67b06e7a49aa724baa9b3d1f902d00c6a6ed2851))
+* **guides:** add the book_reading_guides table and repo ([7b48733](https://github.com/BlackForgeHQ/embookshelf/commit/7b4873344389a9006f3f001aa44a41661435d2a2))
+* **guides:** add the generation job and bulk run coordinator ([5f5adf0](https://github.com/BlackForgeHQ/embookshelf/commit/5f5adf052894de2601c775d0003ffadb10c2abc4))
+* **guides:** add the OpenAI-compatible LLM client ([e3f12dc](https://github.com/BlackForgeHQ/embookshelf/commit/e3f12dc7f76ed60c11ecfd39ea66265492c4f799))
+* **guides:** add the reading guide generator ([11eb4b2](https://github.com/BlackForgeHQ/embookshelf/commit/11eb4b20c836d33093bf8ec2bd100c542ad5e5ac))
+* **guides:** add the reading guide HTTP surface ([023af3a](https://github.com/BlackForgeHQ/embookshelf/commit/023af3a4259c91a2ce9edc32a8341ecce1f9bb60))
+* **guides:** add the reading guide panel and close the error-code drift ([5a77554](https://github.com/BlackForgeHQ/embookshelf/commit/5a7755412f0b34aad9429ba398c265730484184d))
+* **guides:** add the reading guides settings panel ([77eda2e](https://github.com/BlackForgeHQ/embookshelf/commit/77eda2ed662b9590ef4f283cffe2bb88071f25e6))
+* **guides:** add the READING_GUIDE settings row ([409ed1d](https://github.com/BlackForgeHQ/embookshelf/commit/409ed1d4b9af659ceb9116c1bec8dff9d7523dfc))
+* **guides:** extract EPUB text in spine order ([2a33e5d](https://github.com/BlackForgeHQ/embookshelf/commit/2a33e5db9ce554b885203ca659b02b6dac9d3ecd))
+* **guides:** support Azure endpoints and add a connection test ([a522587](https://github.com/BlackForgeHQ/embookshelf/commit/a522587d3debb18fe15206338afba00fd82a3b02))
+* **import:** enhance SQLite import process with unknown table reporting and exclusion management ([2ec7aa1](https://github.com/BlackForgeHQ/embookshelf/commit/2ec7aa1a13b0eb9fd2f251706243fea08b9365a7))
+* **oidc:** enhance OIDC service with diagnostics and state management ([598cd82](https://github.com/BlackForgeHQ/embookshelf/commit/598cd8284932af997d0e888e5a9c0d0e13847424))
+* **provider-settings:** introduce ProviderSettingsService for managing provider configurations ([40eddf7](https://github.com/BlackForgeHQ/embookshelf/commit/40eddf768e46f070075706c4c0eb3c622011c242))
+* **tests:** add comprehensive tests for column-order coupling in book and user repositories ([1d4fe9a](https://github.com/BlackForgeHQ/embookshelf/commit/1d4fe9ac35e925331551b5ed4eed556249028573))
+
+
+### Bug Fixes
+
+* **auth:** sign out every device when a password changes ([77fef62](https://github.com/BlackForgeHQ/embookshelf/commit/77fef62d76b463a6bac009aa003e4b3e1cb3e234))
+* **auth:** stop a weak password from burning the reset link ([a17470b](https://github.com/BlackForgeHQ/embookshelf/commit/a17470b1955ae03d01fe56369cc1eda40a85deeb))
+* **bookdrop:** take the wipe lock on the upload intake path ([d2b137d](https://github.com/BlackForgeHQ/embookshelf/commit/d2b137d2ea4b3886b77940d20f2736ef6c9bc312))
+* **enrich:** degrade closed when provider settings are unreadable ([e6c9620](https://github.com/BlackForgeHQ/embookshelf/commit/e6c962058f705363963dcaabbc1bfc01a53b20d7))
+* **enrich:** stop auto-enrich permanently locking every populated field ([df6d6ba](https://github.com/BlackForgeHQ/embookshelf/commit/df6d6bac998a3868e315ee2c43598d5277045247))
+* **enrich:** validate cover redirects, not just the first URL ([45e65c7](https://github.com/BlackForgeHQ/embookshelf/commit/45e65c7b643ce8309108f1feee1f682a2a336b98))
+* **metadata:** report writes that only reached the database ([88b047e](https://github.com/BlackForgeHQ/embookshelf/commit/88b047e1237fc9c8f6c925358bdfde8f89ab03e3))
+* **reader:** sync audio play state with the media element ([b538035](https://github.com/BlackForgeHQ/embookshelf/commit/b538035633bebaff20c59e537a5919495373bd0d))
+* **settings:** wire ProviderCfg into the handler ([ddb12a6](https://github.com/BlackForgeHQ/embookshelf/commit/ddb12a606de08e78ae6de66b3920543e43b0e8e6))
+
+
+### Documentation
+
+* record ADR-0024, LLM-generated reading guides ([984a600](https://github.com/BlackForgeHQ/embookshelf/commit/984a600d8805a176c1dc9808b83a01cad793b79f))
+
 ## [0.5.0](https://github.com/BlackForgeHQ/embookshelf/compare/v0.4.19...v0.5.0) (2026-07-26)
 
 
