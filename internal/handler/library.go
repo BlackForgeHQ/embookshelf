@@ -302,7 +302,7 @@ func (h *Handler) Books(c *gin.Context) {
 	}
 	library := strings.TrimSpace(c.Query("library"))
 
-	books, err := h.lib.Search(c.Request.Context(), userID, library, params)
+	books, err := h.books.Search(c.Request.Context(), userID, library, params)
 	if err != nil {
 		writeServerError(c, "books search", err)
 		return
@@ -361,7 +361,7 @@ func (h *Handler) BookPatch(c *gin.Context) {
 	}
 	id := c.Param("id")
 
-	current, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	current, err := h.books.GetByID(c.Request.Context(), userID, id)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
@@ -389,7 +389,7 @@ func (h *Handler) BookPatch(c *gin.Context) {
 
 	// Re-load so the response carries any repo-computed fields (e.g. any
 	// side effects of the UPDATE) and stays in lockstep with a fresh GET.
-	fresh, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	fresh, err := h.books.GetByID(c.Request.Context(), userID, id)
 	if err != nil {
 		writeServerError(c, "book reload", err)
 		return
@@ -491,7 +491,7 @@ func (h *Handler) BookDelete(c *gin.Context) {
 	}
 	id := c.Param("id")
 
-	book, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	book, err := h.books.GetByID(c.Request.Context(), userID, id)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
@@ -584,7 +584,7 @@ func (h *Handler) BookDetail(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	b, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	b, err := h.books.GetByID(c.Request.Context(), userID, id)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
@@ -638,7 +638,7 @@ func (h *Handler) BookFile(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	book, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	book, err := h.books.GetByID(c.Request.Context(), userID, id)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")

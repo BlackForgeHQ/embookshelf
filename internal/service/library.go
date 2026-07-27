@@ -68,6 +68,17 @@ type LibraryServiceDeps struct {
 	BookDropPath string
 }
 
+// LibraryService is the Library lifecycle module: create a Library and
+// its storage (ADR-0002's managed local folder, or a Backend row and its
+// prefix), delete one and optionally purge what it held, and the two
+// book-scoped operations that are more than a query — the metadata write
+// pipeline and book deletion, each of which owns a sequence no caller
+// should have to reassemble.
+//
+// It is deliberately not a front door to the book catalog. Reading books
+// is the book repo's job and callers hold it directly; a delegating
+// method here would only be a second seam in front of the first, wide
+// enough to look like the interface but with nothing behind it.
 type LibraryService struct {
 	repo   *repo.LibraryRepo
 	books  *repo.BookRepo
@@ -242,10 +253,13 @@ func slugify(name string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-func (s *LibraryService) Books(ctx context.Context, userID, librarySlug string) ([]model.Book, error) {
-	return s.books.BooksByLibrarySlug(ctx, userID, librarySlug)
-}
-
+// Search and GetBook are pass-throughs to the book repo and are on their
+// way out: every caller that can reach the repo directly now does. They
+// survive only for the OPDS, cover and audiobook handlers, which are
+// held open elsewhere and could not be converted in the same change.
+// Nothing new should route book reads through here — the repo is the
+// book-scoped seam, and a second one in front of it only makes handlers
+// choose between two doors to the same room.
 func (s *LibraryService) Search(ctx context.Context, userID, librarySlug string, p model.SearchParams) ([]model.Book, error) {
 	return s.books.Search(ctx, userID, librarySlug, p)
 }
@@ -433,11 +447,4 @@ func (s *LibraryService) bookFileRoots(ctx context.Context) []string {
 		}
 	}
 	return roots
-}
-
-// BookExistsByPath reports whether any non-deleted book already references
-// this on-disk path. Used by the library scanner to avoid re-queuing files
-// that are already in the library.
-func (s *LibraryService) BookExistsByPath(ctx context.Context, path string) (bool, error) {
-	return s.books.ExistsByPath(ctx, path)
 }

@@ -66,7 +66,7 @@ func (h *Handler) AnnotationsForBook(c *gin.Context) {
 	// Ensure the book is visible to the user before exposing annotations.
 	// Guards against cross-user or deleted-book leaks where the caller
 	// already knows a bookID but shouldn't see the annotations.
-	if _, err := h.lib.GetBook(c.Request.Context(), userID, bookID); err != nil {
+	if _, err := h.books.GetByID(c.Request.Context(), userID, bookID); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
 			return
@@ -117,7 +117,7 @@ func (h *Handler) AnnotationCreate(c *gin.Context) {
 		return
 	}
 	bookID := c.Param("id")
-	if _, err := h.lib.GetBook(c.Request.Context(), userID, bookID); err != nil {
+	if _, err := h.books.GetByID(c.Request.Context(), userID, bookID); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
 			return

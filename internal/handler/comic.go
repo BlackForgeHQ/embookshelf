@@ -25,7 +25,7 @@ func (h *Handler) ComicPagesIndex(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	book, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	book, err := h.books.GetByID(c.Request.Context(), userID, id)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
@@ -69,7 +69,7 @@ func (h *Handler) ComicPage(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "invalid page number")
 		return
 	}
-	book, err := h.lib.GetBook(c.Request.Context(), userID, id)
+	book, err := h.books.GetByID(c.Request.Context(), userID, id)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
