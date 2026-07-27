@@ -11,6 +11,7 @@ import {
 } from "@/api/annotations"
 import { booksQueryKey, fetchBooks } from "@/api/books"
 import { useApiMutation } from "@/api/mutation"
+import { locatorLabel } from "@/lib/locator"
 import { Cover } from "@/components/Cover"
 import { Icon } from "@/components/Icon"
 import { TopBar } from "@/components/TopBar"
@@ -198,13 +199,4 @@ function Notebook() {
       </div>
     </div>
   )
-}
-
-// locatorLabel renders the stored locator in a reader-friendly form.
-// EPUB CFI strings are opaque → show them as "EPUB". PDF `page:N`
-// tokens render as "p.N".
-function locatorLabel(locator: string): string {
-  if (locator.startsWith("page:")) return `p.${locator.slice(5)}`
-  if (locator.startsWith("epubcfi")) return "EPUB"
-  return locator
 }

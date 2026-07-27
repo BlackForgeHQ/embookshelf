@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef } from "react"
  * A reading position: how far through the book the user is (0-1) and an
  * opaque token the reader uses to resume exactly where they left off.
  *
- * The token's shape is the format's business — an EPUB CFI, `page:N`, or
- * `time:N` — and parseResumeToken in the reader route is what decodes it.
+ * The token is opaque here: `lib/locator` owns every shape it can take
+ * and is the only module that encodes or decodes one.
  */
 export type ReadingPosition = {
   progress: number
