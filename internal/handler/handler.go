@@ -31,6 +31,8 @@ type Handler struct {
 	enrich       *service.EnrichmentService
 	providerCfg  *service.ProviderSettingsService
 	annotations  *service.AnnotationService
+	guides       *repo.BookReadingGuideRepo
+	guideRunner  *service.GuideRunner
 	stats        *service.StatsService
 	readingStats *service.ReadingSessionService
 	devices      *service.DeviceService
@@ -126,6 +128,8 @@ type DiscoveryDeps struct {
 	stats        *service.StatsService
 	readingStats *service.ReadingSessionService
 	annotations  *service.AnnotationService
+	guides       *repo.BookReadingGuideRepo
+	guideRunner  *service.GuideRunner
 }
 
 // NewDiscovery builds the discovery group.
@@ -136,10 +140,13 @@ func NewDiscoveryDeps(
 	stats *service.StatsService,
 	readingStats *service.ReadingSessionService,
 	annotations *service.AnnotationService,
+	guides *repo.BookReadingGuideRepo,
+	guideRunner *service.GuideRunner,
 ) DiscoveryDeps {
 	return DiscoveryDeps{
 		enrich: enrich, providerCfg: providerCfg, search: search,
 		stats: stats, readingStats: readingStats, annotations: annotations,
+		guides: guides, guideRunner: guideRunner,
 	}
 }
 
@@ -219,6 +226,7 @@ func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailD
 
 		enrich: d.enrich, providerCfg: d.providerCfg, search: d.search,
 		stats: d.stats, readingStats: d.readingStats, annotations: d.annotations,
+		guides: d.guides, guideRunner: d.guideRunner,
 
 		auth: a.auth, users: a.users, devices: a.devices, appSettings: a.appSettings,
 

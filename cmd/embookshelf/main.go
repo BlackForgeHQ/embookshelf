@@ -407,6 +407,18 @@ database must be empty; migrations are applied to it automatically.
 		return q.Enqueue(ctx, task.BookDropIngestArgs{ItemID: itemID})
 	})
 
+	// Reading guide bulk runs dispatch one job per book, so the runner is
+	// built after the queue. Text cap comes from the settings row at start
+	// time via the job; the runner only needs it to size the estimate.
+	guideCfg, err := appSettingsRepo.GetReadingGuide(ctx)
+	if err != nil {
+		slog.Warn("read reading guide settings", "err", err)
+	}
+	guideRunner := service.NewGuideRunner(guideRepo,
+		func(ctx context.Context, bookID string) error {
+			return q.Enqueue(ctx, task.ReadingGuideArgs{BookID: bookID})
+		}, guideCfg.TextCap)
+
 	// Requeue anything still mid-flight from a previous process.
 	ingest.DiscoverOnStartup(ctx, bdropRepo, q)
 
@@ -469,6 +481,7 @@ database must be empty; migrations are applied to it automatically.
 		handler.NewDiscoveryDeps(
 			enrichSvc, providerCfgSvc, searchSvc,
 			statsSvc, readingStatsSvc, annotationSvc,
+			guideRepo, guideRunner,
 		),
 		handler.NewAccountDeps(authSvc, userRepo, deviceSvc, appSettingsRepo),
 		handler.NewEmailDeps(notifier, resetSvc, inviteRepo, secretCipher, emailTpl),

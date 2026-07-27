@@ -134,6 +134,12 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.POST("/books/:id/cover-from-url", h.EnrichApplyCover)
 			authed.DELETE("/books/:id/cover", h.EnrichRemoveCover)
 
+			// Reading guides (ADR-0024). Generation is queued, so the
+			// POST answers 202 and guide.updated lands over SSE.
+			authed.GET("/books/:id/guide", h.BookGuideGet)
+			authed.POST("/books/:id/guide", h.BookGuideGenerate)
+			authed.PUT("/books/:id/guide", h.BookGuideEdit)
+
 			// Library statistics dashboard
 			authed.GET("/stats", h.Stats)
 			authed.GET("/stats/reading", h.ReadingStats)
@@ -169,6 +175,10 @@ func (h *Handler) Engine() *gin.Engine {
 				admin.POST("/libraries/:id/rescan", h.SettingsLibraryRescan)
 				admin.DELETE("/libraries/:id", h.SettingsLibraryDelete)
 
+				admin.GET("/reading-guide", h.SettingsReadingGuideGet)
+				admin.PUT("/reading-guide", h.SettingsReadingGuideUpdate)
+				admin.GET("/reading-guide/estimate", h.SettingsReadingGuideEstimate)
+				admin.POST("/reading-guide/run", h.SettingsReadingGuideRun)
 				admin.GET("/providers", h.SettingsProvidersList)
 				admin.PATCH("/providers/:id", h.SettingsProviderUpdate)
 

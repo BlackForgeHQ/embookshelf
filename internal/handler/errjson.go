@@ -30,6 +30,9 @@ const (
 	CodeEmailReloadFailed = "EMAIL_RELOAD_FAILED"
 	// CodeSMTPError — a test send reached the SMTP server and it refused.
 	CodeSMTPError = "SMTP_ERROR"
+	// CodeGuidesDisabled — no LLM endpoint is configured, so reading
+	// guides cannot be generated (ADR-0024).
+	CodeGuidesDisabled = "GUIDES_DISABLED"
 )
 
 // AllErrorCodes lists every declared code. Kept beside the constants so a
@@ -40,6 +43,7 @@ var AllErrorCodes = []string{
 	CodeFormatNotSupported,
 	CodeEmailReloadFailed,
 	CodeSMTPError,
+	CodeGuidesDisabled,
 }
 
 // errorBody is the JSON shape every non-2xx response uses.
