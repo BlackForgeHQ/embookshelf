@@ -10,6 +10,7 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/provider"
 	"github.com/blackforge/embookshelf/internal/sidecar"
 )
 
@@ -181,5 +182,67 @@ func TestMetadataWriterUnsupportedFormatIsNotDegraded(t *testing.T) {
 	}
 	if out.Degraded() {
 		t.Fatalf("an unsupported format was reported as degraded: %v", out.Warnings())
+	}
+}
+
+// --- the callers -------------------------------------------------------
+
+// An Outcome nothing reads is a log line with extra steps. Both edit-side
+// services hand it back so their handler can put the warnings on the
+// response; ApplyMatch used to discard it at the service, which is how
+// apply match became the one edit endpoint of three that could answer a
+// lost Sidecar with an unqualified 200.
+
+func TestUpdateBookMetadataReturnsOutcome(t *testing.T) {
+	books := &fakeBookWriter{}
+	mw := newDegradedWriter(t, books, &recordingSidecarWriter{err: errStepFailed}, nil)
+	// Neither repo is reachable from UpdateBookMetadata: the edit goes to
+	// the writer and nowhere else.
+	svc := NewLibraryService(nil, nil, LibraryServiceDeps{}, mw)
+
+	out, err := svc.UpdateBookMetadata(context.Background(), degradedBook())
+	if err != nil {
+		t.Fatalf("UpdateBookMetadata = %v, want nil — the DB write succeeded", err)
+	}
+	if !out.Degraded() {
+		t.Fatal("Outcome.Degraded() is false after a failed sidecar write")
+	}
+	assertWarns(t, out, "sidecar")
+}
+
+func TestApplyMatchReturnsOutcome(t *testing.T) {
+	books := &fakeBookStore{}
+	mw, _ := newPipelineWriter(t, books, &recordingSidecarWriter{err: errStepFailed}, nil)
+	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, &fakeCoverStore{}, nil, mw)
+
+	got, out, err := svc.ApplyMatch(context.Background(), degradedBook(),
+		provider.Match{Title: "Provider Title"}, ApplyOptions{}, TriggerApplyEnrichment)
+	if err != nil {
+		t.Fatalf("ApplyMatch = %v, want nil — the DB write succeeded", err)
+	}
+	if got.Title != "Provider Title" {
+		t.Errorf("Title = %q, want the applied match — the Outcome must accompany the book, not replace it", got.Title)
+	}
+	if !out.Degraded() {
+		t.Fatal("Outcome.Degraded() is false after a failed sidecar write")
+	}
+	assertWarns(t, out, "sidecar")
+}
+
+// Auto-enrichment is DB-only by ADR-0001 §3, so there is no later step
+// that could degrade and nothing for AutoEnrich's discarded Outcome to
+// have hidden.
+func TestApplyMatchAutoEnrichmentOutcomeIsClean(t *testing.T) {
+	books := &fakeBookStore{}
+	mw, _ := newPipelineWriter(t, books, &recordingSidecarWriter{err: errStepFailed}, nil)
+	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, &fakeCoverStore{}, nil, mw)
+
+	_, out, err := svc.ApplyMatch(context.Background(), degradedBook(),
+		provider.Match{Title: "Provider Title"}, ApplyOptions{}, TriggerAutoEnrichment)
+	if err != nil {
+		t.Fatalf("ApplyMatch: %v", err)
+	}
+	if out.Degraded() {
+		t.Fatalf("auto-enrichment reported a degraded write it never attempted: %v", out.Warnings())
 	}
 }

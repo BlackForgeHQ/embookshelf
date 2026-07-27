@@ -403,20 +403,36 @@ func (h *Handler) BookPatch(c *gin.Context) {
 	if shelves == nil {
 		shelves = []string{}
 	}
-	// A degraded write still saved the edit — the books row is canonical —
-	// but the sidecar or the in-file copy did not keep up. Say so rather
-	// than reporting an unqualified success the user cannot act on.
 	body := gin.H{
 		"book": bookDetailDTO{
 			bookDTO: toBookDTO(fresh),
 			Shelves: shelves,
 		},
 	}
-	if warnings := outcome.Warnings(); len(warnings) > 0 {
-		slog.Warn("book metadata write degraded", "book", id, "warnings", warnings)
-		body["warnings"] = warnings
-	}
+	attachWarnings(body, outcome, "book metadata write degraded", id)
 	c.JSON(http.StatusOK, body)
+}
+
+// attachWarnings puts a degraded write's warnings on the response body.
+//
+// A degraded write still saved the edit — the books row is canonical —
+// but the Sidecar or the in-file copy did not keep up, and only the
+// person who made the edit can act on that. Reporting an unqualified
+// success they cannot act on is the failure mode this exists to prevent.
+//
+// All three edit endpoints — metadata PATCH, field-lock toggle, apply
+// match — go through here, so a client parses one shape whichever it
+// called: a top-level "warnings" array of strings alongside "book",
+// present only when a step actually failed. Apply match used to be
+// missing from that list, because ApplyMatch discarded the Outcome before
+// the handler could see it.
+func attachWarnings(body gin.H, out service.Outcome, logMsg, bookID string) {
+	warnings := out.Warnings()
+	if len(warnings) == 0 {
+		return
+	}
+	slog.Warn(logMsg, "book", bookID, "warnings", warnings)
+	body["warnings"] = warnings
 }
 
 // BookProgressUpdate stores the current user's reading progress + resume
