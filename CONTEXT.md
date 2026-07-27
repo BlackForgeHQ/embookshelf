@@ -207,7 +207,7 @@ The JSON sidecar is **spillover-only on local-backed libraries**: holds fields t
 
 Single rule: `inFileWritten == false → sidecar = full mirror`. `inFileWritten == true → sidecar = spillover for that format`. Triggered by **manual edit** or **apply-enrichment** only — auto-enrichment, scan re-ingest, and approve do not write file/sidecar.
 
-Read path (ingest): file embedded → OPF (if present) → JSON, each layer overlays the previous, **lock-aware** (per-field `*_locked` flags shield DB values from re-extract). Write path (user edits): DB (canonical) → JSON sidecar → file embedded (EPUB cover+text rezip; PDF `/Info` text only; audio deferred). Each step is sequenced and atomic; scan skips re-extract when `files.content_hash` matches our recorded write (hash-stamp guard).
+Read path (ingest): file embedded → OPF (if present) → JSON, each layer overlays the previous, **lock-aware** (per-field `*_locked` flags shield DB values from re-extract). Write path (user edits): DB (canonical) → file embedded → JSON sidecar (EPUB cover+text rezip; PDF `/Info` text only; audio deferred). Each step is sequenced and atomic; scan skips re-extract when `files.content_hash` matches our recorded write (hash-stamp guard).
 
 ### BookDrop
 
@@ -359,7 +359,7 @@ The split exists because a 31-field `Deps` struct made every seam optional by co
 
 ### MetadataWriter
 
-`service.MetadataWriter`; the **edit-side write pipeline** module. Owns the `DB → JSON sidecar → file embedded → folder rename` sequence for user-driven edits only. Three triggers in scope: `manual_edit`, `apply_enrichment`, `auto_enrichment`. The other ADR-0001 §3 rows (`bookdrop approve`, `library scan re-ingest`) deliberately route around this module — for those, the file *is* the source, so a writer that rewrites the file would loop. Single entry point: `Write(ctx, book, trigger) (Outcome, error)`. Decision lives in `decideEffects` (pure); execution is a flat orchestration of four private steps (DB, sidecar, in-file embed, folder rename). Stamps `files.content_hash` after a successful in-file write so the next library scan recognises its own write and skips re-extract.
+`service.MetadataWriter`; the **edit-side write pipeline** module. Owns the `DB → file embedded → JSON sidecar → folder rename` sequence for user-driven edits only. Three triggers in scope: `manual_edit`, `apply_enrichment`, `auto_enrichment`. The other ADR-0001 §3 rows (`bookdrop approve`, `library scan re-ingest`) deliberately route around this module — for those, the file *is* the source, so a writer that rewrites the file would loop. Single entry point: `Write(ctx, book, trigger) (Outcome, error)`. Only the DB step fails the call; a nil error means the books row was updated and nothing more, so callers read `Outcome.Degraded()` / `Outcome.Warnings()` to learn whether the sidecar and in-file copies kept up. The metadata PATCH and lock endpoints put those warnings on the response. Decision lives in `decideEffects` (pure); execution is a flat orchestration of four private steps (DB, in-file embed, sidecar, folder rename) — the embed precedes the sidecar because the sidecar's mode is chosen from whether it landed. Stamps `files.content_hash` after a successful in-file write so the next library scan recognises its own write and skips re-extract.
 
 ### Effects
 

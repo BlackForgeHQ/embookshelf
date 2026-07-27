@@ -378,7 +378,8 @@ func (h *Handler) BookPatch(c *gin.Context) {
 	}
 	patch.toDomain().Apply(&current)
 
-	if err := h.lib.UpdateBookMetadata(c.Request.Context(), current); err != nil {
+	outcome, err := h.lib.UpdateBookMetadata(c.Request.Context(), current)
+	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
 			return
@@ -402,12 +403,20 @@ func (h *Handler) BookPatch(c *gin.Context) {
 	if shelves == nil {
 		shelves = []string{}
 	}
-	c.JSON(http.StatusOK, gin.H{
+	// A degraded write still saved the edit — the books row is canonical —
+	// but the sidecar or the in-file copy did not keep up. Say so rather
+	// than reporting an unqualified success the user cannot act on.
+	body := gin.H{
 		"book": bookDetailDTO{
 			bookDTO: toBookDTO(fresh),
 			Shelves: shelves,
 		},
-	})
+	}
+	if warnings := outcome.Warnings(); len(warnings) > 0 {
+		slog.Warn("book metadata write degraded", "book", id, "warnings", warnings)
+		body["warnings"] = warnings
+	}
+	c.JSON(http.StatusOK, body)
 }
 
 // BookProgressUpdate stores the current user's reading progress + resume

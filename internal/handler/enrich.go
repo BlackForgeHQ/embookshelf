@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -342,7 +343,8 @@ func (h *Handler) EnrichToggleFieldLocks(c *gin.Context) {
 		applyLock(&book.Locks, field, v)
 	}
 
-	if err := h.lib.UpdateBookMetadata(c.Request.Context(), book); err != nil {
+	lockOutcome, err := h.lib.UpdateBookMetadata(c.Request.Context(), book)
+	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
 			return
@@ -364,12 +366,17 @@ func (h *Handler) EnrichToggleFieldLocks(c *gin.Context) {
 	if shelves == nil {
 		shelves = []string{}
 	}
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"book": bookDetailDTO{
 			bookDTO: toBookDTO(fresh),
 			Shelves: shelves,
 		},
-	})
+	}
+	if warnings := lockOutcome.Warnings(); len(warnings) > 0 {
+		slog.Warn("lock update write degraded", "book", id, "warnings", warnings)
+		resp["warnings"] = warnings
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func applyLock(l *model.BookLocks, field string, v bool) {

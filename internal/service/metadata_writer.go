@@ -135,6 +135,10 @@ type Outcome struct {
 	// (ModeFull or ModeSpillover). Empty when the sidecar step was
 	// not part of the plan (e.g. auto-enrichment trigger).
 	SidecarMode sidecar.WriteMode
+	// SidecarWritten is true when the sidecar step completed. Distinct
+	// from SidecarMode being non-empty, which only ever meant "a mode
+	// was planned".
+	SidecarWritten bool
 	// FolderRenamed is true when the on-disk folder for the Book
 	// was successfully moved to its new {Author}/{Title} location
 	// per ADR-0003 §6.
@@ -142,10 +146,47 @@ type Outcome struct {
 	// NewFolderPath holds the post-rename library-relative folder
 	// when FolderRenamed is true. Empty otherwise.
 	NewFolderPath string
+	// Failures records the steps that were planned and did not
+	// complete: the sidecar and in-file writes, the two whose silent
+	// loss costs the edit its portable copy. The DB step is never here
+	// — it fails the call. Folder rename is not here either; see Write.
+	Failures []StepFailure
+}
+
+// StepFailure names a write step that was planned and did not complete.
+type StepFailure struct {
+	// Step is the user-facing name of the step: "sidecar", "in-file
+	// write", "folder rename".
+	Step string
+	Err  error
+}
+
+// Degraded reports whether any planned step after the DB write failed.
+// A degraded write still persisted the edit — the books row is
+// canonical — but the on-disk record is behind it.
+func (o Outcome) Degraded() bool { return len(o.Failures) > 0 }
+
+// Warnings renders the failures for a human. Callers put these on the
+// response so the person who made the edit learns their change did not
+// reach the file, instead of it only appearing in a server log.
+func (o Outcome) Warnings() []string {
+	if len(o.Failures) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(o.Failures))
+	for _, f := range o.Failures {
+		out = append(out, fmt.Sprintf("%s not written: %v", f.Step, f.Err))
+	}
+	return out
+}
+
+// fail records a step failure on the outcome.
+func (o *Outcome) fail(step string, err error) {
+	o.Failures = append(o.Failures, StepFailure{Step: step, Err: err})
 }
 
 // MetadataWriter is the **edit-side write pipeline** module. Owns
-// ADR-0001's `DB → JSON sidecar → file embedded` sequence for the
+// ADR-0001's `DB → file embedded → JSON sidecar` sequence for the
 // three edit-side triggers (manual_edit, apply_enrichment,
 // auto_enrichment). Approve and scan-reingest deliberately route
 // around this module — for those, the file IS the source so
@@ -159,18 +200,27 @@ func NewMetadataWriter(deps MetadataWriterDeps) *MetadataWriter {
 	return &MetadataWriter{deps: deps}
 }
 
-// Write persists the book's edited metadata per the plan returned
-// by DecideEffects. The DB step is mandatory and propagates errors;
-// subsequent steps (sidecar, file embed, folder rename) are
-// best-effort and their failures are logged via slog. Returns
-// Outcome describing what actually fired so callers / tests can
-// verify the post-state.
+// Write persists the book's edited metadata per the plan returned by
+// DecideEffects.
+//
+// Only the DB step fails the call. The later steps are best-effort, but
+// "best-effort" is not "unreported": a nil error means the books row was
+// updated and nothing more, so callers must consult Outcome to learn
+// whether the sidecar and in-file copies kept up. Outcome.Degraded and
+// Outcome.Warnings exist for exactly that, and the handlers put the
+// warnings on the response — a user whose edit did not reach the file
+// should not have to read server logs to find out.
 //
 // Step order (ADR-0003 §6.5): DB → in-file embed (old path) →
 // sidecar (old path) → folder rename → DB tx update of
 // files.location + books.folder_path. Renaming last keeps the
 // existing pipeline writes correct on disk; if the rename itself
 // fails the file is in the right shape just at the old folder.
+//
+// The embed must precede the sidecar: the sidecar's mode is chosen from
+// whether the in-file write landed (ADR-0001's "inFileWritten == false →
+// full mirror"). The module doc above this type, and CONTEXT.md, both
+// used to give the order as DB → sidecar → embed, which cannot work.
 func (w *MetadataWriter) Write(ctx context.Context, b model.Book, trigger Trigger) (Outcome, error) {
 	if w.deps.Books == nil {
 		return Outcome{}, errors.New("metadata writer: no book repo configured")
@@ -186,18 +236,43 @@ func (w *MetadataWriter) Write(ctx context.Context, b model.Book, trigger Trigge
 	out := Outcome{}
 
 	if eff.InFile && w.deps.Dispatch != nil {
-		out.InFileWritten = w.embedAndStamp(ctx, b, handle)
+		if err := w.embedAndStamp(ctx, b, handle); err != nil {
+			// ADR-0001 §3 treats a failed in-file write as a reason to
+			// fall back to a full-mirror sidecar rather than an error,
+			// so this is a degradation and not a failure — but it is
+			// still one the caller should be able to see.
+			if !errors.Is(err, fileproc.ErrUnsupportedEmbed) {
+				out.fail("in-file write", err)
+			}
+		} else {
+			out.InFileWritten = true
+		}
 	}
 
 	if eff.Sidecar && w.deps.Sidecar != nil {
-		out.SidecarMode = sidecar.ModeFull
+		mode := sidecar.ModeFull
 		if out.InFileWritten {
-			out.SidecarMode = sidecar.ModeSpillover
+			mode = sidecar.ModeSpillover
 		}
-		w.writeSidecar(ctx, b, handle, out.SidecarMode)
+		if err := w.writeSidecar(ctx, b, handle, mode); err != nil {
+			// Nothing compensates for this one. When the in-file step
+			// was skipped or failed, the sidecar is the only portable
+			// copy of the edit (ADR-0001).
+			out.fail("sidecar", err)
+		} else {
+			out.SidecarWritten = true
+			out.SidecarMode = mode
+		}
 	}
 
 	if eff.FolderRename && handle != nil {
+		// Not recorded as a failure: renameFolder returns false both when
+		// a rename genuinely broke and when it declined (nothing to move,
+		// target already correct), and the two are not distinguishable at
+		// this seam. It would warn on every edit of a legacy flat-layout
+		// book. A failed rename also leaves the file intact, just at its
+		// old path — unlike a lost sidecar, nothing is unrecoverable.
+		// Both impls log the specific cause.
 		if renamed, finalFolder := w.renameFolder(ctx, b, handle, oldFolder, newFolder); renamed {
 			out.FolderRenamed = true
 			out.NewFolderPath = finalFolder
@@ -681,15 +756,19 @@ func (w *MetadataWriter) lookupHandle(ctx context.Context, b model.Book) *Librar
 // false on any per-step failure (no-format-embedder, open, embed,
 // put). Stamps files.content_hash on success when a Files repo is
 // wired.
-func (w *MetadataWriter) embedAndStamp(ctx context.Context, b model.Book, handle *LibraryHandle) bool {
+func (w *MetadataWriter) embedAndStamp(ctx context.Context, b model.Book, handle *LibraryHandle) error {
 	emb, err := w.deps.Dispatch(b.Format)
 	if err != nil {
-		return false
+		// Formats with no in-file target reach here on every edit; the
+		// sidecar carries the full mirror instead (ADR-0001 §3). Returned
+		// so the caller can tell "nothing to write" from "the write
+		// broke", which the previous bare false could not express.
+		return err
 	}
 	src, err := handle.Storage.Open(ctx, b.Path)
 	if err != nil {
 		slog.Warn("metadata writer: open source", "book_id", b.ID, "path", b.Path, "err", err)
-		return false
+		return err
 	}
 	defer func() { _ = src.Close() }()
 	em := b.Editable()
@@ -698,16 +777,16 @@ func (w *MetadataWriter) embedAndStamp(ctx context.Context, b model.Book, handle
 	out, err := emb.Embed(ctx, src, in)
 	if err != nil {
 		slog.Warn("metadata writer: embed", "book_id", b.ID, "format", b.Format, "err", err)
-		return false
+		return err
 	}
 	if _, err := handle.Storage.Put(ctx, b.Path, bytes.NewReader(out)); err != nil {
 		slog.Warn("metadata writer: put", "book_id", b.ID, "path", b.Path, "err", err)
-		return false
+		return err
 	}
 	if w.deps.Files != nil {
 		w.stampFileHash(ctx, b, out)
 	}
-	return true
+	return nil
 }
 
 // stampFileHash computes sha256 of the freshly-written file bytes
@@ -754,13 +833,15 @@ func (w *MetadataWriter) stampFileHash(ctx context.Context, b model.Book, out []
 // caller per ADR-0001's spillover-vs-full rule (set from
 // Outcome.InFileWritten). handle is required (DecideEffects only
 // schedules sidecar when Storage != nil); failures are logged.
-func (w *MetadataWriter) writeSidecar(ctx context.Context, b model.Book, handle *LibraryHandle, mode sidecar.WriteMode) {
+func (w *MetadataWriter) writeSidecar(ctx context.Context, b model.Book, handle *LibraryHandle, mode sidecar.WriteMode) error {
 	key := handle.SidecarKey(b.Path)
 	side := b.Editable()
 	side.PublishedDate = dateString(b.PublishDate)
 	if err := w.deps.Sidecar.Write(ctx, handle.Storage, key, side, mode, b.Format); err != nil {
 		slog.Warn("metadata writer: sidecar write", "book_id", b.ID, "key", key, "err", err)
+		return err
 	}
+	return nil
 }
 
 // dateString formats a *time.Time for the sidecar's PublishedDate

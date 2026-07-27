@@ -235,12 +235,15 @@ func (s *LibraryService) GetBook(ctx context.Context, userID, id string) (model.
 	return s.books.GetByID(ctx, userID, id)
 }
 
-func (s *LibraryService) UpdateBookMetadata(ctx context.Context, b model.Book) error {
+// UpdateBookMetadata persists an edit and reports what actually landed.
+// A nil error means the books row was updated; the Outcome says whether
+// the sidecar and in-file copies kept up, so the caller can tell the user
+// their edit did not reach the file instead of only logging it.
+func (s *LibraryService) UpdateBookMetadata(ctx context.Context, b model.Book) (Outcome, error) {
 	if s.writer != nil {
-		_, err := s.writer.Write(ctx, b, TriggerManualEdit)
-		return err
+		return s.writer.Write(ctx, b, TriggerManualEdit)
 	}
-	return s.books.UpdateMetadata(ctx, b)
+	return Outcome{}, s.books.UpdateMetadata(ctx, b)
 }
 
 // DeleteBook hard-deletes a book. FKs on shelf_books, annotations,
