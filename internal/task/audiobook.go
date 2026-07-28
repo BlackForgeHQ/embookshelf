@@ -18,6 +18,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/storage"
+	"github.com/blackforge/embookshelf/internal/textsplit"
 	"github.com/blackforge/embookshelf/internal/tts"
 )
 
@@ -256,7 +257,7 @@ func synthesizeSegment(
 	// A segment is a job, not a request. Every engine caps a single call
 	// far below the segment size, so one segment is several calls whose
 	// audio is joined the same way the whole book is.
-	chunks := fileproc.SplitForSynthesis(text, sel.Info.MaxRequestChars)
+	chunks := textsplit.OnSentences(text, sel.Info.MaxRequestChars)
 	parts := make([][]byte, 0, len(chunks))
 	for _, chunk := range chunks {
 		if err := ctx.Err(); err != nil {
