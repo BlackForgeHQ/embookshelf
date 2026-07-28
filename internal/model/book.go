@@ -109,37 +109,7 @@ type Chapter struct {
 	EndS   float64 `json:"end_s"`
 }
 
-// BookLocks is the per-field lock set for a book. Each flag corresponds
-// to a `<field>_locked` column on the books table; when set, the
-// apply-metadata flow (provider fan-out → user-selected match → PUT
-// /books/:id/metadata) leaves that field alone even if the candidate
-// carries a value.
-type BookLocks struct {
-	Title       bool
-	Subtitle    bool
-	Author      bool
-	Description bool
-	Publisher   bool
-	Series      bool
-	ISBN        bool
-	ISBN10      bool
-	Language    bool
-	PublishDate bool
-	Genres      bool
-	Moods       bool
-	Tags        bool
-	Pages       bool
-	Cover       bool
-}
-
-// LockFields enumerates the lock flag names accepted on the wire. Used by
-// the toggle-field-locks handler to validate incoming keys and by tests
-// to exhaustively check the serialization map.
-var LockFields = []string{
-	"title", "subtitle", "author", "description", "publisher", "series",
-	"isbn", "isbn10", "language", "publishDate", "genres", "moods",
-	"tags", "pages", "cover",
-}
+// BookLocks and the lock vocabulary live in locks.go.
 
 // Annotation is a single highlight or margin note attached to a book by a
 // specific user. The kind (highlight vs. note) is derived from which
@@ -242,88 +212,50 @@ type EditableMetadata struct {
 }
 
 // IsZero reports whether em carries no information. Used to short-
-// circuit the merge when no sidecar/payload was present.
+// circuit the merge when no sidecar/payload was present. Derived from
+// editableFields.
 func (em EditableMetadata) IsZero() bool {
-	return em.Title == "" && em.Subtitle == "" && em.Author == "" &&
-		em.Description == "" && em.Language == "" && em.Publisher == "" &&
-		em.PublishedDate == "" && em.ISBN == "" && em.Series == "" &&
-		em.SeriesIndex == 0 && len(em.Tags) == 0 && len(em.Genres) == 0
+	for _, f := range editableFields {
+		if !f.Empty(em) {
+			return false
+		}
+	}
+	return true
 }
 
-// MergeEditable overlays b on a: any non-zero field in b wins.
+// MergeEditable overlays b on a: any non-zero field in b wins. Derived
+// from editableFields.
 func MergeEditable(a, b EditableMetadata) EditableMetadata {
 	out := a
-	if b.Title != "" {
-		out.Title = b.Title
-	}
-	if b.Subtitle != "" {
-		out.Subtitle = b.Subtitle
-	}
-	if b.Author != "" {
-		out.Author = b.Author
-	}
-	if b.Description != "" {
-		out.Description = b.Description
-	}
-	if b.Language != "" {
-		out.Language = b.Language
-	}
-	if b.Publisher != "" {
-		out.Publisher = b.Publisher
-	}
-	if b.PublishedDate != "" {
-		out.PublishedDate = b.PublishedDate
-	}
-	if b.ISBN != "" {
-		out.ISBN = b.ISBN
-	}
-	if b.Series != "" {
-		out.Series = b.Series
-	}
-	if b.SeriesIndex != 0 {
-		out.SeriesIndex = b.SeriesIndex
-	}
-	if len(b.Tags) > 0 {
-		out.Tags = b.Tags
-	}
-	if len(b.Genres) > 0 {
-		out.Genres = b.Genres
+	for _, f := range editableFields {
+		if !f.Empty(b) {
+			f.Copy(&out, b)
+		}
 	}
 	return out
 }
 
 // Editable returns the editable scalar subset of b. Drops IDs,
-// structural fields, audio fields, locks. PublishedDate left blank
-// — Book.PublishDate is *time.Time; conversion lives at the boundary.
+// structural fields, audio fields, locks. PublishedDate is left blank
+// — Book.PublishDate is *time.Time; conversion lives at the boundary,
+// which is why that field declares no Book projection.
 func (b Book) Editable() EditableMetadata {
-	return EditableMetadata{
-		Title:       b.Title,
-		Subtitle:    b.Subtitle,
-		Author:      b.Author,
-		Description: b.Description,
-		Language:    b.Language,
-		Publisher:   b.Publisher,
-		ISBN:        b.ISBN,
-		Series:      b.Series,
-		SeriesIndex: b.SeriesIndex,
-		Tags:        b.Tags,
-		Genres:      b.Genres,
+	var em EditableMetadata
+	for _, f := range editableFields {
+		if f.FromBook != nil {
+			f.FromBook(&em, b)
+		}
 	}
+	return em
 }
 
 // ApplyEditable copies em's fields onto b. Does not touch IDs,
 // structural fields, audio fields, locks, or PublishDate (caller
-// converts string ↔ *time.Time at the boundary).
+// converts string <-> *time.Time at the boundary).
 func (b *Book) ApplyEditable(em EditableMetadata) {
-	b.Title = em.Title
-	b.Subtitle = em.Subtitle
-	b.Author = em.Author
-	b.Description = em.Description
-	b.Language = em.Language
-	b.Publisher = em.Publisher
-	b.ISBN = em.ISBN
-	b.Series = em.Series
-	b.SeriesIndex = em.SeriesIndex
-	b.Tags = em.Tags
-	b.Genres = em.Genres
+	for _, f := range editableFields {
+		if f.ToBook != nil {
+			f.ToBook(b, em)
+		}
+	}
 }

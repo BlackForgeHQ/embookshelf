@@ -468,26 +468,30 @@ func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m p
 
 	// writable reports whether this apply may touch a field: never when
 	// the user locked it, and under OnlyEmpty only when it is still blank.
-	writable := func(locked bool, populated bool) bool {
-		return !locked && (!opts.OnlyEmpty || !populated)
+	// The lock is named by its model.LockField constant rather than by
+	// reaching into a BookLocks field, so a lock that gains a wire name
+	// but no writability check here is visible to the parity test in
+	// enrichment_locks_test.go instead of silently unprotected.
+	writable := func(f model.LockField, populated bool) bool {
+		return !locks.Get(f) && (!opts.OnlyEmpty || !populated)
 	}
 
-	if writable(locks.Title, book.Title != "") && m.Title != "" {
+	if writable(model.LockTitle, book.Title != "") && m.Title != "" {
 		book.Title = strings.TrimSpace(m.Title)
 	}
-	if writable(locks.Author, book.Author != "") && len(m.Authors) > 0 {
+	if writable(model.LockAuthor, book.Author != "") && len(m.Authors) > 0 {
 		book.Author = strings.Join(m.Authors, ", ")
 	}
-	if writable(locks.Description, book.Description != "") && m.Description != "" {
+	if writable(model.LockDescription, book.Description != "") && m.Description != "" {
 		book.Description = m.Description
 	}
-	if writable(locks.Publisher, book.Publisher != "") && m.Publisher != "" {
+	if writable(model.LockPublisher, book.Publisher != "") && m.Publisher != "" {
 		book.Publisher = m.Publisher
 	}
-	if writable(locks.Series, book.Series != "") && m.Series != "" {
+	if writable(model.LockSeries, book.Series != "") && m.Series != "" {
 		book.Series = m.Series
 	}
-	if writable(locks.Language, book.Language != "") && m.Language != "" {
+	if writable(model.LockLanguage, book.Language != "") && m.Language != "" {
 		book.Language = m.Language
 	}
 	if m.ISBN != "" {
@@ -498,19 +502,19 @@ func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m p
 		trimmed := strings.TrimSpace(m.ISBN)
 		digits := countDigits(trimmed)
 		switch {
-		case digits == 13 && writable(locks.ISBN, book.ISBN != ""):
+		case digits == 13 && writable(model.LockISBN, book.ISBN != ""):
 			book.ISBN = trimmed
-		case digits == 10 && writable(locks.ISBN10, book.ISBN10 != ""):
+		case digits == 10 && writable(model.LockISBN10, book.ISBN10 != ""):
 			book.ISBN10 = trimmed
-		case digits != 13 && digits != 10 && writable(locks.ISBN, book.ISBN != ""):
+		case digits != 13 && digits != 10 && writable(model.LockISBN, book.ISBN != ""):
 			book.ISBN = trimmed
 		}
 	}
-	if writable(locks.PublishDate, book.Year != 0) && m.Year > 0 {
+	if writable(model.LockPublishDate, book.Year != 0) && m.Year > 0 {
 		book.Year = m.Year
 	}
 
-	if writable(locks.Genres, len(book.Genres) > 0) {
+	if writable(model.LockGenres, len(book.Genres) > 0) {
 		clean := cleanCategorySlice(m.Categories)
 		if len(clean) > 0 {
 			if opts.MergeCategories {
@@ -526,7 +530,7 @@ func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m p
 		return model.Book{}, Outcome{}, err
 	}
 
-	if opts.ApplyCover && writable(locks.Cover, book.HasCover) && strings.TrimSpace(m.CoverURL) != "" {
+	if opts.ApplyCover && writable(model.LockCover, book.HasCover) && strings.TrimSpace(m.CoverURL) != "" {
 		if _, err := s.ImportCoverFromURL(ctx, book.ID, m.CoverURL); err != nil {
 			slog.Warn("apply match cover import", "book", book.ID, "err", err)
 		}

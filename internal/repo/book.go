@@ -26,59 +26,71 @@ import (
 // everything the metadata editor and the apply-metadata flow can touch,
 // plus the fifteen lock flags. Identity, timestamps, per-user progress,
 // on-disk location and the audio fields are read-only from here.
-var bookProjection = projection[model.Book]{
-	{name: "id", dest: func(b *model.Book) any { return &b.ID }},
-	{name: "library_id", dest: func(b *model.Book) any { return &b.LibraryID }},
-	{name: "title", dest: func(b *model.Book) any { return &b.Title }, arg: func(b *model.Book) any { return b.Title }},
-	{name: "subtitle", dest: func(b *model.Book) any { return &b.Subtitle }, arg: func(b *model.Book) any { return b.Subtitle }},
-	{name: "author", dest: func(b *model.Book) any { return &b.Author }, arg: func(b *model.Book) any { return b.Author }},
-	{name: "format", dest: func(b *model.Book) any { return &b.Format }, arg: func(b *model.Book) any { return b.Format }},
-	{name: "year", dest: func(b *model.Book) any { return &b.Year }, arg: func(b *model.Book) any { return b.Year }},
-	{name: "publish_date", dest: func(b *model.Book) any { return &b.PublishDate }, arg: func(b *model.Book) any { return b.PublishDate }},
-	{name: "language", dest: func(b *model.Book) any { return &b.Language }, arg: func(b *model.Book) any { return b.Language }},
-	{name: "progress", expr: `COALESCE(ubp.progress, 0) AS progress`, dest: func(b *model.Book) any { return &b.Progress }},
-	{name: "rating", dest: func(b *model.Book) any { return &b.Rating }, arg: func(b *model.Book) any { return b.Rating }},
-	{name: "cover_palette", dest: func(b *model.Book) any { return &b.CoverPalette }, arg: func(b *model.Book) any { return b.CoverPalette }},
-	{name: "description", dest: func(b *model.Book) any { return &b.Description }, arg: func(b *model.Book) any { return b.Description }},
-	{name: "isbn", dest: func(b *model.Book) any { return &b.ISBN }, arg: func(b *model.Book) any { return b.ISBN }},
-	{name: "isbn10", dest: func(b *model.Book) any { return &b.ISBN10 }, arg: func(b *model.Book) any { return b.ISBN10 }},
-	{name: "publisher", dest: func(b *model.Book) any { return &b.Publisher }, arg: func(b *model.Book) any { return b.Publisher }},
-	{name: "series", dest: func(b *model.Book) any { return &b.Series }, arg: func(b *model.Book) any { return b.Series }},
-	{name: "series_index", dest: func(b *model.Book) any { return &b.SeriesIndex }, arg: func(b *model.Book) any { return b.SeriesIndex }},
-	{name: "series_total", dest: func(b *model.Book) any { return &b.SeriesTotal }, arg: func(b *model.Book) any { return b.SeriesTotal }},
-	{name: "genres", dest: func(b *model.Book) any { return db.TextArray{Dst: &b.Genres} }, arg: func(b *model.Book) any { return b.Genres }},
-	{name: "moods", dest: func(b *model.Book) any { return db.TextArray{Dst: &b.Moods} }, arg: func(b *model.Book) any { return b.Moods }},
-	{name: "tags", dest: func(b *model.Book) any { return db.TextArray{Dst: &b.Tags} }, arg: func(b *model.Book) any { return b.Tags }},
-	{name: "age_rating", dest: func(b *model.Book) any { return &b.AgeRating }, arg: func(b *model.Book) any { return b.AgeRating }},
-	{name: "content_rating", dest: func(b *model.Book) any { return &b.ContentRating }, arg: func(b *model.Book) any { return b.ContentRating }},
-	{name: "pages", dest: func(b *model.Book) any { return &b.Pages }, arg: func(b *model.Book) any { return b.Pages }},
-	{name: "public_reviews", dest: func(b *model.Book) any { return &b.PublicReviews }, arg: func(b *model.Book) any { return b.PublicReviews }},
-	{name: "created_at", dest: func(b *model.Book) any { return &b.CreatedAt }},
-	{name: "path", dest: func(b *model.Book) any { return &b.Path }},
-	{name: "has_cover", dest: func(b *model.Book) any { return &b.HasCover }},
-	{name: "cover_mime", dest: func(b *model.Book) any { return &b.CoverMime }},
-	{name: "cover_hash", dest: func(b *model.Book) any { return &b.CoverHash }},
-	{name: "resume_cfi", expr: `COALESCE(ubp.resume_cfi, '') AS resume_cfi`, dest: func(b *model.Book) any { return &b.ResumeCFI }},
-	{name: "title_locked", dest: func(b *model.Book) any { return &b.Locks.Title }, arg: func(b *model.Book) any { return b.Locks.Title }},
-	{name: "subtitle_locked", dest: func(b *model.Book) any { return &b.Locks.Subtitle }, arg: func(b *model.Book) any { return b.Locks.Subtitle }},
-	{name: "author_locked", dest: func(b *model.Book) any { return &b.Locks.Author }, arg: func(b *model.Book) any { return b.Locks.Author }},
-	{name: "description_locked", dest: func(b *model.Book) any { return &b.Locks.Description }, arg: func(b *model.Book) any { return b.Locks.Description }},
-	{name: "publisher_locked", dest: func(b *model.Book) any { return &b.Locks.Publisher }, arg: func(b *model.Book) any { return b.Locks.Publisher }},
-	{name: "series_locked", dest: func(b *model.Book) any { return &b.Locks.Series }, arg: func(b *model.Book) any { return b.Locks.Series }},
-	{name: "isbn_locked", dest: func(b *model.Book) any { return &b.Locks.ISBN }, arg: func(b *model.Book) any { return b.Locks.ISBN }},
-	{name: "isbn10_locked", dest: func(b *model.Book) any { return &b.Locks.ISBN10 }, arg: func(b *model.Book) any { return b.Locks.ISBN10 }},
-	{name: "language_locked", dest: func(b *model.Book) any { return &b.Locks.Language }, arg: func(b *model.Book) any { return b.Locks.Language }},
-	{name: "publish_date_locked", dest: func(b *model.Book) any { return &b.Locks.PublishDate }, arg: func(b *model.Book) any { return b.Locks.PublishDate }},
-	{name: "genres_locked", dest: func(b *model.Book) any { return &b.Locks.Genres }, arg: func(b *model.Book) any { return b.Locks.Genres }},
-	{name: "moods_locked", dest: func(b *model.Book) any { return &b.Locks.Moods }, arg: func(b *model.Book) any { return b.Locks.Moods }},
-	{name: "tags_locked", dest: func(b *model.Book) any { return &b.Locks.Tags }, arg: func(b *model.Book) any { return b.Locks.Tags }},
-	{name: "pages_locked", dest: func(b *model.Book) any { return &b.Locks.Pages }, arg: func(b *model.Book) any { return b.Locks.Pages }},
-	{name: "cover_locked", dest: func(b *model.Book) any { return &b.Locks.Cover }, arg: func(b *model.Book) any { return b.Locks.Cover }},
-	{name: "duration_seconds", dest: func(b *model.Book) any { return &b.DurationSeconds }},
-	{name: "narrator", dest: func(b *model.Book) any { return &b.Narrator }},
-	{name: "chapters", dest: func(b *model.Book) any { return chaptersJSON{Dst: &b.Chapters} }},
-	{name: "uuid", dest: func(b *model.Book) any { return &b.UUID }},
-	{name: "folder_path", dest: func(b *model.Book) any { return &b.FolderPath }},
+var bookProjection = buildBookProjection()
+
+// buildBookProjection assembles the row, splicing the lock flags in
+// from model.LockSpecs rather than restating them.
+//
+// The lock vocabulary is declared once in the model and every
+// projection walks it, so adding a lock is one entry there plus its
+// migration. Restating the fifteen columns here would put the repo
+// back among the five places that had to agree by hand — the one
+// that failed loudly, and only on a count mismatch.
+func buildBookProjection() projection[model.Book] {
+	p := projection[model.Book]{
+		{name: "id", dest: func(b *model.Book) any { return &b.ID }},
+		{name: "library_id", dest: func(b *model.Book) any { return &b.LibraryID }},
+		{name: "title", dest: func(b *model.Book) any { return &b.Title }, arg: func(b *model.Book) any { return b.Title }},
+		{name: "subtitle", dest: func(b *model.Book) any { return &b.Subtitle }, arg: func(b *model.Book) any { return b.Subtitle }},
+		{name: "author", dest: func(b *model.Book) any { return &b.Author }, arg: func(b *model.Book) any { return b.Author }},
+		{name: "format", dest: func(b *model.Book) any { return &b.Format }, arg: func(b *model.Book) any { return b.Format }},
+		{name: "year", dest: func(b *model.Book) any { return &b.Year }, arg: func(b *model.Book) any { return b.Year }},
+		{name: "publish_date", dest: func(b *model.Book) any { return &b.PublishDate }, arg: func(b *model.Book) any { return b.PublishDate }},
+		{name: "language", dest: func(b *model.Book) any { return &b.Language }, arg: func(b *model.Book) any { return b.Language }},
+		{name: "progress", expr: `COALESCE(ubp.progress, 0) AS progress`, dest: func(b *model.Book) any { return &b.Progress }},
+		{name: "rating", dest: func(b *model.Book) any { return &b.Rating }, arg: func(b *model.Book) any { return b.Rating }},
+		{name: "cover_palette", dest: func(b *model.Book) any { return &b.CoverPalette }, arg: func(b *model.Book) any { return b.CoverPalette }},
+		{name: "description", dest: func(b *model.Book) any { return &b.Description }, arg: func(b *model.Book) any { return b.Description }},
+		{name: "isbn", dest: func(b *model.Book) any { return &b.ISBN }, arg: func(b *model.Book) any { return b.ISBN }},
+		{name: "isbn10", dest: func(b *model.Book) any { return &b.ISBN10 }, arg: func(b *model.Book) any { return b.ISBN10 }},
+		{name: "publisher", dest: func(b *model.Book) any { return &b.Publisher }, arg: func(b *model.Book) any { return b.Publisher }},
+		{name: "series", dest: func(b *model.Book) any { return &b.Series }, arg: func(b *model.Book) any { return b.Series }},
+		{name: "series_index", dest: func(b *model.Book) any { return &b.SeriesIndex }, arg: func(b *model.Book) any { return b.SeriesIndex }},
+		{name: "series_total", dest: func(b *model.Book) any { return &b.SeriesTotal }, arg: func(b *model.Book) any { return b.SeriesTotal }},
+		{name: "genres", dest: func(b *model.Book) any { return db.TextArray{Dst: &b.Genres} }, arg: func(b *model.Book) any { return b.Genres }},
+		{name: "moods", dest: func(b *model.Book) any { return db.TextArray{Dst: &b.Moods} }, arg: func(b *model.Book) any { return b.Moods }},
+		{name: "tags", dest: func(b *model.Book) any { return db.TextArray{Dst: &b.Tags} }, arg: func(b *model.Book) any { return b.Tags }},
+		{name: "age_rating", dest: func(b *model.Book) any { return &b.AgeRating }, arg: func(b *model.Book) any { return b.AgeRating }},
+		{name: "content_rating", dest: func(b *model.Book) any { return &b.ContentRating }, arg: func(b *model.Book) any { return b.ContentRating }},
+		{name: "pages", dest: func(b *model.Book) any { return &b.Pages }, arg: func(b *model.Book) any { return b.Pages }},
+		{name: "public_reviews", dest: func(b *model.Book) any { return &b.PublicReviews }, arg: func(b *model.Book) any { return b.PublicReviews }},
+		{name: "created_at", dest: func(b *model.Book) any { return &b.CreatedAt }},
+		{name: "path", dest: func(b *model.Book) any { return &b.Path }},
+		{name: "has_cover", dest: func(b *model.Book) any { return &b.HasCover }},
+		{name: "cover_mime", dest: func(b *model.Book) any { return &b.CoverMime }},
+		{name: "cover_hash", dest: func(b *model.Book) any { return &b.CoverHash }},
+		{name: "resume_cfi", expr: `COALESCE(ubp.resume_cfi, '') AS resume_cfi`, dest: func(b *model.Book) any { return &b.ResumeCFI }},
+	}
+	for _, spec := range model.LockSpecs {
+		p = append(p, lockColumn(spec))
+	}
+	return append(p, projection[model.Book]{
+		{name: "duration_seconds", dest: func(b *model.Book) any { return &b.DurationSeconds }},
+		{name: "narrator", dest: func(b *model.Book) any { return &b.Narrator }},
+		{name: "chapters", dest: func(b *model.Book) any { return chaptersJSON{Dst: &b.Chapters} }},
+		{name: "uuid", dest: func(b *model.Book) any { return &b.UUID }},
+		{name: "folder_path", dest: func(b *model.Book) any { return &b.FolderPath }},
+	}...)
+}
+
+// lockColumn renders one LockSpec as a projection entry. The flag is
+// both scanned into and written from, so it carries dest and arg.
+func lockColumn(spec model.LockSpec) column[model.Book] {
+	return column[model.Book]{
+		name: spec.Column,
+		dest: func(b *model.Book) any { return spec.Flag(&b.Locks) },
+		arg:  func(b *model.Book) any { return *spec.Flag(&b.Locks) },
+	}
 }
 
 // bookCols is the projection rendered for the joined read path.

@@ -91,7 +91,8 @@ type bookDTO struct {
 	Narrator        string       `json:"narrator,omitempty"`
 	Chapters        []chapterDTO `json:"chapters,omitempty"`
 	// Locks is a sparse map — only fields currently locked appear, so
-	// unlocked books keep the payload small. Keys match model.LockFields.
+	// unlocked books keep the payload small. Keys are model.LockField
+	// values, derived from model.LockSpecs.
 	Locks map[string]bool `json:"locks,omitempty"`
 }
 
@@ -185,57 +186,17 @@ func chaptersToDTO(in []model.Chapter) []chapterDTO {
 }
 
 // serializeLocks emits a sparse map of just the set flags. nil when
-// everything is unlocked so the DTO stays lean on fresh books. Keys
-// match model.LockFields.
+// everything is unlocked so the DTO stays lean on fresh books. Derived
+// from model.LockSpecs, so a new lock reaches the client without an edit
+// here — the omission that used to leave a flag invisible.
 func serializeLocks(l model.BookLocks) map[string]bool {
-	out := map[string]bool{}
-	if l.Title {
-		out["title"] = true
-	}
-	if l.Subtitle {
-		out["subtitle"] = true
-	}
-	if l.Author {
-		out["author"] = true
-	}
-	if l.Description {
-		out["description"] = true
-	}
-	if l.Publisher {
-		out["publisher"] = true
-	}
-	if l.Series {
-		out["series"] = true
-	}
-	if l.ISBN {
-		out["isbn"] = true
-	}
-	if l.ISBN10 {
-		out["isbn10"] = true
-	}
-	if l.Language {
-		out["language"] = true
-	}
-	if l.PublishDate {
-		out["publishDate"] = true
-	}
-	if l.Genres {
-		out["genres"] = true
-	}
-	if l.Moods {
-		out["moods"] = true
-	}
-	if l.Tags {
-		out["tags"] = true
-	}
-	if l.Pages {
-		out["pages"] = true
-	}
-	if l.Cover {
-		out["cover"] = true
-	}
-	if len(out) == 0 {
+	locked := l.Locked()
+	if len(locked) == 0 {
 		return nil
+	}
+	out := make(map[string]bool, len(locked))
+	for _, f := range locked {
+		out[string(f)] = true
 	}
 	return out
 }
