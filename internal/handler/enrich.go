@@ -235,29 +235,9 @@ func (h *Handler) EnrichApplyMatch(c *gin.Context, s bookScope) {
 		return
 	}
 
-	// Reload so the response carries fresh cover flags + any side
-	// effects of the cover-from-url import that ran after UpdateMetadata.
-	fresh, err := h.books.GetByID(c.Request.Context(), userID, updated.ID)
-	if err != nil {
-		writeServerError(c, "enrich apply reload", err)
-		return
-	}
-	shelves, err := h.shelf.SlugsForBook(c.Request.Context(), userID, updated.ID)
-	if err != nil {
-		writeServerError(c, "enrich apply shelves", err)
-		return
-	}
-	if shelves == nil {
-		shelves = []string{}
-	}
-	resp := gin.H{
-		"book": bookDetailDTO{
-			bookDTO: toBookDTO(fresh),
-			Shelves: shelves,
-		},
-	}
-	attachWarnings(resp, outcome, "apply match write degraded", updated.ID)
-	c.JSON(http.StatusOK, resp)
+	// The reload the module performs is what picks up the cover flags the
+	// cover-from-url import set after UpdateMetadata returned.
+	h.writeBookDetail(c, userID, updated.ID, outcome, "apply match write degraded")
 }
 
 // toggleFieldLocksReq flips the lock flag for one or more metadata
@@ -302,27 +282,7 @@ func (h *Handler) EnrichToggleFieldLocks(c *gin.Context, s bookScope) {
 		return
 	}
 
-	fresh, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil {
-		writeServerError(c, "lock reload", err)
-		return
-	}
-	shelves, err := h.shelf.SlugsForBook(c.Request.Context(), userID, id)
-	if err != nil {
-		writeServerError(c, "lock shelves", err)
-		return
-	}
-	if shelves == nil {
-		shelves = []string{}
-	}
-	resp := gin.H{
-		"book": bookDetailDTO{
-			bookDTO: toBookDTO(fresh),
-			Shelves: shelves,
-		},
-	}
-	attachWarnings(resp, lockOutcome, "lock update write degraded", id)
-	c.JSON(http.StatusOK, resp)
+	h.writeBookDetail(c, userID, id, lockOutcome, "lock update write degraded")
 }
 
 func applyLock(l *model.BookLocks, field string, v bool) {

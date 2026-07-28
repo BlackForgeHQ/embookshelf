@@ -377,6 +377,14 @@ Routes that need only existence — add-to-shelf, progress, cancel a run — tak
 
 `handler.bookStore`; the handler tier's read view of the catalog — `GetByID` plus `Search`. Declared as an interface rather than taking `*repo.BookRepo` so a book-scoped handler body is reachable in a test with a fake, which the preamble made impossible: every body began by talking to a real database. **Distinct** from `LibraryService`, which is the Library lifecycle module and no longer fronts the catalog at all.
 
+### Book detail response
+
+`handler.writeBookDetail(c, userID, bookID, outcome, logMsg)`; the one module that answers "the current wire representation of book X for user Y". Owns three rules that were previously restated at five sites across the library, enrichment and bookdrop surfaces: reload the row after a write (so the response carries repo-computed fields and stays in lockstep with a fresh GET), turn a nil shelf-slug slice into an empty one (a JSON `null` where the client's type says `string[]`), and attach [[Outcome]] warnings when the write degraded.
+
+They had already drifted, which is the argument for the module: bookdrop approve hard-coded `Shelves: []string{}` instead of querying, and two of the five carried no warnings. `attachWarnings` — the shared warning attachment the three edit endpoints already used — is absorbed into it rather than sitting beside it.
+
+Callers hand it a book id and it writes the response. A read passes the zero `Outcome` and an empty log message; a plain GET therefore pays one extra primary-key lookup, which is the price of the five sites having one answer instead of five.
+
 ### Book file sandbox
 
 `service.SandboxPath`; the allow-list gate every filesystem read or delete of a book file passes through. Roots are `BOOKDROP_PATH` plus every Library with a local path; a path must resolve inside one of them after cleaning. Fails closed — no configured roots admits nothing. Serving (`handler.sandboxPath`) and deleting (`LibraryService.DeleteBook`) share the one implementation so a change to the rule cannot apply to one and miss the other — the reason it lives in `service` rather than in the HTTP layer with its other caller.

@@ -240,12 +240,6 @@ func serializeLocks(l model.BookLocks) map[string]bool {
 	return out
 }
 
-// bookDetailDTO adds the user's shelf memberships to the base book shape.
-type bookDetailDTO struct {
-	bookDTO
-	Shelves []string `json:"shelves"`
-}
-
 // Libraries returns every library visible to the current user.
 // Single-tenant instance today, so it's just the full list with book counts.
 func (h *Handler) Libraries(c *gin.Context) {
@@ -374,51 +368,7 @@ func (h *Handler) BookPatch(c *gin.Context, s bookScope) {
 		return
 	}
 
-	// Re-load so the response carries any repo-computed fields (e.g. any
-	// side effects of the UPDATE) and stays in lockstep with a fresh GET.
-	fresh, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil {
-		writeServerError(c, "book reload", err)
-		return
-	}
-	shelves, err := h.shelf.SlugsForBook(c.Request.Context(), userID, id)
-	if err != nil {
-		writeServerError(c, "book shelves", err)
-		return
-	}
-	if shelves == nil {
-		shelves = []string{}
-	}
-	body := gin.H{
-		"book": bookDetailDTO{
-			bookDTO: toBookDTO(fresh),
-			Shelves: shelves,
-		},
-	}
-	attachWarnings(body, outcome, "book metadata write degraded", id)
-	c.JSON(http.StatusOK, body)
-}
-
-// attachWarnings puts a degraded write's warnings on the response body.
-//
-// A degraded write still saved the edit — the books row is canonical —
-// but the Sidecar or the in-file copy did not keep up, and only the
-// person who made the edit can act on that. Reporting an unqualified
-// success they cannot act on is the failure mode this exists to prevent.
-//
-// All three edit endpoints — metadata PATCH, field-lock toggle, apply
-// match — go through here, so a client parses one shape whichever it
-// called: a top-level "warnings" array of strings alongside "book",
-// present only when a step actually failed. Apply match used to be
-// missing from that list, because ApplyMatch discarded the Outcome before
-// the handler could see it.
-func attachWarnings(body gin.H, out service.Outcome, logMsg, bookID string) {
-	warnings := out.Warnings()
-	if len(warnings) == 0 {
-		return
-	}
-	slog.Warn(logMsg, "book", bookID, "warnings", warnings)
-	body["warnings"] = warnings
+	h.writeBookDetail(c, userID, id, outcome, "book metadata write degraded")
 }
 
 // BookProgressUpdate stores the current user's reading progress + resume
@@ -555,20 +505,7 @@ func (p bookPatch) toDomain() model.BookPatch {
 // BookDetail returns a single book enriched with the user's shelf
 // membership slugs.
 func (h *Handler) BookDetail(c *gin.Context, s bookScope) {
-	shelves, err := h.shelf.SlugsForBook(c.Request.Context(), s.UserID, s.Book.ID)
-	if err != nil {
-		writeServerError(c, "book shelves", err)
-		return
-	}
-	if shelves == nil {
-		shelves = []string{}
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"book": bookDetailDTO{
-			bookDTO: toBookDTO(s.Book),
-			Shelves: shelves,
-		},
-	})
+	h.writeBookDetail(c, s.UserID, s.Book.ID, service.Outcome{}, "")
 }
 
 // writeBooksPayload projects a repo result into the list envelope the SPA

@@ -286,19 +286,12 @@ func (h *Handler) BookDropApprove(c *gin.Context) {
 	// pool — so this response no longer waits on a provider round-trip,
 	// and callers that never touch HTTP get the same behaviour.
 
-	// Re-load through the library service so the response carries the
-	// per-user progress fields + shelf memberships (empty on a fresh import).
-	fresh, err := h.books.GetByID(c.Request.Context(), userID, book.ID)
-	if err != nil {
-		writeServerError(c, "bookdrop approve reload", err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"book": bookDetailDTO{
-			bookDTO: toBookDTO(fresh),
-			Shelves: []string{},
-		},
-	})
+	// Through the same module every other book-detail response goes
+	// through, which is what makes the shelf list real. Approve used to
+	// hard-code it empty on the assumption that a freshly imported book
+	// sits on no shelf — true of the books row, but the response is per
+	// user, and a Shared shelf or a smart shelf can already claim it.
+	h.writeBookDetail(c, userID, book.ID, service.Outcome{}, "")
 }
 
 // maxUploadBytes caps a single BookDrop upload request. Big enough for a
