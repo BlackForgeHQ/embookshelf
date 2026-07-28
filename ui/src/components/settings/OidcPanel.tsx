@@ -614,6 +614,7 @@ function TestChecks({ result }: { result: OidcTestResult }) {
       >
         {result.checks.map((c: OidcTestCheck, i: number) => (
           <div
+            // biome-ignore lint/suspicious/noArrayIndexKey: the probe returns a fixed ordered checklist; position is the check
             key={i}
             style={{
               display: "grid",

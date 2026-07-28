@@ -46,6 +46,7 @@ export function TopBar({
           }}
         >
           {crumbs.map((c, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: the crumb list is positional — two segments of a path may repeat the same label, so position is the only identity
             <Fragment key={`${i}-${c}`}>
               {i > 0 && (
                 <Icon name="chevron-right" size={12} className="mono" />

@@ -83,12 +83,14 @@ function SidebarProvider({
       }
 
       // This sets the cookie to keep the sidebar state.
+      // biome-ignore lint/suspicious/noDocumentCookie: shadcn persists the sidebar state in a cookie by design so it survives SSR; this file tracks upstream
       document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
     },
     [setOpenProp, open]
   )
 
   // Helper to toggle the sidebar.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: setOpenMobile is a useState setter and stable by identity; listing it is harmless and this file tracks shadcn upstream
   const toggleSidebar = React.useCallback(() => {
     return isMobile
       ? setOpenMobile((prev) => !prev)
@@ -115,6 +117,7 @@ function SidebarProvider({
   // This makes it easier to style the sidebar with Tailwind classes.
   const state = open ? "expanded" : "collapsed"
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: setOpenMobile is a useState setter and stable by identity; listing it is harmless and this file tracks shadcn upstream
   const contextValue = React.useMemo<SidebarContextProps>(
     () => ({
       state,

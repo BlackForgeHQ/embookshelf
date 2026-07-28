@@ -650,7 +650,7 @@ function MetaCell({
     <div className="bdrop-meta-cell">
       <dt className="bdrop-meta-label">{label}</dt>
       <dd
-        className={"bdrop-meta-value" + (mono ? " mono" : "")}
+        className={`bdrop-meta-value${mono ? " mono" : ""}`}
         data-missing={isMissing}
       >
         {isMissing ? (missing ?? "—") : v}

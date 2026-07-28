@@ -126,6 +126,15 @@ const FIELD_ORDER: Array<RuleField> = [
   "progress",
 ]
 
+// nextRowID hands out a stable identity for one predicate row. Only
+// uniqueness within a single open editor matters, so a counter is enough
+// and keeps the component free of a crypto dependency.
+let rowSeq = 0
+function nextRowID(): string {
+  rowSeq += 1
+  return `predicate-${rowSeq}`
+}
+
 // blankPredicate seeds a new row with the first allowed op for the chosen
 // field so the user never sees an invalid combo even for a split second.
 function blankPredicate(field: RuleField = "author"): ShelfPredicate {
@@ -178,7 +187,18 @@ export function RuleEditor({
   const [accent, setAccent] = useState<ShelfAccent>(initialAccent)
   const [icon, setIcon] = useState<string>(initialIcon)
   const [rule, setRule] = useState<ShelfRule>(
-    initialRule ?? { match: "all", predicates: [blankPredicate()] }
+    () => initialRule ?? { match: "all", predicates: [blankPredicate()] }
+  )
+  // Row identity travels beside the predicates rather than being their
+  // position. removePredicate filters by index, so every later row shifts
+  // down after a delete: keyed by index, React would reuse each
+  // PredicateRow instance for a different predicate and carry that row's
+  // internal state — focus, a half-typed value — onto the wrong rule.
+  //
+  // The id stays out of ShelfPredicate because that type is the wire
+  // shape the API stores; this is a view concern with no business on it.
+  const [rowIDs, setRowIDs] = useState<Array<string>>(() =>
+    (initialRule?.predicates ?? [null]).map(() => nextRowID())
   )
 
   const setPredicate = (i: number, next: ShelfPredicate) => {
@@ -193,9 +213,11 @@ export function RuleEditor({
       ...r,
       predicates: r.predicates.filter((_, idx) => idx !== i),
     }))
+    setRowIDs((ids) => ids.filter((_, idx) => idx !== i))
   }
   const addPredicate = () => {
     setRule((r) => ({ ...r, predicates: [...r.predicates, blankPredicate()] }))
+    setRowIDs((ids) => [...ids, nextRowID()])
   }
 
   const canSubmit =
@@ -262,7 +284,7 @@ export function RuleEditor({
         <div className="flex flex-col gap-2">
           {rule.predicates.map((p, i) => (
             <PredicateRow
-              key={i}
+              key={rowIDs[i]}
               predicate={p}
               onChange={(next) => setPredicate(i, next)}
               onRemove={() => removePredicate(i)}

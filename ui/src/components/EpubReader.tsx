@@ -64,6 +64,7 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(
   ) {
     const containerRef = useRef<HTMLDivElement | null>(null)
     const [booted, setBooted] = useState(false)
+    // biome-ignore lint/suspicious/noExplicitAny: epub.js ships no types for this surface
     const renditionRef = useRef<any>(null)
 
     // biome-ignore lint/correctness/useExhaustiveDependencies: boots once per url; typography flows through a separate effect so a font change does not tear down the rendition
@@ -74,7 +75,9 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(
       // async waits below (otherwise no-unnecessary-condition
       // flags the guards as unreachable).
       const flag = { cancelled: false }
+      // biome-ignore lint/suspicious/noExplicitAny: epub.js ships no types for this surface
       let book: any
+      // biome-ignore lint/suspicious/noExplicitAny: epub.js ships no types for this surface
       let rendition: any
       ;(async () => {
         try {
@@ -110,6 +113,7 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(
           // across text inside the iframe. epub.js emits cfiRange + the
           // iframe's `contents` so we can pull the raw string from
           // window.getSelection().
+          // biome-ignore lint/suspicious/noExplicitAny: epub.js ships no types for this surface
           rendition.on("selected", (cfiRange: string, contents: any) => {
             let text = ""
             try {
@@ -122,6 +126,7 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(
             onSelect?.({ cfiRange, text })
           })
 
+          // biome-ignore lint/suspicious/noExplicitAny: epub.js ships no types for this surface
           rendition.on("relocated", (location: any) => {
             if (!location?.start) return
             const cfi: string = location.start.cfi ?? ""
@@ -241,6 +246,7 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(
   }
 )
 
+// biome-ignore lint/suspicious/noExplicitAny: epub.js ships no types for this surface
 function mapToc(node: any): EpubTocEntry {
   return {
     label: String(node.label ?? "").trim(),

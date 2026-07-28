@@ -155,6 +155,7 @@ export const AudioReader = forwardRef<AudioReaderHandle, Props>(
 
     // Reset when the URL changes (e.g. switching audiobooks within the
     // same shell mount).
+    // biome-ignore lint/correctness/useExhaustiveDependencies: url is listed deliberately: this effect exists to reset playback state when the source changes, and dropping the dep would silently stop it firing
     useEffect(() => {
       setDuration(0)
       setChapterIndex(-1)

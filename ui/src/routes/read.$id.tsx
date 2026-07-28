@@ -424,6 +424,7 @@ function ReaderShell({ book }: { book: BookDetail }) {
             )}
             {toc.map((c, i) => (
               <button
+                // biome-ignore lint/suspicious/noArrayIndexKey: a TOC may point at the same href twice, so href alone is not unique; position disambiguates
                 key={`${c.href}-${i}`}
                 onClick={() => {
                   epubRef.current?.goTo(c.href)
@@ -529,7 +530,7 @@ function ReaderShell({ book }: { book: BookDetail }) {
                 disabled={createAnnotationMut.isPending}
                 onClick={() => {
                   const note = window.prompt("Add a note for this selection:")
-                  if (!note || !note.trim()) return
+                  if (!note?.trim()) return
                   createAnnotationMut.mutate({
                     bookId: book.id,
                     body: {
@@ -614,7 +615,7 @@ function ReaderShell({ book }: { book: BookDetail }) {
                   const note = window.prompt(
                     `Note on page ${pageState.current}:`
                   )
-                  if (!note || !note.trim()) return
+                  if (!note?.trim()) return
                   createAnnotationMut.mutate({
                     bookId: book.id,
                     body: {
@@ -1350,6 +1351,7 @@ function AudioReaderShell({
                 if (left < 0 || left > 100) return null
                 return (
                   <div
+                    // biome-ignore lint/suspicious/noArrayIndexKey: markers are positioned from a derived percentage — the index is the marker
                     key={i}
                     style={{
                       position: "absolute",
@@ -1389,7 +1391,7 @@ function AudioReaderShell({
             >
               {book.chapters.map((c, i) => (
                 <button
-                  key={i}
+                  key={c.startS}
                   onClick={() => audioRef.current?.seekTo(c.startS)}
                   style={{
                     display: "block",

@@ -272,6 +272,7 @@ function ShelfLayout({
   return (
     <div className="flex flex-col gap-10">
       {chunks.map((row, ri) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: rows are fixed-size chunks of the book list — the chunk index is the row
         <div key={ri} className="shelf-row">
           <div className="relative w-full max-w-full overflow-hidden">
             <div className="flex snap-x gap-4 overflow-x-auto pb-4">

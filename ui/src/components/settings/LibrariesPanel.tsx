@@ -368,6 +368,7 @@ function LibraryRowSkeleton({ count }: { count: number }) {
     <>
       {Array.from({ length: count }).map((_, i) => (
         <div
+          // biome-ignore lint/suspicious/noArrayIndexKey: skeleton placeholders have no identity beyond their slot
           key={i}
           className="grid grid-cols-[72px_minmax(0,1fr)_auto] items-start gap-x-8 border-b border-rule-soft py-7"
           style={{

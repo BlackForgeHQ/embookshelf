@@ -120,6 +120,7 @@ function Dashboard() {
                   >
                     {["Mon", "", "Wed", "", "Fri", "", ""].map((d, i) => (
                       <div
+                        // biome-ignore lint/suspicious/noArrayIndexKey: the weekday labels are a fixed literal list — position is the day
                         key={i}
                         className="mono"
                         style={{
@@ -135,6 +136,7 @@ function Dashboard() {
                   </div>
                   {weeks.map((week, wi) => (
                     <div
+                      // biome-ignore lint/suspicious/noArrayIndexKey: the heatmap is a positional grid: week N is the Nth column
                       key={wi}
                       style={{
                         display: "flex",
@@ -144,6 +146,7 @@ function Dashboard() {
                     >
                       {week.map((m, di) => (
                         <div
+                          // biome-ignore lint/suspicious/noArrayIndexKey: the heatmap is a positional grid: day N is the Nth cell
                           key={di}
                           title={m === 0 ? "no activity" : `${m} min`}
                           style={{

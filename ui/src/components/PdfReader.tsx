@@ -245,6 +245,7 @@ function PdfPage({
     return () => {
       cancelled = true
       try {
+        // biome-ignore lint/suspicious/noExplicitAny: pdfjs-dist exposes this callback payload untyped
         ;(renderTask as any)?.cancel?.()
       } catch {
         // ignore

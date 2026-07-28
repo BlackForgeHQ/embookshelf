@@ -200,6 +200,7 @@ function SkeletonRows({ count }: { count: number }) {
     <>
       {Array.from({ length: count }).map((_, i) => (
         <div
+          // biome-ignore lint/suspicious/noArrayIndexKey: skeleton placeholders have no identity beyond their slot
           key={i}
           className="flex animate-pulse items-center gap-4 px-5 py-4"
         >
@@ -572,7 +573,7 @@ function relativeTime(ms: number): string {
 }
 
 function truncate(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n - 1) + "…" : s
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s
 }
 
 // The pre-payload shape for a config row. Module-level so its identity is

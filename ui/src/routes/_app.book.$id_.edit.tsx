@@ -354,7 +354,7 @@ function MetadataEditor() {
                     onChange={(e) => set("language", e.target.value)}
                     placeholder="en"
                     className={
-                      "mono " + (b.locks?.language ? "opacity-60" : "")
+                      `mono ${b.locks?.language ? "opacity-60" : ""}`
                     }
                     disabled={!!b.locks?.language}
                   />
@@ -399,7 +399,7 @@ function MetadataEditor() {
                     onBlur={onBlurValidate("isbn13")}
                     aria-invalid={!!errors.isbn13}
                     disabled={!!b.locks?.isbn}
-                    className={"mono " + (b.locks?.isbn ? "opacity-60" : "")}
+                    className={`mono ${b.locks?.isbn ? "opacity-60" : ""}`}
                   />
                 </FieldRow>
                 <FieldRow
@@ -417,7 +417,7 @@ function MetadataEditor() {
                     onBlur={onBlurValidate("isbn10")}
                     aria-invalid={!!errors.isbn10}
                     disabled={!!b.locks?.isbn10}
-                    className={"mono " + (b.locks?.isbn10 ? "opacity-60" : "")}
+                    className={`mono ${b.locks?.isbn10 ? "opacity-60" : ""}`}
                   />
                 </FieldRow>
               </div>

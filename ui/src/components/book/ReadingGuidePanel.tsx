@@ -145,8 +145,7 @@ export function ReadingGuidePanel({ bookId }: { bookId: string }) {
           </div>
         </form>
       ) : (
-        <>
-          {SECTIONS.map((s) => {
+        SECTIONS.map((s) => {
             const text = g[s.key]
             if (!text) return null
             return (
@@ -157,8 +156,7 @@ export function ReadingGuidePanel({ bookId }: { bookId: string }) {
                 <p style={{ margin: 0, lineHeight: 1.55 }}>{text}</p>
               </section>
             )
-          })}
-        </>
+          })
       )}
 
       <GuideProvenance guide={g} />
