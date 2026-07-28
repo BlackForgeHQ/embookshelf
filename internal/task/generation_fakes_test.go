@@ -97,23 +97,22 @@ func epubWithChapters(t *testing.T, bodies ...string) storage.Source {
 //
 // Not called from this file: they exist so the audiobook and reading-guide
 // worker tests (a following change) can substitute for repo.BookRepo and a
-// tts.Engine without Postgres or a live TTS endpoint. golangci-lint's
-// unused check can't see that forward reference, so it is silenced here
-// rather than by adding a call that only exists to please the linter.
+// tts.Engine without Postgres or a live TTS endpoint. The var _ = ... lines
+// below keep golangci-lint's unused check quiet about that forward
+// reference without a suppression comment that would go stale once the
+// worker tests actually call these.
 // ---------------------------------------------------------------------------
 
 // audioUpdate records what a finalize wrote back onto the book row.
-//
-//nolint:unused // consumed by the worker tests that follow this change
 type audioUpdate struct {
 	DurationSeconds *int
 	Narrator        string
 	Chapters        []model.Chapter
 }
 
-// fakeBooks satisfies both bookReader and bookAudioWriter.
-//
-//nolint:unused // consumed by the worker tests that follow this change
+// fakeBooks is a book row plus recorder for the audio write-back. It will
+// satisfy the task package's own reader/writer seams once those land in a
+// later change; until then it stands alone.
 type fakeBooks struct {
 	book  model.Book
 	err   error
@@ -121,7 +120,6 @@ type fakeBooks struct {
 	audio *audioUpdate
 }
 
-//nolint:unused // consumed by the worker tests that follow this change
 func (f *fakeBooks) GetByID(_ context.Context, _, _ string) (model.Book, error) {
 	f.gets++
 	if f.err != nil {
@@ -130,7 +128,6 @@ func (f *fakeBooks) GetByID(_ context.Context, _, _ string) (model.Book, error) 
 	return f.book, nil
 }
 
-//nolint:unused // consumed by the worker tests that follow this change
 func (f *fakeBooks) UpdateAudio(
 	_ context.Context, _ string, durationSeconds *int, narrator string, chapters []model.Chapter,
 ) error {
@@ -138,9 +135,14 @@ func (f *fakeBooks) UpdateAudio(
 	return nil
 }
 
+// fakeBooks and audioUpdate have no interface to assert against yet, so a
+// bare reference is what proves them used to the linter (mirrors the
+// var _ scanner = (*sql.Rows)(nil) idiom in internal/repo/shelf.go, minus
+// the interface since none exists here).
+var _ = fakeBooks{}
+var _ = audioUpdate{}
+
 // fakeEngine is a tts.Engine that never leaves the process.
-//
-//nolint:unused // consumed by the worker tests that follow this change
 type fakeEngine struct {
 	reply    []byte
 	err      error
@@ -148,7 +150,6 @@ type fakeEngine struct {
 	requests []tts.Request
 }
 
-//nolint:unused // consumed by the worker tests that follow this change
 func (e *fakeEngine) Synthesize(_ context.Context, req tts.Request) ([]byte, error) {
 	e.calls++
 	e.requests = append(e.requests, req)
@@ -158,8 +159,12 @@ func (e *fakeEngine) Synthesize(_ context.Context, req tts.Request) ([]byte, err
 	return e.reply, nil
 }
 
-//nolint:unused // consumed by the worker tests that follow this change
 func (e *fakeEngine) ListVoices(context.Context) ([]tts.Voice, error) { return nil, nil }
+
+// fakeEngine satisfies tts.Engine at compile time — self-verifying, unlike
+// a nolint comment, and still worth keeping after the worker tests consume
+// it: it breaks loudly if the fake ever drifts from the real interface.
+var _ tts.Engine = (*fakeEngine)(nil)
 
 // The fixtures are load-bearing: audio.Payload rejects a frame it does
 // not recognise, and ExtractEPUBSegments rejects an archive it cannot
