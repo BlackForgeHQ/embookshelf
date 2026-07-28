@@ -141,7 +141,7 @@ embookshelf/
 
 ### `internal/` — tiered
 
-The backend has 27 packages. Tiered by role:
+The backend has 29 packages. Tiered by role:
 
 **Core (request → domain → persistence)**
 - `handler/` — Gin `HandlerFunc`s; one file per resource group, plus
@@ -177,6 +177,17 @@ The backend has 27 packages. Tiered by role:
 - `sidecar/` — OPF/JSON sidecar reader + writer. ADR-0001
   (edit-side write-back). Reattach on rescan reads sidecars to
   preserve user edits.
+- `textsplit/` — Sentence-boundary text splitter. Two callers at two
+  granularities — the segment planner (`fileproc.ExtractEPUBSegments`)
+  splits a chapter into segments at its ~40k-character cap, and the
+  TTS adapter (`tts.chunked`) splits a segment into engine calls at
+  the catalog's per-engine `MaxRequestChars` — same algorithm,
+  different budgets, so it belongs to neither caller.
+- `audio/` — MPEG frame parsing (`Payload`) used to join chunked
+  synthesis output byte-wise. Subpackage:
+  - `audiotest/` — Shared MPEG frame fixtures for tests in `audio`,
+    `tts`, and `task`, kept out of `audio`'s own production surface so
+    a fixture builder doesn't become importable production code.
 - `scan/` — Filesystem walker, classifier, differ, reattach,
   cover-pick. Powers the `library.scan` job (ADR-0003 book-per-folder
   layout, ADR-0004 scan auto-imports).
