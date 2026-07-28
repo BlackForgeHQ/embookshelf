@@ -49,6 +49,22 @@ func TestJobKindsAndPayloadsAreTheStoredOnes(t *testing.T) {
 	}
 }
 
+// TestAudiobookQueueIsTheStoredValue pins the queue name itself, the same
+// way the kinds above are pinned: River persists "audiobook" in the
+// queue column of every river_job row a segment or finalize job leaves
+// behind, and the client's polled queue set is derived from this
+// constant (internal/queue/queue.go). Both tests above compare against
+// jobs.AudiobookQueue rather than the literal, so they would agree with
+// any value the constant was changed to; only this literal catches a
+// change here. Changing it would leave every existing row with
+// queue='audiobook' unpolled forever, silently.
+func TestAudiobookQueueIsTheStoredValue(t *testing.T) {
+	if jobs.AudiobookQueue != "audiobook" {
+		t.Errorf("AudiobookQueue = %q, want %q — existing river_job rows on the old queue would go unpolled",
+			jobs.AudiobookQueue, "audiobook")
+	}
+}
+
 // Only the audiobook jobs declare a queue. A run is tens of long jobs
 // per book, and sharing the default pool would stall BookDrop ingest
 // and Library scan for as long as the run lasts (ADR-0028 §3).

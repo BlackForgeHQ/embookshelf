@@ -55,8 +55,10 @@ type BookDropIngestArgs struct {
 // jobs.
 func (BookDropIngestArgs) Kind() string { return "bookdrop.ingest" }
 
-// BookDropAutoEnrichArgs addresses the gap-fill for a freshly approved
-// book.
+// BookDropAutoEnrichArgs is the payload for the gap-fill Approve
+// requests once a book leaves BookDrop. BookID only — the worker
+// re-reads the row, so an edit made between approve and dispatch reaches
+// the providers rather than a snapshot taken at enqueue time.
 type BookDropAutoEnrichArgs struct {
 	BookID string `json:"book_id"`
 }
@@ -65,14 +67,18 @@ type BookDropAutoEnrichArgs struct {
 // in-flight jobs.
 func (BookDropAutoEnrichArgs) Kind() string { return "bookdrop.auto_enrich" }
 
-// LibraryScanArgs addresses one library's rescan.
+// LibraryScanArgs is the payload for walking a library's filesystem
+// root. The library id also names the scan — each library owns
+// exactly one path since migration 000018.
 type LibraryScanArgs struct {
 	LibraryID string `json:"library_id"`
 }
 
 func (LibraryScanArgs) Kind() string { return "library.scan" }
 
-// SendToKindleArgs addresses one delivery.
+// SendToKindleArgs is the payload for one Send-to-Kindle delivery.
+// BookID + UserID are the only inputs — Notifier re-fetches both
+// rows so a stale snapshot can't ship the wrong attachment.
 type SendToKindleArgs struct {
 	BookID string `json:"book_id"`
 	UserID string `json:"user_id"`

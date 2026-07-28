@@ -2,8 +2,8 @@
 
 // Package task holds business-logic functions and River adapters. Job
 // payloads live in internal/jobs; the pure functions (BookDropIngest,
-// LibraryScan) are dialect-agnostic; River workers call them through
-// their respective dispatch paths.
+// LibraryScan) are called by River workers through the registry's
+// dispatch path.
 package task
 
 import (
