@@ -76,9 +76,12 @@ func TestChunkedSynthesizePassesASinglePieceThroughUnchanged(t *testing.T) {
 	}
 }
 
-// A segment over the cap becomes several calls, each within the cap, split
-// on sentence boundaries, in the order the text reads.
-func TestChunkedSynthesizeSplitsAboveCapOnSentenceBoundaries(t *testing.T) {
+// A segment over the cap becomes several calls, each within the cap, with
+// no text dropped or reordered across the seams. (Sentence-boundary
+// placement itself is textsplit's own contract, tested in
+// internal/textsplit; this only has to prove chunked hands OnSentences'
+// pieces to speak in order.)
+func TestChunkedSynthesizeSplitsAboveCapPreservingOrderAndText(t *testing.T) {
 	t.Parallel()
 
 	sentence := "This is a sentence of a reasonable length. "
@@ -377,10 +380,23 @@ func TestElevenLabsChunksToItsOwnCap(t *testing.T) {
 	if len(texts) < 2 {
 		t.Fatalf("got %d requests, want several — the segment exceeds ElevenLabs's %d-char cap", len(texts), maxChars)
 	}
+	largest := 0
 	for i, tx := range texts {
 		if n := len([]rune(tx)); n > maxChars {
 			t.Errorf("request %d's text is %d chars, over ElevenLabs's own %d-char cap", i, n, maxChars)
+		} else if n > largest {
+			largest = n
 		}
+	}
+	// An upper bound alone can't tell ElevenLabs's own 5000-char cap apart
+	// from a shared cap borrowed from a smaller sibling: at a shared 4096,
+	// every piece here would still land under both caps and this test would
+	// pass regardless of which cap actually drove the split. At least one
+	// piece has to land strictly above OpenAI's cap to prove that didn't
+	// happen.
+	if openAICap := mustCap(t, EngineOpenAI); largest <= openAICap {
+		t.Errorf("largest request is %d chars, want at least one over OpenAI's %d-char cap — "+
+			"otherwise a cap shared with OpenAI would pass this test too", largest, openAICap)
 	}
 }
 
@@ -458,9 +474,21 @@ func TestAzureChunksToItsOwnCap(t *testing.T) {
 	if len(texts) < 2 {
 		t.Fatalf("got %d requests, want several — the segment exceeds Azure's %d-char cap", len(texts), maxChars)
 	}
+	largest := 0
 	for i, tx := range texts {
 		if n := len([]rune(tx)); n > maxChars {
 			t.Errorf("request %d's unescaped text is %d chars, over Azure's own %d-char cap", i, n, maxChars)
+		} else if n > largest {
+			largest = n
 		}
+	}
+	// Same reasoning as the ElevenLabs test: an upper bound alone doesn't
+	// distinguish Azure's own 8000-char cap from a shared cap borrowed from
+	// a smaller sibling. At least one piece has to land strictly above
+	// ElevenLabs's cap to prove Azure's own, larger cap actually drove the
+	// split.
+	if elevenLabsCap := mustCap(t, EngineElevenLabs); largest <= elevenLabsCap {
+		t.Errorf("largest request is %d chars, want at least one over ElevenLabs's %d-char cap — "+
+			"otherwise a cap shared with ElevenLabs would pass this test too", largest, elevenLabsCap)
 	}
 }
