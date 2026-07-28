@@ -72,6 +72,13 @@ type Info struct {
 	// NeedsModel reports whether the engine takes a model at all. Azure
 	// selects everything through the voice name.
 	NeedsModel bool
+	// newSpeaker builds this engine's adapter. Declared on the catalog
+	// entry so adding an engine is one entry rather than an entry plus a
+	// switch case somewhere else that nothing forces to agree with it.
+	//
+	// Unexported because only this package declares engines. The
+	// settings handler reads Info's named fields and never marshals it.
+	newSpeaker func(Config) speaker
 }
 
 // Catalog is the single declaration of which engines this binary knows.
@@ -85,6 +92,7 @@ var Catalog = []Info{
 		DefaultPricePerMillionChars: 15,
 		DefaultModel:                "tts-1",
 		NeedsModel:                  true,
+		newSpeaker:                  func(c Config) speaker { return &openAIEngine{cfg: c} },
 	},
 	{
 		ID:                          EngineElevenLabs,
@@ -94,6 +102,7 @@ var Catalog = []Info{
 		DefaultBaseURL:              "https://api.elevenlabs.io/v1",
 		DefaultModel:                "eleven_multilingual_v2",
 		NeedsModel:                  true,
+		newSpeaker:                  func(c Config) speaker { return &elevenLabsEngine{cfg: c} },
 	},
 	{
 		ID:                          EngineAzure,
@@ -101,6 +110,7 @@ var Catalog = []Info{
 		MaxRequestChars:             8000,
 		DefaultPricePerMillionChars: 15,
 		NeedsModel:                  false,
+		newSpeaker:                  func(c Config) speaker { return &azureEngine{cfg: c} },
 	},
 }
 
@@ -157,6 +167,12 @@ type Engine interface {
 	ListVoices(ctx context.Context) ([]Voice, error)
 }
 
+// speaker is one engine's adapter.
+type speaker interface {
+	Synthesize(ctx context.Context, r Request) ([]byte, error)
+	ListVoices(ctx context.Context) ([]Voice, error)
+}
+
 // New builds the adapter for id.
 func New(id EngineID, cfg Config) (Engine, error) {
 	info, ok := Lookup(id)
@@ -172,15 +188,10 @@ func New(id EngineID, cfg Config) (Engine, error) {
 	}
 	cfg.BaseURL = base
 
-	switch id {
-	case EngineOpenAI:
-		return &openAIEngine{cfg: cfg}, nil
-	case EngineElevenLabs:
-		return &elevenLabsEngine{cfg: cfg}, nil
-	case EngineAzure:
-		return &azureEngine{cfg: cfg}, nil
+	if info.newSpeaker == nil {
+		return nil, fmt.Errorf("tts: engine %q is in the catalog but has no adapter", id)
 	}
-	return nil, fmt.Errorf("tts: engine %q is in the catalog but has no adapter", id)
+	return info.newSpeaker(cfg), nil
 }
 
 // ---------------------------------------------------------------------------

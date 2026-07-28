@@ -183,6 +183,20 @@ func TestSelectedEngineReturnsTheChosenEntry(t *testing.T) {
 	}
 }
 
+// Adding a TTS engine means touching the catalog, its adapter, and this
+// settings row's per-engine slot. The first two are one declaration
+// after #183; this is the third site, and it cannot join them without
+// changing the shape of persisted settings. So it fails loudly instead.
+func TestEveryCatalogEngineHasASettingsSlot(t *testing.T) {
+	var cfg AudiobookConfig
+	for _, info := range tts.Catalog {
+		if (&cfg).EngineSlot(info.ID) == nil {
+			t.Errorf("engine %q is in the TTS catalog but has no settings slot — "+
+				"add one to AudiobookConfig and to EngineSlot's switch", info.ID)
+		}
+	}
+}
+
 // The default row must be saveable and disabled: nothing should be able
 // to spend money before an admin has said so.
 func TestDefaultAudiobookConfigIsDisabledAndValid(t *testing.T) {
