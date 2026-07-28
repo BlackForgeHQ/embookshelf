@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/blackforge/embookshelf/internal/db"
@@ -18,7 +19,7 @@ import (
 // The trailing `COALESCE(ubp.progress, 0)` comes from a LEFT JOIN on
 // user_book_progress; callers must alias that join as `ubp` and bind the
 // user id as the first parameter ($1).
-const bookCols = `
+var bookCols = `
 	b.id, b.library_id, b.title, b.subtitle, b.author, b.format, b.year,
 	b.publish_date, b.language,
 	COALESCE(ubp.progress, 0) AS progress,
@@ -30,14 +31,36 @@ const bookCols = `
 	b.created_at, b.path,
 	b.has_cover, b.cover_mime, b.cover_hash,
 	COALESCE(ubp.resume_cfi, '') AS resume_cfi,
-	b.title_locked, b.subtitle_locked, b.author_locked,
-	b.description_locked, b.publisher_locked, b.series_locked,
-	b.isbn_locked, b.isbn10_locked, b.language_locked,
-	b.publish_date_locked, b.genres_locked, b.moods_locked,
-	b.tags_locked, b.pages_locked, b.cover_locked,
+	` + lockColumnList("b.") + `,
 	b.duration_seconds, b.narrator, b.chapters,
 	b.uuid, b.folder_path
 `
+
+// lockColumnList renders the books lock columns, in model.LockSpecs
+// order, with the given qualifier. Every SQL context that names the lock
+// block goes through here, so the SELECT order, the scan destinations in
+// scanBook and the UPDATE SET list are one traversal of one declaration
+// rather than four hand-kept lists — the Column-order coupling hazard
+// applied to the part of the row that grows.
+func lockColumnList(qualifier string) string {
+	cols := model.LockColumns()
+	out := make([]string, len(cols))
+	for i, c := range cols {
+		out[i] = qualifier + c
+	}
+	return strings.Join(out, ", ")
+}
+
+// lockSetList renders "title_locked = $n, ..." starting at placeholder
+// first, paired with model.LockValues for the arguments.
+func lockSetList(first int) string {
+	cols := model.LockColumns()
+	out := make([]string, len(cols))
+	for i, c := range cols {
+		out[i] = c + " = $" + strconv.Itoa(first+i)
+	}
+	return strings.Join(out, ", ")
+}
 
 // bookFromPG is the FROM + LEFT JOIN clause for book queries, where
 // the user_id parameter is $1.
@@ -177,7 +200,7 @@ func (r *BookRepo) Create(ctx context.Context, b model.Book) (model.Book, error)
 		b.Path, b.HasCover, b.CoverMime, folderPathArg,
 	}
 
-	const qPG = `
+	qPG := `
 		WITH inserted AS (
 			INSERT INTO books (id, library_id, title, subtitle, author, format, year,
 			                   publish_date, language,
@@ -202,11 +225,7 @@ func (r *BookRepo) Create(ctx context.Context, b model.Book) (model.Book, error)
 		       b.created_at, b.path,
 		       b.has_cover, b.cover_mime, b.cover_hash,
 		       '' AS resume_cfi,
-		       b.title_locked, b.subtitle_locked, b.author_locked,
-		       b.description_locked, b.publisher_locked, b.series_locked,
-		       b.isbn_locked, b.isbn10_locked, b.language_locked,
-		       b.publish_date_locked, b.genres_locked, b.moods_locked,
-		       b.tags_locked, b.pages_locked, b.cover_locked,
+		       ` + lockColumnList("b.") + `,
 		       b.duration_seconds, b.narrator, b.chapters,
 		       b.uuid, b.folder_path
 		FROM inserted b
@@ -216,12 +235,14 @@ func (r *BookRepo) Create(ctx context.Context, b model.Book) (model.Book, error)
 	return scanBook(row)
 }
 
+var bookGetByIDQuery = `
+	SELECT ` + bookCols + `
+	` + bookFromPG + `
+	WHERE b.id = $2 AND b.deleted_at IS NULL
+`
+
 func (r *BookRepo) GetByID(ctx context.Context, userID, id string) (model.Book, error) {
-	const qPG = `
-		SELECT ` + bookCols + `
-		` + bookFromPG + `
-		WHERE b.id = $2 AND b.deleted_at IS NULL
-	`
+	qPG := bookGetByIDQuery
 	row := r.db.SQL.QueryRowContext(ctx, qPG, userID, id)
 	b, err := scanBook(row)
 	if err != nil {
@@ -276,13 +297,15 @@ func (r *BookRepo) SetCoverHash(ctx context.Context, bookID string, hash []byte)
 // Used by the boot-time covers backfill worker. batchSize controls the
 // LIMIT applied; 0 defaults to 100. Re-issued each call so Drain can
 // page through all pending rows.
+var bookMissingCoverHashQuery = `SELECT ` + bookCols + ` ` + bookFromPG + `
+	WHERE b.has_cover = TRUE AND b.cover_hash IS NULL AND b.deleted_at IS NULL
+	LIMIT $2`
+
 func (r *BookRepo) ListMissingCoverHash(ctx context.Context, batchSize int) ([]model.Book, error) {
 	if batchSize <= 0 {
 		batchSize = 100
 	}
-	const qPG = `SELECT ` + bookCols + ` ` + bookFromPG + `
-		WHERE b.has_cover = TRUE AND b.cover_hash IS NULL AND b.deleted_at IS NULL
-		LIMIT $2`
+	qPG := bookMissingCoverHashQuery
 	// user_id = NULL never matches user_book_progress; the backfill only needs
 	// cover data, not per-user progress. Empty string would 22P02 against the
 	// UUID column on Postgres.
@@ -433,7 +456,11 @@ func (r *BookRepo) UpdateMetadata(ctx context.Context, b model.Book) error {
 		b.Tags = []string{}
 	}
 
-	const qPG = `
+	// The scalar placeholders come first, then the lock block, then the
+	// id — all three numbered from one count, so adding a lock cannot
+	// leave the WHERE clause pointing at a lock argument.
+	const scalars = 23
+	qPG := `
 		UPDATE books SET
 			title          = $1,
 			subtitle       = $2,
@@ -458,26 +485,12 @@ func (r *BookRepo) UpdateMetadata(ctx context.Context, b model.Book) error {
 			content_rating = $21,
 			pages          = $22,
 			public_reviews = $23,
-			title_locked          = $24,
-			subtitle_locked       = $25,
-			author_locked         = $26,
-			description_locked    = $27,
-			publisher_locked      = $28,
-			series_locked         = $29,
-			isbn_locked           = $30,
-			isbn10_locked         = $31,
-			language_locked       = $32,
-			publish_date_locked   = $33,
-			genres_locked         = $34,
-			moods_locked          = $35,
-			tags_locked           = $36,
-			pages_locked          = $37,
-			cover_locked          = $38,
+			` + lockSetList(scalars+1) + `,
 			updated_at     = now()
-		WHERE id = $39 AND deleted_at IS NULL
+		WHERE id = $` + strconv.Itoa(scalars+len(model.LockSpecs)+1) + ` AND deleted_at IS NULL
 	`
 
-	res, err := r.db.SQL.ExecContext(ctx, qPG,
+	args := []any{
 		b.Title, b.Subtitle, b.Author, b.Format, b.Year,
 		b.PublishDate, b.Language,
 		b.Rating, b.CoverPalette,
@@ -485,13 +498,14 @@ func (r *BookRepo) UpdateMetadata(ctx context.Context, b model.Book) error {
 		b.Series, b.SeriesIndex, b.SeriesTotal,
 		b.Genres, b.Moods, b.Tags,
 		b.AgeRating, b.ContentRating, b.Pages, b.PublicReviews,
-		b.Locks.Title, b.Locks.Subtitle, b.Locks.Author,
-		b.Locks.Description, b.Locks.Publisher, b.Locks.Series,
-		b.Locks.ISBN, b.Locks.ISBN10, b.Locks.Language,
-		b.Locks.PublishDate, b.Locks.Genres, b.Locks.Moods,
-		b.Locks.Tags, b.Locks.Pages, b.Locks.Cover,
-		b.ID,
-	)
+	}
+	if len(args) != scalars {
+		return fmt.Errorf("book update: %d scalar args, want %d", len(args), scalars)
+	}
+	args = append(args, model.LockValues(b.Locks)...)
+	args = append(args, b.ID)
+
+	res, err := r.db.SQL.ExecContext(ctx, qPG, args...)
 	if err != nil {
 		return err
 	}
@@ -565,7 +579,7 @@ func scanBook(s scanner) (model.Book, error) {
 	var durationAny, chaptersAny any
 	var coverHashAny any
 	var bookUUID, folderPath sql.NullString
-	err := s.Scan(
+	dest := []any{
 		&b.ID, &b.LibraryID, &b.Title, &b.Subtitle, &b.Author, &b.Format, &b.Year,
 		&publishDateAny, &b.Language,
 		&b.Progress, &b.Rating, &b.CoverPalette,
@@ -576,14 +590,13 @@ func scanBook(s scanner) (model.Book, error) {
 		&createdAny, &b.Path,
 		&b.HasCover, &b.CoverMime, &coverHashAny,
 		&b.ResumeCFI,
-		&b.Locks.Title, &b.Locks.Subtitle, &b.Locks.Author,
-		&b.Locks.Description, &b.Locks.Publisher, &b.Locks.Series,
-		&b.Locks.ISBN, &b.Locks.ISBN10, &b.Locks.Language,
-		&b.Locks.PublishDate, &b.Locks.Genres, &b.Locks.Moods,
-		&b.Locks.Tags, &b.Locks.Pages, &b.Locks.Cover,
+	}
+	dest = append(dest, model.LockFlags(&b.Locks)...)
+	dest = append(dest,
 		&durationAny, &b.Narrator, &chaptersAny,
 		&bookUUID, &folderPath,
 	)
+	err := s.Scan(dest...)
 	if err != nil {
 		return b, err
 	}

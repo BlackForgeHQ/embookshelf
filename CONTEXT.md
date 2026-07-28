@@ -184,6 +184,24 @@ The rules it owns: short text fields trimmed (Description kept verbatim, it is p
 
 Two behaviours that surprise callers, both pinned by tests: setting `PublishDate` **also sets Year** (Year is a denormalised display column and would otherwise go stale), so a patch carrying both ends up with the date's year; and an unparseable `PublishDate` is silently ignored rather than rejected. Field *content* — ISBN shape, a plausible year — is validated only in the browser, so a non-UI caller can store neither.
 
+### Lock vocabulary
+
+`model.LockSpecs`; the single declaration of the fifteen per-field locks. One `LockSpec` per lock carries the three facts that used to be restated in five places — the wire name (a `model.LockField` constant), the `books` `*_locked` column, and the flag on `BookLocks` — so every projection is derived: the sparse DTO map, the toggle endpoint, the repo SELECT / scan / UPDATE block, and the [[Apply match]] writability predicate.
+
+Exists because three of those five edits failed **silently**. A missing serializer entry meant the flag never reached the client; a missing toggle case meant the endpoint accepted the key, validated it against the old `LockFields` slice, and did nothing; a missing writability check meant the field was never protected from a metadata provider match. Only the repo column list failed loudly, and only on a count mismatch. Same drift class as the [[Event catalog]] and the [[Job registry]], and the same answer.
+
+**Adding a lock field is one entry in `LockSpecs`** (plus its migration). Validation and application are now the same lookup — `ParseLockField` then `BookLocks.Set` — so a key that validates is by construction a key that applies.
+
+Two projections cannot be derived by a loop and are pinned by parity tests instead. `internal/model`'s test restates the vocabulary exhaustively (the [[Job registry]]'s `registry_test.go` shape) and uses reflection to prove each spec's `Flag` closure targets its own `BookLocks` field — a copy-pasted closure pointing at the neighbour is the [[Column-order coupling]] hazard in a new place. `internal/service`'s test probes `ApplyMatch` per lock and requires every lock to either demonstrably change what a match writes, or be declared — with a reason — as having no provider source (`subtitle`, `moods`, `tags`, `pages`) or as gating a side effect (`cover`).
+
+### Editable field set
+
+`model.editableFields`; the twelve fields of `EditableMetadata` declared once, with `IsZero`, `MergeEditable`, `Book.Editable()` and `Book.ApplyEditable()` derived from it rather than hand-walked. Each entry states how to test the field for empty, how to copy it, and how it projects on and off a `Book`.
+
+`published_date` is the one entry with **no** Book projection, and that is now stated rather than implied: `Book.PublishDate` is a `*time.Time`, so the layout conversion belongs at the boundary that knows the layout ([[Book patch]]'s `applyPublishDate`). Previously this showed up only as the field's absence from two of the four walkers, which reads like an oversight.
+
+**Distinct** from [[Book patch]], the second and wider editable surface: `BookPatch` also carries Format, Year, Rating, Palette, ISBN10, SeriesTotal, AgeRating, ContentRating, Pages and PublicReviews, none of which a [[Sidecar]] holds. What must not drift is the overlap — a parity test maps every editable field onto its `BookPatch` field, because a field the sidecar can carry that no patch can set is a field the edit UI cannot reach. `BookPatch.Apply`'s per-field branches were left in place: each carries its own normaliser (trim, clamp, de-duplicate), so folding them into the walk would relocate the rules rather than remove them.
+
 ### Source
 
 `storage.Source`; the random-access byte view of a single object. `io.ReaderAt + io.Closer + Size() int64`. Returned by `Storage.Open(ctx, key)`. **Distinct** from `storage.Get` (sequential streaming via `io.ReadCloser`) — Source is for callers that need to seek (zip directories, PDF XREF, MP4 atoms). **Distinct** from `service.BookSource` — that's a delivery decision, not a byte primitive.

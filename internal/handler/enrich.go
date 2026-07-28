@@ -300,7 +300,7 @@ func (h *Handler) EnrichApplyMatch(c *gin.Context) {
 
 // toggleFieldLocksReq flips the lock flag for one or more metadata
 // fields on a single book. `locks` is a sparse map — only mentioned
-// fields change. Field keys match model.LockFields.
+// fields change. Field keys are model.LockField values.
 type toggleFieldLocksReq struct {
 	Locks map[string]bool `json:"locks"`
 }
@@ -328,19 +328,21 @@ func (h *Handler) EnrichToggleFieldLocks(c *gin.Context) {
 		return
 	}
 
-	allowed := make(map[string]struct{}, len(model.LockFields))
-	for _, f := range model.LockFields {
-		allowed[f] = struct{}{}
-	}
-	for field := range body.Locks {
-		if _, ok := allowed[field]; !ok {
+	// Validation and application are the same lookup: a key that
+	// passes ParseLockField is a key BookLocks.Set will write. The two
+	// used to be separate walks over the vocabulary, which is how a
+	// field could be accepted, validated, and then silently ignored.
+	parsed := make(map[model.LockField]bool, len(body.Locks))
+	for field, v := range body.Locks {
+		f, ok := model.ParseLockField(field)
+		if !ok {
 			writeError(c, http.StatusBadRequest, "unknown lock field: "+field)
 			return
 		}
+		parsed[f] = v
 	}
-
-	for field, v := range body.Locks {
-		applyLock(&book.Locks, field, v)
+	for f, v := range parsed {
+		book.Locks.Set(f, v)
 	}
 
 	lockOutcome, err := h.lib.UpdateBookMetadata(c.Request.Context(), book)
@@ -377,41 +379,6 @@ func (h *Handler) EnrichToggleFieldLocks(c *gin.Context) {
 		resp["warnings"] = warnings
 	}
 	c.JSON(http.StatusOK, resp)
-}
-
-func applyLock(l *model.BookLocks, field string, v bool) {
-	switch field {
-	case "title":
-		l.Title = v
-	case "subtitle":
-		l.Subtitle = v
-	case "author":
-		l.Author = v
-	case "description":
-		l.Description = v
-	case "publisher":
-		l.Publisher = v
-	case "series":
-		l.Series = v
-	case "isbn":
-		l.ISBN = v
-	case "isbn10":
-		l.ISBN10 = v
-	case "language":
-		l.Language = v
-	case "publishDate":
-		l.PublishDate = v
-	case "genres":
-		l.Genres = v
-	case "moods":
-		l.Moods = v
-	case "tags":
-		l.Tags = v
-	case "pages":
-		l.Pages = v
-	case "cover":
-		l.Cover = v
-	}
 }
 
 // isbnLookupReq drives POST /books/metadata/isbn-lookup. Walks enabled
