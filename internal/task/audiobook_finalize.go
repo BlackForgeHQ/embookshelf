@@ -69,6 +69,8 @@ type FinalizeDeps struct {
 	DataPath string
 }
 
+// publish emits the run's terminal event. See SegmentDeps.publish
+// (audiobook.go) for why a nil publisher is not an error.
 func (d FinalizeDeps) publish(bookID string) {
 	if d.Publish != nil {
 		d.Publish(bookID)

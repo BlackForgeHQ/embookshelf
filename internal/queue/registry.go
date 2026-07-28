@@ -83,6 +83,10 @@ func registry(deps Deps) []registration {
 		Hub:      deps.Hub,
 	}
 
+	// The one collaborator the guide and audiobook jobs share (spec §3):
+	// wired once here rather than constructed per job.
+	openBook := service.NewLibraryBookOpener(deps.LibStore).Open
+
 	// Settings is read per job so an admin can change model, language or
 	// cap without a restart. Registered unconditionally, like the email
 	// jobs: the worker itself refuses when the feature is disabled.
@@ -100,12 +104,18 @@ func registry(deps Deps) []registration {
 		},
 		Guides: deps.Guides,
 		Books:  deps.Books,
-		Open:   service.NewLibraryBookOpener(deps.LibStore).Open,
+		Open:   openBook,
 	}
 	if deps.Hub != nil {
 		readingGuide.Publish = func(bookID string) {
 			_ = deps.Hub.Publish(sse.ReadingGuideUpdated{BookID: bookID})
 		}
+	}
+
+	// publishAudiobook is the SSE side of every audiobook state change —
+	// segment progress and finalize both report on the same topic.
+	publishAudiobook := func(bookID string) {
+		_ = deps.Hub.Publish(sse.AudiobookUpdated{BookID: bookID})
 	}
 
 	// Audiobook generation runs on its own queue, declared by its args
@@ -117,7 +127,7 @@ func registry(deps Deps) []registration {
 		Engine:   repo.AudiobookConfig.SelectEngine,
 		Runs:     deps.Audiobooks,
 		Books:    deps.Books,
-		Open:     service.NewLibraryBookOpener(deps.LibStore).Open,
+		Open:     openBook,
 		DataPath: deps.DataPath,
 		Finalize: func(ctx context.Context, bookID string) error {
 			if deps.AudiobookDispatch == nil || deps.AudiobookDispatch.Finalize == nil {
@@ -127,9 +137,7 @@ func registry(deps Deps) []registration {
 		},
 	}
 	if deps.Hub != nil {
-		segment.Publish = func(bookID string) {
-			_ = deps.Hub.Publish(sse.AudiobookUpdated{BookID: bookID})
-		}
+		segment.Publish = publishAudiobook
 	}
 
 	finalize := task.FinalizeDeps{
@@ -153,9 +161,7 @@ func registry(deps Deps) []registration {
 		finalize.Cover = deps.Covers.Open
 	}
 	if deps.Hub != nil {
-		finalize.Publish = func(bookID string) {
-			_ = deps.Hub.Publish(sse.AudiobookUpdated{BookID: bookID})
-		}
+		finalize.Publish = publishAudiobook
 	}
 
 	return []registration{

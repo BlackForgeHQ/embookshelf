@@ -46,6 +46,8 @@ type ReadingGuideDeps struct {
 	Publish func(bookID string)
 }
 
+// publish emits the guide's completion event. See SegmentDeps.publish
+// (audiobook.go) for why a nil publisher is not an error.
 func (d ReadingGuideDeps) publish(bookID string) {
 	if d.Publish != nil {
 		d.Publish(bookID)

@@ -19,13 +19,9 @@ import (
 // fakeGuides records what the worker wrote.
 type fakeGuides struct {
 	saved []model.ReadingGuide
-	err   error
 }
 
 func (f *fakeGuides) Upsert(_ context.Context, g model.ReadingGuide) error {
-	if f.err != nil {
-		return f.err
-	}
 	f.saved = append(f.saved, g)
 	return nil
 }

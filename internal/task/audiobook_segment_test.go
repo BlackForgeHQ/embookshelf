@@ -68,15 +68,14 @@ func (f *fakeSegmentRuns) RecordSegment(
 // ---------------------------------------------------------------------------
 
 type segmentHarness struct {
-	deps       task.SegmentDeps
-	runs       *fakeSegmentRuns
-	books      *fakeBooks
-	engine     *fakeEngine
-	published  int
-	finalized  int
-	engineErr  error
-	dataPath   string
-	configCall int
+	deps      task.SegmentDeps
+	runs      *fakeSegmentRuns
+	books     *fakeBooks
+	engine    *fakeEngine
+	published int
+	finalized int
+	engineErr error
+	dataPath  string
 }
 
 // newSegmentHarness wires a worker whose every collaborator is in
@@ -98,7 +97,6 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 	src := epubWithChapters(t, "One sentence. Another sentence. A third one.", "Second chapter here.")
 	h.deps = task.SegmentDeps{
 		Config: func(context.Context) (repo.AudiobookConfig, error) {
-			h.configCall++
 			return repo.AudiobookConfig{Enabled: true, Engine: "openai", SegmentChars: 1000}, nil
 		},
 		Engine: func(repo.AudiobookConfig) (repo.ConfiguredEngine, error) {
@@ -157,6 +155,26 @@ func TestSegmentRefusesWhenTheFeatureIsDisabled(t *testing.T) {
 	}
 }
 
+// A store error reading the run is a load failure, not a narration
+// outcome — nothing has been claimed yet, so there is nothing to record
+// it against.
+func TestSegmentSurfacesARunLoadFailure(t *testing.T) {
+	h := newSegmentHarness(t)
+	h.runs.getErr = errors.New("db unavailable")
+
+	err := h.run(t, 0)
+
+	if err == nil {
+		t.Fatal("AudiobookSegment returned nil for a run the store could not load")
+	}
+	if !strings.Contains(err.Error(), "b1") {
+		t.Errorf("err = %q, want it to name the book", err.Error())
+	}
+	if h.runs.claims != 0 || h.engine.calls != 0 {
+		t.Errorf("claims=%d engine=%d, want neither before the run even loaded", h.runs.claims, h.engine.calls)
+	}
+}
+
 // Cancel is the only stop-loss on a run that may be a hundred and
 // seventy dollars. A segment picked up after one must not claim.
 func TestSegmentSkipsACanceledRunWithoutClaiming(t *testing.T) {
@@ -198,6 +216,24 @@ func TestSegmentDoesNotResynthesizeWhatItCouldNotClaim(t *testing.T) {
 	}
 	if h.engine.calls != 0 {
 		t.Errorf("engine called %d times for an unclaimed segment", h.engine.calls)
+	}
+}
+
+// A claim error is the store's own failure, distinct from losing the
+// claim race (claimed=false, nil error): River has to retry a store that
+// could not even attempt the claim, not treat it as someone else having
+// finished the segment first.
+func TestSegmentSurfacesAClaimFailure(t *testing.T) {
+	h := newSegmentHarness(t)
+	h.runs.claimErr = errors.New("advisory lock unavailable")
+
+	err := h.run(t, 0)
+
+	if err == nil {
+		t.Fatal("AudiobookSegment returned nil for a claim the store could not attempt")
+	}
+	if h.engine.calls != 0 {
+		t.Errorf("engine called %d times despite the claim failing", h.engine.calls)
 	}
 }
 
@@ -261,6 +297,29 @@ func TestSegmentSurfacesAMissingBook(t *testing.T) {
 // Engine outcomes
 // ---------------------------------------------------------------------------
 
+// deps.Engine failing — a bad key, an unknown engine id, anything that
+// keeps the engine from being built at all — is a different permanent
+// route from the run/current-engine mismatch above: there the engine
+// builds fine and the run's own choice loses; here there is no engine to
+// choose between.
+func TestSegmentTreatsAnEngineBuildFailureAsPermanent(t *testing.T) {
+	h := newSegmentHarness(t)
+	h.engineErr = errors.New("no api key configured")
+
+	if err := h.run(t, 0); err != nil {
+		t.Fatalf("AudiobookSegment returned %v, want nil for a permanent failure", err)
+	}
+	if len(h.runs.recorded) != 1 || h.runs.recorded[0].State != model.SegmentFailed {
+		t.Fatalf("recorded %+v, want one failed segment", h.runs.recorded)
+	}
+	if h.engine.calls != 0 {
+		t.Errorf("engine called %d times when it could not even be built", h.engine.calls)
+	}
+	if h.published != 1 {
+		t.Errorf("published %d times, want exactly one terminal event", h.published)
+	}
+}
+
 // A permanent engine error stops River retrying something that cannot
 // improve; the failed row and its message carry the outcome.
 func TestSegmentRecordsAPermanentEngineFailureAndStopsRetrying(t *testing.T) {
@@ -294,7 +353,7 @@ func TestSegmentReturnsATransientEngineFailureForRiver(t *testing.T) {
 }
 
 // Audio the frame parser cannot read is not something a retry improves —
-// when it is caught. This raises MaxRequestChars so segment 0's 45
+// when it is caught. This raises MaxRequestChars so segment 0's 44
 // characters stay in one chunk, which routes the bad bytes through
 // AudiobookSegment's own audio.Payload check rather than joinParts' (see
 // the sibling test below for what happens when they don't fit in one).
@@ -400,6 +459,7 @@ func TestSegmentRefusesASeqThePlanNoLongerHas(t *testing.T) {
 
 func TestSegmentStagesItsAudioAndRecordsTheDuration(t *testing.T) {
 	h := newSegmentHarness(t)
+	h.runs.run.Model = "tts-1"
 
 	if err := h.run(t, 0); err != nil {
 		t.Fatalf("AudiobookSegment: %v", err)
@@ -416,6 +476,20 @@ func TestSegmentStagesItsAudioAndRecordsTheDuration(t *testing.T) {
 	}
 	if !h.staged(0) {
 		t.Errorf("no file at %s", got.StagedPath)
+	}
+	// The run pins its own voice and model rather than deferring to
+	// whatever is currently configured — that pin is worthless if it
+	// never actually reaches the engine call. The harness's small
+	// MaxRequestChars splits the segment into several chunks, so every
+	// request has to carry it, not just the first.
+	if len(h.engine.requests) == 0 {
+		t.Fatal("engine was never called")
+	}
+	for i, req := range h.engine.requests {
+		if req.Voice != h.runs.run.Voice || req.Model != h.runs.run.Model {
+			t.Errorf("request %d voice/model = %q/%q, want the run's own %q/%q",
+				i, req.Voice, req.Model, h.runs.run.Voice, h.runs.run.Model)
+		}
 	}
 }
 

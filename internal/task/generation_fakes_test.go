@@ -95,12 +95,10 @@ func epubWithChapters(t *testing.T, bodies ...string) storage.Source {
 // ---------------------------------------------------------------------------
 // Fakes
 //
-// Not called from this file: they exist so the audiobook and reading-guide
-// worker tests (a following change) can substitute for repo.BookRepo and a
-// tts.Engine without Postgres or a live TTS endpoint. The var _ = ... lines
-// below keep golangci-lint's unused check quiet about that forward
-// reference without a suppression comment that would go stale once the
-// worker tests actually call these.
+// Not called from this file: audiobook_segment_test.go, audiobook_finalize_test.go
+// and reading_guide_test.go substitute these for repo.BookRepo and a
+// tts.Engine, which is what lets those tests run without Postgres or a
+// live TTS endpoint.
 // ---------------------------------------------------------------------------
 
 // audioUpdate records what a finalize wrote back onto the book row.
@@ -110,18 +108,16 @@ type audioUpdate struct {
 	Chapters        []model.Chapter
 }
 
-// fakeBooks is a book row plus recorder for the audio write-back. It will
-// satisfy the task package's own reader/writer seams once those land in a
-// later change; until then it stands alone.
+// fakeBooks is a book row plus recorder for the audio write-back. It
+// satisfies both bookReader and bookAudioWriter, which is what lets one
+// fake stand in for the segment, finalize and guide workers' book seam.
 type fakeBooks struct {
 	book  model.Book
 	err   error
-	gets  int
 	audio *audioUpdate
 }
 
 func (f *fakeBooks) GetByID(_ context.Context, _, _ string) (model.Book, error) {
-	f.gets++
 	if f.err != nil {
 		return model.Book{}, f.err
 	}
