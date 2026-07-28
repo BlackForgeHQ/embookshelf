@@ -303,21 +303,27 @@ func cleanStaging(dataPath, bookID string) {
 // back to does not park gigabytes forever.
 const StaleStagingTTL = 7 * 24 * time.Hour
 
+// stagingLister is the one thing a sweep asks of a run store: which runs
+// have been dead weight long enough to reclaim.
+type stagingLister interface {
+	ListStaleStaging(ctx context.Context, olderThanDays int) ([]string, error)
+}
+
 // SweepAudiobookStaging removes staging for runs whose staged segments
 // have been dead weight for longer than StaleStagingTTL. Which runs
 // those are is ListStaleStaging's judgement, not this loop's.
-func SweepAudiobookStaging(ctx context.Context, deps AudiobookDeps) (int, error) {
-	ids, err := deps.Audiobooks.ListStaleStaging(ctx, int(StaleStagingTTL/(24*time.Hour)))
+func SweepAudiobookStaging(ctx context.Context, runs stagingLister, dataPath string) (int, error) {
+	ids, err := runs.ListStaleStaging(ctx, int(StaleStagingTTL/(24*time.Hour)))
 	if err != nil {
 		return 0, err
 	}
 	swept := 0
 	for _, id := range ids {
-		dir := StagingDir(deps.DataPath, id)
+		dir := StagingDir(dataPath, id)
 		if _, err := os.Stat(dir); err != nil {
 			continue
 		}
-		cleanStaging(deps.DataPath, id)
+		cleanStaging(dataPath, id)
 		swept++
 	}
 	return swept, nil
@@ -325,8 +331,8 @@ func SweepAudiobookStaging(ctx context.Context, deps AudiobookDeps) (int, error)
 
 // LoopAudiobookStagingSweep runs the sweep hourly, matching the shape of
 // the missing-file and orphaned-key sweepers.
-func LoopAudiobookStagingSweep(ctx context.Context, deps AudiobookDeps) {
-	if deps.DataPath == "" || deps.Audiobooks == nil {
+func LoopAudiobookStagingSweep(ctx context.Context, runs stagingLister, dataPath string) {
+	if dataPath == "" || runs == nil {
 		return
 	}
 	ticker := time.NewTicker(time.Hour)
@@ -336,7 +342,7 @@ func LoopAudiobookStagingSweep(ctx context.Context, deps AudiobookDeps) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			n, err := SweepAudiobookStaging(ctx, deps)
+			n, err := SweepAudiobookStaging(ctx, runs, dataPath)
 			if err != nil {
 				slog.Warn("audiobook staging sweep", "err", err)
 				continue

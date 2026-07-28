@@ -466,10 +466,7 @@ database must be empty; migrations are applied to it automatically.
 	// Staging for abandoned failed or cancelled runs is dead weight after
 	// a week. Hourly loop, same shape as the missing-file and
 	// orphaned-key sweepers.
-	go task.LoopAudiobookStagingSweep(ctx, task.AudiobookDeps{
-		Audiobooks: audiobookRepo,
-		DataPath:   cfg.DataPath,
-	})
+	go task.LoopAudiobookStagingSweep(ctx, audiobookRepo, cfg.DataPath)
 
 	// Reading guide bulk runs dispatch one job per book, so the runner is
 	// built after the queue. Text cap comes from the settings row at start

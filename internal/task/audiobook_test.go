@@ -93,7 +93,7 @@ func TestSweepAudiobookStagingReclaimsAStrandedRun(t *testing.T) {
 	}
 	ageRun(t, d, bookID, 14)
 
-	n, err := task.SweepAudiobookStaging(ctx, task.AudiobookDeps{Audiobooks: audiobooks, DataPath: dataPath})
+	n, err := task.SweepAudiobookStaging(ctx, audiobooks, dataPath)
 	if err != nil {
 		t.Fatalf("SweepAudiobookStaging: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestSweepAudiobookStagingRetainsAFreshlyFailedRun(t *testing.T) {
 	}
 	ageRun(t, d, bookID, 1)
 
-	n, err := task.SweepAudiobookStaging(ctx, task.AudiobookDeps{Audiobooks: audiobooks, DataPath: dataPath})
+	n, err := task.SweepAudiobookStaging(ctx, audiobooks, dataPath)
 	if err != nil {
 		t.Fatalf("SweepAudiobookStaging: %v", err)
 	}
