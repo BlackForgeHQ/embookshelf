@@ -13,34 +13,64 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/audio"
-	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/sse"
 )
 
 // audiobookGenre is what every generated file declares, so a player that
 // groups by genre files it with audiobooks rather than with music.
 const audiobookGenre = "Audiobook"
 
-// AudiobookDeps groups the seams the finalize worker needs.
-type AudiobookDeps struct {
-	Audiobooks *repo.BookAudiobookRepo
-	Books      *repo.BookRepo
-	Files      *repo.FileRepo
-	LibStore   service.LibraryStore
-	Covers     *coverstore.Store
-	Hub        *sse.Hub
+// finalizeStore is the slice of BookAudiobookRepo finalize touches.
+type finalizeStore interface {
+	GetByBookID(ctx context.Context, bookID string) (model.Audiobook, error)
+	ListSegments(ctx context.Context, bookID string) ([]model.AudiobookSegment, error)
+	SetSegmentStart(ctx context.Context, bookID string, seq int, startMS int64) error
+	SetState(ctx context.Context, bookID string, state model.AudiobookState, msg string) error
+	SetReady(ctx context.Context, bookID, fileID string, durationMS int64) error
+}
+
+// bookAudioWriter reads the book and writes back what only a finished
+// narration knows: its duration and its chapter marks.
+type bookAudioWriter interface {
+	bookReader
+	UpdateAudio(ctx context.Context, id string, durationSeconds *int, narrator string, chapters []model.Chapter) error
+}
+
+// narrationFiles is the files-table slice finalize needs to record the
+// placed audio, reusing the row a previous rendition left behind.
+type narrationFiles interface {
+	GetByLocation(ctx context.Context, libraryID, location string) (model.File, error)
+	SetContentHash(ctx context.Context, fileID string, hash []byte, size int64, mtime time.Time) error
+	Insert(ctx context.Context, f model.File) (model.File, error)
+}
+
+// FinalizeDeps groups the seams the finalize worker needs.
+type FinalizeDeps struct {
+	Runs  finalizeStore
+	Books bookAudioWriter
+	Files narrationFiles
+	// Place moves the assembled file into the book's own folder.
+	// Deliberately narrower than a LibraryStore: the book's folder
+	// already exists, and the generic Placer would answer that with a
+	// "Title (2)" sibling — a second leaf that scan reads as a second
+	// book. Handing over the whole store would let a later edit reach it.
+	Place func(ctx context.Context, book model.Book, srcPath string) (service.PlaceResult, error)
+	// Cover supplies the art embedded in the finished file. Nil-able and
+	// best effort: a narration without embedded art is still a good
+	// narration.
+	Cover   func(book model.Book) (io.ReadCloser, error)
+	Publish func(bookID string)
 	// DataPath roots the staging directory. Per-segment MP3s live on
 	// local disk until finalize, outside storage.Storage, following the
 	// coverstore precedent for derived bytes.
 	DataPath string
 }
 
-func publishAudiobook(deps AudiobookDeps, bookID string) {
-	if deps.Hub != nil {
-		_ = deps.Hub.Publish(sse.AudiobookUpdated{BookID: bookID})
+func (d FinalizeDeps) publish(bookID string) {
+	if d.Publish != nil {
+		d.Publish(bookID)
 	}
 }
 
@@ -52,8 +82,8 @@ func publishAudiobook(deps AudiobookDeps, bookID string) {
 // then mark the run ready. A crash before the last step leaves a file on
 // disk and a run still marked running, which a Retry resolves; a crash
 // after it leaves nothing to resolve.
-func AudiobookFinalize(ctx context.Context, a AudiobookFinalizeArgs, deps AudiobookDeps) error {
-	run, err := deps.Audiobooks.GetByBookID(ctx, a.BookID)
+func AudiobookFinalize(ctx context.Context, a AudiobookFinalizeArgs, deps FinalizeDeps) error {
+	run, err := deps.Runs.GetByBookID(ctx, a.BookID)
 	if err != nil {
 		return fmt.Errorf("load audiobook %s: %w", a.BookID, err)
 	}
@@ -68,7 +98,7 @@ func AudiobookFinalize(ctx context.Context, a AudiobookFinalizeArgs, deps Audiob
 		return nil
 	}
 
-	segments, err := deps.Audiobooks.ListSegments(ctx, a.BookID)
+	segments, err := deps.Runs.ListSegments(ctx, a.BookID)
 	if err != nil {
 		return fmt.Errorf("list segments: %w", err)
 	}
@@ -95,11 +125,6 @@ func AudiobookFinalize(ctx context.Context, a AudiobookFinalizeArgs, deps Audiob
 	}
 	defer func() { _ = os.Remove(assembled) }()
 
-	handle, err := deps.LibStore.For(ctx, book.LibraryID)
-	if err != nil {
-		return fail(ctx, deps, a.BookID, fmt.Errorf("resolve library: %w", err))
-	}
-
 	// Hashed before placement, because placement consumes the file:
 	// content_hash is the authoritative identity of every other files row
 	// (CONTEXT, Content hash) and a narration with a NULL one is invisible
@@ -109,10 +134,7 @@ func AudiobookFinalize(ctx context.Context, a AudiobookFinalizeArgs, deps Audiob
 		return fail(ctx, deps, a.BookID, fmt.Errorf("hash narration: %w", err))
 	}
 
-	// Deliberately PlaceNarration rather than the generic Placer: the
-	// book's folder already exists, and Placer would answer that with a
-	// "Title (2)" sibling — a second leaf that scan reads as a second book.
-	placed, err := handle.PlaceNarration(ctx, book, assembled)
+	placed, err := deps.Place(ctx, book, assembled)
 	if err != nil {
 		return fail(ctx, deps, a.BookID, fmt.Errorf("place narration: %w", err))
 	}
@@ -136,11 +158,11 @@ func AudiobookFinalize(ctx context.Context, a AudiobookFinalizeArgs, deps Audiob
 		slog.Warn("audiobook: update book audio fields", "book", a.BookID, "err", err)
 	}
 
-	if err := deps.Audiobooks.SetReady(ctx, a.BookID, fileRow.ID, totalMS); err != nil {
+	if err := deps.Runs.SetReady(ctx, a.BookID, fileRow.ID, totalMS); err != nil {
 		return fmt.Errorf("mark ready: %w", err)
 	}
 	cleanStaging(deps.DataPath, a.BookID)
-	publishAudiobook(deps, a.BookID)
+	deps.publish(a.BookID)
 	return nil
 }
 
@@ -148,7 +170,7 @@ func AudiobookFinalize(ctx context.Context, a AudiobookFinalizeArgs, deps Audiob
 // previous rendition left at the same location.
 func upsertNarrationFile(
 	ctx context.Context,
-	deps AudiobookDeps,
+	deps FinalizeDeps,
 	book model.Book,
 	placed service.PlaceResult,
 	hash []byte,
@@ -184,7 +206,7 @@ func upsertNarrationFile(
 // jobs is still one entry in the reader's drawer.
 func assemble(
 	ctx context.Context,
-	deps AudiobookDeps,
+	deps FinalizeDeps,
 	book model.Book,
 	segments []model.AudiobookSegment,
 ) (string, []model.Chapter, int64, error) {
@@ -243,7 +265,7 @@ func assemble(
 	// the reading/listening progress bridge is built on.
 	var elapsed int64
 	for i, s := range segments {
-		if err := deps.Audiobooks.SetSegmentStart(ctx, s.BookID, s.Seq, elapsed); err != nil {
+		if err := deps.Runs.SetSegmentStart(ctx, s.BookID, s.Seq, elapsed); err != nil {
 			slog.Warn("audiobook: record segment start", "book", s.BookID, "seq", s.Seq, "err", err)
 		}
 		elapsed += durations[i]
@@ -279,11 +301,11 @@ func chapterMarks(segments []model.AudiobookSegment, durations []int64) ([]model
 // finished has rows with no cover_hash at all, and those books used to
 // finalize with no art for no better reason than which namespace their
 // bytes happened to be in.
-func loadCover(deps AudiobookDeps, book model.Book) ([]byte, string) {
-	if deps.Covers == nil || !book.HasCover {
+func loadCover(deps FinalizeDeps, book model.Book) ([]byte, string) {
+	if deps.Cover == nil || !book.HasCover {
 		return nil, ""
 	}
-	rc, err := deps.Covers.Open(book)
+	rc, err := deps.Cover(book)
 	if err != nil {
 		return nil, ""
 	}
@@ -300,11 +322,11 @@ func loadCover(deps AudiobookDeps, book model.Book) ([]byte, string) {
 // Staging is deliberately left in place: Retry re-enqueues only the
 // segments that never finished, so every paid-for segment has to survive
 // a failed finalize (ADR-0028 §6).
-func fail(ctx context.Context, deps AudiobookDeps, bookID string, cause error) error {
-	if err := deps.Audiobooks.SetState(ctx, bookID, model.AudiobookFailed, cause.Error()); err != nil {
+func fail(ctx context.Context, deps FinalizeDeps, bookID string, cause error) error {
+	if err := deps.Runs.SetState(ctx, bookID, model.AudiobookFailed, cause.Error()); err != nil {
 		slog.Warn("audiobook: mark run failed", "book", bookID, "err", err)
 	}
-	publishAudiobook(deps, bookID)
+	deps.publish(bookID)
 	slog.Error("audiobook finalize failed", "book", bookID, "err", cause)
 	return nil
 }

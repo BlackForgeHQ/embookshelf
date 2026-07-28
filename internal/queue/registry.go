@@ -5,9 +5,11 @@ package queue
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/riverqueue/river"
 
+	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sse"
@@ -130,15 +132,26 @@ func registry(deps Deps) []registration {
 		}
 	}
 
-	// Finalize still takes the old struct until #177's second half.
-	audiobook := task.AudiobookDeps{
-		Audiobooks: deps.Audiobooks,
-		Books:      deps.Books,
-		Files:      deps.FileRepo,
-		LibStore:   deps.LibStore,
-		Covers:     deps.Covers,
-		Hub:        deps.Hub,
-		DataPath:   deps.DataPath,
+	finalize := task.FinalizeDeps{
+		Runs:     deps.Audiobooks,
+		Books:    deps.Books,
+		Files:    deps.FileRepo,
+		DataPath: deps.DataPath,
+		Place: func(ctx context.Context, book model.Book, srcPath string) (service.PlaceResult, error) {
+			handle, err := deps.LibStore.For(ctx, book.LibraryID)
+			if err != nil {
+				return service.PlaceResult{}, fmt.Errorf("resolve library: %w", err)
+			}
+			return handle.PlaceNarration(ctx, book, srcPath)
+		},
+	}
+	if deps.Covers != nil {
+		finalize.Cover = deps.Covers.Open
+	}
+	if deps.Hub != nil {
+		finalize.Publish = func(bookID string) {
+			_ = deps.Hub.Publish(sse.AudiobookUpdated{BookID: bookID})
+		}
 	}
 
 	return []registration{
@@ -161,7 +174,7 @@ func registry(deps Deps) []registration {
 			return task.AudiobookSegment(ctx, a, segment)
 		}),
 		register(func(ctx context.Context, a task.AudiobookFinalizeArgs) error {
-			return task.AudiobookFinalize(ctx, a, audiobook)
+			return task.AudiobookFinalize(ctx, a, finalize)
 		}),
 	}
 }
