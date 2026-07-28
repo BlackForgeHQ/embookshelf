@@ -4,7 +4,6 @@ package queue
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/riverqueue/river"
@@ -120,9 +119,7 @@ func registry(deps Deps) []registration {
 	}
 
 	// Audiobook generation runs on its own queue, declared by its args
-	// types. The finalize dispatcher is reached through a closure rather
-	// than copied, because the composition root fills the holder in after
-	// queue.New returns — the value here would be nil forever (#184).
+	// types.
 	segment := task.SegmentDeps{
 		Config:   deps.AppSettings.GetAudiobook,
 		Engine:   repo.AudiobookConfig.SelectEngine,
@@ -130,12 +127,7 @@ func registry(deps Deps) []registration {
 		Books:    deps.Books,
 		Open:     openBook,
 		DataPath: deps.DataPath,
-		Finalize: func(ctx context.Context, bookID string) error {
-			if deps.AudiobookDispatch == nil || deps.AudiobookDispatch.Finalize == nil {
-				return errors.New("no queue configured for audiobook generation")
-			}
-			return deps.AudiobookDispatch.Finalize(ctx, bookID)
-		},
+		Enqueue:  deps.Enqueue,
 	}
 	if deps.Hub != nil {
 		segment.Publish = publishAudiobook

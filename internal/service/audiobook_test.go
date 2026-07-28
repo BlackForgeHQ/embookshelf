@@ -8,8 +8,10 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
@@ -60,32 +62,49 @@ func (f *fakeAudiobookStore) Coverage(context.Context, string) (model.AudiobookC
 	return f.coverage, nil
 }
 
-type recordingDispatcher struct {
-	segments []int
-	err      error
+// recordingEnqueuer captures the payloads a run hands to the pool, so a
+// test can assert on what was queued rather than on the arguments of an
+// anonymous function.
+type recordingEnqueuer struct {
+	mu   sync.Mutex
+	args []jobs.Args
+	err  error
 }
 
-func (d *recordingDispatcher) dispatch(_ context.Context, _ string, seq int) error {
-	if d.err != nil {
-		return d.err
+func (r *recordingEnqueuer) Enqueue(_ context.Context, a jobs.Args) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return r.err
 	}
-	d.segments = append(d.segments, seq)
+	r.args = append(r.args, a)
 	return nil
 }
 
-// recordingFinalizer counts the finalize enqueues a run attracts — the
-// one thing a stranded run never got.
-type recordingFinalizer struct {
-	calls int
-	err   error
+// segments returns the seq of every segment job queued, in order.
+func (r *recordingEnqueuer) segments() []int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []int
+	for _, a := range r.args {
+		if s, ok := a.(jobs.AudiobookSegmentArgs); ok {
+			out = append(out, s.Seq)
+		}
+	}
+	return out
 }
 
-func (f *recordingFinalizer) dispatch(context.Context, string) error {
-	if f.err != nil {
-		return f.err
+// finalizes counts the finalize jobs queued.
+func (r *recordingEnqueuer) finalizes() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, a := range r.args {
+		if _, ok := a.(jobs.AudiobookFinalizeArgs); ok {
+			n++
+		}
 	}
-	f.calls++
-	return nil
+	return n
 }
 
 // epubOpener serves one synthetic EPUB for any book.
@@ -168,7 +187,7 @@ func TestEstimateReportsCharsSegmentsAndMoney(t *testing.T) {
 
 	// 1000 chars per chapter, two chapters ≈ 2000 characters of prose.
 	text := strings.Repeat("abcdefghij", 100)
-	svc := NewAudiobookService(&fakeAudiobookStore{}, &epubOpener{src: buildTestEPUB(t, text)}, nil)
+	svc := NewAudiobookService(&fakeAudiobookStore{}, &epubOpener{src: buildTestEPUB(t, text)}, &jobs.Deferred{})
 
 	est, err := svc.Estimate(context.Background(), narratableBook(), testOptions())
 	if err != nil {
@@ -199,7 +218,7 @@ func TestEstimateIsFreeAtAZeroPrice(t *testing.T) {
 
 	opts := testOptions()
 	opts.PricePerMillionChars = 0
-	svc := NewAudiobookService(&fakeAudiobookStore{}, &epubOpener{src: buildTestEPUB(t, strings.Repeat("x ", 500))}, nil)
+	svc := NewAudiobookService(&fakeAudiobookStore{}, &epubOpener{src: buildTestEPUB(t, strings.Repeat("x ", 500))}, &jobs.Deferred{})
 
 	est, err := svc.Estimate(context.Background(), narratableBook(), opts)
 	if err != nil {
@@ -216,7 +235,7 @@ func TestEstimateIsFreeAtAZeroPrice(t *testing.T) {
 func TestEstimateRefusesANonNarratableFormat(t *testing.T) {
 	t.Parallel()
 
-	svc := NewAudiobookService(&fakeAudiobookStore{}, &epubOpener{}, nil)
+	svc := NewAudiobookService(&fakeAudiobookStore{}, &epubOpener{}, &jobs.Deferred{})
 	book := narratableBook()
 	book.Format = "PDF"
 
@@ -234,8 +253,8 @@ func TestStartPersistsThePlanAndDispatchesEverySegment(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeAudiobookStore{}
-	disp := &recordingDispatcher{}
-	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, disp.dispatch)
+	rec := &recordingEnqueuer{}
+	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, rec)
 
 	if err := svc.Start(context.Background(), narratableBook(), testOptions()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -247,12 +266,13 @@ func TestStartPersistsThePlanAndDispatchesEverySegment(t *testing.T) {
 	if len(store.segments) == 0 {
 		t.Fatal("the plan has no segments")
 	}
-	if len(disp.segments) != len(store.segments) {
-		t.Errorf("dispatched %d jobs for %d segments", len(disp.segments), len(store.segments))
+	segs := rec.segments()
+	if len(segs) != len(store.segments) {
+		t.Errorf("dispatched %d jobs for %d segments", len(segs), len(store.segments))
 	}
 	// Every segment must be dispatched exactly once, and by seq — a job
 	// addresses its work by (book, seq).
-	for i, seq := range disp.segments {
+	for i, seq := range segs {
 		if seq != i {
 			t.Errorf("dispatched[%d] = seq %d, want %d", i, seq, i)
 		}
@@ -271,8 +291,8 @@ func TestStartRecordsAContiguousAlignmentMap(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeAudiobookStore{}
-	disp := &recordingDispatcher{}
-	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, disp.dispatch)
+	rec := &recordingEnqueuer{}
+	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, rec)
 
 	if err := svc.Start(context.Background(), narratableBook(), testOptions()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -296,8 +316,8 @@ func TestStartKeepsChapterIdentityAcrossSplitSegments(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeAudiobookStore{}
-	disp := &recordingDispatcher{}
-	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 200))}, disp.dispatch)
+	rec := &recordingEnqueuer{}
+	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 200))}, rec)
 
 	if err := svc.Start(context.Background(), narratableBook(), testOptions()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -324,8 +344,8 @@ func TestStartFailsTheRunWhenDispatchBreaks(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeAudiobookStore{}
-	disp := &recordingDispatcher{err: errors.New("queue is down")}
-	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, disp.dispatch)
+	rec := &recordingEnqueuer{err: errors.New("queue is down")}
+	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, rec)
 
 	if err := svc.Start(context.Background(), narratableBook(), testOptions()); err == nil {
 		t.Fatal("want an error when dispatch fails, got nil")
@@ -342,13 +362,32 @@ func TestStartRefusesABookWithNoReadableText(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeAudiobookStore{}
-	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, "")}, (&recordingDispatcher{}).dispatch)
+	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, "")}, &recordingEnqueuer{})
 
 	if err := svc.Start(context.Background(), narratableBook(), testOptions()); err == nil {
 		t.Fatal("want an error for an EPUB with no prose, got nil")
 	}
 	if store.started {
 		t.Error("an unnarratable book was persisted as a run")
+	}
+}
+
+// A run that cannot be queued must fail loudly. Left pending with no
+// jobs it shows 0% forever and no error explains why — the failure the
+// nil-dispatcher guard used to produce silently.
+func TestStartFailsTheRunWhenTheQueueIsNotUp(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeAudiobookStore{}
+	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, &jobs.Deferred{})
+
+	err := svc.Start(context.Background(), model.Book{ID: "b1", Format: "EPUB"}, AudiobookOptions{SegmentChars: 400})
+
+	if err == nil {
+		t.Fatal("Start returned nil with no queue configured")
+	}
+	if store.state != model.AudiobookFailed {
+		t.Errorf("run state = %q, want failed so the UI can say why", store.state)
 	}
 }
 
@@ -362,7 +401,7 @@ func TestCancelMarksARunningRunCanceled(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeAudiobookStore{run: model.Audiobook{BookID: "b1", State: model.AudiobookRunning}}
-	svc := NewAudiobookService(store, &epubOpener{}, nil)
+	svc := NewAudiobookService(store, &epubOpener{}, &jobs.Deferred{})
 
 	if err := svc.Cancel(context.Background(), "b1"); err != nil {
 		t.Fatalf("Cancel: %v", err)
@@ -376,7 +415,7 @@ func TestCancelRefusesAFinishedRun(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeAudiobookStore{run: model.Audiobook{BookID: "b1", State: model.AudiobookReady}}
-	svc := NewAudiobookService(store, &epubOpener{}, nil)
+	svc := NewAudiobookService(store, &epubOpener{}, &jobs.Deferred{})
 
 	if err := svc.Cancel(context.Background(), "b1"); err == nil {
 		t.Fatal("want an error cancelling a finished run, got nil")
@@ -396,14 +435,15 @@ func TestRetryDispatchesOnlyUnfinishedSegments(t *testing.T) {
 			{Seq: 7, State: model.SegmentPending},
 		},
 	}
-	disp := &recordingDispatcher{}
-	svc := NewAudiobookService(store, &epubOpener{}, disp.dispatch)
+	rec := &recordingEnqueuer{}
+	svc := NewAudiobookService(store, &epubOpener{}, rec)
 
 	if err := svc.Retry(context.Background(), "b1"); err != nil {
 		t.Fatalf("Retry: %v", err)
 	}
-	if len(disp.segments) != 2 || disp.segments[0] != 3 || disp.segments[1] != 7 {
-		t.Errorf("dispatched %v, want only the unfinished segments [3 7]", disp.segments)
+	segs := rec.segments()
+	if len(segs) != 2 || segs[0] != 3 || segs[1] != 7 {
+		t.Errorf("dispatched %v, want only the unfinished segments [3 7]", segs)
 	}
 	if store.state != model.AudiobookRunning {
 		t.Errorf("state = %q, want running", store.state)
@@ -419,7 +459,7 @@ func TestRetryRefusesARunWithNothingLeftToDo(t *testing.T) {
 		// No plan at all: nothing to finalize and nothing to re-enqueue.
 		coverage: model.AudiobookCoverage{},
 	}
-	svc := NewAudiobookService(store, &epubOpener{}, (&recordingDispatcher{}).dispatch)
+	svc := NewAudiobookService(store, &epubOpener{}, &recordingEnqueuer{})
 
 	if err := svc.Retry(context.Background(), "b1"); err == nil {
 		t.Fatal("want an error retrying a run with no outstanding segments, got nil")
@@ -441,15 +481,15 @@ func TestStatusFinalizesARunStrandedWithCompleteCoverage(t *testing.T) {
 		run:      model.Audiobook{BookID: "b1", State: model.AudiobookRunning},
 		coverage: model.AudiobookCoverage{Total: 12, Done: 12},
 	}
-	fin := &recordingFinalizer{}
-	svc := NewAudiobookService(store, &epubOpener{}, nil).WithFinalizeDispatcher(fin.dispatch)
+	rec := &recordingEnqueuer{}
+	svc := NewAudiobookService(store, &epubOpener{}, rec)
 
 	run, cov, err := svc.Status(context.Background(), "b1")
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if fin.calls != 1 {
-		t.Fatalf("finalize dispatched %d times, want 1 — the run is stranded", fin.calls)
+	if rec.finalizes() != 1 {
+		t.Fatalf("finalize dispatched %d times, want 1 — the run is stranded", rec.finalizes())
 	}
 	if cov.Done != 12 || cov.Total != 12 {
 		t.Errorf("coverage = %d/%d, want 12/12", cov.Done, cov.Total)
@@ -470,13 +510,13 @@ func TestStatusLeavesARunWithOutstandingSegmentsAlone(t *testing.T) {
 		run:      model.Audiobook{BookID: "b1", State: model.AudiobookRunning},
 		coverage: model.AudiobookCoverage{Total: 12, Done: 5},
 	}
-	fin := &recordingFinalizer{}
-	svc := NewAudiobookService(store, &epubOpener{}, nil).WithFinalizeDispatcher(fin.dispatch)
+	rec := &recordingEnqueuer{}
+	svc := NewAudiobookService(store, &epubOpener{}, rec)
 
 	if _, _, err := svc.Status(context.Background(), "b1"); err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if fin.calls != 0 {
+	if rec.finalizes() != 0 {
 		t.Fatalf("finalize dispatched for a run at %d/%d", 5, 12)
 	}
 	if store.state != "" {
@@ -494,13 +534,13 @@ func TestStatusDoesNotResurrectACanceledRun(t *testing.T) {
 		run:      model.Audiobook{BookID: "b1", State: model.AudiobookCanceled},
 		coverage: model.AudiobookCoverage{Total: 12, Done: 12},
 	}
-	fin := &recordingFinalizer{}
-	svc := NewAudiobookService(store, &epubOpener{}, nil).WithFinalizeDispatcher(fin.dispatch)
+	rec := &recordingEnqueuer{}
+	svc := NewAudiobookService(store, &epubOpener{}, rec)
 
 	if _, _, err := svc.Status(context.Background(), "b1"); err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if fin.calls != 0 {
+	if rec.finalizes() != 0 {
 		t.Fatal("a canceled run was finalized")
 	}
 }
@@ -516,10 +556,9 @@ func TestStatusFailsARunWhoseSegmentsHaveAllSettledWithFailures(t *testing.T) {
 		run:      model.Audiobook{BookID: "b1", State: model.AudiobookRunning},
 		coverage: model.AudiobookCoverage{Total: 12, Done: 9, Failed: 3},
 	}
-	fin := &recordingFinalizer{}
+	rec := &recordingEnqueuer{}
 	swept := 0
-	svc := NewAudiobookService(store, &epubOpener{}, nil).
-		WithFinalizeDispatcher(fin.dispatch).
+	svc := NewAudiobookService(store, &epubOpener{}, rec).
 		WithStagingSweeper(func(string) { swept++ })
 
 	run, _, err := svc.Status(context.Background(), "b1")
@@ -535,7 +574,7 @@ func TestStatusFailsARunWhoseSegmentsHaveAllSettledWithFailures(t *testing.T) {
 	if run.State != model.AudiobookFailed || run.Error != store.stateMsg {
 		t.Errorf("returned run = %q/%q, want the reconciled failure", run.State, run.Error)
 	}
-	if fin.calls != 0 {
+	if rec.finalizes() != 0 {
 		t.Error("an incomplete run was finalized")
 	}
 	if swept != 0 {
@@ -552,8 +591,8 @@ func TestStatusStillAnswersWhenFinalizeCannotBeDispatched(t *testing.T) {
 		run:      model.Audiobook{BookID: "b1", State: model.AudiobookRunning},
 		coverage: model.AudiobookCoverage{Total: 4, Done: 4},
 	}
-	fin := &recordingFinalizer{err: errors.New("queue is down")}
-	svc := NewAudiobookService(store, &epubOpener{}, nil).WithFinalizeDispatcher(fin.dispatch)
+	rec := &recordingEnqueuer{err: errors.New("queue is down")}
+	svc := NewAudiobookService(store, &epubOpener{}, rec)
 
 	_, cov, err := svc.Status(context.Background(), "b1")
 	if err != nil {
@@ -576,17 +615,16 @@ func TestRetryFinalizesAStrandedRunInsteadOfRefusing(t *testing.T) {
 		coverage:   model.AudiobookCoverage{Total: 12, Done: 12},
 		unfinished: nil,
 	}
-	disp := &recordingDispatcher{}
-	fin := &recordingFinalizer{}
-	svc := NewAudiobookService(store, &epubOpener{}, disp.dispatch).WithFinalizeDispatcher(fin.dispatch)
+	rec := &recordingEnqueuer{}
+	svc := NewAudiobookService(store, &epubOpener{}, rec)
 
 	if err := svc.Retry(context.Background(), "b1"); err != nil {
 		t.Fatalf("Retry on a stranded run: %v", err)
 	}
-	if fin.calls != 1 {
-		t.Fatalf("finalize dispatched %d times, want 1", fin.calls)
+	if rec.finalizes() != 1 {
+		t.Fatalf("finalize dispatched %d times, want 1", rec.finalizes())
 	}
-	if len(disp.segments) != 0 {
-		t.Errorf("re-synthesized %v — every one of those segments is already paid for", disp.segments)
+	if segs := rec.segments(); len(segs) != 0 {
+		t.Errorf("re-synthesized %v — every one of those segments is already paid for", segs)
 	}
 }

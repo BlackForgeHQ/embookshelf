@@ -395,28 +395,28 @@ database must be empty; migrations are applied to it automatically.
 	}
 
 	// Background queue. PG → River; SQLite → polling worker (queue.New dispatches by dialect).
-	// The audiobook workers need to enqueue each other — a finishing
-	// segment dispatches the finalize job — but those dispatchers close
-	// over the very client being constructed here. The holder is passed
-	// in empty and filled immediately after New returns.
-	audiobookDispatch := &service.AudiobookDispatch{}
+	// One late-bound enqueuer for the whole composition root. The queue's
+	// worker registry is built out of the services that need to enqueue,
+	// so neither can exist first; jobs.Deferred holds that knot alone and
+	// every service takes it as an ordinary argument.
+	enq := &jobs.Deferred{}
 	q, err := queue.New(ctx, dbh, queue.Deps{
-		BookDropSvc:       bdropSvc,
-		Enrich:            enrichSvc,
-		LibSvc:            libSvc,
-		Resolver:          storageResolver,
-		LibStore:          libStore,
-		FileRepo:          fileRepo,
-		Books:             bookRepo,
-		Users:             userRepo,
-		Notifier:          notifier,
-		Hub:               hub,
-		AppSettings:       appSettingsRepo,
-		Guides:            guideRepo,
-		Audiobooks:        audiobookRepo,
-		Covers:            covers,
-		DataPath:          cfg.DataPath,
-		AudiobookDispatch: audiobookDispatch,
+		BookDropSvc: bdropSvc,
+		Enrich:      enrichSvc,
+		LibSvc:      libSvc,
+		Resolver:    storageResolver,
+		LibStore:    libStore,
+		FileRepo:    fileRepo,
+		Books:       bookRepo,
+		Users:       userRepo,
+		Notifier:    notifier,
+		Hub:         hub,
+		AppSettings: appSettingsRepo,
+		Guides:      guideRepo,
+		Audiobooks:  audiobookRepo,
+		Covers:      covers,
+		DataPath:    cfg.DataPath,
+		Enqueue:     enq,
 	})
 	if err != nil {
 		slog.Error("queue", "err", err)
@@ -429,6 +429,9 @@ database must be empty; migrations are applied to it automatically.
 			slog.Warn("queue stop", "err", err)
 		}
 	}()
+	// The queue exists; everything holding the deferred enqueuer can now
+	// reach it.
+	enq.Resolve(q)
 
 	// Close the intake loop: the service inserts the row and hands the item
 	// straight to the worker pool. Wired after queue.New because the queue
@@ -444,25 +447,15 @@ database must be empty; migrations are applied to it automatically.
 		return q.Enqueue(ctx, jobs.BookDropAutoEnrichArgs{BookID: bookID})
 	})
 
-	// Close the audiobook dispatch loop now that the client exists. Both
-	// halves are set together: a segment dispatcher without a finalize
-	// dispatcher produces runs that reach 100% and never publish.
-	audiobookDispatch.Segment = func(ctx context.Context, bookID string, seq int) error {
-		return q.Enqueue(ctx, jobs.AudiobookSegmentArgs{BookID: bookID, Seq: seq})
-	}
-	audiobookDispatch.Finalize = func(ctx context.Context, bookID string) error {
-		return q.Enqueue(ctx, jobs.AudiobookFinalizeArgs{BookID: bookID})
-	}
 	audiobookSvc := service.NewAudiobookService(
 		audiobookRepo,
 		service.NewLibraryBookOpener(libStore),
-		audiobookDispatch.Segment,
-	).WithFinalizeDispatcher(audiobookDispatch.Finalize).
-		WithStagingSweeper(func(bookID string) {
-			if err := os.RemoveAll(task.StagingDir(cfg.DataPath, bookID)); err != nil {
-				slog.Warn("audiobook: sweep staging after cancel", "book", bookID, "err", err)
-			}
-		})
+		enq,
+	).WithStagingSweeper(func(bookID string) {
+		if err := os.RemoveAll(task.StagingDir(cfg.DataPath, bookID)); err != nil {
+			slog.Warn("audiobook: sweep staging after cancel", "book", bookID, "err", err)
+		}
+	})
 
 	// Staging for abandoned failed or cancelled runs is dead weight after
 	// a week. Hourly loop, same shape as the missing-file and

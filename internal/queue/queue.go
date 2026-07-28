@@ -73,10 +73,6 @@ type Deps struct {
 	Audiobooks *repo.BookAudiobookRepo
 	Covers     *coverstore.Store
 	DataPath   string
-	// AudiobookDispatch is populated by the composition root immediately
-	// after New returns: the finalize dispatcher closes over the client
-	// this call is constructing, so it cannot exist before it.
-	AudiobookDispatch *service.AudiobookDispatch
 	// Enqueue is the seam workers use to dispatch follow-on jobs. It is
 	// the same *jobs.Deferred the service tier holds: the registry below
 	// is built out of services that need it, so it cannot be the client

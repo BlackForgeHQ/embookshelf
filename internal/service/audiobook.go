@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 )
 
@@ -37,30 +38,6 @@ type audiobookStore interface {
 	SetState(ctx context.Context, bookID string, state model.AudiobookState, msg string) error
 	ListUnfinishedSegments(ctx context.Context, bookID string) ([]model.AudiobookSegment, error)
 	Coverage(ctx context.Context, bookID string) (model.AudiobookCoverage, error)
-}
-
-// SegmentDispatcher enqueues one segment job.
-//
-// A function rather than a queue.Client for the same reason GuideRunner
-// takes one: internal/queue imports this package, so depending on it here
-// would be an import cycle.
-type SegmentDispatcher func(ctx context.Context, bookID string, seq int) error
-
-// FinalizeDispatcher enqueues the job that concatenates a finished run.
-type FinalizeDispatcher func(ctx context.Context, bookID string) error
-
-// AudiobookDispatch carries both dispatchers to workers that need them.
-//
-// A mutable holder rather than plain values because of an ordering knot:
-// the queue's worker registry is assembled inside queue.New, but the
-// dispatchers close over the client that call returns. Passing a pointer
-// lets the registry capture it before it is filled and the composition
-// root populate it immediately afterwards — the same trick GuideRunner
-// sidesteps by being built entirely after queue.New, which a worker
-// cannot be.
-type AudiobookDispatch struct {
-	Segment  SegmentDispatcher
-	Finalize FinalizeDispatcher
 }
 
 // AudiobookOptions is one run's configuration, resolved from the
@@ -100,11 +77,13 @@ type AudiobookEstimate struct {
 // one River job per segment, so a failure costs one segment rather than a
 // book (ADR-0028 §3).
 type AudiobookService struct {
-	store    audiobookStore
-	books    bookSourceOpener
-	dispatch SegmentDispatcher
-	finalize FinalizeDispatcher
-	sweep    StagingSweeper
+	store audiobookStore
+	books bookSourceOpener
+	// enq is an ordinary dependency now. It used to be two function
+	// fields plus a mutable holder, because internal/queue imports this
+	// package and the seam had to dodge that.
+	enq   jobs.Enqueuer
+	sweep StagingSweeper
 }
 
 // StagingSweeper discards a run's staged segments.
@@ -117,22 +96,14 @@ type StagingSweeper func(bookID string)
 func NewAudiobookService(
 	store audiobookStore,
 	books bookSourceOpener,
-	dispatch SegmentDispatcher,
+	enq jobs.Enqueuer,
 ) *AudiobookService {
-	return &AudiobookService{store: store, books: books, dispatch: dispatch}
+	return &AudiobookService{store: store, books: books, enq: enq}
 }
 
 // WithStagingSweeper wires the cleanup Cancel performs.
 func (s *AudiobookService) WithStagingSweeper(sweep StagingSweeper) *AudiobookService {
 	s.sweep = sweep
-	return s
-}
-
-// WithFinalizeDispatcher wires the enqueue that turns a complete run into
-// a published book. Needed here as well as in the segment worker because
-// this is where a run that lost its finalize job gets it back.
-func (s *AudiobookService) WithFinalizeDispatcher(finalize FinalizeDispatcher) *AudiobookService {
-	s.finalize = finalize
 	return s
 }
 
@@ -187,10 +158,7 @@ func (s *AudiobookService) reconcile(ctx context.Context, run model.Audiobook, c
 }
 
 func (s *AudiobookService) dispatchFinalize(ctx context.Context, bookID string) error {
-	if s.finalize == nil {
-		return errors.New("no queue configured for audiobook generation")
-	}
-	return s.finalize(ctx, bookID)
+	return s.enq.Enqueue(ctx, jobs.AudiobookFinalizeArgs{BookID: bookID})
 }
 
 // Narratable reports whether a book's format can be read aloud. Checked
@@ -265,11 +233,8 @@ func (s *AudiobookService) Start(ctx context.Context, book model.Book, opts Audi
 // unavailable. A run left at pending with no jobs is invisible: it shows
 // 0% forever and no error explains why.
 func (s *AudiobookService) dispatchAll(ctx context.Context, bookID string, segments []model.AudiobookSegment) error {
-	if s.dispatch == nil {
-		return errors.New("no queue configured for audiobook generation")
-	}
 	for _, seg := range segments {
-		if err := s.dispatch(ctx, bookID, seg.Seq); err != nil {
+		if err := s.enq.Enqueue(ctx, jobs.AudiobookSegmentArgs{BookID: bookID, Seq: seg.Seq}); err != nil {
 			msg := fmt.Sprintf("could not queue segment %d: %v", seg.Seq, err)
 			if serr := s.store.SetState(ctx, bookID, model.AudiobookFailed, msg); serr != nil {
 				slog.Warn("audiobook: mark failed after dispatch error", "book", bookID, "err", serr)

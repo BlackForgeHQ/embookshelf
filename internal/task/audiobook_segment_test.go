@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/jobs"
@@ -19,6 +20,33 @@ import (
 	"github.com/blackforge/embookshelf/internal/task"
 	"github.com/blackforge/embookshelf/internal/tts"
 )
+
+// recordingEnqueuer captures the jobs a segment worker hands to the
+// pool, so a test can count finalize dispatches without a real queue.
+type recordingEnqueuer struct {
+	mu   sync.Mutex
+	args []jobs.Args
+}
+
+func (r *recordingEnqueuer) Enqueue(_ context.Context, a jobs.Args) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.args = append(r.args, a)
+	return nil
+}
+
+// finalizes counts the finalize jobs queued.
+func (r *recordingEnqueuer) finalizes() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, a := range r.args {
+		if _, ok := a.(jobs.AudiobookFinalizeArgs); ok {
+			n++
+		}
+	}
+	return n
+}
 
 // ---------------------------------------------------------------------------
 // Fakes local to the segment worker
@@ -73,8 +101,8 @@ type segmentHarness struct {
 	runs      *fakeSegmentRuns
 	books     *fakeBooks
 	engine    *fakeEngine
+	enq       *recordingEnqueuer
 	published int
-	finalized int
 	engineErr error
 	dataPath  string
 }
@@ -93,6 +121,7 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 			ID: "b1", LibraryID: "lib1", Title: "Dune", Author: "Frank Herbert", Format: "EPUB",
 		}},
 		engine:   &fakeEngine{reply: mp3Frames(4)},
+		enq:      &recordingEnqueuer{},
 		dataPath: t.TempDir(),
 	}
 	src := epubWithChapters(t, "One sentence. Another sentence. A third one.", "Second chapter here.")
@@ -115,7 +144,7 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 		Open: func(context.Context, model.Book) (storage.Source, error) {
 			return src, nil
 		},
-		Finalize: func(context.Context, string) error { h.finalized++; return nil },
+		Enqueue:  h.enq,
 		Publish:  func(string) { h.published++ },
 		DataPath: h.dataPath,
 	}
@@ -503,8 +532,8 @@ func TestSegmentDispatchesFinalizeExactlyOnceWhenTheRunCompletes(t *testing.T) {
 	if err := h.run(t, 0); err != nil {
 		t.Fatalf("AudiobookSegment: %v", err)
 	}
-	if h.finalized != 1 {
-		t.Fatalf("finalize dispatched %d times, want exactly 1", h.finalized)
+	if n := h.enq.finalizes(); n != 1 {
+		t.Fatalf("finalize dispatched %d times, want exactly 1", n)
 	}
 }
 
@@ -519,7 +548,7 @@ func TestSegmentPublishesOnceWhenTheWriteFailsTheRun(t *testing.T) {
 	if h.published != 1 {
 		t.Fatalf("published %d times, want exactly 1", h.published)
 	}
-	if h.finalized != 0 {
-		t.Errorf("finalize dispatched %d times for a failed run", h.finalized)
+	if n := h.enq.finalizes(); n != 0 {
+		t.Errorf("finalize dispatched %d times for a failed run", n)
 	}
 }

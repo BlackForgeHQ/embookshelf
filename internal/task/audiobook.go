@@ -72,9 +72,13 @@ type SegmentDeps struct {
 	// Open yields the book's bytes with random access. Always through the
 	// library handle, never os.Open(book.Path), which is how device push
 	// on S3 libraries was once silently broken.
-	Open     func(context.Context, model.Book) (storage.Source, error)
-	Finalize service.FinalizeDispatcher
-	Publish  func(bookID string)
+	Open func(context.Context, model.Book) (storage.Source, error)
+	// Enqueue dispatches the finalize job when this segment completes
+	// the run. An ordinary dependency: the holder it replaces was passed
+	// in empty and filled after queue.New returned, which left a window
+	// where a completing run silently lost its finalize job.
+	Enqueue jobs.Enqueuer
+	Publish func(bookID string)
 	// DataPath roots the staging directory. Per-segment MP3s live on
 	// local disk until finalize, outside storage.Storage, following the
 	// coverstore precedent for derived bytes.
@@ -203,15 +207,7 @@ func recordSegment(ctx context.Context, deps SegmentDeps, a jobs.AudiobookSegmen
 	}
 	switch outcome.Next {
 	case model.AudiobookNextFinalize:
-		// Nil only for a zero-value SegmentDeps. In production the
-		// registry supplies a closure that dereferences the dispatch
-		// holder late, because the finalize dispatcher closes over the
-		// client the registry is being built for. #184 removes both.
-		if deps.Finalize == nil {
-			slog.Warn("audiobook: no finalize dispatcher", "book", a.BookID)
-			return
-		}
-		if err := deps.Finalize(ctx, a.BookID); err != nil {
+		if err := deps.Enqueue.Enqueue(ctx, jobs.AudiobookFinalizeArgs{BookID: a.BookID}); err != nil {
 			slog.Warn("audiobook: dispatch finalize", "book", a.BookID, "err", err)
 		}
 	case model.AudiobookNextFail:
