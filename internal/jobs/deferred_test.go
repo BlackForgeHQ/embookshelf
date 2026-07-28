@@ -89,10 +89,10 @@ func TestDeferredSurfacesTheInnerError(t *testing.T) {
 
 // The regression pin for the race this refactor exists to close.
 //
-// queue.New starts River before it returns, so worker goroutines are
-// already draining jobs while the composition root is still wiring the
-// enqueuer. The old holder was a plain struct field written on one
-// goroutine and read on others with no synchronization at all.
+// Once queue.Client.Start has been called, worker goroutines read the
+// resolved enqueuer concurrently with any call to Resolve. The old
+// holder was a plain struct field written on one goroutine and read on
+// others with no synchronization at all.
 //
 // This test must fail under -race against a mutex-free Deferred.
 func TestDeferredResolvesSafelyWhileEnqueuesAreInFlight(t *testing.T) {

@@ -35,17 +35,19 @@ func (r *recordingEnqueuer) Enqueue(_ context.Context, a jobs.Args) error {
 	return nil
 }
 
-// finalizes counts the finalize jobs queued.
-func (r *recordingEnqueuer) finalizes() int {
+// finalizes returns the BookID of every finalize job queued. A count
+// alone would pass a finalize dispatched for the wrong book; the payload
+// this whole seam exists to carry is the point of the assertion.
+func (r *recordingEnqueuer) finalizes() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	n := 0
+	var ids []string
 	for _, a := range r.args {
-		if _, ok := a.(jobs.AudiobookFinalizeArgs); ok {
-			n++
+		if f, ok := a.(jobs.AudiobookFinalizeArgs); ok {
+			ids = append(ids, f.BookID)
 		}
 	}
-	return n
+	return ids
 }
 
 // ---------------------------------------------------------------------------
@@ -532,8 +534,8 @@ func TestSegmentDispatchesFinalizeExactlyOnceWhenTheRunCompletes(t *testing.T) {
 	if err := h.run(t, 0); err != nil {
 		t.Fatalf("AudiobookSegment: %v", err)
 	}
-	if n := h.enq.finalizes(); n != 1 {
-		t.Fatalf("finalize dispatched %d times, want exactly 1", n)
+	if ids := h.enq.finalizes(); len(ids) != 1 || ids[0] != h.runs.run.BookID {
+		t.Fatalf("finalize dispatched %v, want exactly one for %q", ids, h.runs.run.BookID)
 	}
 }
 
@@ -548,7 +550,7 @@ func TestSegmentPublishesOnceWhenTheWriteFailsTheRun(t *testing.T) {
 	if h.published != 1 {
 		t.Fatalf("published %d times, want exactly 1", h.published)
 	}
-	if n := h.enq.finalizes(); n != 0 {
-		t.Errorf("finalize dispatched %d times for a failed run", n)
+	if ids := h.enq.finalizes(); len(ids) != 0 {
+		t.Errorf("finalize dispatched %v for a failed run", ids)
 	}
 }

@@ -387,11 +387,26 @@ Background work runs through `queue.Client`, backed by River
 River's own dashboard come along. Crash recovery is River's JobRescuer,
 which reclaims jobs left `running` by a killed process.
 
-`Client` is deliberately one method wide — `Enqueue(ctx, args)` plus
-`Stop` — because the kind travels with the payload, so adding a job type
-does not widen the interface. `queue/registry.go` declares each job once
-(kind + args type + work function) and derives River's typed-worker
-registration from it; `internal/task/` never imports river.
+`Client` is deliberately narrow — `Enqueue(ctx, args)`, `Start`, `Stop`
+— because the kind travels with the payload, so adding a job type does
+not widen the interface. `Start` is its own method rather than folded
+into `New`: `New` builds the client and its worker registry (out of the
+very services that need to enqueue) but must not start draining jobs
+yet, because the composition root still has to resolve every late-bound
+enqueuer (see `internal/jobs` below) before any worker can safely run.
+`queue/registry.go` declares each job once (kind + args type + work
+function) and derives River's typed-worker registration from it;
+`internal/task/` never imports river.
+
+`internal/jobs` is a leaf package holding the job payload types, the
+`Args`/`Queued`/`Enqueuer` vocabulary, and `Deferred`, a mutex-guarded
+enqueuer that services can hold before the queue exists and the
+composition root resolves once the queue is built. `internal/queue`
+imports `internal/service` and `internal/task` to build its worker
+registry, so those packages cannot import `internal/queue` back
+without a cycle; depending on `jobs.Enqueuer` from the leaf package
+instead is what lets them dispatch jobs without needing to know queue
+exists.
 
 `internal/task/` contains the per-kind workers:
 

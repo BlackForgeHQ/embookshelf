@@ -81,30 +81,40 @@ func (r *recordingEnqueuer) Enqueue(_ context.Context, a jobs.Args) error {
 	return nil
 }
 
-// segments returns the seq of every segment job queued, in order.
-func (r *recordingEnqueuer) segments() []int {
+// segmentDispatch is one queued AudiobookSegmentArgs. Seq and BookID
+// travel together so a test can catch a segment addressed at the wrong
+// book, not just one dispatched out of order.
+type segmentDispatch struct {
+	Seq    int
+	BookID string
+}
+
+// segments returns every segment job queued, in order.
+func (r *recordingEnqueuer) segments() []segmentDispatch {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var out []int
+	var out []segmentDispatch
 	for _, a := range r.args {
 		if s, ok := a.(jobs.AudiobookSegmentArgs); ok {
-			out = append(out, s.Seq)
+			out = append(out, segmentDispatch{Seq: s.Seq, BookID: s.BookID})
 		}
 	}
 	return out
 }
 
-// finalizes counts the finalize jobs queued.
-func (r *recordingEnqueuer) finalizes() int {
+// finalizes returns the BookID of every finalize job queued. A count
+// alone would pass a finalize dispatched for the wrong book; the payload
+// this whole seam exists to carry is the point of the assertion.
+func (r *recordingEnqueuer) finalizes() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	n := 0
+	var ids []string
 	for _, a := range r.args {
-		if _, ok := a.(jobs.AudiobookFinalizeArgs); ok {
-			n++
+		if f, ok := a.(jobs.AudiobookFinalizeArgs); ok {
+			ids = append(ids, f.BookID)
 		}
 	}
-	return n
+	return ids
 }
 
 // epubOpener serves one synthetic EPUB for any book.
@@ -270,11 +280,15 @@ func TestStartPersistsThePlanAndDispatchesEverySegment(t *testing.T) {
 	if len(segs) != len(store.segments) {
 		t.Errorf("dispatched %d jobs for %d segments", len(segs), len(store.segments))
 	}
-	// Every segment must be dispatched exactly once, and by seq — a job
-	// addresses its work by (book, seq).
-	for i, seq := range segs {
-		if seq != i {
-			t.Errorf("dispatched[%d] = seq %d, want %d", i, seq, i)
+	// Every segment must be dispatched exactly once, by seq, and
+	// addressed at the book it belongs to — a job addresses its work by
+	// (book, seq).
+	for i, d := range segs {
+		if d.Seq != i {
+			t.Errorf("dispatched[%d] = seq %d, want %d", i, d.Seq, i)
+		}
+		if d.BookID != narratableBook().ID {
+			t.Errorf("dispatched[%d] book = %q, want %q", i, d.BookID, narratableBook().ID)
 		}
 	}
 	if store.run.Engine != "openai" || store.run.Voice != "alloy" {
@@ -450,8 +464,13 @@ func TestRetryDispatchesOnlyUnfinishedSegments(t *testing.T) {
 		t.Fatalf("Retry: %v", err)
 	}
 	segs := rec.segments()
-	if len(segs) != 2 || segs[0] != 3 || segs[1] != 7 {
+	if len(segs) != 2 || segs[0].Seq != 3 || segs[1].Seq != 7 {
 		t.Errorf("dispatched %v, want only the unfinished segments [3 7]", segs)
+	}
+	for _, d := range segs {
+		if d.BookID != "b1" {
+			t.Errorf("dispatched seq %d for book %q, want b1", d.Seq, d.BookID)
+		}
 	}
 	if store.state != model.AudiobookRunning {
 		t.Errorf("state = %q, want running", store.state)
@@ -496,8 +515,8 @@ func TestStatusFinalizesARunStrandedWithCompleteCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if rec.finalizes() != 1 {
-		t.Fatalf("finalize dispatched %d times, want 1 — the run is stranded", rec.finalizes())
+	if ids := rec.finalizes(); len(ids) != 1 || ids[0] != "b1" {
+		t.Fatalf("finalize dispatched %v, want exactly one for b1 — the run is stranded", ids)
 	}
 	if cov.Done != 12 || cov.Total != 12 {
 		t.Errorf("coverage = %d/%d, want 12/12", cov.Done, cov.Total)
@@ -524,8 +543,8 @@ func TestStatusLeavesARunWithOutstandingSegmentsAlone(t *testing.T) {
 	if _, _, err := svc.Status(context.Background(), "b1"); err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if rec.finalizes() != 0 {
-		t.Fatalf("finalize dispatched for a run at %d/%d", 5, 12)
+	if ids := rec.finalizes(); len(ids) != 0 {
+		t.Fatalf("finalize dispatched %v for a run at %d/%d", ids, 5, 12)
 	}
 	if store.state != "" {
 		t.Errorf("state written as %q, want a live run left alone", store.state)
@@ -548,8 +567,8 @@ func TestStatusDoesNotResurrectACanceledRun(t *testing.T) {
 	if _, _, err := svc.Status(context.Background(), "b1"); err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if rec.finalizes() != 0 {
-		t.Fatal("a canceled run was finalized")
+	if ids := rec.finalizes(); len(ids) != 0 {
+		t.Fatalf("a canceled run was finalized: %v", ids)
 	}
 }
 
@@ -582,8 +601,8 @@ func TestStatusFailsARunWhoseSegmentsHaveAllSettledWithFailures(t *testing.T) {
 	if run.State != model.AudiobookFailed || run.Error != store.stateMsg {
 		t.Errorf("returned run = %q/%q, want the reconciled failure", run.State, run.Error)
 	}
-	if rec.finalizes() != 0 {
-		t.Error("an incomplete run was finalized")
+	if ids := rec.finalizes(); len(ids) != 0 {
+		t.Errorf("an incomplete run was finalized: %v", ids)
 	}
 	if swept != 0 {
 		t.Error("a failed run's staging was swept — Retry would have to buy nine segments again")
@@ -629,8 +648,8 @@ func TestRetryFinalizesAStrandedRunInsteadOfRefusing(t *testing.T) {
 	if err := svc.Retry(context.Background(), "b1"); err != nil {
 		t.Fatalf("Retry on a stranded run: %v", err)
 	}
-	if rec.finalizes() != 1 {
-		t.Fatalf("finalize dispatched %d times, want 1", rec.finalizes())
+	if ids := rec.finalizes(); len(ids) != 1 || ids[0] != "b1" {
+		t.Fatalf("finalize dispatched %v, want exactly one for b1", ids)
 	}
 	if segs := rec.segments(); len(segs) != 0 {
 		t.Errorf("re-synthesized %v — every one of those segments is already paid for", segs)

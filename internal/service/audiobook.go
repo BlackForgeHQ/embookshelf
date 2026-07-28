@@ -79,9 +79,10 @@ type AudiobookEstimate struct {
 type AudiobookService struct {
 	store audiobookStore
 	books bookSourceOpener
-	// enq is an ordinary dependency now. It used to be two function
-	// fields plus a mutable holder, because internal/queue imports this
-	// package and the seam had to dodge that.
+	// enq is an ordinary jobs.Enqueuer: internal/queue imports this
+	// package to build its worker registry, so this package depends on
+	// the leaf interface rather than on internal/queue itself, and gets
+	// either a live client or a jobs.Deferred standing in for one.
 	enq   jobs.Enqueuer
 	sweep StagingSweeper
 }

@@ -74,9 +74,9 @@ type SegmentDeps struct {
 	// on S3 libraries was once silently broken.
 	Open func(context.Context, model.Book) (storage.Source, error)
 	// Enqueue dispatches the finalize job when this segment completes
-	// the run. An ordinary dependency: the holder it replaces was passed
-	// in empty and filled after queue.New returned, which left a window
-	// where a completing run silently lost its finalize job.
+	// the run. An ordinary jobs.Enqueuer, resolved by the composition
+	// root before queue.Client.Start is ever called, so no worker here
+	// can observe it unset.
 	Enqueue jobs.Enqueuer
 	Publish func(bookID string)
 	// DataPath roots the staging directory. Per-segment MP3s live on
