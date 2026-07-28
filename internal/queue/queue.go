@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package queue is the background-job seam over River. Callers see a
-// two-method Client and never import a driver; a job registry declares
+// three-method Client and never import a driver; a job registry declares
 // each kind once and derives River's typed-worker plumbing from it.
 // Postgres is the only supported database (ADR-0023).
 package queue
@@ -41,10 +41,15 @@ func queueOf(args jobs.Args) string {
 // for every job type — the kind travels with the payload, so adding a
 // job does not widen this interface.
 //
+// Start is separate from New: the composition root needs a moment
+// between the two to resolve every late-bound enqueuer (jobs.Deferred
+// chief among them) before any worker goroutine can possibly run.
+//
 // Crash recovery is River's JobRescuer, which reclaims jobs left
 // `running` by a killed process after a timeout (default 1h).
 type Client interface {
 	Enqueue(ctx context.Context, args jobs.Args) error
+	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
 }
 
@@ -80,8 +85,13 @@ type Deps struct {
 	Enqueue jobs.Enqueuer
 }
 
-// New constructs the River-backed Client. Postgres is the only supported
-// database (ADR-0023); the SQLite polling worker is gone.
+// New constructs the River-backed Client but does not start it. River
+// begins draining jobs the moment it starts, so starting here — before
+// New even returns — left a window at every process start where a
+// leftover job could complete and find a late-bound enqueuer that was
+// never resolved (#184). The caller resolves those, then calls Start.
+// Postgres is the only supported database (ADR-0023); the SQLite
+// polling worker is gone.
 func New(ctx context.Context, d *db.DB, deps Deps) (Client, error) {
 	if d.Dialect != db.DialectPostgres {
 		return nil, fmt.Errorf("queue: unsupported dialect %q — embookshelf requires Postgres", d.Dialect)
@@ -94,8 +104,8 @@ type RiverClient struct {
 	c *river.Client[pgx.Tx]
 }
 
-// newRiver builds and starts the River-backed implementation. The
-// caller is queue.New, which dispatches by dialect.
+// newRiver builds the River-backed implementation without starting it.
+// The caller is queue.New, which dispatches by dialect.
 func newRiver(ctx context.Context, d *db.DB, deps Deps) (*RiverClient, error) {
 	if d.PG == nil {
 		return nil, errors.New("queue: db.PG is nil for postgres dialect")
@@ -136,11 +146,7 @@ func newRiver(ctx context.Context, d *db.DB, deps Deps) (*RiverClient, error) {
 		return nil, fmt.Errorf("river client: %w", err)
 	}
 
-	rc := &RiverClient{c: c}
-	if err := c.Start(ctx); err != nil {
-		return nil, fmt.Errorf("river start: %w", err)
-	}
-	return rc, nil
+	return &RiverClient{c: c}, nil
 }
 
 // Enqueue inserts a job. River derives the kind from the args type, so
@@ -151,7 +157,20 @@ func (r *RiverClient) Enqueue(ctx context.Context, args jobs.Args) error {
 	return err
 }
 
+// Start begins polling and draining jobs. Separate from New so the
+// composition root gets a moment to resolve every late-bound enqueuer
+// first — nothing calls this until jobs.Deferred.Resolve has already
+// been called, so no worker goroutine can ever observe it unresolved.
+func (r *RiverClient) Start(ctx context.Context) error {
+	return r.c.Start(ctx)
+}
+
 // Stop gracefully drains in-flight work and shuts the client down.
+//
+// Safe to call on a client whose Start never ran or never succeeded:
+// river.Client.Stop tolerates a client that was never started and
+// returns nil rather than erroring or blocking, which is what lets the
+// composition root defer this unconditionally right after New.
 func (r *RiverClient) Stop(ctx context.Context) error {
 	return r.c.Stop(ctx)
 }

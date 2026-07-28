@@ -422,6 +422,10 @@ database must be empty; migrations are applied to it automatically.
 		slog.Error("queue", "err", err)
 		os.Exit(1)
 	}
+	// Deferred before Start is even attempted: river.Client.Stop tolerates
+	// a client that was never started (returns nil rather than blocking
+	// or erroring), so this is safe to run unconditionally even if Start
+	// below fails and the process exits before reaching it.
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -430,8 +434,14 @@ database must be empty; migrations are applied to it automatically.
 		}
 	}()
 	// The queue exists; everything holding the deferred enqueuer can now
-	// reach it.
+	// reach it. Resolved before Start so there is no instant at which a
+	// worker goroutine could run against an unresolved enqueuer — River
+	// begins draining jobs the moment Start returns, not before.
 	enq.Resolve(q)
+	if err := q.Start(ctx); err != nil {
+		slog.Error("queue start", "err", err)
+		os.Exit(1)
+	}
 
 	// Close the intake loop: the service inserts the row and hands the item
 	// straight to the worker pool. Wired after queue.New because the queue

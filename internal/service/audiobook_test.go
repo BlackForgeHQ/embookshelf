@@ -389,6 +389,14 @@ func TestStartFailsTheRunWhenTheQueueIsNotUp(t *testing.T) {
 	if store.state != model.AudiobookFailed {
 		t.Errorf("run state = %q, want failed so the UI can say why", store.state)
 	}
+	if !strings.Contains(store.stateMsg, "no queue configured") {
+		t.Errorf("failure message %q does not carry the reason", store.stateMsg)
+	}
+	// dispatchAll wraps rather than flattens: a caller can tell "the queue
+	// was never configured" apart from any other dispatch failure.
+	if !errors.Is(err, jobs.ErrNoQueue) {
+		t.Errorf("err = %v, want it to unwrap to jobs.ErrNoQueue", err)
+	}
 }
 
 // ---------------------------------------------------------------------------

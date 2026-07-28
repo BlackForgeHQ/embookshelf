@@ -235,11 +235,15 @@ func (s *AudiobookService) Start(ctx context.Context, book model.Book, opts Audi
 func (s *AudiobookService) dispatchAll(ctx context.Context, bookID string, segments []model.AudiobookSegment) error {
 	for _, seg := range segments {
 		if err := s.enq.Enqueue(ctx, jobs.AudiobookSegmentArgs{BookID: bookID, Seq: seg.Seq}); err != nil {
-			msg := fmt.Sprintf("could not queue segment %d: %v", seg.Seq, err)
-			if serr := s.store.SetState(ctx, bookID, model.AudiobookFailed, msg); serr != nil {
+			// %w rather than %v: jobs.ErrNoQueue now actually flows through
+			// here, and wrapping it lets a caller tell "queue is down" apart
+			// from "engine rejected the text" with errors.Is. Same text
+			// either way — %w formats identically to %v in Error().
+			wrapped := fmt.Errorf("could not queue segment %d: %w", seg.Seq, err)
+			if serr := s.store.SetState(ctx, bookID, model.AudiobookFailed, wrapped.Error()); serr != nil {
 				slog.Warn("audiobook: mark failed after dispatch error", "book", bookID, "err", serr)
 			}
-			return errors.New(msg)
+			return wrapped
 		}
 	}
 	return nil
