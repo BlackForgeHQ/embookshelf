@@ -27,7 +27,7 @@ const outputMP3 = "mp3"
 // seam for chat.
 type openAIEngine struct{ cfg Config }
 
-func (e *openAIEngine) Synthesize(ctx context.Context, r Request) ([]byte, error) {
+func (e *openAIEngine) speak(ctx context.Context, r Request) ([]byte, error) {
 	req, err := jsonRequest(http.MethodPost, e.cfg.BaseURL+"/audio/speech", map[string]any{
 		"model":           r.Model,
 		"input":           r.Text,
@@ -70,7 +70,7 @@ func (e *openAIEngine) ListVoices(context.Context) ([]Voice, error) {
 // clone one — so the list has to be fetched.
 type elevenLabsEngine struct{ cfg Config }
 
-func (e *elevenLabsEngine) Synthesize(ctx context.Context, r Request) ([]byte, error) {
+func (e *elevenLabsEngine) speak(ctx context.Context, r Request) ([]byte, error) {
 	url := fmt.Sprintf("%s/text-to-speech/%s?output_format=mp3_44100_128", e.cfg.BaseURL, r.Voice)
 	req, err := jsonRequest(http.MethodPost, url, map[string]any{
 		"text":     r.Text,
@@ -124,7 +124,7 @@ const azureOutputFormat = "audio-24khz-96kbitrate-mono-mp3"
 // region host, e.g. https://westeurope.tts.speech.microsoft.com.
 type azureEngine struct{ cfg Config }
 
-func (e *azureEngine) Synthesize(ctx context.Context, r Request) ([]byte, error) {
+func (e *azureEngine) speak(ctx context.Context, r Request) ([]byte, error) {
 	body := buildSSML(r.Voice, r.Text)
 	req, err := http.NewRequest(http.MethodPost, e.cfg.BaseURL+"/cognitiveservices/v1", strings.NewReader(body))
 	if err != nil {

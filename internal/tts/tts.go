@@ -130,11 +130,22 @@ type Voice struct {
 	Label string
 }
 
-// Request is one unit of synthesis.
+// Request is one segment's worth of narration. Text is the whole
+// segment — the adapter splits it against its own per-request cap.
 type Request struct {
 	Text  string
 	Voice string
 	Model string
+	// BeforeChunk runs before each engine call and aborts the segment if
+	// it returns an error, which is returned unwrapped so the caller can
+	// match its own sentinel.
+	//
+	// A callback rather than a flag because the only real implementation
+	// re-reads the run's state from Postgres, which this package must
+	// not know about. It is the stop-loss on a run that may be $170
+	// (ADR-0028 §6): a cancel that only took effect between segments
+	// would keep spending for most of a dozen engine calls.
+	BeforeChunk func(context.Context) error
 }
 
 // Config is what an adapter needs to reach its engine.
@@ -167,12 +178,6 @@ type Engine interface {
 	ListVoices(ctx context.Context) ([]Voice, error)
 }
 
-// speaker is one engine's adapter.
-type speaker interface {
-	Synthesize(ctx context.Context, r Request) ([]byte, error)
-	ListVoices(ctx context.Context) ([]Voice, error)
-}
-
 // New builds the adapter for id.
 func New(id EngineID, cfg Config) (Engine, error) {
 	info, ok := Lookup(id)
@@ -191,7 +196,7 @@ func New(id EngineID, cfg Config) (Engine, error) {
 	if info.newSpeaker == nil {
 		return nil, fmt.Errorf("tts: engine %q is in the catalog but has no adapter", id)
 	}
-	return info.newSpeaker(cfg), nil
+	return chunked{speaker: info.newSpeaker(cfg), maxChars: info.MaxRequestChars}, nil
 }
 
 // ---------------------------------------------------------------------------
