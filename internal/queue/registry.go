@@ -85,11 +85,25 @@ func registry(deps Deps) []registration {
 	// cap without a restart. Registered unconditionally, like the email
 	// jobs: the worker itself refuses when the feature is disabled.
 	readingGuide := task.ReadingGuideDeps{
-		Settings: deps.AppSettings,
-		Guides:   deps.Guides,
-		Books:    deps.Books,
-		LibStore: deps.LibStore,
-		Hub:      deps.Hub,
+		Config: deps.AppSettings.GetReadingGuide,
+		Completer: func(c repo.ReadingGuideConfig) (service.GuideCompleter, error) {
+			// Explicit rather than returning c.Client() directly: on
+			// error that would box a nil *llm.Client into a non-nil
+			// interface, and the caller's nil check would miss it.
+			cl, err := c.Client()
+			if err != nil {
+				return nil, err
+			}
+			return cl, nil
+		},
+		Guides: deps.Guides,
+		Books:  deps.Books,
+		Open:   service.NewLibraryBookOpener(deps.LibStore).Open,
+	}
+	if deps.Hub != nil {
+		readingGuide.Publish = func(bookID string) {
+			_ = deps.Hub.Publish(sse.ReadingGuideUpdated{BookID: bookID})
+		}
 	}
 
 	// Audiobook generation runs on its own queue, declared by its args

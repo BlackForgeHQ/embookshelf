@@ -29,9 +29,10 @@ type bookSourceOpener interface {
 	Open(ctx context.Context, book model.Book) (storage.Source, error)
 }
 
-// guideCompleter is the slice of llm.Client used here. Narrow, so the
-// generator is testable without a model or a network.
-type guideCompleter interface {
+// GuideCompleter is the slice of llm.Client used here. Narrow, so the
+// generator is testable without a model or a network. Exported because
+// the queue job's Completer seam needs a name for what it returns.
+type GuideCompleter interface {
 	ChatJSON(ctx context.Context, msgs []llm.Message, out any) error
 }
 
@@ -60,14 +61,14 @@ const DefaultGuideTextCap = 48_000
 type ReadingGuideService struct {
 	guides readingGuideStore
 	books  bookSourceOpener
-	llm    guideCompleter
+	llm    GuideCompleter
 	opts   ReadingGuideOptions
 }
 
 func NewReadingGuideService(
 	guides readingGuideStore,
 	books bookSourceOpener,
-	completer guideCompleter,
+	completer GuideCompleter,
 	opts ReadingGuideOptions,
 ) *ReadingGuideService {
 	if opts.TextCap <= 0 {
