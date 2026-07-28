@@ -10,19 +10,11 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/hashing"
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/scan"
 	"github.com/blackforge/embookshelf/internal/service"
 )
-
-// LibraryScanArgs is the payload for walking a library's filesystem
-// root. The library id also names the scan — each library owns
-// exactly one path since migration 000018.
-type LibraryScanArgs struct {
-	LibraryID string `json:"library_id"`
-}
-
-func (LibraryScanArgs) Kind() string { return "library.scan" }
 
 // LibraryScanDeps groups the services LibraryScan needs.
 type LibraryScanDeps struct {
@@ -49,7 +41,7 @@ type LibraryScanDeps struct {
 //
 // Per-file errors are logged and skipped. Returning an error asks the
 // caller to retry the whole scan.
-func LibraryScan(ctx context.Context, args LibraryScanArgs, deps LibraryScanDeps) error {
+func LibraryScan(ctx context.Context, args jobs.LibraryScanArgs, deps LibraryScanDeps) error {
 	if deps.LibStore == nil || deps.Files == nil {
 		slog.Warn("library scan: not wired (missing LibStore or Files)",
 			"library_id", args.LibraryID)

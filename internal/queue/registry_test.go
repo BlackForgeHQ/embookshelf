@@ -6,11 +6,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/blackforge/embookshelf/internal/task"
+	"github.com/blackforge/embookshelf/internal/jobs"
 )
 
 // probeArgs is a stand-in job type — the registry must work for any
-// JobArgs, not just the three this binary ships.
+// jobs.Args, not just the three this binary ships.
 type probeArgs struct {
 	Name  string `json:"name"`
 	Count int    `json:"count"`
@@ -44,13 +44,13 @@ func TestRegistryCoversEveryJobKindExactlyOnce(t *testing.T) {
 	t.Parallel()
 
 	want := []string{
-		task.BookDropIngestArgs{}.Kind(),
-		task.BookDropAutoEnrichArgs{}.Kind(),
-		task.LibraryScanArgs{}.Kind(),
-		task.SendToKindleArgs{}.Kind(),
-		task.ReadingGuideArgs{}.Kind(),
-		task.AudiobookSegmentArgs{}.Kind(),
-		task.AudiobookFinalizeArgs{}.Kind(),
+		jobs.BookDropIngestArgs{}.Kind(),
+		jobs.BookDropAutoEnrichArgs{}.Kind(),
+		jobs.LibraryScanArgs{}.Kind(),
+		jobs.SendToKindleArgs{}.Kind(),
+		jobs.ReadingGuideArgs{}.Kind(),
+		jobs.AudiobookSegmentArgs{}.Kind(),
+		jobs.AudiobookFinalizeArgs{}.Kind(),
 	}
 
 	seen := map[string]int{}
@@ -82,13 +82,13 @@ func TestRegistryRecordsEachJobsQueue(t *testing.T) {
 	t.Parallel()
 
 	want := map[string]string{
-		task.BookDropIngestArgs{}.Kind():     "default",
-		task.BookDropAutoEnrichArgs{}.Kind(): "default",
-		task.LibraryScanArgs{}.Kind():        "default",
-		task.SendToKindleArgs{}.Kind():       "default",
-		task.ReadingGuideArgs{}.Kind():       "default",
-		task.AudiobookSegmentArgs{}.Kind():   task.AudiobookQueue,
-		task.AudiobookFinalizeArgs{}.Kind():  task.AudiobookQueue,
+		jobs.BookDropIngestArgs{}.Kind():     "default",
+		jobs.BookDropAutoEnrichArgs{}.Kind(): "default",
+		jobs.LibraryScanArgs{}.Kind():        "default",
+		jobs.SendToKindleArgs{}.Kind():       "default",
+		jobs.ReadingGuideArgs{}.Kind():       "default",
+		jobs.AudiobookSegmentArgs{}.Kind():   jobs.AudiobookQueue,
+		jobs.AudiobookFinalizeArgs{}.Kind():  jobs.AudiobookQueue,
 	}
 
 	for _, reg := range registry(Deps{}) {

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package task holds job args, business-logic functions, and River
-// adapters. The pure functions (BookDropIngest, LibraryScan) are
-// dialect-agnostic; River workers and the SQLite queue both call
-// them through their respective dispatch paths.
+// Package task holds business-logic functions and River adapters. Job
+// payloads live in internal/jobs; the pure functions (BookDropIngest,
+// LibraryScan) are dialect-agnostic; River workers call them through
+// their respective dispatch paths.
 package task
 
 import (
@@ -18,19 +18,11 @@ import (
 	"strings"
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
-
-// BookDropIngestArgs is the payload for processing a single bookdrop item.
-type BookDropIngestArgs struct {
-	ItemID string `json:"item_id"`
-}
-
-// Kind is the job name used by both River and the SQLite queue.
-// Must be stable — changing it orphans in-flight jobs.
-func (BookDropIngestArgs) Kind() string { return "bookdrop.ingest" }
 
 // BookDropDeps groups the services BookDropIngest needs.
 type BookDropDeps struct {
@@ -42,18 +34,6 @@ type BookDropDeps struct {
 	// Plan F2 addresses this when bookdrop carries library_id.
 	Resolver storage.Resolver
 }
-
-// BookDropAutoEnrichArgs is the payload for the gap-fill Approve
-// requests once a book leaves BookDrop. BookID only — the worker
-// re-reads the row, so an edit made between approve and dispatch reaches
-// the providers rather than a snapshot taken at enqueue time.
-type BookDropAutoEnrichArgs struct {
-	BookID string `json:"book_id"`
-}
-
-// Kind is the stable job name. Must not change — renaming it orphans
-// in-flight jobs.
-func (BookDropAutoEnrichArgs) Kind() string { return "bookdrop.auto_enrich" }
 
 // BookDropAutoEnrichDeps groups the seams the auto-enrich worker needs.
 // The enable setting is deliberately absent: Approve owns that decision
@@ -70,7 +50,7 @@ type BookDropAutoEnrichDeps struct {
 // which is the durability an inline call in the approve request could
 // never offer. A book deleted between approve and dispatch is terminal,
 // not a failure — there is nothing left to enrich.
-func BookDropAutoEnrich(ctx context.Context, a BookDropAutoEnrichArgs, deps BookDropAutoEnrichDeps) error {
+func BookDropAutoEnrich(ctx context.Context, a jobs.BookDropAutoEnrichArgs, deps BookDropAutoEnrichDeps) error {
 	if deps.Books == nil || deps.Enrich == nil {
 		return errors.New("auto-enrich: worker not configured")
 	}
@@ -95,7 +75,7 @@ func BookDropAutoEnrich(ctx context.Context, a BookDropAutoEnrichArgs, deps Book
 // returned for the caller to retry. Permanent errors transition the
 // item into 'failed' for review and return nil so the caller does
 // not retry.
-func BookDropIngest(ctx context.Context, args BookDropIngestArgs, deps BookDropDeps) error {
+func BookDropIngest(ctx context.Context, args jobs.BookDropIngestArgs, deps BookDropDeps) error {
 	itemID := args.ItemID
 	item, err := deps.Svc.Get(ctx, itemID)
 	if err != nil {

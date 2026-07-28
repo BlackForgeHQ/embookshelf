@@ -13,20 +13,13 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/audio"
 	"github.com/blackforge/embookshelf/internal/fileproc"
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/storage"
 	"github.com/blackforge/embookshelf/internal/tts"
 )
-
-// AudiobookQueue is the River queue narration runs on.
-//
-// Its own queue rather than the default one because a run is tens of
-// long jobs per book: sharing the four default workers would stall
-// BookDrop ingest and Library scan for as long as the run lasts
-// (ADR-0028 §3).
-const AudiobookQueue = "audiobook"
 
 // ErrAudiobooksDisabled is returned when the feature is off. Permanent —
 // a disabled feature will still be disabled in thirty seconds.
@@ -46,27 +39,6 @@ func canceled(ctx context.Context, bookID string, deps SegmentDeps) bool {
 	}
 	return run.State == model.AudiobookCanceled
 }
-
-// AudiobookSegmentArgs addresses one unit of synthesis.
-//
-// Book and seq rather than the segment's own id, because that pair is
-// what the plan is keyed on and what a Retry re-enqueues; carrying a row
-// id would mean a retry could address a row a regeneration has replaced.
-type AudiobookSegmentArgs struct {
-	BookID string `json:"book_id"`
-	Seq    int    `json:"seq"`
-}
-
-func (AudiobookSegmentArgs) Kind() string  { return "audiobook.segment" }
-func (AudiobookSegmentArgs) Queue() string { return AudiobookQueue }
-
-// AudiobookFinalizeArgs addresses the concatenation of a finished run.
-type AudiobookFinalizeArgs struct {
-	BookID string `json:"book_id"`
-}
-
-func (AudiobookFinalizeArgs) Kind() string  { return "audiobook.finalize" }
-func (AudiobookFinalizeArgs) Queue() string { return AudiobookQueue }
 
 // segmentStore is the slice of BookAudiobookRepo the segment worker
 // touches. Narrow so the claim, cancel and failure branches are
@@ -133,7 +105,7 @@ func segmentPath(dir string, seq int) string {
 // the whole run was cancelled. A segment that simply stops is the one
 // outcome nothing downstream can recover from — the finalize step waits
 // on a count that would never complete.
-func AudiobookSegment(ctx context.Context, a AudiobookSegmentArgs, deps SegmentDeps) error {
+func AudiobookSegment(ctx context.Context, a jobs.AudiobookSegmentArgs, deps SegmentDeps) error {
 	cfg, err := deps.Config(ctx)
 	if err != nil {
 		return fmt.Errorf("read audiobook settings: %w", err)
@@ -223,7 +195,7 @@ func AudiobookSegment(ctx context.Context, a AudiobookSegmentArgs, deps SegmentD
 // Deliberately does not return an error. A failure here is worth a log
 // and nothing more: returning it would hand River a segment to retry
 // whose audio is already staged and already paid for.
-func recordSegment(ctx context.Context, deps SegmentDeps, a AudiobookSegmentArgs, res model.SegmentResult) {
+func recordSegment(ctx context.Context, deps SegmentDeps, a jobs.AudiobookSegmentArgs, res model.SegmentResult) {
 	outcome, err := deps.Runs.RecordSegment(ctx, a.BookID, a.Seq, res)
 	if err != nil {
 		slog.Warn("audiobook: record segment", "book", a.BookID, "seq", a.Seq, "err", err)
@@ -256,7 +228,7 @@ func recordSegment(ctx context.Context, deps SegmentDeps, a AudiobookSegmentArgs
 // text with no way to notice.
 func synthesizeSegment(
 	ctx context.Context,
-	a AudiobookSegmentArgs,
+	a jobs.AudiobookSegmentArgs,
 	cfg repo.AudiobookConfig,
 	run model.Audiobook,
 	deps SegmentDeps,

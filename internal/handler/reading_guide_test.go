@@ -12,8 +12,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/blackforge/embookshelf/internal/auth"
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/task"
 )
 
 func guideCtx(t *testing.T, method, target string, body string) (*gin.Context, *httptest.ResponseRecorder) {
@@ -79,7 +79,7 @@ func TestBookGuideEditRejectsEmpty(t *testing.T) {
 // queues: BookID only, so the worker re-reads the row and a metadata
 // edit between enqueue and dispatch reaches the prompt.
 func TestReadingGuideJobArgsCarryTheBook(t *testing.T) {
-	a := task.ReadingGuideArgs{BookID: "b1"}
+	a := jobs.ReadingGuideArgs{BookID: "b1"}
 	if a.Kind() != "guide.generate" {
 		t.Fatalf("Kind = %q", a.Kind())
 	}

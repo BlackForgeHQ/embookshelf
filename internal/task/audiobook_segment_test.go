@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -123,7 +124,7 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 
 func (h *segmentHarness) run(t *testing.T, seq int) error {
 	t.Helper()
-	return task.AudiobookSegment(context.Background(), task.AudiobookSegmentArgs{BookID: "b1", Seq: seq}, h.deps)
+	return task.AudiobookSegment(context.Background(), jobs.AudiobookSegmentArgs{BookID: "b1", Seq: seq}, h.deps)
 }
 
 func (h *segmentHarness) staged(seq int) bool {

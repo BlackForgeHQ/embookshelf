@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/audio"
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -170,7 +171,7 @@ func newFinalizeHarness(t *testing.T) *finalizeHarness {
 }
 
 func (h *finalizeHarness) run() error {
-	return task.AudiobookFinalize(context.Background(), task.AudiobookFinalizeArgs{BookID: "b1"}, h.deps)
+	return task.AudiobookFinalize(context.Background(), jobs.AudiobookFinalizeArgs{BookID: "b1"}, h.deps)
 }
 
 func (h *finalizeHarness) stagingExists() bool {

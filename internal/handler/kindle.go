@@ -10,8 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/blackforge/embookshelf/internal/auth"
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/task"
 )
 
 // kindleEmailRegex enforces the public-side shape `*@kindle.com`.
@@ -85,7 +85,7 @@ func (h *Handler) SendToKindle(c *gin.Context, s bookScope) {
 		return
 	}
 
-	if err := h.queue.Enqueue(c.Request.Context(), task.SendToKindleArgs{BookID: book.ID, UserID: u.ID}); err != nil {
+	if err := h.queue.Enqueue(c.Request.Context(), jobs.SendToKindleArgs{BookID: book.ID, UserID: u.ID}); err != nil {
 		writeServerError(c, "send to kindle: enqueue", err)
 		return
 	}

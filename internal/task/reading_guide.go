@@ -8,21 +8,12 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
-
-// ReadingGuideArgs is the payload for generating one book's guide.
-// BookID only — the worker re-reads the row, so a metadata edit between
-// enqueue and dispatch is reflected rather than baked into the payload.
-type ReadingGuideArgs struct {
-	BookID string `json:"book_id"`
-}
-
-// Kind is the stable job name.
-func (ReadingGuideArgs) Kind() string { return "guide.generate" }
 
 // guideStore is the one write a guide job makes.
 type guideStore interface {
@@ -68,7 +59,7 @@ func (f bookOpenerFunc) Open(ctx context.Context, book model.Book) (storage.Sour
 var ErrReadingGuidesDisabled = errors.New("reading guides are not enabled")
 
 // ReadingGuide generates and stores one book's guide.
-func ReadingGuide(ctx context.Context, a ReadingGuideArgs, deps ReadingGuideDeps) error {
+func ReadingGuide(ctx context.Context, a jobs.ReadingGuideArgs, deps ReadingGuideDeps) error {
 	cfg, err := deps.Config(ctx)
 	if err != nil {
 		return fmt.Errorf("read guide settings: %w", err)

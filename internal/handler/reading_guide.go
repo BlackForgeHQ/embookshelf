@@ -11,10 +11,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/llm"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/task"
 )
 
 // readingGuideDTO is the wire shape. SourceKind travels because the
@@ -80,7 +80,7 @@ func (h *Handler) BookGuideGenerate(c *gin.Context, s bookScope) {
 		writeServerError(c, "guide generate", errors.New("no worker pool configured"))
 		return
 	}
-	if err := h.queue.Enqueue(ctx, task.ReadingGuideArgs{BookID: s.Book.ID}); err != nil {
+	if err := h.queue.Enqueue(ctx, jobs.ReadingGuideArgs{BookID: s.Book.ID}); err != nil {
 		writeServerError(c, "queue guide generation", err)
 		return
 	}

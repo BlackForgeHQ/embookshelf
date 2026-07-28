@@ -11,9 +11,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/task"
 )
 
 // resolveSecret reconciles the three-state secret input every settings
@@ -145,7 +145,7 @@ func (h *Handler) SettingsLibraryCreate(c *gin.Context) {
 	// Optional async initial scan. River queue owns the actual work; a
 	// missing queue is a deployment smell but shouldn't block creation.
 	if body.Scan && h.queue != nil {
-		if err := h.queue.Enqueue(c.Request.Context(), task.LibraryScanArgs{LibraryID: lib.ID}); err != nil {
+		if err := h.queue.Enqueue(c.Request.Context(), jobs.LibraryScanArgs{LibraryID: lib.ID}); err != nil {
 			slog.Warn("enqueue library scan after create failed", "library", lib.ID, "err", err)
 		}
 	}
@@ -179,7 +179,7 @@ func (h *Handler) SettingsLibraryRescan(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "queue unavailable")
 		return
 	}
-	if err := h.queue.Enqueue(c.Request.Context(), task.LibraryScanArgs{LibraryID: id}); err != nil {
+	if err := h.queue.Enqueue(c.Request.Context(), jobs.LibraryScanArgs{LibraryID: id}); err != nil {
 		writeServerError(c, "settings enqueue scan", err)
 		return
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -31,7 +32,7 @@ type registration struct {
 
 // riverWorker adapts a plain work function to River's typed worker
 // interface, so task packages never import river.
-type riverWorker[T JobArgs] struct {
+type riverWorker[T jobs.Args] struct {
 	river.WorkerDefaults[T]
 	work func(context.Context, T) error
 }
@@ -43,7 +44,7 @@ func (w *riverWorker[T]) Work(ctx context.Context, job *river.Job[T]) error {
 // register builds a registration from a job's args type and the
 // function that works it. The args type supplies its own kind, so a
 // registration cannot disagree with the payload it names.
-func register[T JobArgs](work func(context.Context, T) error) registration {
+func register[T jobs.Args](work func(context.Context, T) error) registration {
 	var zero T
 	return registration{
 		kind:  zero.Kind(),
@@ -165,25 +166,25 @@ func registry(deps Deps) []registration {
 	}
 
 	return []registration{
-		register(func(ctx context.Context, a task.BookDropIngestArgs) error {
+		register(func(ctx context.Context, a jobs.BookDropIngestArgs) error {
 			return task.BookDropIngest(ctx, a, bookdrop)
 		}),
-		register(func(ctx context.Context, a task.BookDropAutoEnrichArgs) error {
+		register(func(ctx context.Context, a jobs.BookDropAutoEnrichArgs) error {
 			return task.BookDropAutoEnrich(ctx, a, autoEnrich)
 		}),
-		register(func(ctx context.Context, a task.LibraryScanArgs) error {
+		register(func(ctx context.Context, a jobs.LibraryScanArgs) error {
 			return task.LibraryScan(ctx, a, libraryScan)
 		}),
-		register(func(ctx context.Context, a task.SendToKindleArgs) error {
+		register(func(ctx context.Context, a jobs.SendToKindleArgs) error {
 			return task.SendToKindle(ctx, a, sendToKindle)
 		}),
-		register(func(ctx context.Context, a task.ReadingGuideArgs) error {
+		register(func(ctx context.Context, a jobs.ReadingGuideArgs) error {
 			return task.ReadingGuide(ctx, a, readingGuide)
 		}),
-		register(func(ctx context.Context, a task.AudiobookSegmentArgs) error {
+		register(func(ctx context.Context, a jobs.AudiobookSegmentArgs) error {
 			return task.AudiobookSegment(ctx, a, segment)
 		}),
-		register(func(ctx context.Context, a task.AudiobookFinalizeArgs) error {
+		register(func(ctx context.Context, a jobs.AudiobookFinalizeArgs) error {
 			return task.AudiobookFinalize(ctx, a, finalize)
 		}),
 	}

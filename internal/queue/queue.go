@@ -18,37 +18,18 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/db"
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sse"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
 
-// JobArgs is the payload of an enqueued job: a JSON-serializable
-// struct that names its own kind. Declaring it here rather than
-// reusing River's identical interface keeps the driver import out of
-// every caller. The concrete task.*Args types satisfy both.
-type JobArgs interface {
-	Kind() string
-}
-
-// Queued is the optional half of JobArgs: a job that names a queue runs
-// there instead of the default one. Declared as an interface rather than
-// a field on Deps so the name travels with the payload exactly as Kind
-// does, and internal/task still never imports a River type.
-//
-// Audiobook generation is why this exists. A run is tens of long jobs
-// per book, and sharing the default pool would stall BookDrop ingest and
-// Library scan for as long as the run lasts (ADR-0028 §3).
-type Queued interface {
-	Queue() string
-}
-
 // queueOf reports where a job runs. Anything that does not declare a
 // queue runs on the default one, which is every job written before this
 // existed.
-func queueOf(args JobArgs) string {
-	if q, ok := args.(Queued); ok {
+func queueOf(args jobs.Args) string {
+	if q, ok := args.(jobs.Queued); ok {
 		if name := q.Queue(); name != "" {
 			return name
 		}
@@ -63,7 +44,7 @@ func queueOf(args JobArgs) string {
 // Crash recovery is River's JobRescuer, which reclaims jobs left
 // `running` by a killed process after a timeout (default 1h).
 type Client interface {
-	Enqueue(ctx context.Context, args JobArgs) error
+	Enqueue(ctx context.Context, args jobs.Args) error
 	Stop(ctx context.Context) error
 }
 
@@ -96,6 +77,11 @@ type Deps struct {
 	// after New returns: the finalize dispatcher closes over the client
 	// this call is constructing, so it cannot exist before it.
 	AudiobookDispatch *service.AudiobookDispatch
+	// Enqueue is the seam workers use to dispatch follow-on jobs. It is
+	// the same *jobs.Deferred the service tier holds: the registry below
+	// is built out of services that need it, so it cannot be the client
+	// this call is constructing.
+	Enqueue jobs.Enqueuer
 }
 
 // New constructs the River-backed Client. Postgres is the only supported
@@ -162,9 +148,9 @@ func newRiver(ctx context.Context, d *db.DB, deps Deps) (*RiverClient, error) {
 }
 
 // Enqueue inserts a job. River derives the kind from the args type, so
-// any registered JobArgs works without a per-job method here; the queue
-// comes from the payload too, via the optional Queued interface.
-func (r *RiverClient) Enqueue(ctx context.Context, args JobArgs) error {
+// any registered jobs.Args works without a per-job method here; the queue
+// comes from the payload too, via the optional jobs.Queued interface.
+func (r *RiverClient) Enqueue(ctx context.Context, args jobs.Args) error {
 	_, err := r.c.Insert(ctx, args, &river.InsertOpts{Queue: queueOf(args)})
 	return err
 }

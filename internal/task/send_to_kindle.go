@@ -8,21 +8,11 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sse"
 )
-
-// SendToKindleArgs is the payload for one Send-to-Kindle delivery.
-// BookID + UserID are the only inputs — Notifier re-fetches both
-// rows so a stale snapshot can't ship the wrong attachment.
-type SendToKindleArgs struct {
-	BookID string `json:"book_id"`
-	UserID string `json:"user_id"`
-}
-
-// Kind is the stable job name shared by River and the SQLite queue.
-func (SendToKindleArgs) Kind() string { return "kindle.send" }
 
 // SendToKindleDeps groups the seams the worker needs. Notifier owns
 // the email build; Books + Users re-validate the row at run time so
@@ -40,7 +30,7 @@ type SendToKindleDeps struct {
 // broadcasts kindle.sent. River retries transient errors via its
 // own backoff; permanent errors (eligibility, kindle email unset)
 // return nil after the SSE so the job doesn't queue forever. ADR-0021.
-func SendToKindle(ctx context.Context, args SendToKindleArgs, deps SendToKindleDeps) error {
+func SendToKindle(ctx context.Context, args jobs.SendToKindleArgs, deps SendToKindleDeps) error {
 	user, err := deps.Users.GetByID(ctx, args.UserID)
 	if err != nil {
 		return fmt.Errorf("load user: %w", err)

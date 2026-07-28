@@ -26,6 +26,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/handler"
 	"github.com/blackforge/embookshelf/internal/ingest"
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/migrator"
 	"github.com/blackforge/embookshelf/internal/provider"
 	"github.com/blackforge/embookshelf/internal/queue"
@@ -433,24 +434,24 @@ database must be empty; migrations are applied to it automatically.
 	// straight to the worker pool. Wired after queue.New because the queue
 	// takes bdropSvc as a dependency, so the two can only be joined here.
 	bdropSvc.WithIngestDispatcher(func(ctx context.Context, itemID string) error {
-		return q.Enqueue(ctx, task.BookDropIngestArgs{ItemID: itemID})
+		return q.Enqueue(ctx, jobs.BookDropIngestArgs{ItemID: itemID})
 	})
 
 	// Close the approve loop the same way: Approve reads the Auto-enrich
 	// setting and hands the new book to the pool, so the gap-fill runs in
 	// the background rather than inside whatever called Approve (ADR-0012).
 	bdropSvc.WithAutoEnrich(appSettingsRepo, func(ctx context.Context, bookID string) error {
-		return q.Enqueue(ctx, task.BookDropAutoEnrichArgs{BookID: bookID})
+		return q.Enqueue(ctx, jobs.BookDropAutoEnrichArgs{BookID: bookID})
 	})
 
 	// Close the audiobook dispatch loop now that the client exists. Both
 	// halves are set together: a segment dispatcher without a finalize
 	// dispatcher produces runs that reach 100% and never publish.
 	audiobookDispatch.Segment = func(ctx context.Context, bookID string, seq int) error {
-		return q.Enqueue(ctx, task.AudiobookSegmentArgs{BookID: bookID, Seq: seq})
+		return q.Enqueue(ctx, jobs.AudiobookSegmentArgs{BookID: bookID, Seq: seq})
 	}
 	audiobookDispatch.Finalize = func(ctx context.Context, bookID string) error {
-		return q.Enqueue(ctx, task.AudiobookFinalizeArgs{BookID: bookID})
+		return q.Enqueue(ctx, jobs.AudiobookFinalizeArgs{BookID: bookID})
 	}
 	audiobookSvc := service.NewAudiobookService(
 		audiobookRepo,
@@ -477,7 +478,7 @@ database must be empty; migrations are applied to it automatically.
 	}
 	guideRunner := service.NewGuideRunner(guideRepo,
 		func(ctx context.Context, bookID string) error {
-			return q.Enqueue(ctx, task.ReadingGuideArgs{BookID: bookID})
+			return q.Enqueue(ctx, jobs.ReadingGuideArgs{BookID: bookID})
 		}, guideCfg.TextCap)
 
 	// Requeue anything still mid-flight from a previous process.

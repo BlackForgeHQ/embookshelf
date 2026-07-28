@@ -8,6 +8,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/llm"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -77,7 +78,7 @@ func newGuideHarness(t *testing.T) *guideHarness {
 }
 
 func (h *guideHarness) run() error {
-	return task.ReadingGuide(context.Background(), task.ReadingGuideArgs{BookID: "b1"}, h.deps)
+	return task.ReadingGuide(context.Background(), jobs.ReadingGuideArgs{BookID: "b1"}, h.deps)
 }
 
 // A disabled feature will still be disabled in thirty seconds. River

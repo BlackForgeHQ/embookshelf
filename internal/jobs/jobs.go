@@ -37,3 +37,77 @@ type Queued interface {
 type Enqueuer interface {
 	Enqueue(ctx context.Context, args Args) error
 }
+
+// AudiobookQueue is the River queue narration runs on.
+//
+// Its own queue rather than the default one because a run is tens of
+// long jobs per book: sharing the four default workers would stall
+// BookDrop ingest and Library scan for as long as the run lasts
+// (ADR-0028 §3).
+const AudiobookQueue = "audiobook"
+
+// BookDropIngestArgs addresses one staged upload.
+type BookDropIngestArgs struct {
+	ItemID string `json:"item_id"`
+}
+
+// Kind is the job name. Must be stable — changing it orphans in-flight
+// jobs.
+func (BookDropIngestArgs) Kind() string { return "bookdrop.ingest" }
+
+// BookDropAutoEnrichArgs addresses the gap-fill for a freshly approved
+// book.
+type BookDropAutoEnrichArgs struct {
+	BookID string `json:"book_id"`
+}
+
+// Kind is the stable job name. Must not change — renaming it orphans
+// in-flight jobs.
+func (BookDropAutoEnrichArgs) Kind() string { return "bookdrop.auto_enrich" }
+
+// LibraryScanArgs addresses one library's rescan.
+type LibraryScanArgs struct {
+	LibraryID string `json:"library_id"`
+}
+
+func (LibraryScanArgs) Kind() string { return "library.scan" }
+
+// SendToKindleArgs addresses one delivery.
+type SendToKindleArgs struct {
+	BookID string `json:"book_id"`
+	UserID string `json:"user_id"`
+}
+
+// Kind is the stable job name.
+func (SendToKindleArgs) Kind() string { return "kindle.send" }
+
+// ReadingGuideArgs is the payload for generating one book's guide.
+// BookID only — the worker re-reads the row, so a metadata edit between
+// enqueue and dispatch is reflected rather than baked into the payload.
+type ReadingGuideArgs struct {
+	BookID string `json:"book_id"`
+}
+
+// Kind is the stable job name.
+func (ReadingGuideArgs) Kind() string { return "guide.generate" }
+
+// AudiobookSegmentArgs addresses one unit of synthesis.
+//
+// Book and seq rather than the segment's own id, because that pair is
+// what the plan is keyed on and what a Retry re-enqueues; carrying a row
+// id would mean a retry could address a row a regeneration has replaced.
+type AudiobookSegmentArgs struct {
+	BookID string `json:"book_id"`
+	Seq    int    `json:"seq"`
+}
+
+func (AudiobookSegmentArgs) Kind() string  { return "audiobook.segment" }
+func (AudiobookSegmentArgs) Queue() string { return AudiobookQueue }
+
+// AudiobookFinalizeArgs addresses the concatenation of a finished run.
+type AudiobookFinalizeArgs struct {
+	BookID string `json:"book_id"`
+}
+
+func (AudiobookFinalizeArgs) Kind() string  { return "audiobook.finalize" }
+func (AudiobookFinalizeArgs) Queue() string { return AudiobookQueue }

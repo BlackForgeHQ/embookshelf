@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/audio"
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -85,7 +86,7 @@ func (d FinalizeDeps) publish(bookID string) {
 // then mark the run ready. A crash before the last step leaves a file on
 // disk and a run still marked running, which a Retry resolves; a crash
 // after it leaves nothing to resolve.
-func AudiobookFinalize(ctx context.Context, a AudiobookFinalizeArgs, deps FinalizeDeps) error {
+func AudiobookFinalize(ctx context.Context, a jobs.AudiobookFinalizeArgs, deps FinalizeDeps) error {
 	run, err := deps.Runs.GetByBookID(ctx, a.BookID)
 	if err != nil {
 		return fmt.Errorf("load audiobook %s: %w", a.BookID, err)
