@@ -3,14 +3,18 @@
 package task_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/blackforge/embookshelf/internal/audio"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -121,6 +125,7 @@ func newFinalizeHarness(t *testing.T) *finalizeHarness {
 		},
 		books: &fakeBooks{book: model.Book{
 			ID: "b1", LibraryID: "lib1", Title: "Dune", Author: "Frank Herbert", Format: "EPUB",
+			Narrator: "Ada Lovelace",
 		}},
 		files:    &fakeFiles{nextID: "file-1"},
 		dataPath: t.TempDir(),
@@ -145,11 +150,15 @@ func newFinalizeHarness(t *testing.T) *finalizeHarness {
 		Runs:  h.runs,
 		Books: h.books,
 		Files: h.files,
-		Place: func(_ context.Context, _ model.Book, _ string) (service.PlaceResult, error) {
+		Place: func(_ context.Context, _ model.Book, srcPath string) (service.PlaceResult, error) {
 			h.placed++
 			if h.placeErr != nil {
 				return service.PlaceResult{}, h.placeErr
 			}
+			// Placement consumes the source file in production; the fake
+			// mirrors that so a regression that hashes after placement
+			// fails here instead of passing by accident.
+			_ = os.Remove(srcPath)
 			return service.PlaceResult{
 				Location: "Dune/Dune.mp3", Size: 1234, Mtime: time.Unix(0, 0).UTC(),
 			}, nil
@@ -257,6 +266,9 @@ func TestFinalizeRetainsStagingWhenPlacementFails(t *testing.T) {
 	if !h.stagingExists() {
 		t.Error("a failed finalize reclaimed the staging — Retry would have to buy it again")
 	}
+	if h.placed != 1 {
+		t.Errorf("placed %d times, want exactly one placement attempt before the failure", h.placed)
+	}
 	if h.published != 1 {
 		t.Errorf("published %d times, want exactly one terminal event", h.published)
 	}
@@ -288,8 +300,13 @@ func TestFinalizePublishesTheNarrationAndSweeps(t *testing.T) {
 	if h.runs.ready.FileID != "file-1" {
 		t.Errorf("file id = %q, want the inserted row's", h.runs.ready.FileID)
 	}
-	if h.runs.ready.TotalMS <= 0 {
-		t.Errorf("total = %dms, want it measured from the frames", h.runs.ready.TotalMS)
+	_, perSegMS, err := audio.Payload(mp3Frames(4))
+	if err != nil {
+		t.Fatalf("measure fixture duration: %v", err)
+	}
+	if want := perSegMS * 2; h.runs.ready.TotalMS != want {
+		t.Errorf("total = %dms, want %dms measured from the frames, not the stored 100ms-per-segment stand-in",
+			h.runs.ready.TotalMS, want)
 	}
 	if h.books.audio == nil || h.books.audio.DurationSeconds == nil {
 		t.Fatal("the book row's duration was never written")
@@ -297,9 +314,9 @@ func TestFinalizePublishesTheNarrationAndSweeps(t *testing.T) {
 	if len(h.books.audio.Chapters) != 2 {
 		t.Errorf("wrote %d chapters, want one per chapter index", len(h.books.audio.Chapters))
 	}
-	if h.books.audio.Narrator != "" {
-		t.Errorf("narrator = %q — it means what the file's tags said, and a synthesized voice is not that",
-			h.books.audio.Narrator)
+	if h.books.audio.Narrator != h.books.book.Narrator {
+		t.Errorf("narrator = %q, want %q passed through unchanged — it means what the file's tags said, "+
+			"and a synthesized voice is not that", h.books.audio.Narrator, h.books.book.Narrator)
 	}
 	if h.stagingExists() {
 		t.Error("staging survived a successful finalize")
@@ -307,8 +324,11 @@ func TestFinalizePublishesTheNarrationAndSweeps(t *testing.T) {
 	if h.published != 1 {
 		t.Errorf("published %d times, want exactly 1", h.published)
 	}
-	if len(h.runs.starts) != 2 {
-		t.Errorf("recorded %d segment starts, want the alignment map completed", len(h.runs.starts))
+	if got, want := h.runs.starts[0], int64(0); got != want {
+		t.Errorf("segment 0 starts at %dms, want %d", got, want)
+	}
+	if h.runs.starts[1] <= 0 {
+		t.Errorf("segment 1 starts at %dms, want it measured after segment 0's duration", h.runs.starts[1])
 	}
 }
 
@@ -336,7 +356,7 @@ func TestFinalizeUpdatesTheRowAPreviousRenditionLeft(t *testing.T) {
 // A narration without embedded art is still a good narration.
 func TestFinalizeSucceedsWithNoCoverSource(t *testing.T) {
 	h := newFinalizeHarness(t)
-	h.deps.Cover = nil
+	h.deps.Cover = nil // already nil on the harness; naming it here is the point under test
 	h.books.book.HasCover = true
 
 	if err := h.run(); err != nil {
@@ -344,5 +364,58 @@ func TestFinalizeSucceedsWithNoCoverSource(t *testing.T) {
 	}
 	if h.runs.ready == nil {
 		t.Error("the run was not marked ready without a cover source")
+	}
+}
+
+// A supplied cover is not just read without erroring — it has to actually
+// land in the finished file's tag, or a narration with HasCover true would
+// silently ship art-less anyway.
+func TestFinalizeEmbedsTheSuppliedCover(t *testing.T) {
+	h := newFinalizeHarness(t)
+	h.books.book.HasCover = true
+	h.books.book.CoverMime = "image/jpeg"
+	const coverBytes = "cover-bytes-marker"
+	h.deps.Cover = func(model.Book) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(coverBytes)), nil
+	}
+
+	var tag []byte
+	h.deps.Place = func(_ context.Context, _ model.Book, srcPath string) (service.PlaceResult, error) {
+		h.placed++
+		b, err := os.ReadFile(srcPath)
+		if err != nil {
+			t.Fatalf("read assembled file: %v", err)
+		}
+		tag = b
+		_ = os.Remove(srcPath)
+		return service.PlaceResult{
+			Location: "Dune/Dune.mp3", Size: 1234, Mtime: time.Unix(0, 0).UTC(),
+		}, nil
+	}
+
+	if err := h.run(); err != nil {
+		t.Fatalf("AudiobookFinalize: %v", err)
+	}
+	if !bytes.Contains(tag, []byte("APIC")) || !bytes.Contains(tag, []byte(coverBytes)) {
+		t.Error("the cover never reached the finished file's ID3 tag")
+	}
+}
+
+// A files lookup failure that is not "row doesn't exist" has to fail the
+// run rather than fall through to Insert, which would collide with
+// files' UNIQUE(library_id, location) once the row it should have found
+// turns out to exist after all.
+func TestFinalizeFailsWhenTheFilesLookupErrors(t *testing.T) {
+	h := newFinalizeHarness(t)
+	h.files.lookupErr = errors.New("db unavailable")
+
+	if err := h.run(); err != nil {
+		t.Fatalf("AudiobookFinalize returned %v, want nil so River stops", err)
+	}
+	if len(h.runs.states) != 1 || h.runs.states[0].State != model.AudiobookFailed {
+		t.Fatalf("states = %+v, want one failed write", h.runs.states)
+	}
+	if !strings.Contains(h.runs.states[0].Msg, "record narration file") {
+		t.Errorf("failure message = %q, want it to name the failing step", h.runs.states[0].Msg)
 	}
 }

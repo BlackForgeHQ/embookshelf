@@ -142,6 +142,10 @@ func registry(deps Deps) []registration {
 			if err != nil {
 				return service.PlaceResult{}, fmt.Errorf("resolve library: %w", err)
 			}
+			// Deliberately PlaceNarration rather than the generic Placer:
+			// the book's folder already exists, and Placer would answer
+			// that with a "Title (2)" sibling — a second leaf that scan
+			// reads as a second book.
 			return handle.PlaceNarration(ctx, book, srcPath)
 		},
 	}

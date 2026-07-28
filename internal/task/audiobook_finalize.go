@@ -52,10 +52,11 @@ type FinalizeDeps struct {
 	Books bookAudioWriter
 	Files narrationFiles
 	// Place moves the assembled file into the book's own folder.
-	// Deliberately narrower than a LibraryStore: the book's folder
-	// already exists, and the generic Placer would answer that with a
-	// "Title (2)" sibling — a second leaf that scan reads as a second
-	// book. Handing over the whole store would let a later edit reach it.
+	// Narrower than a LibraryStore on purpose: handing over the whole
+	// store would let a later edit reach more than placing one file
+	// needs. Why the closure that builds this field must call
+	// PlaceNarration rather than the generic Placer is that closure's
+	// decision to explain, not this worker's — see the registry.
 	Place func(ctx context.Context, book model.Book, srcPath string) (service.PlaceResult, error)
 	// Cover supplies the art embedded in the finished file. Nil-able and
 	// best effort: a narration without embedded art is still a good
