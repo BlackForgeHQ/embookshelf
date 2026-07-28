@@ -354,22 +354,9 @@ type progressPayload struct {
 
 // BookPatch applies partial metadata updates and returns the fresh detail
 // DTO so the caller can skip a follow-up GET.
-func (h *Handler) BookPatch(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
-
-	current, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "book load", err)
-		return
-	}
+func (h *Handler) BookPatch(c *gin.Context, s bookScope) {
+	userID, id := s.UserID, s.Book.ID
+	current := s.Book
 
 	var patch bookPatch
 	if !bindJSON(c, &patch) {
@@ -437,12 +424,8 @@ func attachWarnings(body gin.H, out service.Outcome, logMsg, bookID string) {
 // BookProgressUpdate stores the current user's reading progress + resume
 // token for a book. Returns 204 (no body) — callers can refetch if they
 // need the updated float.
-func (h *Handler) BookProgressUpdate(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
+func (h *Handler) BookProgressUpdate(c *gin.Context, s bookScope) {
+	userID, id := s.UserID, s.Book.ID
 
 	var payload progressPayload
 	if !bindJSON(c, &payload) {
@@ -464,14 +447,9 @@ func (h *Handler) BookProgressUpdate(c *gin.Context) {
 // (ADR-0017); we strip and resolve to the same row via (user_id,
 // slug). Non-owners attempting the public path 404 from the repo
 // lookup — the picker filters them client-side as well.
-func (h *Handler) BookAddShelf(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
+func (h *Handler) BookAddShelf(c *gin.Context, s bookScope) {
 	slug, _ := service.SplitPublicSlug(c.Param("slug"))
-	if err := h.shelf.AddBook(c.Request.Context(), userID, slug, id); err != nil {
+	if err := h.shelf.AddBook(c.Request.Context(), s.UserID, slug, s.Book.ID); err != nil {
 		switch {
 		case errors.Is(err, repo.ErrNotFound):
 			writeError(c, http.StatusNotFound, "shelf not found")
@@ -489,9 +467,10 @@ func (h *Handler) BookAddShelf(c *gin.Context) {
 // shared instance resource (no per-user ownership), so letting any reader
 // nuke a book everyone else can see is the wrong default.
 //
-// The handler's whole job here is the HTTP contract: authorize, resolve
-// the id to a row so an unknown book is a 404 rather than a silent 204,
-// and map the one fatal error to a status. The delete sequence — snapshot
+// The handler's whole job here is the HTTP contract: map the one fatal
+// error to a status. Authorization and resolving the id to a row — so an
+// unknown book is a 404 rather than a silent 204 — are the book-scoped
+// seam's, which is why the body starts from a book. The delete sequence — snapshot
 // the storage keys, drop the row, then remove the bytes, the cover art
 // and any legacy on-disk file — belongs to LibraryService.DeleteBook,
 // which is where its ordering invariant can be tested.
@@ -500,24 +479,10 @@ func (h *Handler) BookAddShelf(c *gin.Context) {
 // so 204 is the truth as far as the client is concerned, and 204 carries
 // no body to put warnings in; what is left behind is bytes nothing
 // references, which is an operator's problem and goes to the log.
-func (h *Handler) BookDelete(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
+func (h *Handler) BookDelete(c *gin.Context, s bookScope) {
+	id := s.Book.ID
 
-	book, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "book delete lookup", err)
-		return
-	}
-
-	outcome, err := h.lib.DeleteBook(c.Request.Context(), book)
+	outcome, err := h.lib.DeleteBook(c.Request.Context(), s.Book)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
@@ -536,14 +501,9 @@ func (h *Handler) BookDelete(c *gin.Context) {
 // BookRemoveShelf takes a book off a shelf. No-op when the book isn't on
 // the shelf; distinguishing "not there" from "shelf doesn't exist" isn't
 // worth the extra query.
-func (h *Handler) BookRemoveShelf(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
+func (h *Handler) BookRemoveShelf(c *gin.Context, s bookScope) {
 	slug, _ := service.SplitPublicSlug(c.Param("slug"))
-	if err := h.shelf.RemoveBook(c.Request.Context(), userID, slug, id); err != nil {
+	if err := h.shelf.RemoveBook(c.Request.Context(), s.UserID, slug, s.Book.ID); err != nil {
 		switch {
 		case errors.Is(err, repo.ErrNotFound):
 			writeError(c, http.StatusNotFound, "shelf not found")
@@ -594,22 +554,8 @@ func (p bookPatch) toDomain() model.BookPatch {
 
 // BookDetail returns a single book enriched with the user's shelf
 // membership slugs.
-func (h *Handler) BookDetail(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
-	b, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "book detail", err)
-		return
-	}
-	shelves, err := h.shelf.SlugsForBook(c.Request.Context(), userID, id)
+func (h *Handler) BookDetail(c *gin.Context, s bookScope) {
+	shelves, err := h.shelf.SlugsForBook(c.Request.Context(), s.UserID, s.Book.ID)
 	if err != nil {
 		writeServerError(c, "book shelves", err)
 		return
@@ -619,7 +565,7 @@ func (h *Handler) BookDetail(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"book": bookDetailDTO{
-			bookDTO: toBookDTO(b),
+			bookDTO: toBookDTO(s.Book),
 			Shelves: shelves,
 		},
 	})
@@ -648,21 +594,8 @@ func writeBooksPayload(c *gin.Context, books []model.Book) {
 // human-readable filename so browsers save-as instead of embedding.
 // Without the flag the response stays "inline" for the in-browser
 // reader.
-func (h *Handler) BookFile(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
-	book, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "book file lookup", err)
-		return
-	}
+func (h *Handler) BookFile(c *gin.Context, s bookScope) {
+	book := s.Book
 	// A book can be consumed as text or as narration — two renditions of
 	// one book (ADR-0025 §3). books.format names the primary one, so the
 	// caller has to say when it wants the other; without this selector

@@ -45,11 +45,8 @@ func toReadingGuideDTO(g model.ReadingGuide) readingGuideDTO {
 
 // BookGuideGet returns a book's reading guide. 404 when none has been
 // generated — distinct from an empty one, which cannot be stored.
-func (h *Handler) BookGuideGet(c *gin.Context) {
-	if requireUserID(c) == "" {
-		return
-	}
-	g, err := h.guides.GetByBookID(c.Request.Context(), c.Param("id"))
+func (h *Handler) BookGuideGet(c *gin.Context, s bookScope) {
+	g, err := h.guides.GetByBookID(c.Request.Context(), s.Book.ID)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "no reading guide for this book yet")
@@ -66,10 +63,7 @@ func (h *Handler) BookGuideGet(c *gin.Context) {
 // Always overwrites, including a hand-edited guide — unlike a bulk run,
 // which skips those. Here the user is looking at the guide they are
 // replacing, so the intent is visible (ADR-0024 §5).
-func (h *Handler) BookGuideGenerate(c *gin.Context) {
-	if requireUserID(c) == "" {
-		return
-	}
+func (h *Handler) BookGuideGenerate(c *gin.Context, s bookScope) {
 	ctx := c.Request.Context()
 
 	cfg, err := h.appSettings.GetReadingGuide(ctx)
@@ -86,7 +80,7 @@ func (h *Handler) BookGuideGenerate(c *gin.Context) {
 		writeServerError(c, "guide generate", errors.New("no worker pool configured"))
 		return
 	}
-	if err := h.queue.Enqueue(ctx, task.ReadingGuideArgs{BookID: c.Param("id")}); err != nil {
+	if err := h.queue.Enqueue(ctx, task.ReadingGuideArgs{BookID: s.Book.ID}); err != nil {
 		writeServerError(c, "queue guide generation", err)
 		return
 	}
@@ -102,10 +96,7 @@ type readingGuideEditReq struct {
 
 // BookGuideEdit saves a hand-written guide and marks the row edited, so
 // bulk runs leave it alone from then on.
-func (h *Handler) BookGuideEdit(c *gin.Context) {
-	if requireUserID(c) == "" {
-		return
-	}
+func (h *Handler) BookGuideEdit(c *gin.Context, s bookScope) {
 	var body readingGuideEditReq
 	if !bindJSON(c, &body) {
 		return
@@ -121,7 +112,7 @@ func (h *Handler) BookGuideEdit(c *gin.Context) {
 		return
 	}
 
-	id := c.Param("id")
+	id := s.Book.ID
 	if err := h.guides.SaveEdit(c.Request.Context(), id, text); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "no reading guide for this book yet")

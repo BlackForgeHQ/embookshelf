@@ -160,14 +160,14 @@ func assertWarnings(t *testing.T, body map[string]any, endpoint string) {
 
 func TestMetadataPatchReportsDegradedWrite(t *testing.T) {
 	h, bookID := degradedEditHandler(t)
-	body := editRequest(t, h.BookPatch, http.MethodPatch,
+	body := editRequest(t, h.bookScoped(h.BookPatch), http.MethodPatch,
 		"/api/v1/books/"+bookID, bookID, `{"title":"Edited Title"}`)
 	assertWarnings(t, body, "PATCH /books/:id")
 }
 
 func TestFieldLockToggleReportsDegradedWrite(t *testing.T) {
 	h, bookID := degradedEditHandler(t)
-	body := editRequest(t, h.EnrichToggleFieldLocks, http.MethodPut,
+	body := editRequest(t, h.bookScoped(h.EnrichToggleFieldLocks), http.MethodPut,
 		"/api/v1/books/"+bookID+"/metadata/locks", bookID, `{"locks":{"title":true}}`)
 	assertWarnings(t, body, "PUT /books/:id/metadata/locks")
 }
@@ -177,7 +177,7 @@ func TestFieldLockToggleReportsDegradedWrite(t *testing.T) {
 // Sidecar (or rezip) failed came back as a clean 200.
 func TestApplyMatchReportsDegradedWrite(t *testing.T) {
 	h, bookID := degradedEditHandler(t)
-	body := editRequest(t, h.EnrichApplyMatch, http.MethodPut,
+	body := editRequest(t, h.bookScoped(h.EnrichApplyMatch), http.MethodPut,
 		"/api/v1/books/"+bookID+"/metadata", bookID,
 		`{"source":"googlebooks","sourceId":"g1","title":"Provider Title"}`)
 	assertWarnings(t, body, "PUT /books/:id/metadata")

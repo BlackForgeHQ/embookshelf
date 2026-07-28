@@ -57,23 +57,12 @@ type patchAnnotationReq struct {
 // AnnotationsForBook lists every annotation the current user has on a
 // specific book. Used by the reader's notes panel and the book detail
 // page's Notes tab.
-func (h *Handler) AnnotationsForBook(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	bookID := c.Param("id")
-	// Ensure the book is visible to the user before exposing annotations.
-	// Guards against cross-user or deleted-book leaks where the caller
-	// already knows a bookID but shouldn't see the annotations.
-	if _, err := h.books.GetByID(c.Request.Context(), userID, bookID); err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "annotations list book lookup", err)
-		return
-	}
+// The book-scoped seam has already resolved the id, which is what keeps a
+// caller who merely knows a book id from reading annotations on a book
+// that is not there — the existence check used to be an idiom this body
+// carried itself.
+func (h *Handler) AnnotationsForBook(c *gin.Context, s bookScope) {
+	userID, bookID := s.UserID, s.Book.ID
 	list, err := h.annotations.ListForBook(c.Request.Context(), userID, bookID)
 	if err != nil {
 		writeServerError(c, "annotations list", err)
@@ -111,20 +100,8 @@ func (h *Handler) AnnotationsRecent(c *gin.Context) {
 // AnnotationCreate inserts a new annotation for the current user. The
 // book scope comes from the path param, not the body, so a client can't
 // create annotations on a book they aren't allowed to see.
-func (h *Handler) AnnotationCreate(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	bookID := c.Param("id")
-	if _, err := h.books.GetByID(c.Request.Context(), userID, bookID); err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "annotation create book lookup", err)
-		return
-	}
+func (h *Handler) AnnotationCreate(c *gin.Context, s bookScope) {
+	userID, bookID := s.UserID, s.Book.ID
 
 	var body createAnnotationReq
 	if !bindJSON(c, &body) {

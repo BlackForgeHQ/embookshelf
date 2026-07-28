@@ -9,8 +9,6 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
-
-	"github.com/blackforge/embookshelf/internal/repo"
 )
 
 // BookCover streams the approved book's cover image. 404s when either the
@@ -21,21 +19,8 @@ import (
 // handler's: Open takes the book and resolves hashed-then-legacy itself,
 // so a library part-way through the Covers backfill serves either kind
 // without this route knowing a migration exists.
-func (h *Handler) BookCover(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
-	book, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			c.Status(http.StatusNotFound)
-			return
-		}
-		writeServerError(c, "cover lookup", err)
-		return
-	}
+func (h *Handler) BookCover(c *gin.Context, s bookScope) {
+	book := s.Book
 	if !book.HasCover || h.covers == nil {
 		c.Status(http.StatusNotFound)
 		return

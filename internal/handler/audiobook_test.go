@@ -90,7 +90,7 @@ func TestBookAudiobookGetMissingBookIsA404(t *testing.T) {
 	h, _, _, _ := audiobookGetHandler(t)
 	c, rec := audiobookGetCtx(t, "6f1c0f7e-0000-4000-8000-000000000000", true)
 
-	h.BookAudiobookGet(c)
+	h.bookScoped(h.BookAudiobookGet)(c)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
@@ -133,7 +133,7 @@ func TestBookAudiobookGetWithoutUserWritesOnlyThe401(t *testing.T) {
 
 	c, rec := audiobookGetCtx(t, book.ID, false)
 
-	h.BookAudiobookGet(c)
+	h.bookScoped(h.BookAudiobookGet)(c)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 (body %s)", rec.Code, rec.Body.String())

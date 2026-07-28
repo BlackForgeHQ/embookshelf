@@ -12,28 +12,14 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
-	"github.com/blackforge/embookshelf/internal/repo"
 )
 
 // ComicPagesIndex returns the page count for a CBZ book. The reader uses
 // this to size its navigation UI before requesting individual pages.
 //
 // Response: {"count": 142}
-func (h *Handler) ComicPagesIndex(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
-	book, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "comic pages lookup", err)
-		return
-	}
+func (h *Handler) ComicPagesIndex(c *gin.Context, s bookScope) {
+	book := s.Book
 	if book.Format != "CBZ" {
 		writeError(c, http.StatusUnsupportedMediaType, "not a comic book")
 		return
@@ -57,27 +43,14 @@ func (h *Handler) ComicPagesIndex(c *gin.Context) {
 
 // ComicPage streams a single page (image bytes) from a CBZ archive.
 // Pages are 0-indexed in natural sort order (page2.jpg before page10.jpg).
-func (h *Handler) ComicPage(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
+func (h *Handler) ComicPage(c *gin.Context, s bookScope) {
 	nStr := strings.TrimSpace(c.Param("n"))
 	n, err := strconv.Atoi(nStr)
 	if err != nil || n < 0 {
 		writeError(c, http.StatusBadRequest, "invalid page number")
 		return
 	}
-	book, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "comic page lookup", err)
-		return
-	}
+	book := s.Book
 	if book.Format != "CBZ" {
 		writeError(c, http.StatusUnsupportedMediaType, "not a comic book")
 		return
