@@ -18,7 +18,6 @@ import (
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/storage"
-	"github.com/blackforge/embookshelf/internal/textsplit"
 	"github.com/blackforge/embookshelf/internal/tts"
 )
 
@@ -254,48 +253,21 @@ func synthesizeSegment(
 		return nil, err
 	}
 
-	// A segment is a job, not a request. Every engine caps a single call
-	// far below the segment size, so one segment is several calls whose
-	// audio is joined the same way the whole book is.
-	chunks := textsplit.OnSentences(text, sel.Info.MaxRequestChars)
-	parts := make([][]byte, 0, len(chunks))
-	for _, chunk := range chunks {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		// Re-read the run before every call, not once per job. A 40k
-		// segment is a dozen engine calls over several minutes, and a
-		// cancel that only took effect between segments would keep
-		// spending for most of that (ADR-0028 §6).
-		if canceled(ctx, a.BookID, deps) {
-			return nil, errCanceled
-		}
-		part, err := sel.Engine.Synthesize(ctx, tts.Request{
-			Text:  chunk,
-			Voice: run.Voice,
-			Model: run.Model,
-		})
-		if err != nil {
-			return nil, err
-		}
-		parts = append(parts, part)
-	}
-	return joinParts(parts)
-}
-
-func joinParts(parts [][]byte) ([]byte, error) {
-	if len(parts) == 1 {
-		return parts[0], nil
-	}
-	var buf []byte
-	for i, p := range parts {
-		frames, _, err := audio.Payload(p)
-		if err != nil {
-			return nil, fmt.Errorf("chunk %d: %w", i, err)
-		}
-		buf = append(buf, frames...)
-	}
-	return buf, nil
+	// The cancel check travels with the request: the adapter splits this
+	// segment into as many engine calls as its cap needs, and runs this
+	// before each one. It is the only thing between a user pressing stop
+	// and the rest of a $170 run being billed anyway (ADR-0028 §6).
+	return sel.Engine.Synthesize(ctx, tts.Request{
+		Text:  text,
+		Voice: run.Voice,
+		Model: run.Model,
+		BeforeChunk: func(ctx context.Context) error {
+			if canceled(ctx, a.BookID, deps) {
+				return errCanceled
+			}
+			return nil
+		},
+	})
 }
 
 // segmentText re-extracts the book and returns the seq-th segment's prose.

@@ -106,16 +106,38 @@ func (f *fakeBooks) UpdateAudio(
 }
 
 // fakeEngine is a tts.Engine that never leaves the process.
+//
+// chunks simulates the per-request splitting that internal/tts now owns
+// (Task 4): a segment worker makes exactly one Synthesize call per
+// segment, and it is the adapter — real or fake — that turns that into
+// however many engine calls its cap needs. chunks defaults to one
+// simulated piece so every test that does not care about chunking still
+// sees the one request it always saw.
 type fakeEngine struct {
 	reply    []byte
 	err      error
+	chunks   int
 	calls    int
 	requests []tts.Request
 }
 
-func (e *fakeEngine) Synthesize(_ context.Context, req tts.Request) ([]byte, error) {
-	e.calls++
-	e.requests = append(e.requests, req)
+func (e *fakeEngine) Synthesize(ctx context.Context, req tts.Request) ([]byte, error) {
+	n := e.chunks
+	if n <= 0 {
+		n = 1
+	}
+	for i := 0; i < n; i++ {
+		// Mirrors chunked.Synthesize in internal/tts: the callback runs
+		// before every simulated piece, unwrapped, so a caller matching
+		// errCanceled with errors.Is still works.
+		if req.BeforeChunk != nil {
+			if err := req.BeforeChunk(ctx); err != nil {
+				return nil, err
+			}
+		}
+		e.calls++
+		e.requests = append(e.requests, req)
+	}
 	if e.err != nil {
 		return nil, e.err
 	}

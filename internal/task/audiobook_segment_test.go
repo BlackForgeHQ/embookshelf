@@ -138,7 +138,7 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 			}
 			return repo.ConfiguredEngine{
 				ID:     tts.EngineOpenAI,
-				Info:   tts.Info{ID: tts.EngineOpenAI, MaxRequestChars: 20},
+				Info:   tts.Info{ID: tts.EngineOpenAI},
 				Engine: h.engine,
 			}, nil
 		},
@@ -385,21 +385,16 @@ func TestSegmentReturnsATransientEngineFailureForRiver(t *testing.T) {
 	}
 }
 
-// Audio the frame parser cannot read is not something a retry improves —
-// when it is caught. This raises MaxRequestChars so segment 0's 44
-// characters stay in one chunk, which routes the bad bytes through
-// AudiobookSegment's own audio.Payload check rather than joinParts' (see
-// the sibling test below for what happens when they don't fit in one).
+// Audio the frame parser cannot read is not something a retry improves.
+// The worker sees whatever bytes its one Synthesize call returns and
+// runs them through its own audio.Payload check — how many engine calls
+// (if any) the adapter split that call into internally is invisible
+// here, and is internal/tts's business, not the worker's (see the
+// untagged-error test below for the sibling case: a failure the engine
+// itself reports, rather than one the worker's own decode catches).
 func TestSegmentRecordsUnusableAudioAsAPermanentFailure(t *testing.T) {
 	h := newSegmentHarness(t)
 	h.engine.reply = []byte("this is not an mp3")
-	h.deps.Engine = func(repo.AudiobookConfig) (repo.ConfiguredEngine, error) {
-		return repo.ConfiguredEngine{
-			ID:     tts.EngineOpenAI,
-			Info:   tts.Info{ID: tts.EngineOpenAI, MaxRequestChars: 1000},
-			Engine: h.engine,
-		}, nil
-	}
 
 	if err := h.run(t, 0); err != nil {
 		t.Fatalf("AudiobookSegment returned %v, want nil", err)
@@ -412,23 +407,24 @@ func TestSegmentRecordsUnusableAudioAsAPermanentFailure(t *testing.T) {
 	}
 }
 
-// Pins a known inconsistency rather than endorsing it: the harness default
-// (MaxRequestChars: 20) splits segment 0 into three chunks, same as every
-// real engine would on a full-size segment. Unusable audio there is caught
-// by joinParts, not by AudiobookSegment's own check, and joinParts wraps
-// the failure as a plain "chunk %d: %w" — untagged with tts.ErrPermanent —
-// so the worker returns it and River retries forever, unlike the
-// single-chunk case above, which the worker marks permanent and publishes.
-// Fixing that gap is out of scope here; this test exists so the gap has to
-// be noticed, and broken deliberately, before anyone closes it silently.
-func TestSegmentTreatsMultiChunkUnusableAudioAsRetryableUnlikeTheSingleChunkCase(t *testing.T) {
+// The chunk-count asymmetry this test used to pin — unusable audio
+// tagged permanent at one chunk but wrapped untagged, and so retried
+// forever, at several — moved into internal/tts with the chunking loop
+// itself (Task 4) and is now pinned there by
+// TestChunkedJoinWrapsMultiChunkFailureUntagged in
+// internal/tts/chunking_test.go (see #185). What is left at this layer
+// is the other half: whatever untagged error the engine reports, for
+// whatever reason, the worker returns it for River to retry and records
+// exactly one failed segment — it never promotes a bare error to
+// permanent on its own say-so.
+func TestSegmentReturnsAnUntaggedEngineErrorForRiverToRetry(t *testing.T) {
 	h := newSegmentHarness(t)
-	h.engine.reply = []byte("this is not an mp3")
+	h.engine.err = errors.New("chunk 2: mp3 frame sync not found")
 
 	err := h.run(t, 0)
 
 	if err == nil {
-		t.Fatal("AudiobookSegment returned nil — want the chunk-join error, since it isn't tagged permanent")
+		t.Fatal("AudiobookSegment returned nil — want the untagged engine error, since it isn't tagged permanent")
 	}
 	if len(h.runs.recorded) != 1 || h.runs.recorded[0].State != model.SegmentFailed {
 		t.Fatalf("recorded %+v, want one failed segment", h.runs.recorded)
@@ -440,9 +436,12 @@ func TestSegmentTreatsMultiChunkUnusableAudioAsRetryableUnlikeTheSingleChunkCase
 
 // A 40k segment is a dozen engine calls over several minutes. A cancel
 // that only took effect between segments would keep spending for most of
-// that (ADR-0028 §6), so it is checked before every call.
+// that (ADR-0028 §6), so it travels with the request as BeforeChunk and
+// is checked before every simulated piece — chunks: 3 makes the fake
+// stand in for whatever count the real adapter would pick.
 func TestSegmentStopsSpendingWhenCancelLandsBetweenChunks(t *testing.T) {
 	h := newSegmentHarness(t)
+	h.engine.chunks = 3
 	running := model.Audiobook{BookID: "b1", State: model.AudiobookRunning, Engine: "openai", Voice: "alloy"}
 	canceled := running
 	canceled.State = model.AudiobookCanceled
@@ -512,9 +511,7 @@ func TestSegmentStagesItsAudioAndRecordsTheDuration(t *testing.T) {
 	}
 	// The run pins its own voice and model rather than deferring to
 	// whatever is currently configured — that pin is worthless if it
-	// never actually reaches the engine call. The harness's small
-	// MaxRequestChars splits the segment into several chunks, so every
-	// request has to carry it, not just the first.
+	// never actually reaches the engine call.
 	if len(h.engine.requests) == 0 {
 		t.Fatal("engine was never called")
 	}
