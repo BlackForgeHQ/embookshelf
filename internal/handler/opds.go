@@ -205,17 +205,8 @@ func (h *Handler) OPDSSearchDescription(c *gin.Context) {
 
 // OPDSDownload streams the on-disk book file. Delegates to the same path
 // sandbox as the web reader (BOOKDROP_PATH + registered library paths).
-func (h *Handler) OPDSDownload(c *gin.Context) {
-	userID := opdsUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
-	book, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil {
-		c.String(http.StatusNotFound, "book not found")
-		return
-	}
+func (h *Handler) OPDSDownload(c *gin.Context, s bookScope) {
+	id, book := s.Book.ID, s.Book
 	if book.Path == "" {
 		c.String(http.StatusNotFound, "no file on disk for this book")
 		return
@@ -235,14 +226,9 @@ func (h *Handler) OPDSDownload(c *gin.Context) {
 // Mirrors BookCover but uses the Basic Auth context rather than the session.
 // Like BookCover, it asks coverstore for the book's bytes and lets the
 // module decide which namespace they are in.
-func (h *Handler) OPDSCover(c *gin.Context) {
-	userID := opdsUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
-	book, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil || !book.HasCover || h.covers == nil {
+func (h *Handler) OPDSCover(c *gin.Context, s bookScope) {
+	id, book := s.Book.ID, s.Book
+	if !book.HasCover || h.covers == nil {
 		c.Status(http.StatusNotFound)
 		return
 	}

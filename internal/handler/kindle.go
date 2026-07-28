@@ -3,7 +3,6 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -11,7 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/blackforge/embookshelf/internal/auth"
-	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/task"
 )
@@ -55,11 +53,13 @@ func (h *Handler) AccountKindleEmailUpdate(c *gin.Context) {
 // ineligible format, 412 when the kindle_email isn't set, 503 when
 // the email subsystem is off. The actual send happens in
 // task.SendToKindle and reports completion via SSE. ADR-0021.
-func (h *Handler) SendToKindle(c *gin.Context) {
+func (h *Handler) SendToKindle(c *gin.Context, s bookScope) {
 	if !h.emailEnabled() {
 		writeEmailDisabled(c)
 		return
 	}
+	// The seam has already established the session user; this reaches for
+	// the full row because the destination address lives on it.
 	u := auth.UserFromContext(c.Request.Context())
 	if u == nil {
 		writeError(c, http.StatusUnauthorized, "authentication required")
@@ -78,16 +78,7 @@ func (h *Handler) SendToKindle(c *gin.Context) {
 		}
 	}
 
-	bookID := c.Param("id")
-	book, err := h.books.GetByID(c.Request.Context(), u.ID, bookID)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "send to kindle: load book", err)
-		return
-	}
+	book := s.Book
 	if !service.IsKindleEligible(book.Format) {
 		writeErrorCode(c, http.StatusUnsupportedMediaType, CodeFormatNotSupported,
 			"Send-to-Kindle accepts EPUB and PDF only")

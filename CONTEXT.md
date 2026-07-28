@@ -363,6 +363,28 @@ The worker pipeline that takes a staged file path, computes its hash, dispatches
 
 The split exists because a 31-field `Deps` struct made every seam optional by construction, and one of them — the provider settings surface — shipped unassigned and nil-dereferenced on every request to it. Required-vs-optional was already a real distinction in the code, expressed only as the presence or absence of a nil check; this moves it into the type system.
 
+### Book-scoped seam
+
+`handler.bookScoped(fn)`; the one place that turns a book-scoped route into a loaded book. Takes the session user, resolves the `:id` route parameter through the [[bookStore]], answers 404 for a book that is not there and 500 for a lookup that failed, and calls the handler body with a `bookScope{UserID, Book}`.
+
+Fails closed **by construction, not by convention**: a body's type is `func(*gin.Context, bookScope)`, so it cannot run without a resolved book and cannot be registered without the wrapper — wiring one directly is a compile error. That is the property the previous shape lacked. The five-line preamble — take the user id, load the book, branch on not-found, write 404, write 500 — was part of the interface every book endpoint had to learn and restate, at roughly two dozen call sites across eight files. Restating it is what let audiobook status send the lookup error to the blank identifier and report on a zero-value Book, and what let the reading-guide routes skip the existence check altogether.
+
+Two response vocabularies over one resolve: `bookScoped` for the JSON API ([[Error envelope]]), `opdsBookScoped` for the OPDS surface (HTTP Basic, plain text). That difference is real between the surfaces; the resolve and the branch are not duplicated.
+
+Routes that need only existence — add-to-shelf, progress, cancel a run — take the scope and ignore `Book`. The check stops being an idiom a handler can forget.
+
+### bookStore
+
+`handler.bookStore`; the handler tier's read view of the catalog — `GetByID` plus `Search`. Declared as an interface rather than taking `*repo.BookRepo` so a book-scoped handler body is reachable in a test with a fake, which the preamble made impossible: every body began by talking to a real database. **Distinct** from `LibraryService`, which is the Library lifecycle module and no longer fronts the catalog at all.
+
+### Book detail response
+
+`handler.writeBookDetail(c, userID, bookID, outcome, logMsg)`; the one module that answers "the current wire representation of book X for user Y". Owns three rules that were previously restated at five sites across the library, enrichment and bookdrop surfaces: reload the row after a write (so the response carries repo-computed fields and stays in lockstep with a fresh GET), turn a nil shelf-slug slice into an empty one (a JSON `null` where the client's type says `string[]`), and attach [[Outcome]] warnings when the write degraded.
+
+They had already drifted, which is the argument for the module: bookdrop approve hard-coded `Shelves: []string{}` instead of querying, and two of the five carried no warnings. `attachWarnings` — the shared warning attachment the three edit endpoints already used — is absorbed into it rather than sitting beside it.
+
+Callers hand it a book id and it writes the response. A read passes the zero `Outcome` and an empty log message; a plain GET therefore pays one extra primary-key lookup, which is the price of the five sites having one answer instead of five.
+
 ### Book file sandbox
 
 `service.SandboxPath`; the allow-list gate every filesystem read or delete of a book file passes through. Roots are `BOOKDROP_PATH` plus every Library with a local path; a path must resolve inside one of them after cleaning. Fails closed — no configured roots admits nothing. Serving (`handler.sandboxPath`) and deleting (`LibraryService.DeleteBook`) share the one implementation so a change to the rule cannot apply to one and miss the other — the reason it lives in `service` rather than in the HTTP layer with its other caller.

@@ -56,8 +56,11 @@ type Handler struct {
 	// without a restart. resets + inviteRepo + users back the token
 	// flows; cipher + emailTpl back the admin "send test email"
 	// endpoint and any handler-side render. ADR-0020.
-	users      *repo.UserRepo
-	books      *repo.BookRepo
+	users *repo.UserRepo
+	// books is the catalog behind the book-scoped seam. Held as the
+	// bookStore interface rather than *repo.BookRepo so a book-scoped
+	// handler body can be driven against a fake.
+	books      bookStore
 	notifier   *service.Notifier
 	resets     *service.PasswordResetService
 	inviteRepo *repo.UserInviteRepo

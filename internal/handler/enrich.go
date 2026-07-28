@@ -69,21 +69,8 @@ func toEnrichMatchDTO(m provider.Match) enrichMatchDTO {
 //	?title=<string>
 //	?author=<string>
 //	?isbn=<string>
-func (h *Handler) EnrichSearch(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
-	book, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "enrich get book", err)
-		return
-	}
+func (h *Handler) EnrichSearch(c *gin.Context, s bookScope) {
+	book := s.Book
 
 	q := provider.Query{
 		Title:  firstNonEmpty(strings.TrimSpace(c.Query("title")), book.Title),
@@ -125,21 +112,8 @@ func (h *Handler) EnrichSearch(c *gin.Context) {
 //
 // Client disconnect cancels the request context, which cancels every
 // in-flight provider HTTP call via net/http's context integration.
-func (h *Handler) EnrichStream(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
-	book, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "enrich get book", err)
-		return
-	}
+func (h *Handler) EnrichStream(c *gin.Context, s bookScope) {
+	book := s.Book
 
 	q := provider.Query{
 		Title:  firstNonEmpty(strings.TrimSpace(c.Query("title")), book.Title),
@@ -225,21 +199,8 @@ type applyMetadataReq struct {
 // EnrichApplyMatch persists a user-selected provider match onto the
 // book, respecting per-field locks and optionally unioning categories
 // or pulling the cover.
-func (h *Handler) EnrichApplyMatch(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
-	book, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "enrich apply get book", err)
-		return
-	}
+func (h *Handler) EnrichApplyMatch(c *gin.Context, s bookScope) {
+	userID, book := s.UserID, s.Book
 
 	var body applyMetadataReq
 	if !bindJSON(c, &body) {
@@ -274,29 +235,9 @@ func (h *Handler) EnrichApplyMatch(c *gin.Context) {
 		return
 	}
 
-	// Reload so the response carries fresh cover flags + any side
-	// effects of the cover-from-url import that ran after UpdateMetadata.
-	fresh, err := h.books.GetByID(c.Request.Context(), userID, updated.ID)
-	if err != nil {
-		writeServerError(c, "enrich apply reload", err)
-		return
-	}
-	shelves, err := h.shelf.SlugsForBook(c.Request.Context(), userID, updated.ID)
-	if err != nil {
-		writeServerError(c, "enrich apply shelves", err)
-		return
-	}
-	if shelves == nil {
-		shelves = []string{}
-	}
-	resp := gin.H{
-		"book": bookDetailDTO{
-			bookDTO: toBookDTO(fresh),
-			Shelves: shelves,
-		},
-	}
-	attachWarnings(resp, outcome, "apply match write degraded", updated.ID)
-	c.JSON(http.StatusOK, resp)
+	// The reload the module performs is what picks up the cover flags the
+	// cover-from-url import set after UpdateMetadata returned.
+	h.writeBookDetail(c, userID, updated.ID, outcome, "apply match write degraded")
 }
 
 // toggleFieldLocksReq flips the lock flag for one or more metadata
@@ -308,21 +249,8 @@ type toggleFieldLocksReq struct {
 
 // EnrichToggleFieldLocks updates per-field lock flags. Unknown keys are
 // rejected so a typo doesn't silently vanish.
-func (h *Handler) EnrichToggleFieldLocks(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
-	book, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "lock get book", err)
-		return
-	}
+func (h *Handler) EnrichToggleFieldLocks(c *gin.Context, s bookScope) {
+	userID, id, book := s.UserID, s.Book.ID, s.Book
 
 	var body toggleFieldLocksReq
 	if !bindJSON(c, &body) {
@@ -354,27 +282,7 @@ func (h *Handler) EnrichToggleFieldLocks(c *gin.Context) {
 		return
 	}
 
-	fresh, err := h.books.GetByID(c.Request.Context(), userID, id)
-	if err != nil {
-		writeServerError(c, "lock reload", err)
-		return
-	}
-	shelves, err := h.shelf.SlugsForBook(c.Request.Context(), userID, id)
-	if err != nil {
-		writeServerError(c, "lock shelves", err)
-		return
-	}
-	if shelves == nil {
-		shelves = []string{}
-	}
-	resp := gin.H{
-		"book": bookDetailDTO{
-			bookDTO: toBookDTO(fresh),
-			Shelves: shelves,
-		},
-	}
-	attachWarnings(resp, lockOutcome, "lock update write degraded", id)
-	c.JSON(http.StatusOK, resp)
+	h.writeBookDetail(c, userID, id, lockOutcome, "lock update write degraded")
 }
 
 func applyLock(l *model.BookLocks, field string, v bool) {
@@ -459,22 +367,10 @@ type coverFromURLResp struct {
 // service refuses non-HTTPS URLs, non-allow-listed hosts, non-image
 // content types, and payloads larger than 10 MB — so this endpoint can't
 // be turned into an open proxy.
-func (h *Handler) EnrichApplyCover(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
-	// Ensure the book exists + is visible to the user before touching the
-	// cover pipeline. The enrich service itself doesn't enforce ACLs.
-	if _, err := h.books.GetByID(c.Request.Context(), userID, id); err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "cover-from-url get book", err)
-		return
-	}
+// The enrich service enforces no ACL of its own; the book-scoped seam is
+// what guarantees the id names a real book before the cover pipeline runs.
+func (h *Handler) EnrichApplyCover(c *gin.Context, s bookScope) {
+	id := s.Book.ID
 
 	var body coverFromURLReq
 	if !bindJSON(c, &body) {
@@ -501,20 +397,8 @@ func (h *Handler) EnrichApplyCover(c *gin.Context) {
 // nulls cover_mime + cover_hash, and best-effort deletes the legacy
 // id-keyed file. Hashed cover bytes are kept (content-addressed; may be
 // shared with other books). Idempotent — removing again is a no-op.
-func (h *Handler) EnrichRemoveCover(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	id := c.Param("id")
-	if _, err := h.books.GetByID(c.Request.Context(), userID, id); err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "remove cover get book", err)
-		return
-	}
+func (h *Handler) EnrichRemoveCover(c *gin.Context, s bookScope) {
+	id := s.Book.ID
 	if err := h.enrich.ClearCover(c.Request.Context(), id); err != nil {
 		writeServerError(c, "remove cover", err)
 		return

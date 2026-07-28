@@ -120,20 +120,17 @@ func (h *Handler) DeviceDelete(c *gin.Context) {
 // BookSendToDevice pushes one book to one of the user's devices. The
 // driver handles the wire protocol; the service records the outcome on
 // the device row so the UI can show per-device last-sent state.
-func (h *Handler) BookSendToDevice(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-	bookID := c.Param("id")
+func (h *Handler) BookSendToDevice(c *gin.Context, s bookScope) {
 	deviceID := c.Param("deviceId")
 
-	err := h.devices.Send(c.Request.Context(), userID, deviceID, bookID)
+	err := h.devices.Send(c.Request.Context(), s.UserID, deviceID, s.Book.ID)
 	switch {
 	case err == nil:
 		c.Status(http.StatusAccepted)
 	case errors.Is(err, repo.ErrNotFound):
-		writeError(c, http.StatusNotFound, "device or book not found")
+		// The book is the seam's business, so what is left to be missing
+		// here is the device.
+		writeError(c, http.StatusNotFound, "device not found")
 	case errors.Is(err, service.ErrUnsupportedKind):
 		writeError(c, http.StatusBadRequest, "device driver unavailable")
 	default:

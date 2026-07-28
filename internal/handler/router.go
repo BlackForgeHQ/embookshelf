@@ -95,16 +95,16 @@ func (h *Handler) Engine() *gin.Engine {
 			// Library + catalog
 			authed.GET("/libraries", h.Libraries)
 			authed.GET("/books", h.Books)
-			authed.GET("/books/:id", h.BookDetail)
-			authed.GET("/books/:id/cover", h.BookCover)
-			authed.GET("/books/:id/file", h.BookFile)
-			authed.GET("/books/:id/pages", h.ComicPagesIndex)
-			authed.GET("/books/:id/pages/:n", h.ComicPage)
-			authed.PATCH("/books/:id", h.BookPatch)
-			authed.DELETE("/books/:id", auth.RequireRole(model.RoleAdmin), h.BookDelete)
-			authed.POST("/books/:id/progress", h.BookProgressUpdate)
-			authed.POST("/books/:id/shelves/:slug", h.BookAddShelf)
-			authed.DELETE("/books/:id/shelves/:slug", h.BookRemoveShelf)
+			authed.GET("/books/:id", h.bookScoped(h.BookDetail))
+			authed.GET("/books/:id/cover", h.bookScoped(h.BookCover))
+			authed.GET("/books/:id/file", h.bookScoped(h.BookFile))
+			authed.GET("/books/:id/pages", h.bookScoped(h.ComicPagesIndex))
+			authed.GET("/books/:id/pages/:n", h.bookScoped(h.ComicPage))
+			authed.PATCH("/books/:id", h.bookScoped(h.BookPatch))
+			authed.DELETE("/books/:id", auth.RequireRole(model.RoleAdmin), h.bookScoped(h.BookDelete))
+			authed.POST("/books/:id/progress", h.bookScoped(h.BookProgressUpdate))
+			authed.POST("/books/:id/shelves/:slug", h.bookScoped(h.BookAddShelf))
+			authed.DELETE("/books/:id/shelves/:slug", h.bookScoped(h.BookRemoveShelf))
 
 			// Per-user shelves (regular + smart). Public-shelf routing
 			// is folded into the same paths via the `public:<slug>`
@@ -126,13 +126,13 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.POST("/bookdrop/:id/reject", h.BookDropReject)
 
 			// Metadata enrichment
-			authed.GET("/books/:id/enrich", h.EnrichSearch)
-			authed.GET("/books/:id/enrich/stream", h.EnrichStream)
-			authed.PUT("/books/:id/metadata", h.EnrichApplyMatch)
-			authed.PUT("/books/:id/metadata/locks", h.EnrichToggleFieldLocks)
+			authed.GET("/books/:id/enrich", h.bookScoped(h.EnrichSearch))
+			authed.GET("/books/:id/enrich/stream", h.bookScoped(h.EnrichStream))
+			authed.PUT("/books/:id/metadata", h.bookScoped(h.EnrichApplyMatch))
+			authed.PUT("/books/:id/metadata/locks", h.bookScoped(h.EnrichToggleFieldLocks))
 			authed.POST("/books/metadata/isbn-lookup", h.EnrichISBNLookup)
-			authed.POST("/books/:id/cover-from-url", h.EnrichApplyCover)
-			authed.DELETE("/books/:id/cover", h.EnrichRemoveCover)
+			authed.POST("/books/:id/cover-from-url", h.bookScoped(h.EnrichApplyCover))
+			authed.DELETE("/books/:id/cover", h.bookScoped(h.EnrichRemoveCover))
 
 			// Reading guides (ADR-0024). Generation is queued, so the
 			// POST answers 202 and guide.updated lands over SSE.
@@ -144,28 +144,28 @@ func (h *Handler) Engine() *gin.Engine {
 			// reader's regenerate or hand-edit overwrites what everyone
 			// else sees. The bulk run is already admin-gated under
 			// /settings/reading-guide/run.
-			authed.GET("/books/:id/guide", h.BookGuideGet)
+			authed.GET("/books/:id/guide", h.bookScoped(h.BookGuideGet))
 			authed.POST("/books/:id/guide",
-				auth.RequireRole(model.RoleAdmin), h.BookGuideGenerate)
+				auth.RequireRole(model.RoleAdmin), h.bookScoped(h.BookGuideGenerate))
 			authed.PUT("/books/:id/guide",
-				auth.RequireRole(model.RoleAdmin), h.BookGuideEdit)
+				auth.RequireRole(model.RoleAdmin), h.bookScoped(h.BookGuideEdit))
 
 			// Generated narration (ADR-0025 — ADR-0028). Reading the
 			// status is open to any signed-in user, because anyone can
 			// play a finished audiobook; everything that spends money is
 			// admin-gated, since only the key's owner should be able to
 			// spend it (ADR-0028 §1). There is deliberately no bulk run.
-			authed.GET("/books/:id/audiobook", h.BookAudiobookGet)
+			authed.GET("/books/:id/audiobook", h.bookScoped(h.BookAudiobookGet))
 			authed.GET("/books/:id/audiobook/estimate",
-				auth.RequireRole(model.RoleAdmin), h.BookAudiobookEstimate)
+				auth.RequireRole(model.RoleAdmin), h.bookScoped(h.BookAudiobookEstimate))
 			authed.POST("/books/:id/audiobook",
-				auth.RequireRole(model.RoleAdmin), h.BookAudiobookGenerate)
+				auth.RequireRole(model.RoleAdmin), h.bookScoped(h.BookAudiobookGenerate))
 			authed.POST("/books/:id/audiobook/cancel",
-				auth.RequireRole(model.RoleAdmin), h.BookAudiobookCancel)
+				auth.RequireRole(model.RoleAdmin), h.bookScoped(h.BookAudiobookCancel))
 			authed.POST("/books/:id/audiobook/retry",
-				auth.RequireRole(model.RoleAdmin), h.BookAudiobookRetry)
+				auth.RequireRole(model.RoleAdmin), h.bookScoped(h.BookAudiobookRetry))
 			authed.DELETE("/books/:id/audiobook",
-				auth.RequireRole(model.RoleAdmin), h.BookAudiobookDelete)
+				auth.RequireRole(model.RoleAdmin), h.bookScoped(h.BookAudiobookDelete))
 
 			// Library statistics dashboard
 			authed.GET("/stats", h.Stats)
@@ -173,19 +173,19 @@ func (h *Handler) Engine() *gin.Engine {
 
 			// Send-to-Kindle delivery. Email subsystem must be on; the
 			// handler returns 503 EMAIL_DISABLED otherwise. ADR-0021.
-			authed.POST("/books/:id/send-to-kindle", h.SendToKindle)
+			authed.POST("/books/:id/send-to-kindle", h.bookScoped(h.SendToKindle))
 
 			// Device sync (reMarkable Paper Pro, ...) — per-user
 			// destinations you can push books to.
 			authed.GET("/devices", h.Devices)
 			authed.POST("/devices", h.DevicePair)
 			authed.DELETE("/devices/:id", h.DeviceDelete)
-			authed.POST("/books/:id/send/:deviceId", h.BookSendToDevice)
+			authed.POST("/books/:id/send/:deviceId", h.bookScoped(h.BookSendToDevice))
 
 			// Annotations (highlights + notes)
 			authed.GET("/annotations", h.AnnotationsRecent)
-			authed.GET("/books/:id/annotations", h.AnnotationsForBook)
-			authed.POST("/books/:id/annotations", h.AnnotationCreate)
+			authed.GET("/books/:id/annotations", h.bookScoped(h.AnnotationsForBook))
+			authed.POST("/books/:id/annotations", h.bookScoped(h.AnnotationCreate))
 			authed.PATCH("/annotations/:id", h.AnnotationPatch)
 			authed.DELETE("/annotations/:id", h.AnnotationDelete)
 
@@ -270,8 +270,8 @@ func (h *Handler) Engine() *gin.Engine {
 		opds.GET("/recent", h.OPDSRecent)
 		opds.GET("/search", h.OPDSSearch)
 		opds.GET("/search.xml", h.OPDSSearchDescription)
-		opds.GET("/book/:id/download", h.OPDSDownload)
-		opds.GET("/cover/:id", h.OPDSCover)
+		opds.GET("/book/:id/download", h.opdsBookScoped(h.OPDSDownload))
+		opds.GET("/cover/:id", h.opdsBookScoped(h.OPDSCover))
 	}
 
 	h.mountSPA(r)

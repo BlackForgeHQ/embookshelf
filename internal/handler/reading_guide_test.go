@@ -65,7 +65,10 @@ func TestBookGuideEditRejectsEmpty(t *testing.T) {
 	c.Request = c.Request.WithContext(
 		auth.WithUser(c.Request.Context(), &model.User{ID: "u1"}))
 
-	h.BookGuideEdit(c)
+	// Driven as a body rather than through the seam: the book-scoped seam
+	// has already done the resolving, so the empty-guide rule is
+	// exercisable without a catalog behind it at all.
+	h.BookGuideEdit(c, bookScope{UserID: "u1", Book: model.Book{ID: "b1"}})
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
