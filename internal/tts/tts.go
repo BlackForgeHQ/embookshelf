@@ -56,8 +56,10 @@ const (
 type Info struct {
 	ID    EngineID
 	Label string
-	// MaxRequestChars is the engine's own per-request limit. The segment
-	// planner never emits a segment larger than this.
+	// MaxRequestChars is the engine's own per-request limit. chunked
+	// splits against it before every engine call; the segment planner's
+	// SegmentChars is a separate, much larger budget and is not sized to
+	// this at all.
 	MaxRequestChars int
 	// DefaultPricePerMillionChars seeds the admin's editable price. A
 	// default, not a source of truth — prices change without our releases

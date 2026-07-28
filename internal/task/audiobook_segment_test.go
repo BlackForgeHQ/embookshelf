@@ -371,6 +371,16 @@ func TestSegmentRecordsAPermanentEngineFailureAndStopsRetrying(t *testing.T) {
 }
 
 // A transient error is River's to retry, so the worker has to return it.
+// This is also where the chunk-count asymmetry Task 5 used to pin at this
+// layer now lives in spirit: unusable audio tagged permanent at one chunk
+// but wrapped untagged, and so retried forever, at several, moved into
+// internal/tts with the chunking loop itself (Task 4) and is pinned there
+// by TestChunkedJoinWrapsMultiChunkFailureUntagged in
+// internal/tts/chunking_test.go (see #185). What survives at this layer
+// is this: whatever untagged error the engine reports, for whatever
+// reason, the worker returns it for River to retry, records exactly one
+// failed segment, and never publishes — it never promotes a bare error
+// to permanent on its own say-so.
 func TestSegmentReturnsATransientEngineFailureForRiver(t *testing.T) {
 	h := newSegmentHarness(t)
 	h.engine.err = errors.New("connection reset")
@@ -383,15 +393,19 @@ func TestSegmentReturnsATransientEngineFailureForRiver(t *testing.T) {
 	if len(h.runs.recorded) != 1 || h.runs.recorded[0].State != model.SegmentFailed {
 		t.Fatalf("recorded %+v, want one failed segment", h.runs.recorded)
 	}
+	if h.published != 0 {
+		t.Errorf("published %d times, want zero — this path never reaches the permanent-failure publish", h.published)
+	}
 }
 
 // Audio the frame parser cannot read is not something a retry improves.
 // The worker sees whatever bytes its one Synthesize call returns and
 // runs them through its own audio.Payload check — how many engine calls
 // (if any) the adapter split that call into internally is invisible
-// here, and is internal/tts's business, not the worker's (see the
-// untagged-error test below for the sibling case: a failure the engine
-// itself reports, rather than one the worker's own decode catches).
+// here, and is internal/tts's business, not the worker's (see
+// TestSegmentReturnsATransientEngineFailureForRiver above for the
+// sibling case: a failure the engine itself reports, rather than one the
+// worker's own decode catches).
 func TestSegmentRecordsUnusableAudioAsAPermanentFailure(t *testing.T) {
 	h := newSegmentHarness(t)
 	h.engine.reply = []byte("this is not an mp3")
@@ -404,33 +418,6 @@ func TestSegmentRecordsUnusableAudioAsAPermanentFailure(t *testing.T) {
 	}
 	if h.published != 1 {
 		t.Errorf("published %d times, want exactly one", h.published)
-	}
-}
-
-// The chunk-count asymmetry this test used to pin — unusable audio
-// tagged permanent at one chunk but wrapped untagged, and so retried
-// forever, at several — moved into internal/tts with the chunking loop
-// itself (Task 4) and is now pinned there by
-// TestChunkedJoinWrapsMultiChunkFailureUntagged in
-// internal/tts/chunking_test.go (see #185). What is left at this layer
-// is the other half: whatever untagged error the engine reports, for
-// whatever reason, the worker returns it for River to retry and records
-// exactly one failed segment — it never promotes a bare error to
-// permanent on its own say-so.
-func TestSegmentReturnsAnUntaggedEngineErrorForRiverToRetry(t *testing.T) {
-	h := newSegmentHarness(t)
-	h.engine.err = errors.New("chunk 2: mp3 frame sync not found")
-
-	err := h.run(t, 0)
-
-	if err == nil {
-		t.Fatal("AudiobookSegment returned nil — want the untagged engine error, since it isn't tagged permanent")
-	}
-	if len(h.runs.recorded) != 1 || h.runs.recorded[0].State != model.SegmentFailed {
-		t.Fatalf("recorded %+v, want one failed segment", h.runs.recorded)
-	}
-	if h.published != 0 {
-		t.Errorf("published %d times, want zero — this path never reaches the permanent-failure publish", h.published)
 	}
 }
 

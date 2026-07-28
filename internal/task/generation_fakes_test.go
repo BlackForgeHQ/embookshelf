@@ -113,6 +113,13 @@ func (f *fakeBooks) UpdateAudio(
 // however many engine calls its cap needs. chunks defaults to one
 // simulated piece so every test that does not care about chunking still
 // sees the one request it always saw.
+//
+// It models chunked's BeforeChunk-before-each-piece ordering only, not
+// its full behaviour: no ctx.Err() pre-check, the same outer Request
+// (whole-segment Text, live BeforeChunk) is recorded on every simulated
+// piece rather than a fresh per-piece Request, and e.err surfaces only
+// after all n pieces are counted rather than at the first failure. Fine
+// for what this package's tests assert; don't lean on any of the three.
 type fakeEngine struct {
 	reply    []byte
 	err      error
@@ -126,7 +133,7 @@ func (e *fakeEngine) Synthesize(ctx context.Context, req tts.Request) ([]byte, e
 	if n <= 0 {
 		n = 1
 	}
-	for i := 0; i < n; i++ {
+	for range n {
 		// Mirrors chunked.Synthesize in internal/tts: the callback runs
 		// before every simulated piece, unwrapped, so a caller matching
 		// errCanceled with errors.Is still works.
