@@ -10,38 +10,12 @@ import (
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/audio"
+	"github.com/blackforge/embookshelf/internal/audio/audiotest"
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/storage"
 	"github.com/blackforge/embookshelf/internal/tts"
 )
-
-// ---------------------------------------------------------------------------
-// MP3 fixtures
-// ---------------------------------------------------------------------------
-
-// mpeg1FrameHeader is one MPEG-1 Layer III frame header: 128 kbit/s,
-// 44.1 kHz, stereo, no CRC. audio.Payload rejects anything that is not
-// this, and both the staging and the assembly paths run through it.
-//
-// Duplicated from internal/audio's own test support rather than exported
-// from it: a frame builder is a fixture, and putting one in the
-// production surface of a package whose job is parsing real files would
-// be worse than four lines of repetition.
-var mpeg1FrameHeader = []byte{0xFF, 0xFB, 0x90, 0x00}
-
-// mp3FrameBytes is the size of the frame above: 144 * 128000 / 44100.
-const mp3FrameBytes = 417
-
-// mp3Frames builds n back-to-back frames of silence.
-func mp3Frames(n int) []byte {
-	var b bytes.Buffer
-	for range n {
-		b.Write(mpeg1FrameHeader)
-		b.Write(make([]byte, mp3FrameBytes-len(mpeg1FrameHeader)))
-	}
-	return b.Bytes()
-}
 
 // ---------------------------------------------------------------------------
 // EPUB fixture
@@ -160,12 +134,12 @@ var _ tts.Engine = (*fakeEngine)(nil)
 // walk. Both would fail every test downstream with an error about the
 // fixture rather than about the worker, so they are checked here once.
 func TestFixturesAreWhatTheProductionParsersExpect(t *testing.T) {
-	frames, durationMS, err := audio.Payload(mp3Frames(4))
+	frames, durationMS, err := audio.Payload(audiotest.Frames(4))
 	if err != nil {
 		t.Fatalf("audio.Payload rejected the frame fixture: %v", err)
 	}
-	if len(frames) != 4*mp3FrameBytes {
-		t.Errorf("payload is %d bytes, want %d", len(frames), 4*mp3FrameBytes)
+	if want := 4 * audiotest.FrameBytes; len(frames) != want {
+		t.Errorf("payload is %d bytes, want %d", len(frames), want)
 	}
 	if durationMS <= 0 {
 		t.Errorf("duration is %dms, want a positive measurement", durationMS)

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/blackforge/embookshelf/internal/audio/audiotest"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -122,7 +123,7 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 		books: &fakeBooks{book: model.Book{
 			ID: "b1", LibraryID: "lib1", Title: "Dune", Author: "Frank Herbert", Format: "EPUB",
 		}},
-		engine:   &fakeEngine{reply: mp3Frames(4)},
+		engine:   &fakeEngine{reply: audiotest.Frames(4)},
 		enq:      &recordingEnqueuer{},
 		dataPath: t.TempDir(),
 	}

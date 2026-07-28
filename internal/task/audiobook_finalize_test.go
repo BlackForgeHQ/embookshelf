@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/audio"
+	"github.com/blackforge/embookshelf/internal/audio/audiotest"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -138,7 +139,7 @@ func newFinalizeHarness(t *testing.T) *finalizeHarness {
 	}
 	for seq := range 2 {
 		path := filepath.Join(dir, "seg-"+strconv.Itoa(seq)+".mp3")
-		if err := os.WriteFile(path, mp3Frames(4), 0o600); err != nil {
+		if err := os.WriteFile(path, audiotest.Frames(4), 0o600); err != nil {
 			t.Fatalf("stage segment %d: %v", seq, err)
 		}
 		h.runs.segments = append(h.runs.segments, model.AudiobookSegment{
@@ -301,7 +302,7 @@ func TestFinalizePublishesTheNarrationAndSweeps(t *testing.T) {
 	if h.runs.ready.FileID != "file-1" {
 		t.Errorf("file id = %q, want the inserted row's", h.runs.ready.FileID)
 	}
-	_, perSegMS, err := audio.Payload(mp3Frames(4))
+	_, perSegMS, err := audio.Payload(audiotest.Frames(4))
 	if err != nil {
 		t.Fatalf("measure fixture duration: %v", err)
 	}
