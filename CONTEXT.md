@@ -325,7 +325,7 @@ Routing replaced client-side filtering. `Hub` fanned every event to every subscr
 
 ### Job registry
 
-`queue.registry(deps)`; the single list of job kinds the binary knows. One `register[T](work)` entry per job declares the kind, the args type, and the work function together, and derives River's typed-worker plumbing from them; the per-job `Deps` structs are assembled once. Adding a job is one line: the `Client` interface does not widen (kind travels with the payload via `queue.JobArgs`), and no second registration site exists. Confines the River driver import to `internal/queue`; `internal/task` does not import it.
+`queue.registry(deps)`; the single list of job kinds the binary knows. One `register[T](work)` entry per job declares the kind, the args type, and the work function together, and derives River's typed-worker plumbing from them; the per-job `Deps` structs are assembled once. Adding a job is one line: the `Client` interface does not widen (kind travels with the payload via `jobs.Args`'s `Kind()` method), and no second registration site exists. Confines the River driver import to `internal/queue`; `internal/task` does not import it.
 
 Crash recovery is River's JobRescuer, which reclaims jobs left `running` by a killed process after a timeout (default 1h). The SQLite polling backend that used to sit behind this same interface is gone (ADR-0023).
 
@@ -351,7 +351,7 @@ Crash recovery is River's JobRescuer, which reclaims jobs left `running` by a ki
 
 ### Approve
 
-`BookDropService.Approve`; the orchestration that turns a `bookdrop_items` row into a `books` row + `files` row + cover. Five side effects in sequence, then the [[Auto-enrich]] trigger: Approve reads the `METADATA_AUTO_ENRICH` setting itself and, when it is on, dispatches a `bookdrop.auto_enrich` job through `WithAutoEnrich`'s dispatcher rather than running the fan-out inline. The decision belongs to Approve, so every caller — the HTTP endpoint, the queue, a CLI — gets it; it used to live in the approve handler, which meant only HTTP callers enriched and the approve response waited on the providers. Degrades closed on a settings read error, and a refused dispatch is logged, never fatal — the books row is already committed.
+`BookDropService.Approve`; the orchestration that turns a `bookdrop_items` row into a `books` row + `files` row + cover. Five side effects in sequence, then the [[Auto-enrich]] trigger: Approve reads the `METADATA_AUTO_ENRICH` setting itself and, when it is on, dispatches a `bookdrop.auto_enrich` job through its injected `jobs.Enqueuer` rather than running the fan-out inline. The decision belongs to Approve, so every caller — the HTTP endpoint, the queue, a CLI — gets it; it used to live in the approve handler, which meant only HTTP callers enriched and the approve response waited on the providers. Degrades closed on a settings read error, and a refused dispatch is logged, never fatal — the books row is already committed.
 
 ### Bookdrop ingest
 

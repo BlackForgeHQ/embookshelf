@@ -39,12 +39,12 @@ type fakeDispatch struct {
 }
 
 func (f *fakeDispatch) Enqueue(_ context.Context, a jobs.Args) error {
-	if f.err != nil {
-		return f.err
-	}
 	args, ok := a.(jobs.ReadingGuideArgs)
 	if !ok {
 		return fmt.Errorf("unexpected job args %T", a)
+	}
+	if f.err != nil {
+		return f.err
 	}
 	f.ids = append(f.ids, args.BookID)
 	return nil

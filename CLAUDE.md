@@ -9,7 +9,7 @@ make up               # backend (:6060) + Vite (:5173)
 make build            # ui-build + go build → ./tmp/embookshelf
 make test             # go test ./...
 make ci-local         # all CI checks in parallel
-make go-lint          # golangci-lint v2.11.4
+make go-lint          # golangci-lint v2.12.2
 make ui-lint          # Biome lint (cd ui && bun run lint)
 make ui-typecheck     # tsc --noEmit
 make ui-test          # vitest run

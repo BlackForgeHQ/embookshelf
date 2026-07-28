@@ -413,7 +413,7 @@ database must be empty; migrations are applied to it automatically.
 		slog.Info("email subsystem disabled — configure under admin settings to enable")
 	}
 
-	// Background queue. PG → River; SQLite → polling worker (queue.New dispatches by dialect).
+	// Background queue, backed by River.
 	q, err := queue.New(ctx, dbh, queue.Deps{
 		BookDropSvc: bdropSvc,
 		Enrich:      enrichSvc,

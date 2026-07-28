@@ -41,10 +41,8 @@ type BookDropService struct {
 	// audio re-extract. nil disables Approve (it cannot place without it).
 	libStore LibraryStore
 	// enq is the worker-pool handoff shared by Intake/Accept's ingest
-	// dispatch and Approve's Auto-enrich dispatch. An ordinary dependency
-	// now, not two function fields plus a comment explaining why the
-	// queue tier couldn't be named here directly — jobs is the seam both
-	// tiers can import instead.
+	// dispatch and Approve's Auto-enrich dispatch. One enqueuer backs
+	// both, because both just need to name the job and hand it off.
 	enq jobs.Enqueuer
 
 	// bookdropPath is the staging directory the watcher polls and Wipe
@@ -75,10 +73,8 @@ type autoEnrichPolicy interface {
 }
 
 // WithAutoEnrichPolicy wires the setting that decides whether Approve
-// triggers Auto-enrich. It used to travel paired with a dispatcher,
-// because either alone was inert; now the service always holds an
-// enqueuer, so the policy is the only half still optional, and nil
-// reads as off.
+// triggers Auto-enrich. It is the only optional half of that decision —
+// the service always holds an enqueuer — so a nil policy reads as off.
 func (s *BookDropService) WithAutoEnrichPolicy(p autoEnrichPolicy) *BookDropService {
 	s.enrichPolicy = p
 	return s

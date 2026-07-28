@@ -21,9 +21,11 @@ var ErrNoQueue = errors.New("no queue configured")
 // workaround for that; now they take an ordinary Enqueuer and this
 // holds the knot alone.
 //
-// The mutex is not decoration. queue.New calls river.Client.Start
-// before it returns, so worker goroutines are already draining jobs
-// while the composition root is still calling Resolve.
+// The mutex is not decoration. Once the composition root calls
+// Client.Start, worker goroutines read the resolved enqueuer
+// concurrently with any call to Resolve; Enqueue takes the read lock
+// and Resolve takes the write lock so that read is never racing the
+// one write.
 type Deferred struct {
 	mu    sync.RWMutex
 	inner Enqueuer
