@@ -135,13 +135,6 @@ func (f *fakeBooks) UpdateAudio(
 	return nil
 }
 
-// fakeBooks and audioUpdate have no interface to assert against yet, so a
-// bare reference is what proves them used to the linter (mirrors the
-// var _ scanner = (*sql.Rows)(nil) idiom in internal/repo/shelf.go, minus
-// the interface since none exists here).
-var _ = fakeBooks{}
-var _ = audioUpdate{}
-
 // fakeEngine is a tts.Engine that never leaves the process.
 type fakeEngine struct {
 	reply    []byte

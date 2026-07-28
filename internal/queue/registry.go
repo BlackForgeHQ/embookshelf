@@ -4,9 +4,13 @@ package queue
 
 import (
 	"context"
+	"errors"
 
 	"github.com/riverqueue/river"
 
+	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/sse"
 	"github.com/blackforge/embookshelf/internal/task"
 )
 
@@ -89,18 +93,37 @@ func registry(deps Deps) []registration {
 	}
 
 	// Audiobook generation runs on its own queue, declared by its args
-	// types. Dispatch is a pointer the composition root fills in after
-	// queue.New returns, because the finalize dispatcher closes over the
-	// very client this registry is being built for.
+	// types. The finalize dispatcher is reached through a closure rather
+	// than copied, because the composition root fills the holder in after
+	// queue.New returns — the value here would be nil forever (#184).
+	segment := task.SegmentDeps{
+		Config:   deps.AppSettings.GetAudiobook,
+		Engine:   repo.AudiobookConfig.SelectEngine,
+		Runs:     deps.Audiobooks,
+		Books:    deps.Books,
+		Open:     service.NewLibraryBookOpener(deps.LibStore).Open,
+		DataPath: deps.DataPath,
+		Finalize: func(ctx context.Context, bookID string) error {
+			if deps.AudiobookDispatch == nil || deps.AudiobookDispatch.Finalize == nil {
+				return errors.New("no queue configured for audiobook generation")
+			}
+			return deps.AudiobookDispatch.Finalize(ctx, bookID)
+		},
+	}
+	if deps.Hub != nil {
+		segment.Publish = func(bookID string) {
+			_ = deps.Hub.Publish(sse.AudiobookUpdated{BookID: bookID})
+		}
+	}
+
+	// Finalize still takes the old struct until #177's second half.
 	audiobook := task.AudiobookDeps{
-		Settings:   deps.AppSettings,
 		Audiobooks: deps.Audiobooks,
 		Books:      deps.Books,
 		Files:      deps.FileRepo,
 		LibStore:   deps.LibStore,
 		Covers:     deps.Covers,
 		Hub:        deps.Hub,
-		Dispatch:   deps.AudiobookDispatch,
 		DataPath:   deps.DataPath,
 	}
 
@@ -121,7 +144,7 @@ func registry(deps Deps) []registration {
 			return task.ReadingGuide(ctx, a, readingGuide)
 		}),
 		register(func(ctx context.Context, a task.AudiobookSegmentArgs) error {
-			return task.AudiobookSegment(ctx, a, audiobook)
+			return task.AudiobookSegment(ctx, a, segment)
 		}),
 		register(func(ctx context.Context, a task.AudiobookFinalizeArgs) error {
 			return task.AudiobookFinalize(ctx, a, audiobook)

@@ -13,14 +13,36 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/audio"
+	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/sse"
 )
 
 // audiobookGenre is what every generated file declares, so a player that
 // groups by genre files it with audiobooks rather than with music.
 const audiobookGenre = "Audiobook"
+
+// AudiobookDeps groups the seams both workers need.
+type AudiobookDeps struct {
+	Audiobooks *repo.BookAudiobookRepo
+	Books      *repo.BookRepo
+	Files      *repo.FileRepo
+	LibStore   service.LibraryStore
+	Covers     *coverstore.Store
+	Hub        *sse.Hub
+	// DataPath roots the staging directory. Per-segment MP3s live on
+	// local disk until finalize, outside storage.Storage, following the
+	// coverstore precedent for derived bytes.
+	DataPath string
+}
+
+func publishAudiobook(deps AudiobookDeps, bookID string) {
+	if deps.Hub != nil {
+		_ = deps.Hub.Publish(sse.AudiobookUpdated{BookID: bookID})
+	}
+}
 
 // AudiobookFinalize joins a finished run's staged segments into the one
 // file that becomes a library artifact.

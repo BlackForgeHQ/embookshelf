@@ -12,12 +12,11 @@ import (
 	"strconv"
 
 	"github.com/blackforge/embookshelf/internal/audio"
-	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/sse"
+	"github.com/blackforge/embookshelf/internal/storage"
 	"github.com/blackforge/embookshelf/internal/tts"
 )
 
@@ -40,8 +39,8 @@ var errCanceled = errors.New("audiobook run canceled")
 
 // canceled reports whether the run has been stopped since the job began.
 // A read per engine call is cheap next to the call it guards.
-func canceled(ctx context.Context, bookID string, deps AudiobookDeps) bool {
-	run, err := deps.Audiobooks.GetByBookID(ctx, bookID)
+func canceled(ctx context.Context, bookID string, deps SegmentDeps) bool {
+	run, err := deps.Runs.GetByBookID(ctx, bookID)
 	if err != nil {
 		return false
 	}
@@ -69,24 +68,53 @@ type AudiobookFinalizeArgs struct {
 func (AudiobookFinalizeArgs) Kind() string  { return "audiobook.finalize" }
 func (AudiobookFinalizeArgs) Queue() string { return AudiobookQueue }
 
-// AudiobookDeps groups the seams both workers need.
+// segmentStore is the slice of BookAudiobookRepo the segment worker
+// touches. Narrow so the claim, cancel and failure branches are
+// exercisable without a database — the property AudiobookService has had
+// since it was written, and these workers did not (#177).
+type segmentStore interface {
+	GetByBookID(ctx context.Context, bookID string) (model.Audiobook, error)
+	MarkSegmentRunning(ctx context.Context, bookID string, seq int) (bool, error)
+	RecordSegment(ctx context.Context, bookID string, seq int, res model.SegmentResult) (model.AudiobookOutcome, error)
+}
+
+// bookReader is the one book-row read every generation job makes.
+type bookReader interface {
+	GetByID(ctx context.Context, userID, id string) (model.Book, error)
+}
+
+// SegmentDeps groups the seams the segment worker needs.
 //
-// Settings is read per job rather than captured at boot, so an admin
+// Config is read per job rather than captured at boot, so an admin
 // changing voice, engine or key takes effect on the next segment instead
 // of at the next restart — the same hot-reload the guide worker gets.
-type AudiobookDeps struct {
-	Settings   *repo.AppSettingsRepo
-	Audiobooks *repo.BookAudiobookRepo
-	Books      *repo.BookRepo
-	Files      *repo.FileRepo
-	LibStore   service.LibraryStore
-	Covers     *coverstore.Store
-	Hub        *sse.Hub
-	Dispatch   *service.AudiobookDispatch
+//
+// Config and Engine are separate rather than one resolve step: the
+// disabled check and its permanent sentinel stay in the worker body,
+// where a reader asking why River does not retry will find them.
+type SegmentDeps struct {
+	Config func(context.Context) (repo.AudiobookConfig, error)
+	Engine func(repo.AudiobookConfig) (repo.ConfiguredEngine, error)
+	Runs   segmentStore
+	Books  bookReader
+	// Open yields the book's bytes with random access. Always through the
+	// library handle, never os.Open(book.Path), which is how device push
+	// on S3 libraries was once silently broken.
+	Open     func(context.Context, model.Book) (storage.Source, error)
+	Finalize service.FinalizeDispatcher
+	Publish  func(bookID string)
 	// DataPath roots the staging directory. Per-segment MP3s live on
 	// local disk until finalize, outside storage.Storage, following the
 	// coverstore precedent for derived bytes.
 	DataPath string
+}
+
+// publish emits the run's terminal event. A missing publisher is a
+// deployment with no SSE hub, not an error worth a branch at each call.
+func (d SegmentDeps) publish(bookID string) {
+	if d.Publish != nil {
+		d.Publish(bookID)
+	}
 }
 
 // StagingDir is where one book's per-segment MP3s live until finalize.
@@ -105,8 +133,8 @@ func segmentPath(dir string, seq int) string {
 // the whole run was cancelled. A segment that simply stops is the one
 // outcome nothing downstream can recover from — the finalize step waits
 // on a count that would never complete.
-func AudiobookSegment(ctx context.Context, a AudiobookSegmentArgs, deps AudiobookDeps) error {
-	cfg, err := deps.Settings.GetAudiobook(ctx)
+func AudiobookSegment(ctx context.Context, a AudiobookSegmentArgs, deps SegmentDeps) error {
+	cfg, err := deps.Config(ctx)
 	if err != nil {
 		return fmt.Errorf("read audiobook settings: %w", err)
 	}
@@ -114,7 +142,7 @@ func AudiobookSegment(ctx context.Context, a AudiobookSegmentArgs, deps Audioboo
 		return ErrAudiobooksDisabled
 	}
 
-	run, err := deps.Audiobooks.GetByBookID(ctx, a.BookID)
+	run, err := deps.Runs.GetByBookID(ctx, a.BookID)
 	if err != nil {
 		return fmt.Errorf("load audiobook %s: %w", a.BookID, err)
 	}
@@ -126,7 +154,7 @@ func AudiobookSegment(ctx context.Context, a AudiobookSegmentArgs, deps Audioboo
 		return nil
 	}
 
-	claimed, err := deps.Audiobooks.MarkSegmentRunning(ctx, a.BookID, a.Seq)
+	claimed, err := deps.Runs.MarkSegmentRunning(ctx, a.BookID, a.Seq)
 	if err != nil {
 		return fmt.Errorf("claim segment %d: %w", a.Seq, err)
 	}
@@ -148,7 +176,7 @@ func AudiobookSegment(ctx context.Context, a AudiobookSegmentArgs, deps Audioboo
 		if errors.Is(err, tts.ErrPermanent) || errors.Is(err, service.ErrNotNarratable) {
 			// Returning nil stops River retrying something that cannot
 			// improve; the failed row and its message carry the outcome.
-			publishAudiobook(deps, a.BookID)
+			deps.publish(a.BookID)
 			return nil
 		}
 		return err
@@ -165,7 +193,7 @@ func AudiobookSegment(ctx context.Context, a AudiobookSegmentArgs, deps Audioboo
 			State: model.SegmentFailed,
 			Error: fmt.Sprintf("engine returned unusable audio: %v", err),
 		})
-		publishAudiobook(deps, a.BookID)
+		deps.publish(a.BookID)
 		return nil
 	}
 	if err := os.WriteFile(path, frames, 0o600); err != nil {
@@ -195,23 +223,27 @@ func AudiobookSegment(ctx context.Context, a AudiobookSegmentArgs, deps Audioboo
 // Deliberately does not return an error. A failure here is worth a log
 // and nothing more: returning it would hand River a segment to retry
 // whose audio is already staged and already paid for.
-func recordSegment(ctx context.Context, deps AudiobookDeps, a AudiobookSegmentArgs, res model.SegmentResult) {
-	outcome, err := deps.Audiobooks.RecordSegment(ctx, a.BookID, a.Seq, res)
+func recordSegment(ctx context.Context, deps SegmentDeps, a AudiobookSegmentArgs, res model.SegmentResult) {
+	outcome, err := deps.Runs.RecordSegment(ctx, a.BookID, a.Seq, res)
 	if err != nil {
 		slog.Warn("audiobook: record segment", "book", a.BookID, "seq", a.Seq, "err", err)
 		return
 	}
 	switch outcome.Next {
 	case model.AudiobookNextFinalize:
-		if deps.Dispatch == nil || deps.Dispatch.Finalize == nil {
+		// Nil only for a zero-value SegmentDeps. In production the
+		// registry supplies a closure that dereferences the dispatch
+		// holder late, because the finalize dispatcher closes over the
+		// client the registry is being built for. #184 removes both.
+		if deps.Finalize == nil {
 			slog.Warn("audiobook: no finalize dispatcher", "book", a.BookID)
 			return
 		}
-		if err := deps.Dispatch.Finalize(ctx, a.BookID); err != nil {
+		if err := deps.Finalize(ctx, a.BookID); err != nil {
 			slog.Warn("audiobook: dispatch finalize", "book", a.BookID, "err", err)
 		}
 	case model.AudiobookNextFail:
-		publishAudiobook(deps, a.BookID)
+		deps.publish(a.BookID)
 	case model.AudiobookNextNothing:
 	}
 }
@@ -227,7 +259,7 @@ func synthesizeSegment(
 	a AudiobookSegmentArgs,
 	cfg repo.AudiobookConfig,
 	run model.Audiobook,
-	deps AudiobookDeps,
+	deps SegmentDeps,
 ) ([]byte, error) {
 	book, err := deps.Books.GetByID(ctx, "", a.BookID)
 	if err != nil {
@@ -237,7 +269,7 @@ func synthesizeSegment(
 		return nil, fmt.Errorf("%w: %s is %s", service.ErrNotNarratable, book.ID, book.Format)
 	}
 
-	sel, err := cfg.SelectEngine()
+	sel, err := deps.Engine(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", tts.ErrPermanent, err)
 	}
@@ -297,12 +329,6 @@ func joinParts(parts [][]byte) ([]byte, error) {
 	return buf, nil
 }
 
-func publishAudiobook(deps AudiobookDeps, bookID string) {
-	if deps.Hub != nil {
-		_ = deps.Hub.Publish(sse.AudiobookUpdated{BookID: bookID})
-	}
-}
-
 // segmentText re-extracts the book and returns the seq-th segment's prose.
 //
 // Re-extraction rather than a stored copy keeps the EPUB the single
@@ -315,10 +341,9 @@ func segmentText(
 	book model.Book,
 	cfg repo.AudiobookConfig,
 	seq int,
-	deps AudiobookDeps,
+	deps SegmentDeps,
 ) (string, error) {
-	opener := service.NewLibraryBookOpener(deps.LibStore)
-	src, err := opener.Open(ctx, book)
+	src, err := deps.Open(ctx, book)
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", book.ID, err)
 	}
