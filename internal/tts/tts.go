@@ -7,10 +7,10 @@
 // LLM — and both times the reasoning was that the vendors differed in
 // billing rather than capability, so a second adapter would have been a
 // copy of the first. Speech engines are not like that: they differ in
-// per-request cap by a factor of eight, in whether they accept SSML at
-// all, in whether they can report word timings, and in price by a factor
-// of twenty. Here the second and third adapters are real on day one
-// (ADR-0026).
+// per-request cap (the Catalog below has the current figures), in
+// whether they accept SSML at all, in whether they can report word
+// timings, and in price by a factor of twenty. Here the second and third
+// adapters are real on day one (ADR-0026).
 //
 // Engines are *selected*, not fanned out. Narrating a book through three
 // engines would produce three books and three bills, so ADR-0013's

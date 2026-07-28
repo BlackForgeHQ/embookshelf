@@ -10,7 +10,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/textsplit"
 )
 
-// speaker is the per-request primitive: one engine call, one piece of
+// speaker is the per-request primitive: one engine call, one chunk of
 // audio. Each adapter implements this, and chunking is written once
 // around it.
 type speaker interface {
@@ -22,19 +22,19 @@ type speaker interface {
 // whole segment.
 //
 // The cap is an implementation detail here rather than a caller's
-// homework. ADR-0026 §1 already settled that chunking is engine-specific —
-// the catalog's caps differ by a factor of two — so the interface should
-// admit it instead of making every caller look the number up.
+// homework. ADR-0026 §1 already settled that chunking is engine-specific,
+// so the interface should admit it instead of making every caller look
+// the number up — the catalog is the one place the actual figures live.
 type chunked struct {
 	speaker
 	maxChars int
 }
 
-// Synthesize narrates a whole segment, one engine call per piece.
+// Synthesize narrates a whole segment, one engine call per chunk.
 func (c chunked) Synthesize(ctx context.Context, r Request) ([]byte, error) {
-	pieces := textsplit.OnSentences(r.Text, c.maxChars)
-	parts := make([][]byte, 0, len(pieces))
-	for _, piece := range pieces {
+	chunks := textsplit.OnSentences(r.Text, c.maxChars)
+	parts := make([][]byte, 0, len(chunks))
+	for _, chunk := range chunks {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -48,7 +48,7 @@ func (c chunked) Synthesize(ctx context.Context, r Request) ([]byte, error) {
 				return nil, err
 			}
 		}
-		part, err := c.speak(ctx, Request{Text: piece, Voice: r.Voice, Model: r.Model})
+		part, err := c.speak(ctx, Request{Text: chunk, Voice: r.Voice, Model: r.Model})
 		if err != nil {
 			return nil, err
 		}
@@ -57,10 +57,10 @@ func (c chunked) Synthesize(ctx context.Context, r Request) ([]byte, error) {
 	return join(parts)
 }
 
-// join concatenates the pieces' MPEG frames.
+// join concatenates the chunks' MPEG frames.
 //
-// A single piece is returned untouched, tag and all — the caller strips
-// it once when measuring. Only a multi-piece result has to be decoded,
+// A single chunk is returned untouched, tag and all — the caller strips
+// it once when measuring. Only a multi-chunk result has to be decoded,
 // and that asymmetry is why unusable audio is a permanent failure at one
 // chunk and a retryable error at several (#185). Preserved deliberately:
 // fixing it here would be a behaviour change inside a refactor.

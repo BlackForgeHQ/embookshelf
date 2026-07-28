@@ -138,7 +138,6 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 			}
 			return repo.ConfiguredEngine{
 				ID:     tts.EngineOpenAI,
-				Info:   tts.Info{ID: tts.EngineOpenAI},
 				Engine: h.engine,
 			}, nil
 		},

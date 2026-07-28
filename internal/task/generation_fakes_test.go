@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/blackforge/embookshelf/internal/audio"
-	"github.com/blackforge/embookshelf/internal/audio/audiotest"
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/storage"
@@ -158,22 +156,14 @@ func (e *fakeEngine) ListVoices(context.Context) ([]tts.Voice, error) { return n
 // it: it breaks loudly if the fake ever drifts from the real interface.
 var _ tts.Engine = (*fakeEngine)(nil)
 
-// The fixtures are load-bearing: audio.Payload rejects a frame it does
-// not recognise, and ExtractEPUBSegments rejects an archive it cannot
-// walk. Both would fail every test downstream with an error about the
-// fixture rather than about the worker, so they are checked here once.
-func TestFixturesAreWhatTheProductionParsersExpect(t *testing.T) {
-	frames, durationMS, err := audio.Payload(audiotest.Frames(4))
-	if err != nil {
-		t.Fatalf("audio.Payload rejected the frame fixture: %v", err)
-	}
-	if want := 4 * audiotest.FrameBytes; len(frames) != want {
-		t.Errorf("payload is %d bytes, want %d", len(frames), want)
-	}
-	if durationMS <= 0 {
-		t.Errorf("duration is %dms, want a positive measurement", durationMS)
-	}
-
+// The EPUB fixture is load-bearing: ExtractEPUBSegments rejects an
+// archive it cannot walk, which would fail every test downstream with an
+// error about the fixture rather than about the worker, so it is checked
+// here once. (The audio frame fixture used to get the same treatment
+// here too, but audiotest validates its own fixture — see
+// audiotest_test.go — so asserting it again in this package was
+// redundant.)
+func TestFixtureIsWhatTheProductionParserExpects(t *testing.T) {
 	src := epubWithChapters(t, "One sentence. Another sentence.", "A second chapter.")
 	segs, err := fileproc.ExtractEPUBSegments(context.Background(), src, fileproc.SegmentOptions{MaxChars: 1000})
 	if err != nil {

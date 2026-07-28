@@ -53,17 +53,18 @@ func (c ReadingGuideConfig) ProbeClient() (*llm.Client, error) {
 	return llm.New(c.llmConfig(probeTimeout))
 }
 
-// ConfiguredEngine is the selected TTS engine and everything a caller
-// needs to drive it: the catalog id, that engine's stored settings, its
-// catalog entry, and the adapter itself.
+// ConfiguredEngine is the selected TTS engine, resolved in one call
+// instead of four lookups: the catalog id, that engine's stored
+// settings, and the adapter built from them, ready to drive.
 //
-// One answer rather than four lookups. The catalog Info travels with it
-// because a caller cannot use Synthesize correctly without the engine's
-// per-request cap.
+// It used to carry the catalog Info too, because a caller once had to
+// look up the engine's per-request cap to chunk a segment correctly.
+// That call moved inside the adapter — Synthesize now takes a whole
+// segment and chunks it internally — so the cap has nothing left to
+// travel for.
 type ConfiguredEngine struct {
 	ID       tts.EngineID
 	Settings AudiobookEngineConfig
-	Info     tts.Info
 	Engine   tts.Engine
 }
 
@@ -86,12 +87,11 @@ func (c AudiobookConfig) selectEngine(timeout time.Duration) (ConfiguredEngine, 
 	if err != nil {
 		return ConfiguredEngine{}, err
 	}
-	info, _ := tts.Lookup(id)
 	engine, err := tts.New(id, c.ttsConfig(engineCfg, timeout))
 	if err != nil {
 		return ConfiguredEngine{}, err
 	}
-	return ConfiguredEngine{ID: id, Settings: engineCfg, Info: info, Engine: engine}, nil
+	return ConfiguredEngine{ID: id, Settings: engineCfg, Engine: engine}, nil
 }
 
 // SelectEngine resolves and builds the selected engine for a run.

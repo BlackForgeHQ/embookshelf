@@ -107,11 +107,6 @@ func TestAudiobookSelectEngineAnswersEverythingACallerNeeds(t *testing.T) {
 	if sel.Settings.DefaultVoice != "alloy" {
 		t.Errorf("Settings.DefaultVoice = %q, want alloy", sel.Settings.DefaultVoice)
 	}
-	// The per-request cap travels with the selection, so a caller never
-	// has to reach back into the catalog to use the engine correctly.
-	if sel.Info.MaxRequestChars <= 0 {
-		t.Errorf("Info.MaxRequestChars = %d, want the catalog cap", sel.Info.MaxRequestChars)
-	}
 }
 
 func TestAudiobookSelectEngineRejectsUnknownEngine(t *testing.T) {

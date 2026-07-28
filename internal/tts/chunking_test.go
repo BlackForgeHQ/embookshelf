@@ -333,10 +333,22 @@ func TestOpenAIChunksToItsOwnCap(t *testing.T) {
 	if len(texts) < 2 {
 		t.Fatalf("got %d requests, want several — the segment exceeds OpenAI's %d-char cap", len(texts), maxChars)
 	}
+	largest := 0
 	for i, tx := range texts {
 		if n := len([]rune(tx)); n > maxChars {
 			t.Errorf("request %d's input is %d chars, over OpenAI's own %d-char cap", i, n, maxChars)
+		} else if n > largest {
+			largest = n
 		}
+	}
+	// OpenAI has no smaller sibling to compare against, so an upper bound
+	// alone can't tell its own cap apart from one hardcoded far below it
+	// (a 1000-char cap would still pass the loop above). textsplit only
+	// backs off within the last limit/4 runes looking for a boundary, so
+	// the largest piece is guaranteed to exceed maxChars*3/4; anything
+	// smaller means the split wasn't driven by this cap at all.
+	if lower := maxChars * 3 / 4; largest <= lower {
+		t.Errorf("largest request is %d chars, want more than %d (3/4 of OpenAI's %d-char cap)", largest, lower, maxChars)
 	}
 }
 
