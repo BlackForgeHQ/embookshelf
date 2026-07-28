@@ -16,6 +16,7 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/fileproc"
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/sse"
@@ -39,6 +40,12 @@ type BookDropService struct {
 	// fetching the Library row, building the Placer, opening Sources for
 	// audio re-extract. nil disables Approve (it cannot place without it).
 	libStore LibraryStore
+	// enq is the worker-pool handoff shared by Intake/Accept's ingest
+	// dispatch and Approve's Auto-enrich dispatch. An ordinary dependency
+	// now, not two function fields plus a comment explaining why the
+	// queue tier couldn't be named here directly — jobs is the seam both
+	// tiers can import instead.
+	enq jobs.Enqueuer
 
 	// bookdropPath is the staging directory the watcher polls and Wipe
 	// targets. Empty disables Wipe (no path configured = nothing to wipe).
@@ -54,26 +61,11 @@ type BookDropService struct {
 	// means "use bdrop"; tests set it to a fake so the intake sequence
 	// runs against a temp dir with no database.
 	intake bookdropInserter
-	// dispatch hands a freshly-tracked item to the worker pool. nil means
-	// no pool is wired — the row is still written.
-	dispatch IngestDispatcher
 
 	// enrichPolicy answers "is Auto-enrich enabled on this instance?" for
 	// Approve. nil means no policy source, which reads as off.
 	enrichPolicy autoEnrichPolicy
-	// enrichDispatch hands a freshly-approved book to the worker pool for
-	// Auto-enrich. nil means no pool is wired — the book is still imported.
-	enrichDispatch EnrichDispatcher
 }
-
-// EnrichDispatcher hands a freshly-approved book to the worker pool for
-// Auto-enrich. A function rather than a queue.Client because
-// internal/queue imports this package; main.go supplies a closure over
-// the river client. Same shape as IngestDispatcher and GuideDispatcher.
-//
-// nil is valid and means "no worker pool": the book is imported, it just
-// never gets the background gap-fill.
-type EnrichDispatcher func(ctx context.Context, bookID string) error
 
 // autoEnrichPolicy is the slice of AppSettingsRepo the approve path
 // reads — one flag, one method. Narrow so the decision is exercisable
@@ -82,14 +74,13 @@ type autoEnrichPolicy interface {
 	GetBool(ctx context.Context, key string) (bool, error)
 }
 
-// WithAutoEnrich wires the Auto-enrich trigger Approve owns: the setting
-// that enables it and the worker-pool handoff that carries it off the
-// caller's goroutine. Both travel together because either one alone is
-// inert — a policy with nowhere to dispatch, or a dispatcher no policy
-// ever authorises.
-func (s *BookDropService) WithAutoEnrich(p autoEnrichPolicy, d EnrichDispatcher) *BookDropService {
+// WithAutoEnrichPolicy wires the setting that decides whether Approve
+// triggers Auto-enrich. It used to travel paired with a dispatcher,
+// because either alone was inert; now the service always holds an
+// enqueuer, so the policy is the only half still optional, and nil
+// reads as off.
+func (s *BookDropService) WithAutoEnrichPolicy(p autoEnrichPolicy) *BookDropService {
 	s.enrichPolicy = p
-	s.enrichDispatch = d
 	return s
 }
 
@@ -100,6 +91,7 @@ func NewBookDropService(
 	covers *coverstore.Store,
 	hub *sse.Hub,
 	files *repo.FileRepo,
+	enq jobs.Enqueuer,
 ) *BookDropService {
 	return &BookDropService{
 		bdrop:  bdrop,
@@ -108,6 +100,7 @@ func NewBookDropService(
 		covers: covers,
 		hub:    hub,
 		files:  files,
+		enq:    enq,
 	}
 }
 
@@ -376,7 +369,7 @@ func (s *BookDropService) Approve(ctx context.Context, id, libraryID string) (mo
 // Every failure is logged and swallowed. The books row is committed by
 // the time this runs; losing the gap-fill must not lose the import.
 func (s *BookDropService) requestAutoEnrich(ctx context.Context, bookID string) {
-	if s.enrichPolicy == nil || s.enrichDispatch == nil {
+	if s.enrichPolicy == nil {
 		return
 	}
 	on, err := s.enrichPolicy.GetBool(ctx, repo.SettingMetadataAutoEnrich)
@@ -389,7 +382,7 @@ func (s *BookDropService) requestAutoEnrich(ctx context.Context, bookID string) 
 	if !on {
 		return
 	}
-	if err := s.enrichDispatch(ctx, bookID); err != nil {
+	if err := s.enq.Enqueue(ctx, jobs.BookDropAutoEnrichArgs{BookID: bookID}); err != nil {
 		slog.Warn("dispatch auto-enrich", "book", bookID, "err", err)
 	}
 }

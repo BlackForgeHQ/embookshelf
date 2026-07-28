@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/repo"
 )
 
@@ -17,10 +18,6 @@ type guideCandidateLister interface {
 	ListGuideCandidates(ctx context.Context) ([]repo.GuideCandidate, error)
 	CountCoverage(ctx context.Context) (total, done int, err error)
 }
-
-// GuideDispatcher hands one book to the worker pool. A function rather
-// than a queue.Client because internal/queue imports this package.
-type GuideDispatcher func(ctx context.Context, bookID string) error
 
 // GuideEstimate is the pre-flight shown before a run starts. ADR-0024 §4
 // requires cost to follow visibly from an explicit action, and a number
@@ -54,15 +51,15 @@ const charsPerToken = 4
 // GuideRunner starts and sizes bulk guide generation (ADR-0024 §4).
 type GuideRunner struct {
 	candidates guideCandidateLister
-	dispatch   GuideDispatcher
+	enq        jobs.Enqueuer
 	textCap    int64
 }
 
-func NewGuideRunner(c guideCandidateLister, d GuideDispatcher, textCap int64) *GuideRunner {
+func NewGuideRunner(c guideCandidateLister, enq jobs.Enqueuer, textCap int64) *GuideRunner {
 	if textCap <= 0 {
 		textCap = DefaultGuideTextCap
 	}
-	return &GuideRunner{candidates: c, dispatch: d, textCap: textCap}
+	return &GuideRunner{candidates: c, enq: enq, textCap: textCap}
 }
 
 // Estimate sizes a run without reading a single book.
@@ -107,7 +104,7 @@ func (r *GuideRunner) Start(ctx context.Context) (int, error) {
 	}
 	queued := 0
 	for _, c := range rows {
-		if err := r.dispatch(ctx, c.BookID); err != nil {
+		if err := r.enq.Enqueue(ctx, jobs.ReadingGuideArgs{BookID: c.BookID}); err != nil {
 			return queued, fmt.Errorf("queue guide for %s: %w", c.BookID, err)
 		}
 		queued++

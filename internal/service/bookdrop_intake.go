@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 )
@@ -33,21 +34,6 @@ var (
 // is testable against a temp dir and a fake, with no database.
 type bookdropInserter interface {
 	Insert(ctx context.Context, path, format string, size int64) (model.BookDropItem, error)
-}
-
-// IngestDispatcher hands a freshly-tracked item to the worker pool. A
-// function rather than a queue.Client because internal/queue imports this
-// package; main.go supplies a closure over the river client.
-//
-// nil is valid and means "no worker pool" — the row is still written and the
-// watcher's next tick will dispatch it.
-type IngestDispatcher func(ctx context.Context, itemID string) error
-
-// WithIngestDispatcher wires the worker-pool handoff used by Intake and
-// Accept.
-func (s *BookDropService) WithIngestDispatcher(d IngestDispatcher) *BookDropService {
-	s.dispatch = d
-	return s
 }
 
 // Intake registers a file that is already sitting in the staging directory.
@@ -135,13 +121,11 @@ func (s *BookDropService) register(ctx context.Context, path string, size int64)
 		return item, false, err
 	}
 	s.broadcast(item.ID)
-	if s.dispatch != nil {
-		if err := s.dispatch(ctx, item.ID); err != nil {
-			// The row is committed. Losing the job only delays processing;
-			// the watcher re-dispatches on its next tick, and
-			// DiscoverOnStartup catches anything still stranded at boot.
-			slog.Error("dispatch bookdrop ingest", "item_id", item.ID, "err", err)
-		}
+	// The row is committed. Losing the job only delays processing; the
+	// watcher re-dispatches on its next tick, and DiscoverOnStartup
+	// catches anything still stranded at boot.
+	if err := s.enq.Enqueue(ctx, jobs.BookDropIngestArgs{ItemID: item.ID}); err != nil {
+		slog.Error("dispatch bookdrop ingest", "item_id", item.ID, "err", err)
 	}
 	return item, true, nil
 }

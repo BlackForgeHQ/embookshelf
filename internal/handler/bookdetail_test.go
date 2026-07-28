@@ -16,6 +16,7 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/db"
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/repo/repotest"
@@ -152,7 +153,7 @@ func newDetailFixture(t *testing.T) detailFixture {
 		books:  bookRepo,
 		shelf:  service.NewShelfService(shelfRepo, nil),
 		enrich: service.NewEnrichmentService(nil, nil, nil, nil, writer),
-		bookdrop: service.NewBookDropService(bdropRepo, libRepo, bookRepo, nil, nil, nil).
+		bookdrop: service.NewBookDropService(bdropRepo, libRepo, bookRepo, nil, nil, nil, &jobs.Deferred{}).
 			WithLibraryStore(fixedLibStore{handle}),
 	}
 	return detailFixture{h: h, userID: user.ID, bookID: book.ID, itemID: item.ID}

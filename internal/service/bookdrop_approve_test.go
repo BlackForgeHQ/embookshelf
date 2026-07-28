@@ -5,11 +5,13 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/repo/repotest"
@@ -42,13 +44,17 @@ type fakeEnrichDispatcher struct {
 	err error
 }
 
-func (f *fakeEnrichDispatcher) dispatch(_ context.Context, bookID string) error {
+func (f *fakeEnrichDispatcher) Enqueue(_ context.Context, a jobs.Args) error {
+	args, ok := a.(jobs.BookDropAutoEnrichArgs)
+	if !ok {
+		return fmt.Errorf("unexpected job args %T", a)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
-	f.ids = append(f.ids, bookID)
+	f.ids = append(f.ids, args.BookID)
 	return nil
 }
 
@@ -112,12 +118,12 @@ func newApproveHarness(t *testing.T, policy *fakeAutoEnrichPolicy) *approveHarne
 	}
 
 	dispatch := &fakeEnrichDispatcher{}
-	svc := NewBookDropService(bdropRepo, libRepo, bookRepo, nil, nil, nil).
+	svc := NewBookDropService(bdropRepo, libRepo, bookRepo, nil, nil, nil, dispatch).
 		WithLibraryStore(&fakeLibStore{handle: &LibraryHandle{
 			Library: lib,
 			Placer:  stubPlacer{location: "Frank Herbert/Dune/dune.epub"},
 		}}).
-		WithAutoEnrich(policy, dispatch.dispatch)
+		WithAutoEnrichPolicy(policy)
 
 	return &approveHarness{
 		svc:      svc,
@@ -198,11 +204,13 @@ func TestApproveSucceedsWhenTheEnrichDispatchFails(t *testing.T) {
 	}
 }
 
-// With no dispatcher wired the approve path still works — a binary
+// With the queue unresolved the approve path still works — a binary
 // without a worker pool imports books, it just never gap-fills them.
+// jobs.Deferred refuses with ErrNoQueue until Resolve is called, and
+// that refusal is exactly what requestAutoEnrich logs and swallows.
 func TestApproveWithoutAnEnrichDispatcherStillImports(t *testing.T) {
 	h := newApproveHarness(t, &fakeAutoEnrichPolicy{on: true})
-	h.svc.WithAutoEnrich(h.policy, nil)
+	h.svc.enq = &jobs.Deferred{}
 
 	if _, err := h.svc.Approve(t.Context(), h.item.ID, h.library.ID); err != nil {
 		t.Fatalf("Approve: %v", err)

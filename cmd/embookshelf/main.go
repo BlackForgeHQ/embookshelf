@@ -208,6 +208,15 @@ database must be empty; migrations are applied to it automatically.
 	covers := coverstore.New(filepath.Join(cfg.DataPath, "covers"))
 
 	// Services.
+	//
+	// One late-bound enqueuer for the whole composition root, created
+	// before any of its consumers. bdropSvc, guideRunner and audiobookSvc
+	// all take it as an ordinary argument; the queue's own worker
+	// registry is assembled inside queue.New out of those very services,
+	// so neither the queue nor its consumers can be built first.
+	// jobs.Deferred holds that knot alone, and Resolve closes it once the
+	// queue exists, below.
+	enq := &jobs.Deferred{}
 	backendRepo := repo.NewStorageBackendRepo(dbh)
 	pendingOrphansRepo := repo.NewPendingOrphanRepo(dbh)
 	// Built before LibraryService: book deletion needs a LibraryHandle to
@@ -260,9 +269,10 @@ database must be empty; migrations are applied to it automatically.
 	shelfSvc := service.NewShelfService(shelfRepo, hub)
 	searchSvc := service.NewSearchService(libRepo, bookRepo, shelfRepo)
 	authSvc := service.NewAuthService(userRepo, sessionRepo, hub)
-	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, bookRepo, covers, hub, fileRepo).
+	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, bookRepo, covers, hub, fileRepo, enq).
 		WithLibraryStore(libStore).
-		WithBookDropPath(cfg.BookDropPath)
+		WithBookDropPath(cfg.BookDropPath).
+		WithAutoEnrichPolicy(appSettingsRepo)
 	progressSvc := service.NewProgressService(progressRepo, readingSessionRepo)
 	annotationSvc := service.NewAnnotationService(annotationRepo)
 	statsSvc := service.NewStatsService(statsRepo)
@@ -386,6 +396,15 @@ database must be empty; migrations are applied to it automatically.
 		AppSettings: appSettingsRepo,
 	})
 	guideRepo := repo.NewBookReadingGuideRepo(dbh)
+	// Reading guide bulk runs dispatch one job per book. Text cap comes
+	// from the settings row at start time via the job; the runner only
+	// needs it to size the estimate. Built here rather than after the
+	// queue — nothing about the runner depends on it any more.
+	guideCfg, err := appSettingsRepo.GetReadingGuide(ctx)
+	if err != nil {
+		slog.Warn("read reading guide settings", "err", err)
+	}
+	guideRunner := service.NewGuideRunner(guideRepo, enq, guideCfg.TextCap)
 	audiobookRepo := repo.NewBookAudiobookRepo(dbh)
 	resetSvc := service.NewPasswordResetService(userRepo, resetRepo, sessionRepo, notifier)
 	if err := notifier.Reload(ctx); err != nil {
@@ -395,11 +414,6 @@ database must be empty; migrations are applied to it automatically.
 	}
 
 	// Background queue. PG → River; SQLite → polling worker (queue.New dispatches by dialect).
-	// One late-bound enqueuer for the whole composition root. The queue's
-	// worker registry is built out of the services that need to enqueue,
-	// so neither can exist first; jobs.Deferred holds that knot alone and
-	// every service takes it as an ordinary argument.
-	enq := &jobs.Deferred{}
 	q, err := queue.New(ctx, dbh, queue.Deps{
 		BookDropSvc: bdropSvc,
 		Enrich:      enrichSvc,
@@ -443,20 +457,6 @@ database must be empty; migrations are applied to it automatically.
 		os.Exit(1)
 	}
 
-	// Close the intake loop: the service inserts the row and hands the item
-	// straight to the worker pool. Wired after queue.New because the queue
-	// takes bdropSvc as a dependency, so the two can only be joined here.
-	bdropSvc.WithIngestDispatcher(func(ctx context.Context, itemID string) error {
-		return q.Enqueue(ctx, jobs.BookDropIngestArgs{ItemID: itemID})
-	})
-
-	// Close the approve loop the same way: Approve reads the Auto-enrich
-	// setting and hands the new book to the pool, so the gap-fill runs in
-	// the background rather than inside whatever called Approve (ADR-0012).
-	bdropSvc.WithAutoEnrich(appSettingsRepo, func(ctx context.Context, bookID string) error {
-		return q.Enqueue(ctx, jobs.BookDropAutoEnrichArgs{BookID: bookID})
-	})
-
 	audiobookSvc := service.NewAudiobookService(
 		audiobookRepo,
 		service.NewLibraryBookOpener(libStore),
@@ -471,18 +471,6 @@ database must be empty; migrations are applied to it automatically.
 	// a week. Hourly loop, same shape as the missing-file and
 	// orphaned-key sweepers.
 	go task.LoopAudiobookStagingSweep(ctx, audiobookRepo, cfg.DataPath)
-
-	// Reading guide bulk runs dispatch one job per book, so the runner is
-	// built after the queue. Text cap comes from the settings row at start
-	// time via the job; the runner only needs it to size the estimate.
-	guideCfg, err := appSettingsRepo.GetReadingGuide(ctx)
-	if err != nil {
-		slog.Warn("read reading guide settings", "err", err)
-	}
-	guideRunner := service.NewGuideRunner(guideRepo,
-		func(ctx context.Context, bookID string) error {
-			return q.Enqueue(ctx, jobs.ReadingGuideArgs{BookID: bookID})
-		}, guideCfg.TextCap)
 
 	// Requeue anything still mid-flight from a previous process.
 	ingest.DiscoverOnStartup(ctx, bdropRepo, q)

@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 )
@@ -58,19 +60,26 @@ func (f *fakeBookDropInserter) sole(t *testing.T) insertCall {
 	return f.calls[0]
 }
 
+// fakeDispatcher records the item ids Intake/Accept handed to the worker
+// pool. It never runs a processor — that is the point: the request
+// goroutine only enqueues.
 type fakeDispatcher struct {
 	mu  sync.Mutex
 	ids []string
 	err error
 }
 
-func (f *fakeDispatcher) dispatch(_ context.Context, itemID string) error {
+func (f *fakeDispatcher) Enqueue(_ context.Context, a jobs.Args) error {
+	args, ok := a.(jobs.BookDropIngestArgs)
+	if !ok {
+		return fmt.Errorf("unexpected job args %T", a)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
-	f.ids = append(f.ids, itemID)
+	f.ids = append(f.ids, args.ItemID)
 	return nil
 }
 
@@ -90,9 +99,8 @@ func newIntakeHarness(t *testing.T) *intakeHarness {
 		disp:     &fakeDispatcher{},
 		dir:      t.TempDir(),
 	}
-	h.svc = &BookDropService{bookdropPath: h.dir}
+	h.svc = &BookDropService{bookdropPath: h.dir, enq: h.disp}
 	h.svc.intake = h.inserter
-	h.svc.dispatch = h.disp.dispatch
 	return h
 }
 

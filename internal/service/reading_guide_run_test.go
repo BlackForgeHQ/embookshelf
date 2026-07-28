@@ -5,8 +5,10 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/repo"
 )
 
@@ -30,23 +32,28 @@ func (f *fakeCandidates) ListGuideCandidates(context.Context) ([]repo.GuideCandi
 	return f.rows, nil
 }
 
+// fakeDispatch records the book ids Start handed to the worker pool.
 type fakeDispatch struct {
 	ids []string
 	err error
 }
 
-func (f *fakeDispatch) dispatch(_ context.Context, bookID string) error {
+func (f *fakeDispatch) Enqueue(_ context.Context, a jobs.Args) error {
 	if f.err != nil {
 		return f.err
 	}
-	f.ids = append(f.ids, bookID)
+	args, ok := a.(jobs.ReadingGuideArgs)
+	if !ok {
+		return fmt.Errorf("unexpected job args %T", a)
+	}
+	f.ids = append(f.ids, args.BookID)
 	return nil
 }
 
 func runHarness(rows ...repo.GuideCandidate) (*GuideRunner, *fakeDispatch) {
 	cands := &fakeCandidates{rows: rows, total: len(rows), done: 0}
 	disp := &fakeDispatch{}
-	return NewGuideRunner(cands, disp.dispatch, 48_000), disp
+	return NewGuideRunner(cands, disp, 48_000), disp
 }
 
 // --- estimate ------------------------------------------------------------
@@ -155,7 +162,7 @@ func TestStartSurfacesDispatchFailure(t *testing.T) {
 
 func TestStartSurfacesListFailure(t *testing.T) {
 	cands := &fakeCandidates{err: errors.New("db down")}
-	r := NewGuideRunner(cands, func(context.Context, string) error { return nil }, 48_000)
+	r := NewGuideRunner(cands, &jobs.Deferred{}, 48_000)
 
 	if _, err := r.Start(context.Background()); err == nil {
 		t.Fatal("Start returned nil despite the candidate query failing")
@@ -185,7 +192,7 @@ func TestEstimateCarriesLibraryCoverage(t *testing.T) {
 		total: 10,
 		done:  9,
 	}
-	r := NewGuideRunner(cands, func(context.Context, string) error { return nil }, 48_000)
+	r := NewGuideRunner(cands, &jobs.Deferred{}, 48_000)
 
 	est, err := r.Estimate(context.Background())
 	if err != nil {
