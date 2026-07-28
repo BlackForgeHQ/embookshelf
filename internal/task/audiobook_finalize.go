@@ -24,7 +24,7 @@ import (
 // groups by genre files it with audiobooks rather than with music.
 const audiobookGenre = "Audiobook"
 
-// AudiobookDeps groups the seams both workers need.
+// AudiobookDeps groups the seams the finalize worker needs.
 type AudiobookDeps struct {
 	Audiobooks *repo.BookAudiobookRepo
 	Books      *repo.BookRepo

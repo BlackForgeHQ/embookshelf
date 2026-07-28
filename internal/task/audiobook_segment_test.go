@@ -8,10 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/storage"
 	"github.com/blackforge/embookshelf/internal/task"
 	"github.com/blackforge/embookshelf/internal/tts"
@@ -136,7 +138,9 @@ func (h *segmentHarness) staged(seq int) bool {
 // ---------------------------------------------------------------------------
 
 // A disabled feature is permanent, not transient: it will still be
-// disabled in thirty seconds, and River must not retry it.
+// disabled in thirty seconds. The worker returns the sentinel and never
+// reaches the engine — what River does with the error is River's own
+// retry policy, not this worker's concern.
 func TestSegmentRefusesWhenTheFeatureIsDisabled(t *testing.T) {
 	h := newSegmentHarness(t)
 	h.deps.Config = func(context.Context) (repo.AudiobookConfig, error) {
@@ -242,6 +246,12 @@ func TestSegmentSurfacesAMissingBook(t *testing.T) {
 	if err == nil {
 		t.Fatal("AudiobookSegment returned nil for a deleted book")
 	}
+	if !strings.Contains(err.Error(), "b1") {
+		t.Errorf("err = %q, want it to name the book that vanished", err.Error())
+	}
+	if errors.Is(err, tts.ErrPermanent) || errors.Is(err, service.ErrNotNarratable) {
+		t.Errorf("err = %v classified as permanent — a missing book is a load failure, not a narration refusal", err)
+	}
 	if h.staged(0) {
 		t.Error("a segment was staged for a book that no longer exists")
 	}
@@ -283,13 +293,14 @@ func TestSegmentReturnsATransientEngineFailureForRiver(t *testing.T) {
 	}
 }
 
-// Audio the frame parser cannot read is not something a retry improves.
+// Audio the frame parser cannot read is not something a retry improves —
+// when it is caught. This raises MaxRequestChars so segment 0's 45
+// characters stay in one chunk, which routes the bad bytes through
+// AudiobookSegment's own audio.Payload check rather than joinParts' (see
+// the sibling test below for what happens when they don't fit in one).
 func TestSegmentRecordsUnusableAudioAsAPermanentFailure(t *testing.T) {
 	h := newSegmentHarness(t)
 	h.engine.reply = []byte("this is not an mp3")
-	// One chunk, not the harness's default three: this exercises
-	// AudiobookSegment's own audio.Payload check on the joined bytes, not
-	// joinParts' per-chunk check, which a segment this short never hits.
 	h.deps.Engine = func(repo.AudiobookConfig) (repo.ConfiguredEngine, error) {
 		return repo.ConfiguredEngine{
 			ID:     tts.EngineOpenAI,
@@ -306,6 +317,32 @@ func TestSegmentRecordsUnusableAudioAsAPermanentFailure(t *testing.T) {
 	}
 	if h.published != 1 {
 		t.Errorf("published %d times, want exactly one", h.published)
+	}
+}
+
+// Pins a known inconsistency rather than endorsing it: the harness default
+// (MaxRequestChars: 20) splits segment 0 into three chunks, same as every
+// real engine would on a full-size segment. Unusable audio there is caught
+// by joinParts, not by AudiobookSegment's own check, and joinParts wraps
+// the failure as a plain "chunk %d: %w" — untagged with tts.ErrPermanent —
+// so the worker returns it and River retries forever, unlike the
+// single-chunk case above, which the worker marks permanent and publishes.
+// Fixing that gap is out of scope here; this test exists so the gap has to
+// be noticed, and broken deliberately, before anyone closes it silently.
+func TestSegmentTreatsMultiChunkUnusableAudioAsRetryableUnlikeTheSingleChunkCase(t *testing.T) {
+	h := newSegmentHarness(t)
+	h.engine.reply = []byte("this is not an mp3")
+
+	err := h.run(t, 0)
+
+	if err == nil {
+		t.Fatal("AudiobookSegment returned nil — want the chunk-join error, since it isn't tagged permanent")
+	}
+	if len(h.runs.recorded) != 1 || h.runs.recorded[0].State != model.SegmentFailed {
+		t.Fatalf("recorded %+v, want one failed segment", h.runs.recorded)
+	}
+	if h.published != 0 {
+		t.Errorf("published %d times, want zero — this path never reaches the permanent-failure publish", h.published)
 	}
 }
 
