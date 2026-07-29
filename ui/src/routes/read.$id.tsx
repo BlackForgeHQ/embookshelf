@@ -28,14 +28,9 @@ import {
   ReaderFooter,
   ReaderHeader,
 } from "@/components/reader/Chrome"
+import { decodeLocator, encodeLocator, formatHMS } from "@/lib/locator"
+import { NotesPanel, TypePanel } from "@/components/reader/Panels"
 import {
-  decodeLocator,
-  encodeLocator,
-  formatHMS,
-  locatorLabel,
-} from "@/lib/locator"
-import {
-  annotationKind,
   bookAnnotationsQuery,
   createAnnotation,
   createBookmark,
@@ -115,7 +110,23 @@ function Reader() {
   if (isNarratableFormat(b.format)) {
     return <NarratableShell book={b} />
   }
-  return <ReaderShell book={b} />
+  return <PagedReaderShell book={b} />
+}
+
+// Which of the two paged shells opens the book.
+//
+// `readerKindForFormat` above already answered "a text surface", which
+// covers EPUB and PDF both; this is the rest of that question. It is the
+// only branch on `book.format` left in the file — the shells themselves
+// no longer have one (ADR-0029 §3) — and it stays a one-liner here
+// rather than growing a home of its own, because slice 4 folds both
+// halves of the question into the Rendition module (#179).
+function PagedReaderShell({ book }: { book: BookDetail }) {
+  return book.format === "EPUB" ? (
+    <TextReaderShell book={book} />
+  ) : (
+    <PdfReaderShell book={book} />
+  )
 }
 
 // NarratableShell picks which rendition of an EPUB to open.
@@ -143,7 +154,7 @@ function NarratableShell({ book }: { book: BookDetail }) {
       {listen ? (
         <AudioReaderShell book={book} audioUrl={narrationUrl(book.id)} />
       ) : (
-        <ReaderShell book={book} />
+        <PagedReaderShell book={book} />
       )}
     </>
   )
@@ -195,14 +206,30 @@ function RenditionSwitch({
   )
 }
 
-function ReaderShell({ book }: { book: BookDetail }) {
+// TextReaderShell is the chrome around an EPUB.
+//
+// It and PdfReaderShell were one component until ADR-0029 §3: 8 of that
+// component's 17 hooks served exactly one of the two formats, two
+// imperative refs were allocated on every mount so one of them could be
+// null for the component's lifetime, and sixteen render sites asked
+// which format they were in. What was left once the branches were
+// resolved is two shells that read straight through, sharing the chrome
+// (`components/reader/Chrome.tsx`) and the two side panels
+// (`components/reader/Panels.tsx`) that genuinely do not vary.
+//
+// What is EPUB-only and therefore lives here: the table of contents, the
+// selection toolbar, the highlight overlay, and a position named by CFI.
+function TextReaderShell({ book }: { book: BookDetail }) {
   const navigate = useNavigate()
-  // This shell drives EPUB and PDF, so it takes the kind that matches the
-  // format and ignores the other — a token of the wrong kind means "start
-  // from the beginning" rather than a coerced position.
+  // A resume token of another kind means "start from the beginning"
+  // rather than a coerced position.
+  //
+  // Decoded inline rather than memoized, and deliberately: what leaves
+  // here is a string. EpubReader's boot effect has deps
+  // `[url, initialCfi]`, so handing it the decoded `Locator` instead
+  // would re-boot epub.js on every render.
   const resume = decodeLocator(book.resumeCfi)
   const resumeCfi = resume?.kind === "cfi" ? resume.cfi : undefined
-  const resumePage = resume?.kind === "page" ? resume.page : undefined
 
   const [chromeVisible, setChromeVisible] = useState(true)
   const [tocOpen, setTocOpen] = useState(false)
@@ -213,30 +240,28 @@ function ReaderShell({ book }: { book: BookDetail }) {
   // Progress state mirrors what the reader reports. Used for the bottom
   // scrubber and to compose the token we persist on unmount.
   const [percent, setPercent] = useState(0)
-  const [pageState, setPageState] = useState<{
-    current: number
-    total: number
-  } | null>(null)
   const [cfiState, setCfiState] = useState<string>(resumeCfi ?? "")
 
-  // Pending EPUB selection — set by rendition.on('selected'), cleared
-  // when the user saves or dismisses it. Absence hides the selection
-  // toolbar, so this doubles as the toolbar's visibility switch.
+  // Pending selection — set by rendition.on('selected'), cleared when
+  // the user saves or dismisses it. Absence hides the selection toolbar,
+  // so this doubles as the toolbar's visibility switch.
   const [pendingSelection, setPendingSelection] = useState<{
     cfiRange: string
     text: string
   } | null>(null)
 
   const epubRef = useRef<EpubReaderHandle>(null)
-  const pdfRef = useRef<PdfReaderHandle>(null)
 
   const { queue: queueProgress, flush: flushProgress } = useReadingPosition({
     save: (progress, token) => void updateProgress(book.id, progress, token),
     debounceMs: PROGRESS_DEBOUNCE_MS,
   })
 
-  // Annotations for this book — drives the side panel AND the EPUB
-  // highlight overlay.
+  // Annotations for this book — drives the notes panel AND the highlight
+  // overlay. It stays here, immediately above the memo that reads it,
+  // rather than being fetched once above both shells: separating the two
+  // reintroduces the add/remove churn that memo exists to prevent
+  // (ADR-0029 §3). The PDF shell keeps its own.
   const annotations = useApiQuery(bookAnnotationsQuery(book.id))
 
   const createAnnotationMut = useApiMutation(createAnnotation, {
@@ -251,37 +276,34 @@ function ReaderShell({ book }: { book: BookDetail }) {
   })
 
   // Null until the reader has reported a position: the shell mounts
-  // before either renderer knows where it is, and this is the only shell
-  // with that gap — hence the only one whose bookmark button has a null
-  // path to take.
-  const bookmarkLocator: Locator | null =
-    book.format === "PDF" && pageState
-      ? { kind: "page", page: pageState.current }
-      : book.format === "EPUB" && cfiState
-        ? { kind: "cfi", cfi: cfiState }
-        : null
+  // before the renderer knows where it is, and the paged shells are the
+  // only ones with that gap — hence the only ones whose bookmark button
+  // has a null path to take.
+  const bookmarkLocator: Locator | null = cfiState
+    ? { kind: "cfi", cfi: cfiState }
+    : null
 
-  // EPUB highlights for the rendition overlay. Stable reference when the
+  // Highlights for the rendition overlay. Stable reference when the
   // annotation list hasn't changed, so the effect in EpubReader doesn't
   // churn add/remove on every render.
-  const epubHighlights = useMemo<Array<EpubHighlight>>(() => {
-    if (book.format !== "EPUB") return []
-    return (annotations.data ?? [])
-      .filter(
-        (a) => !!a.selectedText && decodeLocator(a.locator)?.kind === "cfi"
-      )
-      .map((a) => ({ cfiRange: a.locator!, color: "oklch(0.92 0.07 85)" }))
-  }, [book.format, annotations.data])
+  const epubHighlights = useMemo<Array<EpubHighlight>>(
+    () =>
+      (annotations.data ?? [])
+        .filter(
+          (a) => !!a.selectedText && decodeLocator(a.locator)?.kind === "cfi"
+        )
+        .map((a) => ({ cfiRange: a.locator!, color: "oklch(0.92 0.07 85)" })),
+    [annotations.data]
+  )
 
   const onEpubProgress = (p: EpubProgress) => {
     setPercent(p.percent)
     setCfiState(p.cfi)
+    // The raw CFI, not `encodeLocator`: what epub.js emits already
+    // carries the prefix `lib/locator` reads a CFI back by, so the token
+    // is stored verbatim. The PDF shell's page number does not, which is
+    // why that one is encoded and this one is not.
     queueProgress(p.percent, p.cfi)
-  }
-  const onPdfProgress = (p: PdfProgress) => {
-    setPercent(p.percent)
-    setPageState({ current: p.page, total: p.totalPages })
-    queueProgress(p.percent, encodeLocator({ kind: "page", page: p.page }))
   }
 
   const closePanels = () => {
@@ -297,15 +319,11 @@ function ReaderShell({ book }: { book: BookDetail }) {
     void navigate({ to: "/book/$id", params: { id: book.id } })
   }
 
-  // Derived footer values — keep both reader shapes on one code path.
-  const footerPageLabel =
-    book.format === "PDF" && pageState
-      ? `p.${pageState.current}`
-      : book.format === "EPUB" && percent
-        ? `${Math.round(percent * 100)}%`
-        : "—"
-  const footerTotalLabel =
-    book.format === "PDF" && pageState ? `p.${pageState.total}` : ""
+  // Derived labels. An EPUB has no page count, so how far through it the
+  // reader is *is* the position — the footer's right-hand label shows
+  // the same percentage without the "not started yet" dash.
+  const percentLabel = `${Math.round(percent * 100)}%`
+  const positionLabel = percent ? percentLabel : "—"
 
   return (
     <ReaderContainer background="var(--color-paper-0)">
@@ -324,23 +342,20 @@ function ReaderShell({ book }: { book: BookDetail }) {
               {book.title}
             </div>
             <div className="t-micro" style={{ fontSize: 10 }}>
-              {book.author} · {footerPageLabel}
-              {footerTotalLabel ? ` / ${footerTotalLabel}` : ""}
+              {book.author} · {positionLabel}
             </div>
           </div>
-          {book.format === "EPUB" && (
-            <Button
-              variant={tocOpen ? "default" : "ghost"}
-              size="icon-sm"
-              onClick={() => {
-                const next = !tocOpen
-                closePanels()
-                setTocOpen(next)
-              }}
-            >
-              <Icon name="contents" size={14} />
-            </Button>
-          )}
+          <Button
+            variant={tocOpen ? "default" : "ghost"}
+            size="icon-sm"
+            onClick={() => {
+              const next = !tocOpen
+              closePanels()
+              setTocOpen(next)
+            }}
+          >
+            <Icon name="contents" size={14} />
+          </Button>
           <Button
             variant={typePanelOpen ? "default" : "ghost"}
             size="icon-sm"
@@ -389,8 +404,9 @@ function ReaderShell({ book }: { book: BookDetail }) {
           position: "relative",
         }}
       >
-        {/* Left TOC (EPUB only) */}
-        {tocOpen && book.format === "EPUB" && (
+        {/* Left TOC. The one panel with no PDF counterpart: pdf.js
+            exposes an outline, but nothing here has ever read it. */}
+        {tocOpen && (
           <aside
             style={{
               width: 280,
@@ -453,36 +469,21 @@ function ReaderShell({ book }: { book: BookDetail }) {
             flex: 1,
             overflow: "hidden",
             position: "relative",
-            background:
-              book.format === "EPUB"
-                ? "var(--color-paper-0)"
-                : "var(--color-paper-2)",
+            background: "var(--color-paper-0)",
           }}
         >
-          {book.format === "EPUB" ? (
-            <EpubReader
-              ref={epubRef}
-              url={`/api/v1/books/${book.id}/file`}
-              initialCfi={resumeCfi}
-              highlights={epubHighlights}
-              onReady={({ toc: t }) => setToc(t.flatMap(flatten))}
-              onProgress={onEpubProgress}
-              onSelect={(sel) => setPendingSelection(sel)}
-            />
-          ) : (
-            <PdfReader
-              ref={pdfRef}
-              url={`/api/v1/books/${book.id}/file`}
-              initialPage={resumePage}
-              onReady={({ totalPages }) =>
-                setPageState({ current: resumePage ?? 1, total: totalPages })
-              }
-              onProgress={onPdfProgress}
-            />
-          )}
+          <EpubReader
+            ref={epubRef}
+            url={`/api/v1/books/${book.id}/file`}
+            initialCfi={resumeCfi}
+            highlights={epubHighlights}
+            onReady={({ toc: t }) => setToc(t.flatMap(flatten))}
+            onProgress={onEpubProgress}
+            onSelect={(sel) => setPendingSelection(sel)}
+          />
 
           {/* Selection toolbar — shown whenever the user drags across
-              EPUB text and epub.js emits a `selected` event. Pending
+              text and epub.js emits a `selected` event. Pending
               selection is cleared on save or dismiss. */}
           {pendingSelection && (
             <div
@@ -552,55 +553,264 @@ function ReaderShell({ book }: { book: BookDetail }) {
           )}
         </div>
 
-        {/* Type panel (floating) */}
-        {typePanelOpen && (
-          <div
-            style={{
-              position: "absolute",
-              top: 0,
-              right: 16,
-              width: 260,
-              background: "var(--color-paper-0)",
-              border: "1px solid var(--color-ink-3)",
-              boxShadow: "0 12px 32px -8px oklch(0.2 0.02 60 / 0.22)",
-              padding: "14px 16px",
-              borderRadius: 2,
-              zIndex: 5,
-            }}
-          >
-            <div className="t-label" style={{ marginBottom: 10 }}>
-              Reader type
-            </div>
-            <div
-              style={{
-                fontSize: 12,
-                color: "var(--color-ink-3)",
-                fontStyle: "italic",
-              }}
-            >
-              Font + size controls land once per-user reader preferences sync
-              from the backend.
-            </div>
-          </div>
-        )}
+        {typePanelOpen && <TypePanel />}
 
         {notesOpen && (
-          <aside
+          <NotesPanel
+            annotations={annotations.data ?? []}
+            loading={annotations.isLoading}
+            emptyText="Select text in the page to highlight or annotate."
+            renderGoTo={(locator) =>
+              locator.kind === "cfi" ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => epubRef.current?.goTo(locator.cfi)}
+                  title="Go to highlight"
+                >
+                  <Icon name="arrow-right" size={10} />
+                </Button>
+              ) : null
+            }
+            onDelete={(a) =>
+              deleteAnnotationMut.mutate({ id: a.id, bookId: a.bookId })
+            }
+            deleting={deleteAnnotationMut.isPending}
+          />
+        )}
+      </div>
+
+      {/* Bottom — progress + page controls.
+
+          Pre-existing (ADR-0029 "Consequences"): this sits outside the
+          `chromeVisible` guard, so "hide chrome" hides only the header.
+          Preserved rather than fixed — it is tracked on its own. */}
+      <ReaderFooter
+        onPrev={() => epubRef.current?.prev()}
+        onNext={() => epubRef.current?.next()}
+        leftLabel={positionLabel}
+        rightLabel={percentLabel}
+      >
+        <ProgressBar value={percent} label="Reading progress" />
+      </ReaderFooter>
+
+      {!chromeVisible && (
+        <ChromeRestoreButton onRestore={() => setChromeVisible(true)} />
+      )}
+    </ReaderContainer>
+  )
+}
+
+// PdfReaderShell is the chrome around a PDF — TextReaderShell's sibling
+// rather than a variant of it (ADR-0029 §3).
+//
+// What is PDF-only and therefore lives here: a position named by page,
+// so the header can say "p.7 / p.240" where the text shell can only say
+// a percentage, and a notes panel whose new note attaches to the page on
+// screen because there is no text selection to attach it to.
+function PdfReaderShell({ book }: { book: BookDetail }) {
+  const navigate = useNavigate()
+  // A resume token of another kind means "start from the beginning"
+  // rather than a coerced position. Yields a primitive for the same
+  // reason the text shell does: `initialPage` is a renderer prop, and a
+  // decoded `Locator` would be a fresh object on every render.
+  const resume = decodeLocator(book.resumeCfi)
+  const resumePage = resume?.kind === "page" ? resume.page : undefined
+
+  const [chromeVisible, setChromeVisible] = useState(true)
+  const [notesOpen, setNotesOpen] = useState(false)
+  const [typePanelOpen, setTypePanelOpen] = useState(false)
+
+  // Progress state mirrors what the reader reports. Used for the bottom
+  // scrubber and to compose the token we persist on unmount.
+  const [percent, setPercent] = useState(0)
+  const [pageState, setPageState] = useState<{
+    current: number
+    total: number
+  } | null>(null)
+
+  const pdfRef = useRef<PdfReaderHandle>(null)
+
+  const { queue: queueProgress, flush: flushProgress } = useReadingPosition({
+    save: (progress, token) => void updateProgress(book.id, progress, token),
+    debounceMs: PROGRESS_DEBOUNCE_MS,
+  })
+
+  // This shell's own annotations query, for the notes panel. Not one
+  // hoisted above both shells: a PDF has no highlight overlay, but the
+  // text shell's list has to stay next to the memo that builds one
+  // (ADR-0029 §3), so each shell asks for what it needs. Only one of the
+  // two is ever mounted, so this is one fetch either way.
+  const annotations = useApiQuery(bookAnnotationsQuery(book.id))
+
+  const createAnnotationMut = useApiMutation(createAnnotation)
+
+  const deleteAnnotationMut = useApiMutation(deleteAnnotation)
+
+  const bookmarkMut = useApiMutation(createBookmark, {
+    successToast: "Bookmark saved",
+    errorToast: (err) => err.message || "Bookmark failed",
+  })
+
+  // Null until the reader has reported a position: the shell mounts
+  // before the renderer knows where it is, and the paged shells are the
+  // only ones with that gap — hence the only ones whose bookmark button
+  // has a null path to take.
+  const bookmarkLocator: Locator | null = pageState
+    ? { kind: "page", page: pageState.current }
+    : null
+
+  const onPdfProgress = (p: PdfProgress) => {
+    setPercent(p.percent)
+    setPageState({ current: p.page, total: p.totalPages })
+    // Encoded, unlike the text shell's raw CFI: a bare page number
+    // carries no prefix to read it back by, so `lib/locator` is what
+    // makes the stored token self-describing.
+    queueProgress(p.percent, encodeLocator({ kind: "page", page: p.page }))
+  }
+
+  const closePanels = () => {
+    setNotesOpen(false)
+    setTypePanelOpen(false)
+  }
+
+  const exit = () => {
+    // Write the position before unmounting rather than relying on the
+    // unmount backstop, which fires mid-teardown.
+    flushProgress()
+    void navigate({ to: "/book/$id", params: { id: book.id } })
+  }
+
+  // Derived labels. Both are empty-ish until the document reports its
+  // page count, and the footer falls back to the percentage then.
+  const pageLabel = pageState ? `p.${pageState.current}` : "—"
+  const totalLabel = pageState ? `p.${pageState.total}` : ""
+
+  return (
+    <ReaderContainer background="var(--color-paper-0)">
+      {chromeVisible && (
+        <ReaderHeader>
+          <ExitButton onExit={exit} />
+          <div
             style={{
-              width: 320,
-              borderLeft: "1px solid var(--color-rule-soft)",
-              background: "var(--color-paper-1)",
-              overflow: "auto",
-              padding: "18px 16px",
-              flexShrink: 0,
+              flex: 1,
               display: "flex",
               flexDirection: "column",
-              gap: 10,
+              alignItems: "center",
             }}
           >
-            <div className="t-label">Notes on this book</div>
+            <div style={{ fontSize: 13, fontWeight: 500, fontStyle: "italic" }}>
+              {book.title}
+            </div>
+            <div className="t-micro" style={{ fontSize: 10 }}>
+              {book.author} · {pageLabel}
+              {totalLabel ? ` / ${totalLabel}` : ""}
+            </div>
+          </div>
+          <Button
+            variant={typePanelOpen ? "default" : "ghost"}
+            size="icon-sm"
+            onClick={() => {
+              const next = !typePanelOpen
+              closePanels()
+              setTypePanelOpen(next)
+            }}
+          >
+            <Icon name="aA" size={14} />
+          </Button>
+          <BookmarkButton
+            locator={bookmarkLocator}
+            pending={bookmarkMut.isPending}
+            onBookmark={(locator) =>
+              bookmarkMut.mutate({ bookId: book.id, locator })
+            }
+          />
+          <Button
+            variant={notesOpen ? "default" : "ghost"}
+            size="icon-sm"
+            onClick={() => {
+              const next = !notesOpen
+              closePanels()
+              setNotesOpen(next)
+            }}
+          >
+            <Icon name="note" size={14} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setChromeVisible(false)}
+            title="Hide chrome"
+          >
+            <Icon name="close" size={14} />
+          </Button>
+        </ReaderHeader>
+      )}
 
-            {book.format === "PDF" && pageState && (
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          overflow: "hidden",
+          position: "relative",
+        }}
+      >
+        {/* Reading area.
+
+            Pre-existing: the single-click restore is inherited from the
+            shell these two were split out of, where it was written for
+            the EPUB iframe that swallows the click. A PDF canvas does
+            not, so a click anywhere in the page restores chrome here.
+            Left as-is — changing it is a behaviour change. */}
+        <div
+          onClick={() => setChromeVisible(true)}
+          style={{
+            flex: 1,
+            overflow: "hidden",
+            position: "relative",
+            background: "var(--color-paper-2)",
+          }}
+        >
+          <PdfReader
+            ref={pdfRef}
+            url={`/api/v1/books/${book.id}/file`}
+            initialPage={resumePage}
+            onReady={({ totalPages }) =>
+              setPageState({ current: resumePage ?? 1, total: totalPages })
+            }
+            onProgress={onPdfProgress}
+          />
+        </div>
+
+        {typePanelOpen && <TypePanel />}
+
+        {notesOpen && (
+          <NotesPanel
+            annotations={annotations.data ?? []}
+            loading={annotations.isLoading}
+            emptyText="No notes yet."
+            renderGoTo={(locator) =>
+              locator.kind === "page" ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  // Decoding already rejected an unreadable page, so
+                  // there is nothing left to re-validate here.
+                  onClick={() => pdfRef.current?.goTo(locator.page)}
+                  title="Go to page"
+                >
+                  <Icon name="arrow-right" size={10} />
+                </Button>
+              ) : null
+            }
+            onDelete={(a) =>
+              deleteAnnotationMut.mutate({ id: a.id, bookId: a.bookId })
+            }
+            deleting={deleteAnnotationMut.isPending}
+          >
+            {pageState && (
               <Button
                 type="button"
                 variant="outline"
@@ -628,118 +838,7 @@ function ReaderShell({ book }: { book: BookDetail }) {
                 {pageState.current}
               </Button>
             )}
-
-            {annotations.isLoading && (
-              <div className="t-small" style={{ fontStyle: "italic" }}>
-                Loading…
-              </div>
-            )}
-            {!annotations.isLoading &&
-              (annotations.data ?? []).length === 0 && (
-                <div className="t-small" style={{ fontStyle: "italic" }}>
-                  {book.format === "EPUB"
-                    ? "Select text in the page to highlight or annotate."
-                    : "No notes yet."}
-                </div>
-              )}
-
-            {(annotations.data ?? []).map((a) => {
-              const kind = annotationKind(a)
-              const locator = decodeLocator(a.locator)
-              return (
-                <div
-                  key={a.id}
-                  style={{
-                    borderLeft: "3px solid var(--color-accent-soft)",
-                    padding: "6px 10px",
-                    background: "var(--color-paper-0)",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      marginBottom: 4,
-                    }}
-                  >
-                    <span className="t-micro" style={{ fontSize: 9.5 }}>
-                      {kind === "highlight"
-                        ? "Highlight"
-                        : kind === "highlight+note"
-                          ? "Highlight · Note"
-                          : "Note"}
-                      {/* A CFI reduces to "EPUB", which says nothing the
-                          reader you are already inside doesn't — so only
-                          a page carries a label worth showing here. */}
-                      {locator?.kind === "page" &&
-                        ` · ${locatorLabel(a.locator)}`}
-                    </span>
-                    <div
-                      style={{ display: "flex", alignItems: "center", gap: 6 }}
-                    >
-                      {locator?.kind === "cfi" && book.format === "EPUB" && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          onClick={() => epubRef.current?.goTo(locator.cfi)}
-                          title="Go to highlight"
-                        >
-                          <Icon name="arrow-right" size={10} />
-                        </Button>
-                      )}
-                      {locator?.kind === "page" && book.format === "PDF" && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          // Decoding already rejected an unreadable page,
-                          // so there is nothing left to re-validate here.
-                          onClick={() => pdfRef.current?.goTo(locator.page)}
-                          title="Go to page"
-                        >
-                          <Icon name="arrow-right" size={10} />
-                        </Button>
-                      )}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={() =>
-                          deleteAnnotationMut.mutate({
-                            id: a.id,
-                            bookId: a.bookId,
-                          })
-                        }
-                        disabled={deleteAnnotationMut.isPending}
-                        aria-label="Delete"
-                        title="Delete"
-                      >
-                        <Icon name="close" size={10} />
-                      </Button>
-                    </div>
-                  </div>
-                  {a.selectedText && (
-                    <p
-                      style={{
-                        fontSize: 12.5,
-                        lineHeight: 1.5,
-                        fontStyle: "italic",
-                        background: "oklch(0.94 0.04 85)",
-                        padding: "4px 6px",
-                        marginBottom: a.note ? 6 : 0,
-                      }}
-                    >
-                      {a.selectedText}
-                    </p>
-                  )}
-                  {a.note && (
-                    <p style={{ fontSize: 13, lineHeight: 1.5 }}>{a.note}</p>
-                  )}
-                </div>
-              )
-            })}
-          </aside>
+          </NotesPanel>
         )}
       </div>
 
@@ -749,18 +848,10 @@ function ReaderShell({ book }: { book: BookDetail }) {
           `chromeVisible` guard, so "hide chrome" hides only the header.
           Preserved rather than fixed — it is tracked on its own. */}
       <ReaderFooter
-        onPrev={() =>
-          book.format === "EPUB"
-            ? epubRef.current?.prev()
-            : pdfRef.current?.prev()
-        }
-        onNext={() =>
-          book.format === "EPUB"
-            ? epubRef.current?.next()
-            : pdfRef.current?.next()
-        }
-        leftLabel={footerPageLabel}
-        rightLabel={footerTotalLabel || `${Math.round(percent * 100)}%`}
+        onPrev={() => pdfRef.current?.prev()}
+        onNext={() => pdfRef.current?.next()}
+        leftLabel={pageLabel}
+        rightLabel={totalLabel || `${Math.round(percent * 100)}%`}
       >
         <ProgressBar value={percent} label="Reading progress" />
       </ReaderFooter>
