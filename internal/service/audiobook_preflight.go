@@ -57,6 +57,26 @@ func (s *AudiobookService) WithContentHash(fn func(context.Context, model.Book) 
 	return s
 }
 
+// narrationArtifacts is what finalize wrote outside the run's own table:
+// the files row naming the generated audio, and the book's playback view
+// — its duration and chapter list.
+//
+// A narrow interface rather than the opaque closure the byte sweep uses,
+// because deleting a narration has to undo all of it and "did it?" is
+// worth asserting. The service still cannot reach the files table
+// itself, which is the property #191 established.
+type narrationArtifacts interface {
+	DeleteFile(ctx context.Context, fileID string) error
+	ClearBookAudio(ctx context.Context, bookID string) error
+}
+
+// WithNarrationArtifacts wires the removal of what finalize wrote
+// outside the run's table.
+func (s *AudiobookService) WithNarrationArtifacts(a narrationArtifacts) *AudiobookService {
+	s.artifacts = a
+	return s
+}
+
 // WithNarrationSweeper wires the removal of a finished narration's bytes.
 func (s *AudiobookService) WithNarrationSweeper(
 	fn func(ctx context.Context, book model.Book, run model.Audiobook) error,
@@ -168,6 +188,30 @@ func (s *AudiobookService) DeleteNarration(ctx context.Context, book model.Book)
 	if err := s.store.Delete(ctx, book.ID); err != nil {
 		return fmt.Errorf("delete narration: %w", err)
 	}
+
+	// Everything finalize wrote, not just the run row. It writes four
+	// things — the files row, the book's duration and chapters, the run,
+	// and each segment's offset — and deleting the run took two of them
+	// (the segments cascade). The files row survived pointing at bytes
+	// that were about to go, and the reader kept finding a chapter list
+	// for a narration that no longer existed (#208).
+	//
+	// Each failure is logged rather than returned, for the reason the
+	// byte sweep gives: a user must not be left with a narration they
+	// cannot remove. What is left behind is collectable — an orphaned
+	// object by the key sweeper, an orphaned files row by the
+	// missing-file purge after a scan.
+	if s.artifacts != nil {
+		if run.FileID != nil {
+			if err := s.artifacts.DeleteFile(ctx, *run.FileID); err != nil {
+				slog.Warn("audiobook: delete narration files row", "book", book.ID, "err", err)
+			}
+		}
+		if err := s.artifacts.ClearBookAudio(ctx, book.ID); err != nil {
+			slog.Warn("audiobook: clear book audio fields", "book", book.ID, "err", err)
+		}
+	}
+
 	if s.sweepNarration == nil {
 		return nil
 	}
@@ -200,4 +244,24 @@ func (s *AudiobookService) contentHash(ctx context.Context, book model.Book) []b
 		return nil
 	}
 	return s.hash(ctx, book)
+}
+
+// RepoNarrationArtifacts adapts the two repos to what DeleteNarration
+// needs. A thin adapter rather than handing the service the repos: the
+// pair of methods below is its whole reach outside the run's table.
+type RepoNarrationArtifacts struct {
+	Files *repo.FileRepo
+	Books *repo.BookRepo
+}
+
+func (a RepoNarrationArtifacts) DeleteFile(ctx context.Context, fileID string) error {
+	return a.Files.Delete(ctx, fileID)
+}
+
+// ClearBookAudio resets the playback view finalize wrote. The narrator
+// is deliberately untouched — books.narrator means "what this file's
+// tags said" and a generated narration never writes it (ADR-0025 §5).
+func (a RepoNarrationArtifacts) ClearBookAudio(ctx context.Context, bookID string) error {
+	zero := 0
+	return a.Books.UpdateAudio(ctx, bookID, &zero, "", nil)
 }

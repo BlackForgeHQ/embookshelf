@@ -175,8 +175,9 @@ func (h *Handler) BookAudiobookRetry(c *gin.Context, s bookScope) {
 	c.JSON(http.StatusAccepted, gin.H{"queued": true})
 }
 
-// BookAudiobookDelete removes a narration: the run record, the files row,
-// and the bytes. The book keeps its EPUB.
+// BookAudiobookDelete removes a narration: the run record, the files
+// row, the book's chapter list and duration, and the bytes. The book
+// keeps its EPUB.
 func (h *Handler) BookAudiobookDelete(c *gin.Context, s bookScope) {
 	if h.audiobooks == nil {
 		writeError(c, http.StatusNotFound, "this book has no generated narration")

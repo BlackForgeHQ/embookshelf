@@ -258,3 +258,89 @@ func TestDeleteNarrationReportsAMissingRun(t *testing.T) {
 		t.Error("deleted a run that was never found")
 	}
 }
+
+// recordingArtifacts captures what the delete undid outside the run's
+// own table.
+type recordingArtifacts struct {
+	deletedFiles []string
+	clearedAudio []string
+	order        *[]string
+}
+
+func (r *recordingArtifacts) DeleteFile(_ context.Context, fileID string) error {
+	r.deletedFiles = append(r.deletedFiles, fileID)
+	*r.order = append(*r.order, "file")
+	return nil
+}
+
+func (r *recordingArtifacts) ClearBookAudio(_ context.Context, bookID string) error {
+	r.clearedAudio = append(r.clearedAudio, bookID)
+	*r.order = append(*r.order, "audio")
+	return nil
+}
+
+// Finalize writes four things: the files row for the generated audio,
+// the book's duration and chapter list, the run, and each segment's
+// offset. Deleting the run took two of them — the segments cascade — so
+// the files row survived pointing at bytes that were about to go, and
+// the reader kept finding a chapter list for a narration that no longer
+// existed (#208).
+func TestDeleteNarrationUndoesEverythingFinalizeWrote(t *testing.T) {
+	t.Parallel()
+
+	fileID := "file-1"
+	var order []string
+	store := &fakeAudiobookStore{run: model.Audiobook{
+		BookID: "b1", State: model.AudiobookReady, FileID: &fileID,
+	}}
+	store.onDelete = func() { order = append(order, "row") }
+	artifacts := &recordingArtifacts{order: &order}
+
+	svc := NewAudiobookService(store, nil, &recordingEnqueuer{}).
+		WithNarrationArtifacts(artifacts).
+		WithNarrationSweeper(func(context.Context, model.Book, model.Audiobook) error {
+			order = append(order, "bytes")
+			return nil
+		})
+
+	if err := svc.DeleteNarration(context.Background(), narratableBook()); err != nil {
+		t.Fatalf("DeleteNarration: %v", err)
+	}
+
+	if len(artifacts.deletedFiles) != 1 || artifacts.deletedFiles[0] != fileID {
+		t.Errorf("deleted files rows %v, want the one the run pointed at", artifacts.deletedFiles)
+	}
+	if len(artifacts.clearedAudio) != 1 {
+		t.Errorf("cleared audio for %v, want the book — the reader still finds chapters otherwise",
+			artifacts.clearedAudio)
+	}
+	// The ordering invariant survives: the run row goes first, because it
+	// is what names the location everything after resolves.
+	if strings.Join(order, ",") != "row,file,audio,bytes" {
+		t.Errorf("order = %v, want the row first and the bytes last", order)
+	}
+}
+
+// A run that never finished has no files row to delete, and asking for
+// one would be a nil dereference.
+func TestDeleteNarrationSkipsTheFilesRowWhenTheRunNeverProducedOne(t *testing.T) {
+	t.Parallel()
+
+	var order []string
+	store := &fakeAudiobookStore{run: model.Audiobook{BookID: "b1", State: model.AudiobookFailed}}
+	artifacts := &recordingArtifacts{order: &order}
+
+	svc := NewAudiobookService(store, nil, &recordingEnqueuer{}).
+		WithNarrationArtifacts(artifacts)
+
+	if err := svc.DeleteNarration(context.Background(), narratableBook()); err != nil {
+		t.Fatalf("DeleteNarration: %v", err)
+	}
+
+	if len(artifacts.deletedFiles) != 0 {
+		t.Errorf("deleted %v, want none — the run never produced a files row", artifacts.deletedFiles)
+	}
+	if len(artifacts.clearedAudio) != 1 {
+		t.Error("the book's audio fields were left set")
+	}
+}

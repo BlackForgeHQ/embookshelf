@@ -104,6 +104,7 @@ type AudiobookService struct {
 	settings       func(context.Context) (repo.AudiobookConfig, error)
 	hash           func(context.Context, model.Book) []byte
 	sweepNarration func(ctx context.Context, book model.Book, run model.Audiobook) error
+	artifacts      narrationArtifacts
 }
 
 // StagingSweeper discards a run's staged segments.

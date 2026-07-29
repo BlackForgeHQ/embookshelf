@@ -387,6 +387,7 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 			}
 			return handle.PrimaryContentHash(ctx, book)
 		}).
+		WithNarrationArtifacts(service.RepoNarrationArtifacts{Files: fileRepo, Books: bookRepo}).
 		WithNarrationSweeper(func(ctx context.Context, book model.Book, run model.Audiobook) error {
 			if run.FileID == nil {
 				return nil

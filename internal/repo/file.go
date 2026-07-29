@@ -199,6 +199,14 @@ func (r *FileRepo) ClearMissing(ctx context.Context, fileID string) error {
 
 // DeleteMissingOlderThan purges rows whose missing_since is more
 // than ttl ago. Returns the count deleted. Rows where missing_since
+// Delete removes one files row. Used when the artifact it names is
+// deliberately discarded — today only a narration, whose bytes go with
+// it (#208).
+func (r *FileRepo) Delete(ctx context.Context, fileID string) error {
+	_, err := r.db.SQL.ExecContext(ctx, `DELETE FROM files WHERE id = $1`, fileID)
+	return err
+}
+
 // IS NULL are not affected.
 func (r *FileRepo) DeleteMissingOlderThan(ctx context.Context, ttl time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-ttl)
