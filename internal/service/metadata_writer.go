@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -285,7 +286,42 @@ func (w *MetadataWriter) folderDelta(b model.Book) (changed bool, oldFolder, new
 		oldFolder = *b.FolderPath
 	}
 	newFolder = filepath.Join(layout.SanitizeAuthor(b.Author), layout.SanitizeTitle(b.Title))
-	return oldFolder != newFolder, oldFolder, newFolder
+
+	// No folder at all is the flat-layout book ADR-0003 §5 migrates
+	// lazily, and the rename step is what performs that migration.
+	if oldFolder == "" {
+		return true, oldFolder, newFolder
+	}
+
+	// Not a plain inequality. A book whose folder took a collision
+	// suffix at approve — "Author/Title (2)", because another book
+	// sanitized to the same path — differs from the computed target on
+	// every edit, so a plain comparison scheduled a rename for an edit
+	// that changed only the description, walked the folder to (3), and
+	// to (4) on the next save (#211).
+	return !folderMatches(oldFolder, newFolder), oldFolder, newFolder
+}
+
+// collisionSuffix matches the " (2)", " (3)" … the placer appends when
+// two books sanitize to the same folder (uniqueDirectory).
+var collisionSuffix = regexp.MustCompile(`^(.*) \(\d+\)$`)
+
+// folderMatches reports whether folder is where this author and title
+// belong, allowing for the collision suffix.
+//
+// The suffix is part of the placer's naming, not part of the book's
+// identity: two books can legitimately share an author and title, and
+// the one that lost the race keeps its suffix for life. Reading it as a
+// difference is what produced the churn.
+func folderMatches(folder, ideal string) bool {
+	if folder == ideal {
+		return true
+	}
+	dir, base := filepath.Dir(folder), filepath.Base(folder)
+	if m := collisionSuffix.FindStringSubmatch(base); m != nil {
+		return filepath.Join(dir, m[1]) == ideal
+	}
+	return false
 }
 
 // renameFolder dispatches the post-DB rename step by backend kind.

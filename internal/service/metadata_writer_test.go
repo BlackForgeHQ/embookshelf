@@ -1052,3 +1052,108 @@ func TestMetadataWriter_LocalLibrary_ResolvesSidecarAgainstTheLibraryRoot(t *tes
 			"LocalFS writes at the filesystem root", got, want)
 	}
 }
+
+// A folder rename must follow from the author or the title changing.
+// What was computed instead was "does the current folder differ from the
+// sanitized author-and-title" — the same predicate only for a book whose
+// folder is exactly that.
+//
+// Approve does not guarantee it: when two books sanitize to the same
+// path the placer appends a collision suffix, so the folder is
+// "Author/Title (2)" while the computed target is "Author/Title". They
+// differ, so the rename fired on every edit — including one that changed
+// only the description — and walked the folder to (3), then (4), with a
+// files row rewrite each time (#211).
+func TestFolderDeltaIgnoresTheCollisionSuffix(t *testing.T) {
+	t.Parallel()
+
+	var w MetadataWriter
+	suffixed := "Frank Herbert/Dune (2)"
+	book := model.Book{
+		ID: "b1", Author: "Frank Herbert", Title: "Dune", FolderPath: &suffixed,
+	}
+
+	changed, oldFolder, _ := w.folderDelta(book)
+
+	if changed {
+		t.Errorf("folderDelta reported a change for %q on an edit that touched neither "+
+			"author nor title — the folder walks to (3) on the next save", oldFolder)
+	}
+}
+
+// The rename still has to fire when the title really did change, suffix
+// or not.
+func TestFolderDeltaReportsARealTitleChange(t *testing.T) {
+	t.Parallel()
+
+	var w MetadataWriter
+	suffixed := "Frank Herbert/Dune (2)"
+	book := model.Book{
+		ID: "b1", Author: "Frank Herbert", Title: "Dune Messiah", FolderPath: &suffixed,
+	}
+
+	changed, _, newFolder := w.folderDelta(book)
+
+	if !changed {
+		t.Error("a retitled book did not schedule a rename")
+	}
+	if newFolder != filepath.Join("Frank Herbert", "Dune Messiah") {
+		t.Errorf("newFolder = %q, want the sanitized author and title", newFolder)
+	}
+}
+
+// A book with no folder at all is the flat-layout case ADR-0003 §5
+// migrates lazily, and it must keep migrating.
+func TestFolderDeltaStillMigratesAFlatLayoutBook(t *testing.T) {
+	t.Parallel()
+
+	var w MetadataWriter
+	book := model.Book{ID: "b1", Author: "Frank Herbert", Title: "Dune"}
+
+	if changed, _, _ := w.folderDelta(book); !changed {
+		t.Error("a book with no folder was not scheduled for the flat-layout migration")
+	}
+}
+
+// The whole write, not just the predicate: a book whose folder carries a
+// collision suffix keeps it across an edit that changed only the
+// description, and no rename is attempted (#211).
+func TestMetadataWriter_SuffixedFolderSurvivesAnUnrelatedEdit(t *testing.T) {
+	libRoot := t.TempDir()
+	suffixed := "Frank Herbert/Dune (2)"
+	if err := os.MkdirAll(filepath.Join(libRoot, filepath.FromSlash(suffixed)), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	rootedAtSlash, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	handle := &LibraryHandle{
+		Library: model.Library{ID: "lib1", Path: libRoot, Root: &libRoot},
+		Storage: rootedAtSlash,
+	}
+	mw := NewMetadataWriter(MetadataWriterDeps{
+		Books:    &fakeBookWriter{},
+		LibStore: &fakeLibStore{handle: handle},
+		Sidecar:  &recordingSidecarWriter{},
+	})
+
+	out, err := mw.Write(context.Background(), model.Book{
+		ID: "b1", LibraryID: "lib1", Author: "Frank Herbert", Title: "Dune",
+		Description: "edited", Format: "PDF", FolderPath: &suffixed,
+	}, TriggerManualEdit)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if out.FolderRenamed {
+		t.Error("an edit that touched neither author nor title renamed the folder")
+	}
+	if _, statErr := os.Stat(filepath.Join(libRoot, "Frank Herbert", "Dune (3)")); statErr == nil {
+		t.Error("the folder walked to (3) — the churn this fixes")
+	}
+	if _, statErr := os.Stat(filepath.Join(libRoot, filepath.FromSlash(suffixed))); statErr != nil {
+		t.Errorf("the book's own folder is gone: %v", statErr)
+	}
+}
