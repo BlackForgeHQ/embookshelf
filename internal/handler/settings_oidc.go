@@ -3,6 +3,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -90,7 +91,7 @@ func (h *Handler) SettingsOIDCGet(c *gin.Context) {
 // row plus the shared flags. ClientSecret is preserved when absent —
 // an admin editing the client ID shouldn't have to re-enter the secret.
 func (h *Handler) SettingsOIDCUpdate(c *gin.Context) {
-	if h.appSettings == nil {
+	if h.appSettings == nil || h.oidcSettings == nil {
 		writeError(c, http.StatusServiceUnavailable, "settings repo unavailable")
 		return
 	}
@@ -100,108 +101,24 @@ func (h *Handler) SettingsOIDCUpdate(c *gin.Context) {
 	}
 	ctx := c.Request.Context()
 
-	// Load current rows to preserve secrets.
-	existingGoogle, err := h.appSettings.GetGoogle(ctx)
+	// The keep-versus-clear contract for secrets stays here, with the
+	// wire shape that expresses it: a blank field with its "set" flag
+	// still true means "keep what is stored". What the service receives
+	// is already-resolved plaintext (ADR-0010).
+	sub, err := h.resolveOIDCSubmission(ctx, body)
 	if err != nil {
-		writeServerError(c, "oidc existing google", err)
-		return
-	}
-	existingGitHub, err := h.appSettings.GetGitHub(ctx)
-	if err != nil {
-		writeServerError(c, "oidc existing github", err)
-		return
-	}
-	existingGeneric, err := h.appSettings.GetGenericOIDC(ctx)
-	if err != nil {
-		writeServerError(c, "oidc existing generic", err)
+		writeServerError(c, "oidc existing rows", err)
 		return
 	}
 
-	google := repo.OAuthPresetConfig{
-		Enabled:      body.Google.Enabled,
-		ClientID:     strings.TrimSpace(body.Google.ClientID),
-		ClientSecret: resolveSecret(body.Google.ClientSecret, body.Google.ClientSecretSet, existingGoogle.ClientSecret),
-	}
-	github := repo.OAuthPresetConfig{
-		Enabled:      body.GitHub.Enabled,
-		ClientID:     strings.TrimSpace(body.GitHub.ClientID),
-		ClientSecret: resolveSecret(body.GitHub.ClientSecret, body.GitHub.ClientSecretSet, existingGitHub.ClientSecret),
-	}
-	generic := repo.GenericOIDCConfig{
-		Enabled:      body.Generic.Enabled,
-		ProviderName: strings.TrimSpace(body.Generic.ProviderName),
-		ClientID:     strings.TrimSpace(body.Generic.ClientID),
-		ClientSecret: resolveSecret(body.Generic.ClientSecret, body.Generic.ClientSecretSet, existingGeneric.ClientSecret),
-		IssuerURI:    strings.TrimSpace(body.Generic.IssuerURI),
-		Scopes:       strings.TrimSpace(body.Generic.Scopes),
-		ClaimMapping: body.Generic.ClaimMapping,
-	}
-	if generic.Scopes == "" {
-		generic.Scopes = "openid profile email"
-	}
-	if generic.ClaimMapping == (repo.ClaimMapping{}) {
-		generic.ClaimMapping = repo.DefaultGenericOIDCConfig().ClaimMapping
-	}
-	if generic.ClaimMapping.Username == "" {
-		generic.ClaimMapping.Username = "preferred_username"
-	}
-	if generic.ClaimMapping.Email == "" {
-		generic.ClaimMapping.Email = "email"
-	}
-	if generic.ClaimMapping.Name == "" {
-		generic.ClaimMapping.Name = "name"
-	}
-
-	// Validate per-provider enable transitions.
-	if google.Enabled {
-		if google.ClientID == "" || google.ClientSecret == "" {
-			writeError(c, http.StatusBadRequest, "Google: clientId and clientSecret are required to enable")
-			return
+	if err := h.oidcSettings.Apply(ctx, sub); err != nil {
+		switch {
+		case errors.Is(err, service.ErrOIDCIncomplete),
+			errors.Is(err, service.ErrOIDCForceOnlyBlocked):
+			writeError(c, http.StatusBadRequest, err.Error())
+		default:
+			writeServerError(c, "oidc settings apply", err)
 		}
-	}
-	if github.Enabled {
-		if github.ClientID == "" || github.ClientSecret == "" {
-			writeError(c, http.StatusBadRequest, "GitHub: clientId and clientSecret are required to enable")
-			return
-		}
-	}
-	if generic.Enabled {
-		if generic.ClientID == "" || generic.IssuerURI == "" {
-			writeError(c, http.StatusBadRequest, "Generic OIDC: clientId and issuerUri are required to enable")
-			return
-		}
-	}
-
-	if err := h.appSettings.SetGoogle(ctx, google); err != nil {
-		writeServerError(c, "oidc save google", err)
-		return
-	}
-	if err := h.appSettings.SetGitHub(ctx, github); err != nil {
-		writeServerError(c, "oidc save github", err)
-		return
-	}
-	if err := h.appSettings.SetGenericOIDC(ctx, generic); err != nil {
-		writeServerError(c, "oidc save generic", err)
-		return
-	}
-	if err := h.appSettings.SetOIDCAutoProvision(ctx, body.AutoProvision); err != nil {
-		writeServerError(c, "oidc save auto", err)
-		return
-	}
-
-	// Force-only guard: don't let an admin lock themselves out.
-	if h.oidc != nil {
-		if err := h.oidc.ValidateForceOnlyTransition(ctx, body.ForceOnly); err != nil {
-			if errors.Is(err, service.ErrOIDCForceOnlyBlocked) {
-				writeError(c, http.StatusBadRequest, err.Error())
-				return
-			}
-			writeServerError(c, "oidc force-only validate", err)
-			return
-		}
-	}
-	if err := h.appSettings.SetBool(ctx, repo.SettingOIDCForceOnlyMode, body.ForceOnly); err != nil {
-		writeServerError(c, "oidc save force", err)
 		return
 	}
 
@@ -209,6 +126,55 @@ func (h *Handler) SettingsOIDCUpdate(c *gin.Context) {
 		h.oidc.Invalidate()
 	}
 	h.SettingsOIDCGet(c)
+}
+
+// resolveOIDCSubmission turns the wire shape into the submission the
+// service applies, reading the stored rows only to resolve secrets the
+// client asked to keep.
+func (h *Handler) resolveOIDCSubmission(
+	ctx context.Context,
+	body oidcSettingsDTO,
+) (service.OIDCSubmission, error) {
+	var zero service.OIDCSubmission
+
+	existingGoogle, err := h.appSettings.GetGoogle(ctx)
+	if err != nil {
+		return zero, err
+	}
+	existingGitHub, err := h.appSettings.GetGitHub(ctx)
+	if err != nil {
+		return zero, err
+	}
+	existingGeneric, err := h.appSettings.GetGenericOIDC(ctx)
+	if err != nil {
+		return zero, err
+	}
+
+	return service.OIDCSubmission{
+		Google: repo.OAuthPresetConfig{
+			Enabled:      body.Google.Enabled,
+			ClientID:     strings.TrimSpace(body.Google.ClientID),
+			ClientSecret: resolveSecret(body.Google.ClientSecret, body.Google.ClientSecretSet, existingGoogle.ClientSecret),
+		},
+		GitHub: repo.OAuthPresetConfig{
+			Enabled:      body.GitHub.Enabled,
+			ClientID:     strings.TrimSpace(body.GitHub.ClientID),
+			ClientSecret: resolveSecret(body.GitHub.ClientSecret, body.GitHub.ClientSecretSet, existingGitHub.ClientSecret),
+		},
+		Generic: repo.GenericOIDCConfig{
+			Enabled:      body.Generic.Enabled,
+			ProviderName: strings.TrimSpace(body.Generic.ProviderName),
+			ClientID:     strings.TrimSpace(body.Generic.ClientID),
+			ClientSecret: resolveSecret(body.Generic.ClientSecret, body.Generic.ClientSecretSet, existingGeneric.ClientSecret),
+			IssuerURI:    strings.TrimSpace(body.Generic.IssuerURI),
+			Scopes:       strings.TrimSpace(body.Generic.Scopes),
+			// Defaults are the Setting declaration's, so a row written by
+			// anything other than this endpoint gets them too (#195).
+			ClaimMapping: body.Generic.ClaimMapping,
+		},
+		AutoProvision: body.AutoProvision,
+		ForceOnly:     body.ForceOnly,
+	}, nil
 }
 
 // SettingsOIDCTest runs TestConnection for one provider at a time. The

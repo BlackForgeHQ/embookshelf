@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/blackforge/embookshelf/internal/crypto"
@@ -152,6 +153,38 @@ func (r *AppSettingsRepo) SetRaw(ctx context.Context, name string, value json.Ra
 	return err
 }
 
+// SetRows upserts several settings in one transaction.
+//
+// All or nothing, which is the point: a submission that configures three
+// providers, an auto-provision policy and a force-only flag is one
+// decision, and landing part of it leaves an instance in a state nobody
+// asked for — including, before this, one where the lockout guard
+// refused the last row after the first four had already been written
+// (#195).
+func (r *AppSettingsRepo) SetRows(ctx context.Context, rows []SettingRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	tx, err := r.db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const q = `
+		INSERT INTO app_settings (name, value, updated_at)
+		VALUES ($1, $2::jsonb, now())
+		ON CONFLICT (name) DO UPDATE
+		SET value = EXCLUDED.value, updated_at = now()
+	`
+	for _, row := range rows {
+		if _, err := tx.ExecContext(ctx, q, row.Name, string(row.Value)); err != nil {
+			return fmt.Errorf("write setting %s: %w", row.Name, err)
+		}
+	}
+	return tx.Commit()
+}
+
 // GetBool returns (false, nil) when the row is missing so callers don't
 // need to distinguish between "never set" and "explicitly false" for
 // the common toggle case.
@@ -182,11 +215,34 @@ func (r *AppSettingsRepo) SetBool(ctx context.Context, name string, v bool) erro
 var genericOIDCSetting = Setting[GenericOIDCConfig]{
 	Key:     SettingOIDCGeneric,
 	Default: DefaultGenericOIDCConfig,
+	// The defaults are here rather than at the write site, so a reader
+	// that never went through the settings endpoint gets them too — the
+	// login flow reading a row an operator seeded by hand, say. They used
+	// to live in the HTTP handler, which meant an empty scope list was
+	// only ever filled in for callers who arrived over HTTP (#195).
 	Normalize: func(c GenericOIDCConfig) GenericOIDCConfig {
 		c.ProviderName = strings.TrimSpace(c.ProviderName)
 		c.ClientID = strings.TrimSpace(c.ClientID)
 		c.IssuerURI = strings.TrimRight(strings.TrimSpace(c.IssuerURI), "/")
 		c.Scopes = strings.TrimSpace(c.Scopes)
+
+		d := DefaultGenericOIDCConfig()
+		if c.Scopes == "" {
+			c.Scopes = d.Scopes
+		}
+		// Claim mapping is three independent fields: a submission that
+		// names one and leaves the others blank should get the defaults
+		// for the two it did not mention, not a login that reads an
+		// empty claim name.
+		if c.ClaimMapping.Username == "" {
+			c.ClaimMapping.Username = d.ClaimMapping.Username
+		}
+		if c.ClaimMapping.Email == "" {
+			c.ClaimMapping.Email = d.ClaimMapping.Email
+		}
+		if c.ClaimMapping.Name == "" {
+			c.ClaimMapping.Name = d.ClaimMapping.Name
+		}
 		return c
 	},
 	Secrets: func(c *GenericOIDCConfig) []*string { return []*string{&c.ClientSecret} },
@@ -252,6 +308,51 @@ func (r *AppSettingsRepo) GetOIDCAutoProvision(ctx context.Context) (OIDCAutoPro
 
 func (r *AppSettingsRepo) SetOIDCAutoProvision(ctx context.Context, ap OIDCAutoProvisionDetails) error {
 	return autoProvisionSetting.Set(ctx, r, ap)
+}
+
+// OIDCRows is one settings submission's five rows, as plaintext values.
+// Named here rather than in the service so the marshalling, the
+// normalisation and the encryption stay with the Setting declarations
+// that own them.
+type OIDCRows struct {
+	Google        OAuthPresetConfig
+	GitHub        OAuthPresetConfig
+	Generic       GenericOIDCConfig
+	AutoProvision OIDCAutoProvisionDetails
+	ForceOnly     bool
+}
+
+// PrepareOIDCSettingRows normalizes, validates and encrypts every row a
+// submission touches, without writing any of them.
+//
+// Preparing before writing is what lets the five land in one
+// transaction: an encryption failure on the third row now costs the
+// whole submission rather than leaving the first two applied (#195).
+func (r *AppSettingsRepo) PrepareOIDCSettingRows(in OIDCRows) ([]SettingRow, error) {
+	rows := make([]SettingRow, 0, 5)
+	google, err := googleSetting.Prepare(r, in.Google)
+	if err != nil {
+		return nil, err
+	}
+	github, err := githubSetting.Prepare(r, in.GitHub)
+	if err != nil {
+		return nil, err
+	}
+	generic, err := genericOIDCSetting.Prepare(r, in.Generic)
+	if err != nil {
+		return nil, err
+	}
+	auto, err := autoProvisionSetting.Prepare(r, in.AutoProvision)
+	if err != nil {
+		return nil, err
+	}
+	force, err := json.Marshal(in.ForceOnly)
+	if err != nil {
+		return nil, err
+	}
+	rows = append(rows, google, github, generic, auto,
+		SettingRow{Name: SettingOIDCForceOnlyMode, Value: force})
+	return rows, nil
 }
 
 // SeedOIDCIfAbsent writes defaults for any OIDC setting still missing

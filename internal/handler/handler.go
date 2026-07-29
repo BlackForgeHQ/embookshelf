@@ -35,16 +35,18 @@ type Handler struct {
 	guideRunner   *service.GuideRunner
 	audiobooks    *service.AudiobookService
 	audiobookRepo *repo.BookAudiobookRepo
-	stats         *service.StatsService
-	readingStats  *service.ReadingSessionService
-	devices       *service.DeviceService
-	oidc          *service.OIDCService
-	identities    *repo.IdentityRepo
-	search        *service.SearchService
-	appSettings   *repo.AppSettingsRepo
-	covers        *coverstore.Store
-	hub           *sse.Hub
-	queue         queue.Client
+	// oidcSettings applies a settings submission as one decision (#195).
+	oidcSettings *service.OIDCSettingsService
+	stats        *service.StatsService
+	readingStats *service.ReadingSessionService
+	devices      *service.DeviceService
+	oidc         *service.OIDCService
+	identities   *repo.IdentityRepo
+	search       *service.SearchService
+	appSettings  *repo.AppSettingsRepo
+	covers       *coverstore.Store
+	hub          *sse.Hub
+	queue        queue.Client
 	// libStore powers the file-serve path's BookSource decision
 	// (presign vs. local) and any other library-aware lookup. nil on
 	// installs that haven't configured a storage backend — serveBookFile
@@ -248,9 +250,30 @@ func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailD
 		cipher: e.cipher, emailTpl: e.emailTpl,
 
 		libStore: opts.LibStore, oidc: opts.OIDC, identities: opts.Identities,
-		covers: opts.Covers, queue: opts.Queue,
+		oidcSettings: newOIDCSettingsService(a.appSettings, opts.OIDC),
+		covers:       opts.Covers, queue: opts.Queue,
 		fwdAuthHolder: opts.FwdAuthHolder, fwdAuth: opts.FwdAuth,
 	}
+}
+
+// newOIDCSettingsService wires the module that applies an OIDC settings
+// submission, or nothing when there is no settings repo to write to.
+//
+// The guard is passed as a typed nil-check rather than straight through:
+// a nil *OIDCService in an interface field is not a nil interface, and
+// the module would call it.
+func newOIDCSettingsService(
+	appSettings *repo.AppSettingsRepo,
+	oidc *service.OIDCService,
+) *service.OIDCSettingsService {
+	if appSettings == nil {
+		return nil
+	}
+	rows := service.AppSettingsOIDCRows{Repo: appSettings}
+	if oidc == nil {
+		return service.NewOIDCSettingsService(rows, nil)
+	}
+	return service.NewOIDCSettingsService(rows, oidc)
 }
 
 // emailEnabled reports whether the email subsystem is wired and on.

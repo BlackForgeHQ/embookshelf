@@ -66,24 +66,46 @@ func (s Setting[T]) Get(ctx context.Context, r *AppSettingsRepo) (T, error) {
 // Set normalizes, validates, encrypts declared secrets, and upserts the
 // row. The caller's value is untouched — encryption happens on a copy.
 func (s Setting[T]) Set(ctx context.Context, r *AppSettingsRepo, v T) error {
+	row, err := s.Prepare(r, v)
+	if err != nil {
+		return err
+	}
+	return r.SetRaw(ctx, row.Name, row.Value)
+}
+
+// Prepare does everything Set does except the write: normalize,
+// validate, encrypt, marshal.
+//
+// Split out so several settings can be written in one transaction. The
+// OIDC settings submission is five rows, and applying four of them
+// before a fifth is refused leaves an instance configured half the way
+// an admin asked for (#195).
+func (s Setting[T]) Prepare(r *AppSettingsRepo, v T) (SettingRow, error) {
 	if s.Normalize != nil {
 		v = s.Normalize(v)
 	}
 	if s.Validate != nil {
 		if err := s.Validate(v); err != nil {
-			return err
+			return SettingRow{}, err
 		}
 	}
 	if s.Secrets != nil {
 		if err := crypto.TransformSlots(r.cipher.Encrypt, s.Secrets(&v)); err != nil {
-			return fmt.Errorf("encrypt %s secrets: %w", s.Key, err)
+			return SettingRow{}, fmt.Errorf("encrypt %s secrets: %w", s.Key, err)
 		}
 	}
 	b, err := json.Marshal(v)
 	if err != nil {
-		return err
+		return SettingRow{}, err
 	}
-	return r.SetRaw(ctx, s.Key, b)
+	return SettingRow{Name: s.Key, Value: b}, nil
+}
+
+// SettingRow is one prepared app_settings row: the key, and the JSON
+// that is ready to land in it.
+type SettingRow struct {
+	Name  string
+	Value json.RawMessage
 }
 
 // SeedIfAbsent writes the default row when none exists, so the admin
