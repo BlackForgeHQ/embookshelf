@@ -30,8 +30,7 @@ func newAdvanceHarness(t *testing.T, run model.Audiobook, cov model.AudiobookCov
 		store: &fakeAudiobookStore{run: run, coverage: cov},
 		enq:   &recordingEnqueuer{},
 	}
-	h.svc = NewAudiobookService(h.store, nil, h.enq).
-		WithPublisher(func(bookID string) { h.published = append(h.published, bookID) })
+	h.svc = NewAudiobookService(AudiobookDeps{Store: h.store, Enqueue: h.enq, Publish: func(bookID string) { h.published = append(h.published, bookID) }})
 	return h
 }
 

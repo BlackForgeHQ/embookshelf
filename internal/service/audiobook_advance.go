@@ -30,7 +30,7 @@ func (s *AudiobookService) AdvanceAfterSegment(
 	seq int,
 	res model.SegmentResult,
 ) error {
-	outcome, err := s.store.RecordSegment(ctx, bookID, seq, res)
+	outcome, err := s.d.Store.RecordSegment(ctx, bookID, seq, res)
 	if err != nil {
 		return fmt.Errorf("record segment %d: %w", seq, err)
 	}
@@ -90,15 +90,6 @@ func (s *AudiobookService) applyNext(
 	return "", nil
 }
 
-// publish emits a run's change to whoever is watching. A missing
-// publisher is a deployment with no SSE hub, not an error worth a branch
-// at each call.
-func (s *AudiobookService) publish(bookID string) {
-	if s.pub != nil {
-		s.pub(bookID)
-	}
-}
-
 // FailRun is the one place a run is marked failed.
 //
 // Four writers reached this outcome before: the repo inside its
@@ -118,13 +109,13 @@ func (s *AudiobookService) publish(bookID string) {
 // segment worker handed an error would make River retry audio it has
 // already staged and paid for.
 func (s *AudiobookService) FailRun(ctx context.Context, bookID, msg string) error {
-	moved, err := s.store.FailRun(ctx, bookID, msg)
+	moved, err := s.d.Store.FailRun(ctx, bookID, msg)
 	if err != nil {
 		slog.Warn("audiobook: mark run failed", "book", bookID, "err", err)
 		return nil
 	}
 	if moved {
-		s.publish(bookID)
+		s.d.Publish(bookID)
 	}
 	return nil
 }

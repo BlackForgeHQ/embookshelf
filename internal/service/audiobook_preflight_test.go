@@ -30,9 +30,7 @@ func enabledSettings() repo.AudiobookConfig {
 
 func preflightService(t *testing.T, cfg repo.AudiobookConfig, hash []byte) *AudiobookService {
 	t.Helper()
-	return NewAudiobookService(&fakeAudiobookStore{}, &epubOpener{src: buildTestEPUB(t, "text")}, &recordingEnqueuer{}).
-		WithSettings(func(context.Context) (repo.AudiobookConfig, error) { return cfg, nil }).
-		WithContentHash(func(context.Context, model.Book) []byte { return hash })
+	return NewAudiobookService(AudiobookDeps{Store: &fakeAudiobookStore{}, Books: &epubOpener{src: buildTestEPUB(t, "text")}, Enqueue: &recordingEnqueuer{}, Settings: func(context.Context) (repo.AudiobookConfig, error) { return cfg, nil }, ContentHash: func(context.Context, model.Book) []byte { return hash }})
 }
 
 // The run records the engine, voice, model and price the settings row
@@ -113,7 +111,7 @@ func TestPreflightRefusesABookWithNoTextToRead(t *testing.T) {
 func TestPreflightRefusesWhenNothingIsConfigured(t *testing.T) {
 	t.Parallel()
 
-	svc := NewAudiobookService(&fakeAudiobookStore{}, nil, &recordingEnqueuer{})
+	svc := NewAudiobookService(AudiobookDeps{Store: &fakeAudiobookStore{}, Enqueue: &recordingEnqueuer{}})
 
 	_, err := svc.Preflight(context.Background(), narratableBook(), GenerateOverride{})
 
@@ -152,7 +150,7 @@ func TestReportMarksANarrationStaleAgainstANewerFile(t *testing.T) {
 	t.Parallel()
 
 	svc := preflightService(t, enabledSettings(), []byte{0x02})
-	svc.store.(*fakeAudiobookStore).run = model.Audiobook{
+	svc.d.Store.(*fakeAudiobookStore).run = model.Audiobook{
 		BookID: "b1", State: model.AudiobookReady, SourceContentHash: []byte{0x01},
 	}
 
@@ -179,7 +177,7 @@ func TestReportDoesNotGuessStalenessWithoutBothHashes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := preflightService(t, enabledSettings(), tc.current)
-			svc.store.(*fakeAudiobookStore).run = model.Audiobook{
+			svc.d.Store.(*fakeAudiobookStore).run = model.Audiobook{
 				BookID: "b1", State: model.AudiobookReady, SourceContentHash: tc.run,
 			}
 
@@ -206,11 +204,13 @@ func TestDeleteNarrationResolvesTheLocationBeforeTheRowGoes(t *testing.T) {
 	var order []string
 	store := &fakeAudiobookStore{run: model.Audiobook{BookID: "b1", State: model.AudiobookReady}}
 	store.onDelete = func() { order = append(order, "row") }
-	svc := NewAudiobookService(store, nil, &recordingEnqueuer{}).
-		WithNarrationSweeper(func(context.Context, model.Book, model.Audiobook) error {
+	svc := NewAudiobookService(AudiobookDeps{
+		Store: store, Enqueue: &recordingEnqueuer{},
+		SweepNarration: func(context.Context, model.Book, model.Audiobook) error {
 			order = append(order, "bytes")
 			return nil
-		})
+		},
+	})
 
 	if err := svc.DeleteNarration(context.Background(), narratableBook()); err != nil {
 		t.Fatalf("DeleteNarration: %v", err)
@@ -228,10 +228,12 @@ func TestDeleteNarrationSurvivesAByteCleanupFailure(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeAudiobookStore{run: model.Audiobook{BookID: "b1", State: model.AudiobookReady}}
-	svc := NewAudiobookService(store, nil, &recordingEnqueuer{}).
-		WithNarrationSweeper(func(context.Context, model.Book, model.Audiobook) error {
+	svc := NewAudiobookService(AudiobookDeps{
+		Store: store, Enqueue: &recordingEnqueuer{},
+		SweepNarration: func(context.Context, model.Book, model.Audiobook) error {
 			return errors.New("backend refused")
-		})
+		},
+	})
 
 	if err := svc.DeleteNarration(context.Background(), narratableBook()); err != nil {
 		t.Errorf("DeleteNarration = %v, want nil — the row is gone and the bytes are the sweeper's", err)
@@ -247,7 +249,7 @@ func TestDeleteNarrationReportsAMissingRun(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeAudiobookStore{getErr: repo.ErrNotFound}
-	svc := NewAudiobookService(store, nil, &recordingEnqueuer{})
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Enqueue: &recordingEnqueuer{}})
 
 	err := svc.DeleteNarration(context.Background(), narratableBook())
 
@@ -296,12 +298,14 @@ func TestDeleteNarrationUndoesEverythingFinalizeWrote(t *testing.T) {
 	store.onDelete = func() { order = append(order, "row") }
 	artifacts := &recordingArtifacts{order: &order}
 
-	svc := NewAudiobookService(store, nil, &recordingEnqueuer{}).
-		WithNarrationArtifacts(artifacts).
-		WithNarrationSweeper(func(context.Context, model.Book, model.Audiobook) error {
+	svc := NewAudiobookService(AudiobookDeps{
+		Store: store, Enqueue: &recordingEnqueuer{},
+		Artifacts: artifacts,
+		SweepNarration: func(context.Context, model.Book, model.Audiobook) error {
 			order = append(order, "bytes")
 			return nil
-		})
+		},
+	})
 
 	if err := svc.DeleteNarration(context.Background(), narratableBook()); err != nil {
 		t.Fatalf("DeleteNarration: %v", err)
@@ -330,8 +334,9 @@ func TestDeleteNarrationSkipsTheFilesRowWhenTheRunNeverProducedOne(t *testing.T)
 	store := &fakeAudiobookStore{run: model.Audiobook{BookID: "b1", State: model.AudiobookFailed}}
 	artifacts := &recordingArtifacts{order: &order}
 
-	svc := NewAudiobookService(store, nil, &recordingEnqueuer{}).
-		WithNarrationArtifacts(artifacts)
+	svc := NewAudiobookService(AudiobookDeps{
+		Store: store, Enqueue: &recordingEnqueuer{}, Artifacts: artifacts,
+	})
 
 	if err := svc.DeleteNarration(context.Background(), narratableBook()); err != nil {
 		t.Fatalf("DeleteNarration: %v", err)

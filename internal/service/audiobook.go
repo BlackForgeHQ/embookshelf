@@ -11,6 +11,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // ErrNotNarratable is returned for a book whose format has no text to
@@ -88,23 +89,9 @@ type AudiobookEstimate struct {
 // one River job per segment, so a failure costs one segment rather than a
 // book (ADR-0028 §3).
 type AudiobookService struct {
-	store audiobookStore
-	books bookSourceOpener
-	// enq is an ordinary jobs.Enqueuer: internal/queue imports this
-	// package to build its worker registry, so this package depends on
-	// the leaf interface rather than on internal/queue itself, and gets
-	// either a live client or a jobs.Deferred standing in for one.
-	enq   jobs.Enqueuer
-	sweep StagingSweeper
-	// pub emits a run's change over SSE. Optional: a deployment with no
-	// hub still runs, it just does not push.
-	pub func(bookID string)
-	// settings, hash and sweepNarration are what preflight, staleness and
-	// delete need to be this service's rather than the handler's (#191).
-	settings       func(context.Context) (repo.AudiobookConfig, error)
-	hash           func(context.Context, model.Book) []byte
-	sweepNarration func(ctx context.Context, book model.Book, run model.Audiobook) error
-	artifacts      narrationArtifacts
+	// d is complete by construction: NewAudiobookService fills every
+	// field, so nothing below branches on a missing dependency.
+	d AudiobookDeps
 }
 
 // StagingSweeper discards a run's staged segments.
@@ -114,24 +101,99 @@ type AudiobookService struct {
 // whole lifecycle be exercised without either.
 type StagingSweeper func(bookID string)
 
-func NewAudiobookService(
-	store audiobookStore,
-	books bookSourceOpener,
-	enq jobs.Enqueuer,
-) *AudiobookService {
-	return &AudiobookService{store: store, books: books, enq: enq}
+// AudiobookDeps is everything the run service reaches for.
+//
+// One struct rather than three constructor arguments and six chained
+// setters. The setters bought partial construction for tests and charged
+// every field a nil branch at each use and its own answer to "what does
+// absent mean" — six answers to one question, none of them written down
+// together (#209). There is one production construction site and it
+// supplies all of them.
+//
+// Absence is now decided once, in newAudiobookService below, and every
+// use site can call the field.
+type AudiobookDeps struct {
+	Store audiobookStore
+	// Enqueue is an ordinary jobs.Enqueuer: internal/queue imports this
+	// package to build its worker registry, so this package depends on
+	// the leaf interface rather than on internal/queue itself, and gets
+	// either a live client or a jobs.Deferred standing in for one.
+	Enqueue jobs.Enqueuer
+	// Books yields a book's bytes. Absent, planning refuses — a narration
+	// cannot be split without the text.
+	Books bookSourceOpener
+	// Settings reads the AUDIOBOOK row, per call rather than captured, so
+	// an admin changing engine or voice takes effect on the next request
+	// instead of the next restart. Absent means the feature is not
+	// configured at all, which Preflight reports as such.
+	Settings func(context.Context) (repo.AudiobookConfig, error)
+	// Publish emits a run's change over SSE. Absent, transitions are
+	// silent: a deployment with no hub still runs, it just does not push.
+	Publish func(bookID string)
+	// SweepStaging discards a run's staged segments on cancel. Injected
+	// rather than done inline so this service keeps its property of
+	// touching neither storage nor the filesystem.
+	SweepStaging StagingSweeper
+	// ContentHash reads the book's current file hash, for provenance and
+	// the staleness comparison. Injected because it lives on the files
+	// row behind a library handle, which this service deliberately cannot
+	// reach (#191). Absent, a narration is never reported stale — the
+	// honest answer when the comparison never happened.
+	ContentHash func(context.Context, model.Book) []byte
+	// Artifacts removes what finalize wrote outside the run's own table.
+	Artifacts narrationArtifacts
+	// SweepNarration removes a finished narration's bytes.
+	SweepNarration func(ctx context.Context, book model.Book, run model.Audiobook) error
 }
 
-// WithPublisher wires the SSE notification a transition emits.
-func (s *AudiobookService) WithPublisher(pub func(bookID string)) *AudiobookService {
-	s.pub = pub
-	return s
+// noNarrationArtifacts stands in for a service constructed without them:
+// there is nothing outside the run's table to remove.
+type noNarrationArtifacts struct{}
+
+func (noNarrationArtifacts) DeleteFile(context.Context, string) error     { return nil }
+func (noNarrationArtifacts) ClearBookAudio(context.Context, string) error { return nil }
+
+// NewAudiobookService fills in what the caller left out, so that no use
+// site below has to ask whether a dependency is there.
+//
+// Each default is this module's single answer to "what does absent
+// mean", stated where the others are rather than at the six call sites
+// that used to each carry one.
+func NewAudiobookService(d AudiobookDeps) *AudiobookService {
+	if d.Publish == nil {
+		d.Publish = func(string) {}
+	}
+	if d.SweepStaging == nil {
+		d.SweepStaging = func(string) {}
+	}
+	if d.ContentHash == nil {
+		d.ContentHash = func(context.Context, model.Book) []byte { return nil }
+	}
+	if d.Settings == nil {
+		d.Settings = func(context.Context) (repo.AudiobookConfig, error) {
+			return repo.AudiobookConfig{}, ErrAudiobooksNotConfigured
+		}
+	}
+	if d.Books == nil {
+		d.Books = openerFunc(func(context.Context, model.Book) (storage.Source, error) {
+			return nil, errors.New("audiobook: no book opener configured")
+		})
+	}
+	if d.Artifacts == nil {
+		d.Artifacts = noNarrationArtifacts{}
+	}
+	if d.SweepNarration == nil {
+		d.SweepNarration = func(context.Context, model.Book, model.Audiobook) error { return nil }
+	}
+	return &AudiobookService{d: d}
 }
 
-// WithStagingSweeper wires the cleanup Cancel performs.
-func (s *AudiobookService) WithStagingSweeper(sweep StagingSweeper) *AudiobookService {
-	s.sweep = sweep
-	return s
+// openerFunc adapts a function to bookSourceOpener, for the refusing
+// default above.
+type openerFunc func(context.Context, model.Book) (storage.Source, error)
+
+func (f openerFunc) Open(ctx context.Context, book model.Book) (storage.Source, error) {
+	return f(ctx, book)
 }
 
 // Status reports a run and its Coverage, reconciling the two before it
@@ -153,11 +215,11 @@ func (s *AudiobookService) WithStagingSweeper(sweep StagingSweeper) *AudiobookSe
 // recovery, not the read — a status endpoint that 500s because finalize
 // could not be enqueued would hide the very progress it exists to show.
 func (s *AudiobookService) Status(ctx context.Context, bookID string) (model.Audiobook, model.AudiobookCoverage, error) {
-	run, err := s.store.GetByBookID(ctx, bookID)
+	run, err := s.d.Store.GetByBookID(ctx, bookID)
 	if err != nil {
 		return model.Audiobook{}, model.AudiobookCoverage{}, err
 	}
-	cov, err := s.store.Coverage(ctx, bookID)
+	cov, err := s.d.Store.Coverage(ctx, bookID)
 	if err != nil {
 		return model.Audiobook{}, model.AudiobookCoverage{}, err
 	}
@@ -183,7 +245,7 @@ func (s *AudiobookService) reconcile(ctx context.Context, run model.Audiobook, c
 }
 
 func (s *AudiobookService) dispatchFinalize(ctx context.Context, bookID string) error {
-	return s.enq.Enqueue(ctx, jobs.AudiobookFinalizeArgs{BookID: bookID})
+	return s.d.Enqueue.Enqueue(ctx, jobs.AudiobookFinalizeArgs{BookID: bookID})
 }
 
 // Narratable reports whether a book's format can be read aloud. Checked
@@ -249,14 +311,14 @@ func (s *AudiobookService) Start(ctx context.Context, book model.Book, opts Audi
 		SourceContentHash: opts.SourceContentHash,
 		TotalChars:        chars,
 	}
-	if err := s.store.Start(ctx, run, segments); err != nil {
+	if err := s.d.Store.Start(ctx, run, segments); err != nil {
 		return fmt.Errorf("persist audiobook plan: %w", err)
 	}
 
 	if err := s.dispatchAll(ctx, book.ID, segments); err != nil {
 		return err
 	}
-	return s.store.SetState(ctx, book.ID, model.AudiobookRunning, "")
+	return s.d.Store.SetState(ctx, book.ID, model.AudiobookRunning, "")
 }
 
 // dispatchAll enqueues every segment, failing the run if the queue is
@@ -264,7 +326,7 @@ func (s *AudiobookService) Start(ctx context.Context, book model.Book, opts Audi
 // 0% forever and no error explains why.
 func (s *AudiobookService) dispatchAll(ctx context.Context, bookID string, segments []model.AudiobookSegment) error {
 	for _, seg := range segments {
-		if err := s.enq.Enqueue(ctx, jobs.AudiobookSegmentArgs{BookID: bookID, Seq: seg.Seq}); err != nil {
+		if err := s.d.Enqueue.Enqueue(ctx, jobs.AudiobookSegmentArgs{BookID: bookID, Seq: seg.Seq}); err != nil {
 			// %w rather than %v: jobs.ErrNoQueue now actually flows through
 			// here, and wrapping it lets a caller tell "queue is down" apart
 			// from "engine rejected the text" with errors.Is. Same text
@@ -285,10 +347,7 @@ func (s *AudiobookService) plan(ctx context.Context, book model.Book, opts Audio
 	if !Narratable(book.Format) {
 		return nil, ErrNotNarratable
 	}
-	if s.books == nil {
-		return nil, errors.New("no book opener configured")
-	}
-	src, err := s.books.Open(ctx, book)
+	src, err := s.d.Books.Open(ctx, book)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", book.ID, err)
 	}
@@ -321,14 +380,14 @@ func (s *AudiobookService) plan(ctx context.Context, book model.Book, opts Audio
 // before each engine call, which makes it the only way to stop spending
 // on a run that is already going.
 func (s *AudiobookService) Cancel(ctx context.Context, bookID string) error {
-	run, err := s.store.GetByBookID(ctx, bookID)
+	run, err := s.d.Store.GetByBookID(ctx, bookID)
 	if err != nil {
 		return err
 	}
 	if run.State.Terminal() {
 		return fmt.Errorf("audiobook for %s is already %s", bookID, run.State)
 	}
-	if err := s.store.SetState(ctx, bookID, model.AudiobookCanceled, ""); err != nil {
+	if err := s.d.Store.SetState(ctx, bookID, model.AudiobookCanceled, ""); err != nil {
 		return err
 	}
 	// Swept immediately, unlike a failure. A user who pressed stop does
@@ -337,9 +396,7 @@ func (s *AudiobookService) Cancel(ctx context.Context, bookID string) error {
 	// (ADR-0028 §6). State first: if the sweep panics or the process dies
 	// between the two, a cancelled run with stale staging is recoverable
 	// and a running run with no staging is not.
-	if s.sweep != nil {
-		s.sweep(bookID)
-	}
+	s.d.SweepStaging(bookID)
 	return nil
 }
 
@@ -348,11 +405,11 @@ func (s *AudiobookService) Cancel(ctx context.Context, bookID string) error {
 // Re-running the completed ones would buy the same audio twice — the
 // whole reason segments are rows rather than a counter (ADR-0028 §6).
 func (s *AudiobookService) Retry(ctx context.Context, bookID string) error {
-	run, err := s.store.GetByBookID(ctx, bookID)
+	run, err := s.d.Store.GetByBookID(ctx, bookID)
 	if err != nil {
 		return err
 	}
-	cov, err := s.store.Coverage(ctx, bookID)
+	cov, err := s.d.Store.Coverage(ctx, bookID)
 	if err != nil {
 		return err
 	}
@@ -376,7 +433,7 @@ func (s *AudiobookService) Retry(ctx context.Context, bookID string) error {
 	if run.State == model.AudiobookRunning {
 		return fmt.Errorf("audiobook for %s is already running", bookID)
 	}
-	outstanding, err := s.store.ListUnfinishedSegments(ctx, bookID)
+	outstanding, err := s.d.Store.ListUnfinishedSegments(ctx, bookID)
 	if err != nil {
 		return err
 	}
@@ -386,5 +443,5 @@ func (s *AudiobookService) Retry(ctx context.Context, bookID string) error {
 	if err := s.dispatchAll(ctx, bookID, outstanding); err != nil {
 		return err
 	}
-	return s.store.SetState(ctx, bookID, model.AudiobookRunning, "")
+	return s.d.Store.SetState(ctx, bookID, model.AudiobookRunning, "")
 }

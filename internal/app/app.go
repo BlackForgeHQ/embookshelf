@@ -367,28 +367,34 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 	// service rather than switching on the transition themselves (#190),
 	// so the registry needs it. Its enqueuer is the deferred one, which
 	// is what makes that ordering possible at all.
-	audiobookSvc := service.NewAudiobookService(
-		audiobookRepo,
-		service.NewLibraryBookOpener(libStore),
-		enq,
-	).WithStagingSweeper(func(bookID string) {
-		if err := os.RemoveAll(task.StagingDir(cfg.DataPath, bookID)); err != nil {
-			slog.Warn("audiobook: sweep staging after cancel", "book", bookID, "err", err)
-		}
-	}).WithSettings(appSettingsRepo.GetAudiobook).
+	audiobookDeps := service.AudiobookDeps{
+		Store:   audiobookRepo,
+		Books:   service.NewLibraryBookOpener(libStore),
+		Enqueue: enq,
+
+		Settings: appSettingsRepo.GetAudiobook,
+
+		SweepStaging: func(bookID string) {
+			if err := os.RemoveAll(task.StagingDir(cfg.DataPath, bookID)); err != nil {
+				slog.Warn("audiobook: sweep staging after cancel", "book", bookID, "err", err)
+			}
+		},
+
 		// The hash of the book's own file, for provenance and for the
 		// staleness comparison. Injected because it lives on the files row
 		// behind a library handle, which the service deliberately cannot
 		// reach (#191).
-		WithContentHash(func(ctx context.Context, book model.Book) []byte {
+		ContentHash: func(ctx context.Context, book model.Book) []byte {
 			handle, err := libStore.For(ctx, book.LibraryID)
 			if err != nil {
 				return nil
 			}
 			return handle.PrimaryContentHash(ctx, book)
-		}).
-		WithNarrationArtifacts(service.RepoNarrationArtifacts{Files: fileRepo, Books: bookRepo}).
-		WithNarrationSweeper(func(ctx context.Context, book model.Book, run model.Audiobook) error {
+		},
+
+		Artifacts: service.RepoNarrationArtifacts{Files: fileRepo, Books: bookRepo},
+
+		SweepNarration: func(ctx context.Context, book model.Book, run model.Audiobook) error {
 			if run.FileID == nil {
 				return nil
 			}
@@ -401,12 +407,14 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 				return nil
 			}
 			return handle.DeleteBookBytes(ctx, book.ID, []string{f.Location})
-		})
-	if hub != nil {
-		audiobookSvc = audiobookSvc.WithPublisher(func(bookID string) {
-			_ = hub.Publish(sse.AudiobookUpdated{BookID: bookID})
-		})
+		},
 	}
+	if hub != nil {
+		audiobookDeps.Publish = func(bookID string) {
+			_ = hub.Publish(sse.AudiobookUpdated{BookID: bookID})
+		}
+	}
+	audiobookSvc := service.NewAudiobookService(audiobookDeps)
 
 	// Background queue, backed by River. Constructed, not started —
 	// Start owns that, together with resolving enq.

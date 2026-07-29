@@ -236,7 +236,7 @@ func TestEstimateReportsCharsSegmentsAndMoney(t *testing.T) {
 
 	// 1000 chars per chapter, two chapters ≈ 2000 characters of prose.
 	text := strings.Repeat("abcdefghij", 100)
-	svc := NewAudiobookService(&fakeAudiobookStore{}, &epubOpener{src: buildTestEPUB(t, text)}, &jobs.Deferred{})
+	svc := NewAudiobookService(AudiobookDeps{Store: &fakeAudiobookStore{}, Books: &epubOpener{src: buildTestEPUB(t, text)}, Enqueue: &jobs.Deferred{}})
 
 	est, err := svc.Estimate(context.Background(), narratableBook(), testOptions())
 	if err != nil {
@@ -267,7 +267,7 @@ func TestEstimateIsFreeAtAZeroPrice(t *testing.T) {
 
 	opts := testOptions()
 	opts.PricePerMillionChars = 0
-	svc := NewAudiobookService(&fakeAudiobookStore{}, &epubOpener{src: buildTestEPUB(t, strings.Repeat("x ", 500))}, &jobs.Deferred{})
+	svc := NewAudiobookService(AudiobookDeps{Store: &fakeAudiobookStore{}, Books: &epubOpener{src: buildTestEPUB(t, strings.Repeat("x ", 500))}, Enqueue: &jobs.Deferred{}})
 
 	est, err := svc.Estimate(context.Background(), narratableBook(), opts)
 	if err != nil {
@@ -284,7 +284,7 @@ func TestEstimateIsFreeAtAZeroPrice(t *testing.T) {
 func TestEstimateRefusesANonNarratableFormat(t *testing.T) {
 	t.Parallel()
 
-	svc := NewAudiobookService(&fakeAudiobookStore{}, &epubOpener{}, &jobs.Deferred{})
+	svc := NewAudiobookService(AudiobookDeps{Store: &fakeAudiobookStore{}, Books: &epubOpener{}, Enqueue: &jobs.Deferred{}})
 	book := narratableBook()
 	book.Format = "PDF"
 
@@ -303,7 +303,7 @@ func TestStartPersistsThePlanAndDispatchesEverySegment(t *testing.T) {
 
 	store := &fakeAudiobookStore{}
 	rec := &recordingEnqueuer{}
-	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, rec)
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, Enqueue: rec})
 
 	if err := svc.Start(context.Background(), narratableBook(), testOptions()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -346,8 +346,7 @@ func TestStartRecordsTheCapItPlannedWith(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeAudiobookStore{}
-	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))},
-		&recordingEnqueuer{})
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, Enqueue: &recordingEnqueuer{}})
 
 	if err := svc.Start(context.Background(), narratableBook(), testOptions()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -367,8 +366,7 @@ func TestStartRecordsTheDefaultCapWhenNoneWasAsked(t *testing.T) {
 	store := &fakeAudiobookStore{}
 	opts := testOptions()
 	opts.SegmentChars = 0
-	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))},
-		&recordingEnqueuer{})
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, Enqueue: &recordingEnqueuer{}})
 
 	if err := svc.Start(context.Background(), narratableBook(), opts); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -387,7 +385,7 @@ func TestStartRecordsAContiguousAlignmentMap(t *testing.T) {
 
 	store := &fakeAudiobookStore{}
 	rec := &recordingEnqueuer{}
-	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, rec)
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, Enqueue: rec})
 
 	if err := svc.Start(context.Background(), narratableBook(), testOptions()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -412,7 +410,7 @@ func TestStartKeepsChapterIdentityAcrossSplitSegments(t *testing.T) {
 
 	store := &fakeAudiobookStore{}
 	rec := &recordingEnqueuer{}
-	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 200))}, rec)
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 200))}, Enqueue: rec})
 
 	if err := svc.Start(context.Background(), narratableBook(), testOptions()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -440,7 +438,7 @@ func TestStartFailsTheRunWhenDispatchBreaks(t *testing.T) {
 
 	store := &fakeAudiobookStore{}
 	rec := &recordingEnqueuer{err: errors.New("queue is down")}
-	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, rec)
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, Enqueue: rec})
 
 	if err := svc.Start(context.Background(), narratableBook(), testOptions()); err == nil {
 		t.Fatal("want an error when dispatch fails, got nil")
@@ -457,7 +455,7 @@ func TestStartRefusesABookWithNoReadableText(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeAudiobookStore{}
-	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, "")}, &recordingEnqueuer{})
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{src: buildTestEPUB(t, "")}, Enqueue: &recordingEnqueuer{}})
 
 	if err := svc.Start(context.Background(), narratableBook(), testOptions()); err == nil {
 		t.Fatal("want an error for an EPUB with no prose, got nil")
@@ -474,7 +472,7 @@ func TestStartFailsTheRunWhenTheQueueIsNotUp(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeAudiobookStore{}
-	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, &jobs.Deferred{})
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))}, Enqueue: &jobs.Deferred{}})
 
 	err := svc.Start(context.Background(), model.Book{ID: "b1", Format: "EPUB"}, AudiobookOptions{SegmentChars: 400})
 
@@ -504,7 +502,7 @@ func TestCancelMarksARunningRunCanceled(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeAudiobookStore{run: model.Audiobook{BookID: "b1", State: model.AudiobookRunning}}
-	svc := NewAudiobookService(store, &epubOpener{}, &jobs.Deferred{})
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{}, Enqueue: &jobs.Deferred{}})
 
 	if err := svc.Cancel(context.Background(), "b1"); err != nil {
 		t.Fatalf("Cancel: %v", err)
@@ -518,7 +516,7 @@ func TestCancelRefusesAFinishedRun(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeAudiobookStore{run: model.Audiobook{BookID: "b1", State: model.AudiobookReady}}
-	svc := NewAudiobookService(store, &epubOpener{}, &jobs.Deferred{})
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{}, Enqueue: &jobs.Deferred{}})
 
 	if err := svc.Cancel(context.Background(), "b1"); err == nil {
 		t.Fatal("want an error cancelling a finished run, got nil")
@@ -539,7 +537,7 @@ func TestRetryDispatchesOnlyUnfinishedSegments(t *testing.T) {
 		},
 	}
 	rec := &recordingEnqueuer{}
-	svc := NewAudiobookService(store, &epubOpener{}, rec)
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{}, Enqueue: rec})
 
 	if err := svc.Retry(context.Background(), "b1"); err != nil {
 		t.Fatalf("Retry: %v", err)
@@ -567,7 +565,7 @@ func TestRetryRefusesARunWithNothingLeftToDo(t *testing.T) {
 		// No plan at all: nothing to finalize and nothing to re-enqueue.
 		coverage: model.AudiobookCoverage{},
 	}
-	svc := NewAudiobookService(store, &epubOpener{}, &recordingEnqueuer{})
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{}, Enqueue: &recordingEnqueuer{}})
 
 	if err := svc.Retry(context.Background(), "b1"); err == nil {
 		t.Fatal("want an error retrying a run with no outstanding segments, got nil")
@@ -590,7 +588,7 @@ func TestStatusFinalizesARunStrandedWithCompleteCoverage(t *testing.T) {
 		coverage: model.AudiobookCoverage{Total: 12, Done: 12},
 	}
 	rec := &recordingEnqueuer{}
-	svc := NewAudiobookService(store, &epubOpener{}, rec)
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{}, Enqueue: rec})
 
 	run, cov, err := svc.Status(context.Background(), "b1")
 	if err != nil {
@@ -619,7 +617,7 @@ func TestStatusLeavesARunWithOutstandingSegmentsAlone(t *testing.T) {
 		coverage: model.AudiobookCoverage{Total: 12, Done: 5},
 	}
 	rec := &recordingEnqueuer{}
-	svc := NewAudiobookService(store, &epubOpener{}, rec)
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{}, Enqueue: rec})
 
 	if _, _, err := svc.Status(context.Background(), "b1"); err != nil {
 		t.Fatalf("Status: %v", err)
@@ -643,7 +641,7 @@ func TestStatusDoesNotResurrectACanceledRun(t *testing.T) {
 		coverage: model.AudiobookCoverage{Total: 12, Done: 12},
 	}
 	rec := &recordingEnqueuer{}
-	svc := NewAudiobookService(store, &epubOpener{}, rec)
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{}, Enqueue: rec})
 
 	if _, _, err := svc.Status(context.Background(), "b1"); err != nil {
 		t.Fatalf("Status: %v", err)
@@ -667,9 +665,11 @@ func TestStatusFailsARunWhoseSegmentsHaveAllSettledWithFailures(t *testing.T) {
 	rec := &recordingEnqueuer{}
 	swept := 0
 	var published []string
-	svc := NewAudiobookService(store, &epubOpener{}, rec).
-		WithStagingSweeper(func(string) { swept++ }).
-		WithPublisher(func(bookID string) { published = append(published, bookID) })
+	svc := NewAudiobookService(AudiobookDeps{
+		Store: store, Books: &epubOpener{}, Enqueue: rec,
+		SweepStaging: func(string) { swept++ },
+		Publish:      func(bookID string) { published = append(published, bookID) },
+	})
 
 	run, _, err := svc.Status(context.Background(), "b1")
 	if err != nil {
@@ -705,7 +705,7 @@ func TestStatusStillAnswersWhenFinalizeCannotBeDispatched(t *testing.T) {
 		coverage: model.AudiobookCoverage{Total: 4, Done: 4},
 	}
 	rec := &recordingEnqueuer{err: errors.New("queue is down")}
-	svc := NewAudiobookService(store, &epubOpener{}, rec)
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{}, Enqueue: rec})
 
 	_, cov, err := svc.Status(context.Background(), "b1")
 	if err != nil {
@@ -729,7 +729,7 @@ func TestRetryFinalizesAStrandedRunInsteadOfRefusing(t *testing.T) {
 		unfinished: nil,
 	}
 	rec := &recordingEnqueuer{}
-	svc := NewAudiobookService(store, &epubOpener{}, rec)
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Books: &epubOpener{}, Enqueue: rec})
 
 	if err := svc.Retry(context.Background(), "b1"); err != nil {
 		t.Fatalf("Retry on a stranded run: %v", err)
@@ -754,7 +754,7 @@ func TestRetryFinalizesARunThatFailedAtFinalize(t *testing.T) {
 		coverage: model.AudiobookCoverage{Total: 3, Done: 3},
 	}
 	rec := &recordingEnqueuer{}
-	svc := NewAudiobookService(store, nil, rec)
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Enqueue: rec})
 
 	if err := svc.Retry(context.Background(), "b1"); err != nil {
 		t.Fatalf("Retry: %v", err)
@@ -775,7 +775,7 @@ func TestRetryDoesNotResurrectACanceledRunWithCompleteCoverage(t *testing.T) {
 		coverage: model.AudiobookCoverage{Total: 3, Done: 3},
 	}
 	rec := &recordingEnqueuer{}
-	svc := NewAudiobookService(store, nil, rec)
+	svc := NewAudiobookService(AudiobookDeps{Store: store, Enqueue: rec})
 
 	_ = svc.Retry(context.Background(), "b1")
 

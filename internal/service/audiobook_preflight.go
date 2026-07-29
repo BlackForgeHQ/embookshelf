@@ -39,24 +39,6 @@ type AudiobookReport struct {
 	Stale bool
 }
 
-// WithSettings wires the AUDIOBOOK settings row. Read per call rather
-// than captured, so an admin changing engine or voice takes effect on the
-// next request instead of the next restart.
-func (s *AudiobookService) WithSettings(fn func(context.Context) (repo.AudiobookConfig, error)) *AudiobookService {
-	s.settings = fn
-	return s
-}
-
-// WithContentHash wires the read of a book's current file hash.
-//
-// Injected because it lives on the files row behind a library handle, and
-// this service deliberately reaches neither — the property that lets its
-// whole lifecycle be exercised without storage or a database.
-func (s *AudiobookService) WithContentHash(fn func(context.Context, model.Book) []byte) *AudiobookService {
-	s.hash = fn
-	return s
-}
-
 // narrationArtifacts is what finalize wrote outside the run's own table:
 // the files row naming the generated audio, and the book's playback view
 // — its duration and chapter list.
@@ -68,21 +50,6 @@ func (s *AudiobookService) WithContentHash(fn func(context.Context, model.Book) 
 type narrationArtifacts interface {
 	DeleteFile(ctx context.Context, fileID string) error
 	ClearBookAudio(ctx context.Context, bookID string) error
-}
-
-// WithNarrationArtifacts wires the removal of what finalize wrote
-// outside the run's table.
-func (s *AudiobookService) WithNarrationArtifacts(a narrationArtifacts) *AudiobookService {
-	s.artifacts = a
-	return s
-}
-
-// WithNarrationSweeper wires the removal of a finished narration's bytes.
-func (s *AudiobookService) WithNarrationSweeper(
-	fn func(ctx context.Context, book model.Book, run model.Audiobook) error,
-) *AudiobookService {
-	s.sweepNarration = fn
-	return s
 }
 
 // Preflight resolves everything a run needs before it can start: the
@@ -98,10 +65,7 @@ func (s *AudiobookService) Preflight(
 	book model.Book,
 	over GenerateOverride,
 ) (AudiobookOptions, error) {
-	if s.settings == nil {
-		return AudiobookOptions{}, ErrAudiobooksNotConfigured
-	}
-	cfg, err := s.settings(ctx)
+	cfg, err := s.d.Settings(ctx)
 	if err != nil {
 		return AudiobookOptions{}, fmt.Errorf("read audiobook settings: %w", err)
 	}
@@ -125,7 +89,7 @@ func (s *AudiobookService) Preflight(
 		Model:                engine.Model,
 		SegmentChars:         cfg.SegmentChars,
 		PricePerMillionChars: engine.PricePerMillionChars,
-		SourceContentHash:    s.contentHash(ctx, book),
+		SourceContentHash:    s.d.ContentHash(ctx, book),
 	}
 	if over.Voice != "" {
 		opts.Voice = over.Voice
@@ -181,11 +145,11 @@ func (s *AudiobookService) Report(ctx context.Context, book model.Book) (Audiobo
 // deferred cleanup — that would also fire on the failure path, deleting
 // the audio out from under a run that still points at it.
 func (s *AudiobookService) DeleteNarration(ctx context.Context, book model.Book) error {
-	run, err := s.store.GetByBookID(ctx, book.ID)
+	run, err := s.d.Store.GetByBookID(ctx, book.ID)
 	if err != nil {
 		return err
 	}
-	if err := s.store.Delete(ctx, book.ID); err != nil {
+	if err := s.d.Store.Delete(ctx, book.ID); err != nil {
 		return fmt.Errorf("delete narration: %w", err)
 	}
 
@@ -201,24 +165,19 @@ func (s *AudiobookService) DeleteNarration(ctx context.Context, book model.Book)
 	// cannot remove. What is left behind is collectable — an orphaned
 	// object by the key sweeper, an orphaned files row by the
 	// missing-file purge after a scan.
-	if s.artifacts != nil {
-		if run.FileID != nil {
-			if err := s.artifacts.DeleteFile(ctx, *run.FileID); err != nil {
-				slog.Warn("audiobook: delete narration files row", "book", book.ID, "err", err)
-			}
+	if run.FileID != nil {
+		if err := s.d.Artifacts.DeleteFile(ctx, *run.FileID); err != nil {
+			slog.Warn("audiobook: delete narration files row", "book", book.ID, "err", err)
 		}
-		if err := s.artifacts.ClearBookAudio(ctx, book.ID); err != nil {
-			slog.Warn("audiobook: clear book audio fields", "book", book.ID, "err", err)
-		}
+	}
+	if err := s.d.Artifacts.ClearBookAudio(ctx, book.ID); err != nil {
+		slog.Warn("audiobook: clear book audio fields", "book", book.ID, "err", err)
 	}
 
-	if s.sweepNarration == nil {
-		return nil
-	}
 	// A failed cleanup leaves an object the orphaned-key sweeper will
 	// collect. Failing the call instead would leave the user with a
 	// narration they cannot remove.
-	if err := s.sweepNarration(ctx, book, run); err != nil {
+	if err := s.d.SweepNarration(ctx, book, run); err != nil {
 		slog.Warn("audiobook: narration byte cleanup", "book", book.ID, "err", err)
 	}
 	return nil
@@ -232,18 +191,11 @@ func (s *AudiobookService) stale(ctx context.Context, book model.Book, run model
 	if len(run.SourceContentHash) == 0 {
 		return false
 	}
-	current := s.contentHash(ctx, book)
+	current := s.d.ContentHash(ctx, book)
 	if len(current) == 0 {
 		return false
 	}
 	return !bytes.Equal(current, run.SourceContentHash)
-}
-
-func (s *AudiobookService) contentHash(ctx context.Context, book model.Book) []byte {
-	if s.hash == nil {
-		return nil
-	}
-	return s.hash(ctx, book)
 }
 
 // RepoNarrationArtifacts adapts the two repos to what DeleteNarration
