@@ -141,7 +141,8 @@ embookshelf/
 
 ### `internal/` — tiered
 
-The backend has 29 packages. Tiered by role:
+The backend has 39 packages (`go list ./internal/...`), subpackages
+included. Tiered by role:
 
 **Core (request → domain → persistence)**
 - `handler/` — Gin `HandlerFunc`s; one file per resource group, plus
@@ -149,7 +150,9 @@ The backend has 29 packages. Tiered by role:
   (`Handler` + `Deps`), `errjson.go` (JSON error envelope).
 - `service/` — Business logic. ~20 services (see §4.1).
 - `repo/` — Hand-written SQL via pgx. Single dialect: one Postgres
-  query text per statement (ADR-0023).
+  query text per statement (ADR-0023). Subpackage:
+  - `repotest/` — Per-test Postgres schema so repo tests share one
+    database without seeing each other's rows.
 - `model/` — Domain structs and shared enums (`Role`, `DeviceKind`,
   `EditableMetadata`, etc.).
 - `migrator/` — Embedded `golang-migrate` wrapper. `migrations/postgres/`
@@ -209,7 +212,14 @@ The backend has 29 packages. Tiered by role:
 - `db/` — `*sql.DB` wrapper over the pgx pool, DSN detection (a
   `sqlite://` DSN is recognized only to refuse it), shared scan helpers.
   `sqlite_driver.go` registers `modernc.org/sqlite` for the importer's
-  read-only path and nothing else.
+  read-only path and nothing else. Subpackage:
+  - `dberr/` — Error inspection (not-found, unique violation) in one
+    place, so repos never import driver packages to classify a failure.
+- `jobs/` — The vocabulary the service and queue tiers share: `Args`
+  (payload + `Kind`), `Queued`, `Enqueuer`, `Deferred`, and
+  `ErrDoNotRetry`. A leaf by design — `internal/queue` imports
+  `internal/service`, so the seam has to live somewhere below both or
+  each caller grows its own function-typed dispatcher. See §4.4.
 - `queue/` — One-method `Client` interface over River. `registry.go`
   declares each job type once (kind + args + work fn) and derives
   River's typed-worker plumbing from it. See §4.4.
@@ -222,6 +232,19 @@ The backend has 29 packages. Tiered by role:
 - `opds/` — Atom/XML feed types + builder.
 - `provider/` — External metadata sources + catalog + resilient
   client + scoring. See §7.1.
+- `llm/` — One adapter for any OpenAI-compatible chat-completions
+  endpoint (OpenAI, OpenRouter, Ollama, LM Studio, vLLM), which is what
+  lets an operator point `BaseURL` at a local server and keep their
+  library off a third party's machine (ADR-0024 §3). Deliberately not a
+  catalog.
+- `tts/` — The text-to-speech seam, and deliberately the opposite call:
+  a catalog, because engines differ in per-request cap, SSML support,
+  word timings and price by a factor of twelve (ADR-0026 §1). Each
+  entry carries its own adapter and cap, and `chunked` splits a segment
+  into engine calls against that cap so no caller has to know it.
+- `email/` — Transport seam for outbound mail (Send-to-Kindle,
+  invites). SMTP via `go-mail`; no provider catalog, and ADR-0020
+  records why.
 - `staticfs/` — `//go:embed all:dist` host for the compiled SPA.
 - `telemetry/` — OTLP exporter wiring. Gated on `OTEL_ENABLED`.
 

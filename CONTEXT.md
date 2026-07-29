@@ -611,7 +611,9 @@ Unlike metadata providers, engines are **selected, not fanned out** — fan-out 
 
 The Go literal declaring which engines the binary knows, plus their endpoints, per-request character caps, and a default price per million characters. Hard-coded and rebuilt to change, like the metadata [[Catalog]] (ADR-0008).
 
-Its existence reverses the stance of ADR-0020 and ADR-0024, which both refused a catalog. Those refusals turned on the vendors differing in billing rather than capability; speech engines differ in per-request cap (3,000 → unbounded), SSML support, word-timing output, and price by a factor of twenty. Here the second and third adapters are real on day one.
+Its existence reverses the stance of ADR-0020 and ADR-0024, which both refused a catalog. Those refusals turned on the vendors differing in billing rather than capability; speech engines differ in per-request cap, SSML support, word-timing output, and price by more than a factor of ten. Here the second and third adapters are real on day one.
+
+The caps are `MaxRequestChars` in `tts.Catalog` and are not quoted here — `chunked` splits every [[Segment]] against the entry's own cap, so the catalog is the only place the numbers mean anything, and a figure restated in prose is a figure that drifts (it said "3,000 → unbounded" for some months while the catalog said 4,096 → 8,000).
 
 ### Audiobook settings row
 
