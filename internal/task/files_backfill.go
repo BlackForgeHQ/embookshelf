@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/hashing"
@@ -57,14 +56,10 @@ func RunFilesBackfill(ctx context.Context, deps FilesBackfillDeps) error {
 					"file_id", f.ID, "library_id", f.LibraryID)
 				return errors.New("no storage for library")
 			}
-			root := ""
-			if handle.Library.Root != nil {
-				root = *handle.Library.Root
-			}
-			if root == "" && handle.Library.Path != "" {
-				root = handle.Library.Path
-			}
-			key := joinKey(root, f.Location)
+			// The library's own rule, not a copy of it: it passes a
+			// backend-backed key and an already-absolute legacy location
+			// through untouched, which joining the root cannot (#201).
+			key := handle.StorageKey(f.Location)
 
 			hash, size, err := hashing.HashFile(ctx, handle.Storage, key)
 			if err != nil {
@@ -87,19 +82,4 @@ func RunFilesBackfill(ctx context.Context, deps FilesBackfillDeps) error {
 		},
 	)
 	return err
-}
-
-// joinKey concatenates a backend root with a file location into a
-// single slash-separated key. Strips trailing slashes from root so
-// "<root>" + "/" + "<loc>" never produces a double slash.
-func joinKey(root, loc string) string {
-	root = strings.TrimRight(root, "/")
-	loc = strings.TrimLeft(loc, "/")
-	if root == "" {
-		return loc
-	}
-	if loc == "" {
-		return root
-	}
-	return root + "/" + loc
 }

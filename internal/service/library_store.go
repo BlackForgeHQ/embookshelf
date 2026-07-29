@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/model"
@@ -87,8 +86,14 @@ func (h *LibraryHandle) IsBackendBacked() bool {
 	return h.Library.BackendID != nil
 }
 
-// storageKey turns a files.location into the key this library's Storage
+// StorageKey turns a files.location into the key this library's Storage
 // actually answers to.
+//
+// Exported because the job tier needs it too. While it was private,
+// internal/task re-derived it and the copy was missing both branches
+// below — it joined the root on unconditionally, so a legacy absolute
+// location asked for /lib/root/lib/root/… and hashed nothing, on every
+// boot, forever (#201).
 //
 // files.location is relative to the library root (CONTEXT, "Files row"),
 // but a local install's LocalFS is rooted at "/" and expects absolute
@@ -105,7 +110,7 @@ func (h *LibraryHandle) IsBackendBacked() bool {
 //
 // Backend-backed libraries are untouched: their keys are already the
 // object keys, and the backend encodes its own prefix.
-func (h *LibraryHandle) storageKey(location string) string {
+func (h *LibraryHandle) StorageKey(location string) string {
 	if h.IsBackendBacked() {
 		return location
 	}
@@ -140,7 +145,7 @@ func (h *LibraryHandle) storageKey(location string) string {
 func (h *LibraryHandle) OpenBook(ctx context.Context, book model.Book) (io.Reader, int64, io.Closer, error) {
 	if h.Storage != nil && h.files != nil {
 		if f, err := primaryFile(ctx, h.files, book); err == nil {
-			key := h.storageKey(f.Location)
+			key := h.StorageKey(f.Location)
 			src, oerr := h.Storage.Open(ctx, key)
 			if oerr != nil {
 				return nil, 0, nil, fmt.Errorf("open %s: %w", key, oerr)
@@ -247,7 +252,7 @@ func (h *LibraryHandle) DeleteBookBytes(ctx context.Context, bookID string, loca
 		// handing it the library-relative files.location asked the
 		// filesystem to delete "/Author/Title/book.epub" and quietly
 		// removed nothing. The same reason OpenBook goes through it.
-		key := h.storageKey(location)
+		key := h.StorageKey(location)
 		if derr := h.Storage.Delete(ctx, key); derr != nil && !errors.Is(derr, storage.ErrNotFound) {
 			failures = append(failures, fmt.Errorf("delete %s: %w", key, derr))
 		}
@@ -300,24 +305,14 @@ func (h *LibraryHandle) SidecarKey(bookLocation string) string {
 // when it doesn't sit under the root — defensive fallback for callers
 // that pass an already-relative location.
 func (h *LibraryHandle) Relativize(abs string) string {
-	root := ""
-	if h.Library.Root != nil {
-		root = *h.Library.Root
-	}
-	if root == "" {
-		root = h.Library.Path
-	}
+	// localRoot, not a fourth inline copy of it: this used to re-derive
+	// the Root-then-Path rule eight lines from the method that owns it
+	// (#201).
+	root := h.localRoot()
 	if root == "" {
 		return abs
 	}
-	prefix := root
-	if !strings.HasSuffix(prefix, "/") {
-		prefix += "/"
-	}
-	if strings.HasPrefix(abs, prefix) {
-		return abs[len(prefix):]
-	}
-	return abs
+	return relativeToRoot(abs, root)
 }
 
 // Open opens a Source against the library's storage at the given
@@ -363,7 +358,7 @@ func (h *LibraryHandle) BookSource(ctx context.Context, book model.Book) (BookSo
 			// CapPresign, and storageKey passes their keys through
 			// untouched — but the raw location was the odd one out among
 			// this file's four key resolutions (#168).
-			if url, err := ps.PresignGet(ctx, h.storageKey(f.Location), h.presignTTL); err == nil {
+			if url, err := ps.PresignGet(ctx, h.StorageKey(f.Location), h.presignTTL); err == nil {
 				return BookSource{Kind: BookDeliveryPresign, URL: url, TTL: h.presignTTL}, nil
 			}
 		}
@@ -373,7 +368,7 @@ func (h *LibraryHandle) BookSource(ctx context.Context, book model.Book) (BookSo
 		return BookSource{
 			Kind:    BookDeliveryStream,
 			Storage: h.Storage,
-			Key:     h.storageKey(f.Location),
+			Key:     h.StorageKey(f.Location),
 		}, nil
 	}
 

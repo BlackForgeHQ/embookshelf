@@ -102,10 +102,10 @@ func LibraryScan(ctx context.Context, args jobs.LibraryScanArgs, deps LibrarySca
 	// Missing in this scan).
 	relocated := make(map[string]struct{})
 	for _, w := range cs.New {
-		if !fileproc.IsSupported("/" + joinKey(root, w.Location)) {
+		key := handle.StorageKey(w.Location)
+		if !fileproc.IsSupported(key) {
 			continue
 		}
-		key := joinKey(root, w.Location)
 		hash, _, herr := hashing.HashFile(ctx, store, key)
 		if herr != nil {
 			slog.Warn("library scan: hash new entry", "loc", w.Location, "err", herr)

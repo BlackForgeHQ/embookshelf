@@ -261,3 +261,47 @@ func TestRunFilesBackfill_idempotent(t *testing.T) {
 		t.Fatalf("second run changed hash: got %x want %x", f2.ContentHash, hashAfterFirst)
 	}
 }
+
+// A legacy Files row holds an absolute location. ADR-0030 names the
+// producer: the storage-v2 backfill wrote books.path verbatim whenever
+// the Library root was unknown at seed time, and its own tests assert
+// that shape.
+//
+// The service tier's key rule passes such a location through untouched,
+// because it is already the key a "/"-rooted local Backend wants. The
+// copy this package made does not — it joins the root on unconditionally,
+// asking for /lib/root/lib/root/… and hashing nothing. Forever, since
+// the row stays pending and is retried on every boot (#201).
+func TestRunFilesBackfill_hashesALegacyAbsoluteLocation(t *testing.T) {
+	tmpDir := t.TempDir()
+	deps, lr := newTestDeps(t)
+	lib := seedLibrary(t, lr, tmpDir)
+
+	const content = "legacy content"
+	writeFile(t, tmpDir, "legacy.epub", content)
+	// The whole point: the stored location is absolute, not library-relative.
+	insertFile(t, deps.Files, lib.ID, filepath.Join(tmpDir, "legacy.epub"))
+
+	ctx := context.Background()
+	if err := task.RunFilesBackfill(ctx, deps); err != nil {
+		t.Fatalf("RunFilesBackfill: %v", err)
+	}
+
+	pending, err := deps.Files.ListPendingHash(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListPendingHash: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("%d rows still pending — a legacy absolute location never hashes, "+
+			"and is retried on every boot", len(pending))
+	}
+
+	want := sha256.Sum256([]byte(content))
+	got, err := deps.Files.GetByLocation(ctx, lib.ID, filepath.Join(tmpDir, "legacy.epub"))
+	if err != nil {
+		t.Fatalf("GetByLocation: %v", err)
+	}
+	if !bytes.Equal(got.ContentHash, want[:]) {
+		t.Errorf("ContentHash = %x, want %x", got.ContentHash, want)
+	}
+}

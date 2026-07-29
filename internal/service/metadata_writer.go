@@ -708,7 +708,7 @@ func (w *MetadataWriter) embedAndStamp(ctx context.Context, b model.Book, handle
 	// over raw asked the filesystem for /Author/Title/book.epub, failed,
 	// and logged a warning — so the in-file embed ADR-0001 promises has
 	// been quietly off for every locally-approved book (#168).
-	key := handle.storageKey(b.Path)
+	key := handle.StorageKey(b.Path)
 	src, err := handle.Storage.Open(ctx, key)
 	if err != nil {
 		slog.Warn("metadata writer: open source", "book_id", b.ID, "key", key, "err", err)
@@ -781,7 +781,7 @@ func (w *MetadataWriter) writeSidecar(ctx context.Context, b model.Book, handle 
 	// storageKey first: SidecarKey only swaps the filename, so a
 	// library-relative books.path would have written the sidecar to the
 	// filesystem root on a local install (#168).
-	key := handle.SidecarKey(handle.storageKey(b.Path))
+	key := handle.SidecarKey(handle.StorageKey(b.Path))
 	side := b.Editable()
 	side.PublishedDate = dateString(b.PublishDate)
 	if err := w.deps.Sidecar.Write(ctx, handle.Storage, key, side, mode, b.Format); err != nil {

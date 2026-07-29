@@ -285,8 +285,8 @@ func TestStorageKeyLeavesALegacyAbsolutePathAlone(t *testing.T) {
 
 	legacy := filepath.Join(root, "Kobo Abe", "Woman in the Dunes", "dunes.epub")
 
-	if got := handle.storageKey(legacy); got != legacy {
-		t.Errorf("storageKey(%q) = %q, want it unchanged", legacy, got)
+	if got := handle.StorageKey(legacy); got != legacy {
+		t.Errorf("StorageKey(%q) = %q, want it unchanged", legacy, got)
 	}
 }
 
@@ -307,7 +307,7 @@ func TestStorageKeyResolvesARelativeLocationAgainstTheRoot(t *testing.T) {
 
 	want := filepath.Join(root, "Kobo Abe", "dunes.epub")
 
-	if got := handle.storageKey("Kobo Abe/dunes.epub"); got != want {
+	if got := handle.StorageKey("Kobo Abe/dunes.epub"); got != want {
 		t.Errorf("storageKey = %q, want %q", got, want)
 	}
 }
