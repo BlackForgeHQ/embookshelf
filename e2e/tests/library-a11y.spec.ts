@@ -32,9 +32,13 @@ test.describe('library · a11y', () => {
     await page.goto('/library?layout=grid');
     await expect(page.getByRole('heading', { name: 'All Books' })).toBeVisible();
 
-    // `aria-label="Open <title>"` — match any. If the library is empty,
-    // skip so this spec doesn't depend on a specific seed.
-    const tiles = page.getByRole('button', { name: /^Open / });
+    // `aria-label="Open <title>"` — match any book tile. The negative
+    // lookahead excludes the top bar's "Open command palette", which
+    // matched a bare /^Open / and sorted first, so this spec spent its
+    // click opening the palette and then asserted that a palette is not
+    // a book page (#216). If the library is empty, skip so this spec
+    // doesn't depend on a specific seed.
+    const tiles = page.getByRole('button', { name: /^Open (?!command palette)/ });
     const count = await tiles.count();
     test.skip(count === 0, 'library has no books — nothing to assert on');
 

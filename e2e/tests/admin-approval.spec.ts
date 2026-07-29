@@ -61,6 +61,14 @@ test.afterEach(() => {
   psql(SQL_DELETE_PENDING)
 })
 
+// Serial, because these two tests share one piece of global state: the
+// @e2e.local rows in the users table. Under fullyParallel each test's
+// beforeEach deletes and re-seeds them while the other is mid-flight, so
+// approving one user could leave the other test's badge reading zero.
+// The suite runs single-worker in CI, which hid this locally-only race
+// behind a config value rather than fixing it (#216).
+test.describe.configure({ mode: 'serial' })
+
 test.describe('OIDC admin approval', () => {
   test('badge surfaces pending users and approve flips them to active', async ({
     page,

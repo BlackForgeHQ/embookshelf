@@ -50,8 +50,14 @@ test.describe('opds catalog', () => {
       expect(body).toContain('rel="self"');
       expect(body).toContain('rel="start"');
       expect(body).toContain('rel="search"');
-      // Library subsections for the seeded libraries.
-      expect(body).toContain('/opds/library/main');
+      // A library subsection, not a particular one. This named
+      // `/opds/library/main` — the slug of a library some long-gone seed
+      // fixture created — so it asserted the shape of somebody's dev
+      // database rather than the shape of the feed (#216). What the feed
+      // owes the reader is a subsection per library; which libraries
+      // exist is the fixture's business, and global-setup guarantees at
+      // least one.
+      expect(body).toContain('/opds/library/');
     } finally {
       await ctx.dispose();
     }
