@@ -2,9 +2,9 @@ name: ci
 
 on:
   workflow_dispatch:
-  # pull_request:
-  # push:
-  #   branches: [main]
+  pull_request:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -281,10 +281,6 @@ jobs:
       - name: migrate up (again — ensures a clean re-apply)
         run: go run ./cmd/migrate up
 
-  # SQLite is no longer a supported runtime backend (ADR-0023), but the
-  # SQLite migration tree survives to serve `embookshelf import-sqlite`,
-  # which brings an old source database forward before reading it. This
-  # job keeps that tree honest. Retire it with the importer.
   # SQLite is no longer a supported runtime backend (ADR-0023), but the
   # SQLite migration tree survives to serve `embookshelf import-sqlite`,
   # which brings an old source database forward before reading it. This
