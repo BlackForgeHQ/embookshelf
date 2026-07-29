@@ -229,8 +229,8 @@ included. Tiered by role:
 - `queue/` — One-method `Client` interface over River. `registry.go`
   declares each job type once (kind + args + work fn) and derives
   River's typed-worker plumbing from it. See §4.4.
-- `task/` — Job kinds + workers (`BookDropWorker`,
-  `LibraryScanWorker`, `ScanImportWorker`).
+- `task/` — One worker per job kind; never imports river. See §4.4 for
+  the register.
 - `sqliteimport/` — Read-only SQLite → Postgres importer behind
   `embookshelf import-sqlite`. Deletable when the deprecation window
   closes (ADR-0023).
@@ -329,15 +329,16 @@ Handler → Service → Repository → PostgreSQL
   functions in `internal/app` (`Build` constructs, `Start` runs the
   boot-time side effects, `Close` shuts down; `cmd/embookshelf/main.go`
   is flags, build, start, serve, close). Current set:
-  `AuthService`, `LibraryService` (+ `LibraryStore`), `ShelfService`,
-  `BookDropService`, `ProgressService`, `EnrichmentService`,
-  `AnnotationService`, `StatsService`, `ReadingSessionService`,
-  `DeviceService` (+ `DeviceDriver` strategy), `OIDCService`,
-  `SearchService`, plus internal-use helpers `MetadataWriter`
-  (sidecar write-back), `LockMerger` (lock-aware metadata merge,
-  `lock_merge.go`), `Placer` (write-target path resolver,
-  `placer.go`), `ScanImport` (decision-driven side-effect runner,
-  `scan_import.go` + `decide_effects.go`).
+  `AuthService`, `PasswordResetService`, `LibraryService`
+  (+ `LibraryStore`), `ShelfService`, `BookDropService`,
+  `ProgressService`, `EnrichmentService`, `AnnotationService`,
+  `StatsService`, `ReadingSessionService`, `DeviceService`
+  (+ `DeviceDriver` strategy), `OIDCService`, `OIDCSettingsService`,
+  `ForwardAuthService`, `ProviderSettingsService`, `SearchService`,
+  `ReadingGuideService` (ADR-0024), `AudiobookService` (ADR-0028),
+  plus internal-use helpers `MetadataWriter` (sidecar write-back,
+  whose plan comes from `DecideEffects` in `decide_effects.go`) and
+  `Placer` (write-target path resolver, `placer.go`).
 - **Repositories** — Hand-written SQL via pgx, one Postgres query text
   per statement (ADR-0023).
 - **DTOs** — Request/response structs live alongside handlers
@@ -452,15 +453,27 @@ exists.
 
 `internal/task/` contains the per-kind workers:
 
-- `BookDropWorker` (`bookdrop.ingest`) — runs the `fileproc` pipeline,
-  stores the cover, transitions the queue row.
-- `LibraryScanWorker` (`library.scan`) — walks a library root via
-  `internal/scan` (walker + classifier + differ), groups files into
-  classified `LeafBook`s (ADR-0003), then enqueues one
-  `scan.import` job per leaf.
-- `ScanImportWorker` (`scan.import`) — runs `service.ScanImport` to
-  decide effects (create / update / reattach) and apply them via a
-  shared decision-driven runner (`decide_effects.go`).
+- `bookdrop.ingest` — runs the `fileproc` pipeline on one staged
+  upload, stores the cover, transitions the queue row.
+- `bookdrop.auto_enrich` — the optional enrichment pass after an
+  approve, when the instance setting is on. Its failure never fails
+  the import.
+- `library.scan` — walks a Library through `storage.Storage` and
+  reconciles the `files` rows against what it finds: new files are
+  recorded, a file that no longer walks is flagged missing, and one
+  that moved is relocated by content hash rather than becoming a
+  missing row plus a new one. It never ingests — that is ADR-0018,
+  and it is why there is no import job downstream of it. A local
+  Library walks from its root and the found paths are relativized; an
+  object-store Library walks the Backend, which is already rooted at
+  its own prefix (ADR-0030).
+- `kindle.send` — mails one book to a device address (ADR-0021).
+- `guide.generate` — the LLM call behind a reading guide (ADR-0024).
+- `audiobook.segment` — one engine call's worth of narration: extract,
+  synthesize, stage the MP3, report the result to `AudiobookService`,
+  which owns what the run does next (ADR-0028).
+- `audiobook.finalize` — assembles the staged segments into the
+  book's audio file and writes the playback view.
 
 S3-backed installs use the orphan sweeper to delete keys left behind
 by edit-time folder renames after a grace window (ADR-0005,
