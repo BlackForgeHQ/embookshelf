@@ -38,11 +38,26 @@ This is the trade being made explicit. A backend rooted globally needs its keys 
 
 ### 3. Folder rename becomes one operation on the Storage interface
 
-Still to build, and deliberately not settled here. The interface has `Copy` but no rename and no directory concept, so the local arm escapes to `os.Rename` and the S3 arm hand-rolls a copy loop.
+The interface had `Copy` but no rename and no directory concept, so the local arm escaped to `os.Rename` and the S3 arm hand-rolled a copy loop.
 
-The open question is not the signature but who owns failure. The S3 arm retries each copy, schedules already-written keys for reclamation when its transaction fails, and refuses the rename outright when there is no orphan queue to defer the source delete to. The local arm renames a directory atomically and has none of that. A single operation has to say which of those it owns and which stays with the caller — and the answer decides whether the two adapters share a contract or merely a name.
+The open question was not the signature but who owns failure. The S3 arm retries each copy, schedules already-written keys for reclamation when its transaction fails, and refuses the rename outright when there is no orphan queue to defer the source delete to. The local arm renames a directory atomically and has none of that. A single operation has to say which of those it owns and which stays with the caller — and the answer decides whether the two adapters share a contract or merely a name.
 
-The conformance suite is not ready for it either: it only ever puts single keys, has no multi-key fixture, and its `Copy` test never checks whether the source survived — so the divergence a rename contract would have to pin is currently untested. The interface comment claims `Copy` is `rename(2)`-with-fallback on local; the implementation is a true copy that never unlinks.
+**Settled: the adapter owns the mechanics, the caller owns the transaction and the policy.** The interface grew
+
+```go
+MovePrefix(ctx context.Context, oldPrefix, newPrefix string) (MoveResult, error)
+
+type MoveResult struct {
+    Written []string // destinations created; reclaim these if your transaction fails
+    Reclaim []string // sources still present; schedule these once it commits
+}
+```
+
+The adapter cannot own rollback, because rollback here means a database transaction and only the caller has one. So it reports what it wrote and what it left, and the caller does with those lists exactly what it did before. Local returns both empty — the rename is atomic, there is no partial write and no survivor. S3 returns the destinations in `Written` and the sources in `Reclaim`, and never deletes a source, because an in-flight presigned URL for one must stay valid (ADR-0005). The per-copy retry moved into the S3 adapter, where it belongs: it is resilience against one backend's failure mode, not a property of renaming. Collision probing, the fails-closed refusal without an orphan queue, `RenameFolderTx` and both grace windows stayed in `service.MetadataWriter`.
+
+The two adapters therefore share a contract, not merely a name, and the conformance suite now pins it: a multi-key fixture, every key readable at its new prefix with its bytes intact, and — for the one place they legitimately differ — the disjunction that each source is either gone or listed in `Reclaim`, rather than one side of it.
+
+The suite's `Copy` test also never checked whether the source survived. It does now, and local and S3 agree: both duplicate and leave the source in place. The interface comment claiming `Copy` was `rename(2)`-with-fallback on local was simply wrong and has been corrected to match the implementation.
 
 ## Consequences
 

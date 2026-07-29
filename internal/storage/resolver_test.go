@@ -33,6 +33,9 @@ func (s *stubStorage) Delete(_ context.Context, _ string, _ ...storage.DeleteOpt
 func (s *stubStorage) Copy(_ context.Context, _, _ string) (storage.CopyResult, error) {
 	return storage.CopyResult{}, nil
 }
+func (s *stubStorage) MovePrefix(_ context.Context, _, _ string) (storage.MoveResult, error) {
+	return storage.MoveResult{}, nil
+}
 func (s *stubStorage) Open(_ context.Context, _ string) (storage.Source, error) {
 	return nil, storage.ErrNotFound
 }

@@ -258,6 +258,44 @@ func (fs *LocalFS) Open(ctx context.Context, key string) (storage.Source, error)
 	return &localSource{File: f, size: st.Size()}, nil
 }
 
+// MovePrefix relocates everything under oldPrefix to newPrefix with a
+// single rename(2) on the directory, after creating the destination's
+// parent. That is atomic on a local filesystem, so both halves of the
+// MoveResult come back empty: there is no partial write to reclaim and
+// no source left behind for the caller to schedule a delete for.
+//
+// The rename is deliberately not a copy-then-unlink fallback for the
+// cross-filesystem case. A library's folders live under one root, so a
+// prefix move never crosses a device; if one somehow did, EXDEV is a
+// real answer the caller should see rather than a reason to silently
+// duplicate a whole book folder.
+func (fs *LocalFS) MovePrefix(ctx context.Context, oldPrefix, newPrefix string) (storage.MoveResult, error) {
+	srcAbs, err := fs.resolve(oldPrefix)
+	if err != nil {
+		return storage.MoveResult{}, err
+	}
+	dstAbs, err := fs.resolve(newPrefix)
+	if err != nil {
+		return storage.MoveResult{}, err
+	}
+	if _, err := os.Stat(srcAbs); err != nil {
+		if os.IsNotExist(err) {
+			return storage.MoveResult{}, errors.Join(storage.ErrNotFound, err)
+		}
+		return storage.MoveResult{}, err
+	}
+	if srcAbs == dstAbs {
+		return storage.MoveResult{}, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dstAbs), 0o755); err != nil {
+		return storage.MoveResult{}, err
+	}
+	if err := os.Rename(srcAbs, dstAbs); err != nil {
+		return storage.MoveResult{}, err
+	}
+	return storage.MoveResult{}, nil
+}
+
 func (fs *LocalFS) Copy(ctx context.Context, srcKey, dstKey string) (storage.CopyResult, error) {
 	srcAbs, err := fs.resolve(srcKey)
 	if err != nil {

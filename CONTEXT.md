@@ -145,7 +145,7 @@ Admin-only housekeeping op that recursively removes every file under `BOOKDROP_P
 
 ### Pending orphan
 
-A storage key whose Book is no longer referenced by `files.location` (or sidecar/cover at `{folder_path}/`) and which is queued for deletion after a grace window. Materialised as a row in `pending_orphans` (library_id, key, eligible_at, reason, book_id). Created on every S3 edit-time folder rename: old keys go in with full grace; new keys from a half-failed rename go in with a short grace. A background sweeper deletes keys past `eligible_at`. Local backends do not produce pending orphans — `os.Rename` is atomic.
+A storage key whose Book is no longer referenced by `files.location` (or sidecar/cover at `{folder_path}/`) and which is queued for deletion after a grace window. Materialised as a row in `pending_orphans` (library_id, key, eligible_at, reason, book_id). Created on every S3 edit-time folder rename: old keys go in with full grace; new keys from a half-failed rename go in with a short grace. A background sweeper deletes keys past `eligible_at`. Local backends do not produce pending orphans — their `MovePrefix` is one atomic `rename(2)`, so it returns an empty `Reclaim` and there is nothing to queue.
 
 ---
 
@@ -371,7 +371,7 @@ The worker pipeline that takes a staged file path, computes its hash, dispatches
 
 ### Backend-backed
 
-`LibraryHandle.IsBackendBacked()`; whether a Library's bytes live in a Storage backend rather than the local filesystem. Named once so callers stop re-deriving it from `libraries.backend_id`. Two policies branch on it: the in-file metadata embed (local only, ADR-0001) and the folder-rename strategy (`os.Rename` vs copy + Pending orphan, ADR-0005).
+`LibraryHandle.IsBackendBacked()`; whether a Library's bytes live in a Storage backend rather than the local filesystem. Named once so callers stop re-deriving it from `libraries.backend_id`. Two policies branch on it: the in-file metadata embed (local only, ADR-0001) and the folder-rename policy wrapped around `Storage.MovePrefix` (nothing to reclaim vs copy + Pending orphan, ADR-0005).
 
 ### Handler dependency groups
 
@@ -449,7 +449,9 @@ The highest-priority supported file inside a LeafBook (EPUB > PDF > CBZ > AZW3 >
 
 ### Folder rename
 
-`os.Rename(oldDir, newDir)` invoked by `MetadataWriter` after the DB → sidecar → in-file pipeline succeeds, when `Author` or `Title` change via a `manual_edit` or `apply_enrichment` trigger on a local-backed library. S3 backends never rename. `auto_enrichment` and scan re-extract never rename — DB drifts from disk, accepted.
+`Storage.MovePrefix(oldPrefix, newPrefix)` invoked by `MetadataWriter` after the DB → sidecar → in-file pipeline succeeds, when `Author` or `Title` change via a `manual_edit` or `apply_enrichment` trigger. One operation, two adapters: local renames the directory atomically, S3 copies each key and leaves the sources for the [[Pending orphan]] sweeper. `auto_enrichment` and scan re-extract never rename — DB drifts from disk, accepted.
+
+The adapter owns the mechanics, the caller owns the transaction and the policy. `MovePrefix` returns a `MoveResult{Written, Reclaim}` rather than compensating for itself, because rollback here means a DB transaction and the adapter has none: `Written` is what it created (reclaim these if your transaction fails), `Reclaim` is what still exists at the source (schedule these once it commits). Collision probing, the fails-closed refusal when there is no orphan queue, and the grace windows all stay with `MetadataWriter`.
 
 ### Lazy layout migration
 

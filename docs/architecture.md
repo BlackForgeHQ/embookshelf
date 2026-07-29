@@ -577,8 +577,8 @@ future driver.
 
 | Backend | Package | Notes |
 |---------|---------|-------|
-| Local POSIX FS | `internal/storage/local` | Default for self-hosted single-machine installs. `Copy` uses `rename(2)` on same-FS, falls back to copy + unlink. |
-| AWS S3 (and S3-compatible: MinIO, R2, B2) | `internal/storage/s3` | AWS SDK v2; presign + server-side copy; iterator wraps `ListObjectsV2`. Boot-time check warns when bucket versioning is disabled (does not refuse to start). |
+| Local POSIX FS | `internal/storage/local` | Default for self-hosted single-machine installs. `Copy` duplicates and leaves the source alone; `MovePrefix` is one `rename(2)` on the directory. |
+| AWS S3 (and S3-compatible: MinIO, R2, B2) | `internal/storage/s3` | AWS SDK v2; presign + server-side copy; iterator wraps `ListObjectsV2`. `MovePrefix` is a copy loop with a bounded retry that reports its sources for later reclamation. Boot-time check warns when bucket versioning is disabled (does not refuse to start). |
 
 Per-library mapping. A library row holds `kind` (local|s3) +
 `backend_id` + `root` (`storage_v2`, migration `000025`). At boot
@@ -605,8 +605,14 @@ capability return `ErrUnsupportedOption`.
   CORS** — epub.js / pdf.js XHRs follow the redirect cross-origin
   and will fail without CORS.
 
-**S3 edit-time folder rename (ADR-0005).** Renaming a book's folder
-on S3 is `Copy` + deferred `Delete`. The old keys land in
+**Folder rename.** Both backends move a book's folder through
+`Storage.MovePrefix`, which relocates the bytes and reports back what
+it wrote and what it left behind; the caller
+(`service.MetadataWriter`) owns the transaction and therefore the
+compensation. Local renames the directory atomically and has nothing
+to report. On S3 (ADR-0005) it is `Copy` + deferred `Delete`: the
+adapter never unlinks a source, so already-issued presigned URLs stay
+valid. The old keys land in
 `pending_orphans` (migration `000032`) with `eligible_at = now() +
 EMBOOKSHELF_S3_RENAME_GRACE` (default `max(2 × PresignTTL, 1h)`); a
 sweeper deletes after the window so already-issued presigned URLs

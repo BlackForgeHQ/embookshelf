@@ -36,6 +36,8 @@ func RunSuite(t *testing.T, make MakeBackend) {
 	t.Run("DeleteRemovesObject", func(t *testing.T) { testDeleteRemovesObject(t, make) })
 	t.Run("DeleteMissingIsNoError", func(t *testing.T) { testDeleteMissingIsNoError(t, make) })
 	t.Run("CopyDuplicates", func(t *testing.T) { testCopyDuplicates(t, make) })
+	t.Run("MovePrefixRelocatesEveryKey", func(t *testing.T) { testMovePrefixRelocatesEveryKey(t, make) })
+	t.Run("MovePrefixMissingIsNotFound", func(t *testing.T) { testMovePrefixMissingIsNotFound(t, make) })
 	t.Run("ListYieldsAllKeys", func(t *testing.T) { testListYieldsAllKeys(t, make) })
 	t.Run("ListPrefixFilters", func(t *testing.T) { testListPrefixFilters(t, make) })
 	t.Run("ListEmptyOnMissingPrefix", func(t *testing.T) { testListEmptyOnMissingPrefix(t, make) })
@@ -113,14 +115,137 @@ func testCopyDuplicates(t *testing.T, mk MakeBackend) {
 	if _, err := s.Copy(ctx, "src", "dst"); err != nil {
 		t.Fatal(err)
 	}
-	rc, err := s.Get(ctx, "dst")
+	if got := mustRead(t, s, "dst"); got != "data" {
+		t.Fatalf("got %q, want %q", got, "data")
+	}
+	// Copy duplicates: the source survives. The interface comment used
+	// to say LocalFS did rename(2)-with-fallback here, which no
+	// implementation has ever done and no caller could have relied on —
+	// both backends leave the source alone, and the comment now says so.
+	if _, err := s.Head(ctx, "src"); err != nil {
+		t.Fatalf("after Copy, Head(src) = %v; Copy must not unlink the source", err)
+	}
+}
+
+// movePrefixFixture is the multi-key tree the MovePrefix tests move.
+// Deliberately more than one key and more than one level: a rename has
+// to carry the book, its sidecar and anything nested alongside them.
+var movePrefixFixture = map[string]string{
+	"old/book.epub":             "epub bytes",
+	"old/metadata.json":         "{}",
+	"old/extras/cover.jpg":      "jpeg bytes",
+	"old/extras/deep/notes.txt": "notes",
+}
+
+func putFixture(t *testing.T, s storage.Storage, files map[string]string) {
+	t.Helper()
+	ctx := context.Background()
+	for k, v := range files {
+		if _, err := s.Put(ctx, k, strings.NewReader(v)); err != nil {
+			t.Fatalf("seed %q: %v", k, err)
+		}
+	}
+}
+
+func mustRead(t *testing.T, s storage.Storage, key string) string {
+	t.Helper()
+	rc, err := s.Get(context.Background(), key)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Get(%q): %v", key, err)
 	}
 	defer func() { _ = rc.Close() }()
-	got, _ := io.ReadAll(rc)
-	if string(got) != "data" {
-		t.Fatalf("got %q, want %q", got, "data")
+	b, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("read %q: %v", key, err)
+	}
+	return string(b)
+}
+
+// testMovePrefixRelocatesEveryKey pins the shared half of the MovePrefix
+// contract and, for the half the backends legitimately disagree on, the
+// disjunction rather than one side of it.
+//
+// Every key that was under oldPrefix is readable at the corresponding
+// newPrefix key with its bytes intact — that part is the same
+// everywhere. What happens to the source is not: LocalFS renames the
+// directory so the sources are gone, S3 has no rename so they are still
+// there and come back in Reclaim for the caller to delete on its own
+// schedule. The assertion is therefore "gone XOR listed in Reclaim",
+// which both satisfy and neither can satisfy by accident.
+func testMovePrefixRelocatesEveryKey(t *testing.T, mk MakeBackend) {
+	s, cleanup := mk(t)
+	defer cleanup()
+	ctx := context.Background()
+	putFixture(t, s, movePrefixFixture)
+
+	res, err := s.MovePrefix(ctx, "old", "new/home")
+	if err != nil {
+		t.Fatalf("MovePrefix: %v", err)
+	}
+
+	for src, want := range movePrefixFixture {
+		dst := "new/home/" + strings.TrimPrefix(src, "old/")
+		if got := mustRead(t, s, dst); got != want {
+			t.Errorf("after move, %q = %q, want %q", dst, got, want)
+		}
+	}
+
+	reclaim := map[string]bool{}
+	for _, k := range res.Reclaim {
+		reclaim[k] = true
+	}
+	for src := range movePrefixFixture {
+		_, err := s.Head(ctx, src)
+		switch {
+		case errors.Is(err, storage.ErrNotFound):
+			if reclaim[src] {
+				t.Errorf("%q is gone yet listed in Reclaim — Reclaim is for "+
+					"sources that survived the move", src)
+			}
+		case err != nil:
+			t.Errorf("Head(%q): %v", src, err)
+		default:
+			if !reclaim[src] {
+				t.Errorf("%q survived the move but is not in Reclaim — the "+
+					"caller has no way to learn it must be reaped", src)
+			}
+		}
+	}
+
+	// Everything Written must actually be there; a caller reclaims this
+	// list on failure and a phantom key would mask a real leak.
+	for _, k := range res.Written {
+		if _, err := s.Head(ctx, k); err != nil {
+			t.Errorf("Written lists %q but Head says %v", k, err)
+		}
+	}
+}
+
+// testMovePrefixMissingIsNotFound pins the empty-source case: an error
+// the caller can recognise, and no half-built destination.
+func testMovePrefixMissingIsNotFound(t *testing.T, mk MakeBackend) {
+	s, cleanup := mk(t)
+	defer cleanup()
+	ctx := context.Background()
+	// A neighbour that must not be swept in, and proof the backend is
+	// not merely empty.
+	if _, err := s.Put(ctx, "elsewhere/keep.txt", strings.NewReader("keep")); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s.MovePrefix(ctx, "nope", "new")
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("MovePrefix on a missing prefix = %v, want ErrNotFound", err)
+	}
+	if len(res.Written) != 0 || len(res.Reclaim) != 0 {
+		t.Errorf("MovePrefix on a missing prefix reported Written=%v Reclaim=%v; "+
+			"want nothing written", res.Written, res.Reclaim)
+	}
+	if _, err := s.Head(ctx, "new"); !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("Head(new) = %v after a failed move, want ErrNotFound", err)
+	}
+	if got := mustRead(t, s, "elsewhere/keep.txt"); got != "keep" {
+		t.Errorf("unrelated key disturbed: %q", got)
 	}
 }
 

@@ -602,7 +602,11 @@ func TestMetadataWriter_HashStampAfterFileWrite(t *testing.T) {
 // new prefix, and books.folder_path + path are persisted.
 func TestMetadataWriter_FolderRename_NewLayout(t *testing.T) {
 	libRoot := t.TempDir()
-	fs, err := local.New(libRoot)
+	// Rooted at "/", which is what boot builds for a local install
+	// (ADR-0030 §1) and what makes the absolute paths this arm hands to
+	// MovePrefix the keys the adapter answers to. A LocalFS rooted at
+	// libRoot would double the root back onto itself.
+	fs, err := local.New("/")
 	if err != nil {
 		t.Fatalf("local.New: %v", err)
 	}
@@ -732,11 +736,61 @@ func TestMetadataWriter_FolderRename_NoChange(t *testing.T) {
 	}
 }
 
+// copyingBackend is a Storage whose MovePrefix copies rather than
+// renames: the S3 shape, which has no rename and must leave its sources
+// alive for in-flight presigned URLs (ADR-0005).
+//
+// A plain LocalFS used to stand in for S3 in the tests below, and can no
+// longer, now that the move goes through the interface: the local
+// adapter's MovePrefix is one atomic rename(2), so it reports nothing to
+// reclaim and the orphan policy these tests exist to pin would never
+// fire. What they pin is this module's half of the split — enqueue the
+// surviving sources, reclaim the written destinations when the
+// transaction fails — so the double has to be the copy-based half.
+type copyingBackend struct {
+	*local.LocalFS
+}
+
+func (c copyingBackend) MovePrefix(ctx context.Context, oldPrefix, newPrefix string) (storage.MoveResult, error) {
+	src := strings.Trim(oldPrefix, "/") + "/"
+	dst := strings.Trim(newPrefix, "/") + "/"
+	it, err := c.List(ctx, src)
+	if err != nil {
+		return storage.MoveResult{}, err
+	}
+	defer func() { _ = it.Close() }()
+	var srcKeys []string
+	for {
+		obj, nerr := it.Next(ctx)
+		if errors.Is(nerr, io.EOF) {
+			break
+		}
+		if nerr != nil {
+			return storage.MoveResult{}, nerr
+		}
+		srcKeys = append(srcKeys, obj.Key)
+	}
+	if len(srcKeys) == 0 {
+		return storage.MoveResult{}, storage.ErrNotFound
+	}
+	var res storage.MoveResult
+	for _, k := range srcKeys {
+		dstKey := dst + strings.TrimPrefix(k, src)
+		if _, cerr := c.Copy(ctx, k, dstKey); cerr != nil {
+			return res, cerr
+		}
+		res.Written = append(res.Written, dstKey)
+	}
+	res.Reclaim = srcKeys
+	return res, nil
+}
+
 // TestMetadataWriter_FolderRename_S3Renames covers ADR-0005: an
 // S3-backed library now performs an edit-time folder rename via
 // list-prefix + server-side copy + sweeper-deferred delete. Uses
-// local.Storage as a stand-in backend (the rename pipeline is
-// agnostic to the concrete Storage impl).
+// copyingBackend as a stand-in backend — the rename pipeline is
+// agnostic to the concrete Storage impl, but not to whether that impl's
+// MovePrefix is atomic.
 func TestMetadataWriter_FolderRename_S3Renames(t *testing.T) {
 	libRoot := t.TempDir()
 	fs, err := local.New(libRoot)
@@ -765,7 +819,7 @@ func TestMetadataWriter_FolderRename_S3Renames(t *testing.T) {
 	orphans := &fakeOrphans{}
 	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", Path: libRoot, BackendID: &backendID},
-		Storage: fs,
+		Storage: copyingBackend{fs},
 	}
 	libStore := &fakeLibStore{handle: handle}
 	mw := NewMetadataWriter(MetadataWriterDeps{
@@ -864,7 +918,7 @@ func TestMetadataWriter_FolderRename_BackendTxFailRollback(t *testing.T) {
 	orphans := &fakeOrphans{}
 	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", Path: libRoot, BackendID: &backendID},
-		Storage: fs,
+		Storage: copyingBackend{fs},
 	}
 	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,
@@ -922,7 +976,7 @@ func TestMetadataWriter_FolderRename_BackendNoOrphansRepo(t *testing.T) {
 	books := &fakeBookWriter{}
 	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", Path: libRoot, BackendID: &backendID},
-		Storage: fs,
+		Storage: copyingBackend{fs},
 	}
 	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,

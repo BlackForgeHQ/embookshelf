@@ -81,6 +81,24 @@ type CopyResult struct {
 	ETag string
 }
 
+// MoveResult is returned by Storage.MovePrefix. It is the adapter's
+// report of what the move left for its caller to finish.
+//
+// The split is deliberate: the adapter owns the mechanics of relocating
+// bytes, but it cannot own rollback, because only the caller has a
+// database transaction to roll back against. So the adapter states what
+// it wrote and what is still there, and the caller applies its own
+// policy to both lists.
+type MoveResult struct {
+	// Written lists destination keys created. A caller whose own
+	// transaction then fails schedules these for reclamation.
+	Written []string
+	// Reclaim lists source keys still present after the move. A caller
+	// schedules these once its transaction commits. Empty when the move
+	// was atomic and the sources are already gone.
+	Reclaim []string
+}
+
 // Iterator yields objects from List. Callers must Close it.
 type Iterator interface {
 	// Next returns the next object. Returns io.EOF when the iteration
@@ -119,10 +137,31 @@ type Storage interface {
 	// Delete removes a key. Removing a missing key is not an error.
 	Delete(ctx context.Context, key string, opts ...DeleteOption) error
 
-	// Copy duplicates srcKey to dstKey. On LocalFS this is rename(2)
-	// when src and dst share a filesystem, falling back to copy + unlink.
-	// On S3 it is a server-side copy.
+	// Copy duplicates srcKey to dstKey. The source survives on every
+	// backend: LocalFS writes the destination through a temp file and
+	// never unlinks the source, S3 issues a server-side copy. A caller
+	// that wants the source gone follows with Delete, or uses MovePrefix
+	// for a whole folder.
 	Copy(ctx context.Context, srcKey, dstKey string) (CopyResult, error)
+
+	// MovePrefix relocates every object under oldPrefix to newPrefix.
+	// Returns ErrNotFound, having written nothing, when no object lives
+	// under oldPrefix.
+	//
+	// Backends disagree about whether the sources survive, and MoveResult
+	// is where they say so rather than where the caller guesses: an
+	// atomic backend (LocalFS renames the directory) returns both lists
+	// empty, a copy-based backend (S3 has no rename) returns the
+	// destinations it created in Written and the still-live sources in
+	// Reclaim. No backend deletes the sources itself — only the caller
+	// knows when its transaction committed, and on S3 an inflight
+	// presigned URL for a source key must stay valid until it has
+	// (ADR-0005).
+	//
+	// On failure the error comes back alongside a MoveResult whose
+	// Written holds whatever was created before the failure, so the
+	// caller can reclaim a partial write.
+	MovePrefix(ctx context.Context, oldPrefix, newPrefix string) (MoveResult, error)
 
 	// Open returns a random-access view of the object at key. Returns
 	// ErrNotFound when missing. Callers must Close the returned Source.

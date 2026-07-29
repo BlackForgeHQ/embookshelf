@@ -54,9 +54,10 @@ func DecideEffects(trigger Trigger, handle *LibraryHandle, folderChanged bool) E
 	}
 	e := Effects{DB: true, Sidecar: true}
 	if folderChanged {
-		// Both backends rename on user-driven Author/Title edits.
-		// Local: atomic os.Rename. S3: copy + sweeper-deferred delete
-		// per ADR-0005. Trigger gate is the same (TriggerAutoEnrichment
+		// Both backends rename on user-driven Author/Title edits, and
+		// both go through Storage.MovePrefix. Local: one atomic
+		// rename(2). S3: copy + sweeper-deferred delete per ADR-0005.
+		// Trigger gate is the same (TriggerAutoEnrichment
 		// short-circuited above; only manual_edit + apply_enrichment
 		// reach here).
 		e.FolderRename = true
