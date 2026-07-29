@@ -21,6 +21,7 @@ import {
 } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { ProgressBar } from "@/components/ProgressBar"
 import { pollWhile } from "@/lib/poll"
 
 // Roughly the opening 30-40 pages. A 300-page EPUB extracts to about nine
@@ -301,24 +302,7 @@ function GuideRunCard() {
             </span>
             <span className="t-small tabular-nums">{pct}%</span>
           </div>
-          <div
-            aria-label="Reading guide coverage"
-            style={{
-              height: 6,
-              borderRadius: 3,
-              background: "var(--color-rule-soft)",
-              overflow: "hidden",
-            }}
-          >
-            <div
-              style={{
-                width: `${pct}%`,
-                height: "100%",
-                background: "var(--color-accent, #0f766e)",
-                transition: "width .4s ease",
-              }}
-            />
-          </div>
+          <ProgressBar value={pct / 100} label="Reading guide coverage" />
         </div>
       )}
 

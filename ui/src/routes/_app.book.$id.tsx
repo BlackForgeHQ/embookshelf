@@ -36,6 +36,7 @@ import { locatorLabel } from "@/lib/locator"
 import { ConfirmPhraseDialog } from "@/components/ConfirmPhraseDialog"
 import { Cover, StarRating } from "@/components/Cover"
 import { Icon } from "@/components/Icon"
+import { ProgressBar } from "@/components/ProgressBar"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { AudiobookPanel } from "@/components/book/AudiobookPanel"
@@ -198,9 +199,7 @@ function BookDetail() {
                   {Math.round(progress * 100)}%
                 </span>
               </div>
-              <div className="progress">
-                <div style={{ width: `${progress * 100}%` }} />
-              </div>
+              <ProgressBar value={progress} label="Reading progress" />
             </div>
           )}
           <ShelfCard book={b} />

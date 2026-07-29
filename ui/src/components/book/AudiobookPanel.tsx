@@ -16,6 +16,7 @@ import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/Icon"
+import { ProgressBar } from "@/components/ProgressBar"
 import { isNarratableFormat, narratableFormatList } from "@/lib/formats"
 import { runView } from "@/lib/audiobookRun"
 import { pollWhile } from "@/lib/poll"
@@ -183,24 +184,7 @@ function RunProgress({
         </span>
         <span className="t-small tabular-nums">{pct}%</span>
       </div>
-      <div
-        aria-label="Narration progress"
-        style={{
-          height: 6,
-          borderRadius: 3,
-          background: "var(--color-rule-soft)",
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            width: `${pct}%`,
-            height: "100%",
-            background: "var(--color-accent, #0f766e)",
-            transition: "width .4s ease",
-          }}
-        />
-      </div>
+      <ProgressBar value={pct / 100} label="Narration progress" />
       <p className="t-small" style={{ marginTop: 8 }}>
         This runs in the background — you can leave this page.
       </p>

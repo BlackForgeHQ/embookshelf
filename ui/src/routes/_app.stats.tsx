@@ -11,6 +11,7 @@ import type {
 import { statsQuery } from "@/api/stats"
 import { readingStatsQuery } from "@/api/reading"
 import { useApiQuery } from "@/api/query"
+import { ProgressBar } from "@/components/ProgressBar"
 import { TopBar } from "@/components/TopBar"
 
 export const Route = createFileRoute("/_app/stats")({
@@ -301,18 +302,7 @@ function Bar({
       >
         {label}
       </span>
-      <div
-        className="relative h-[6px] overflow-hidden bg-(--color-paper-3)"
-        style={{ borderRadius: 1 }}
-      >
-        <div
-          className="h-full bg-(--color-editorial-accent)"
-          style={{
-            width: `${pct}%`,
-            transition: "width 220ms cubic-bezier(0.16, 1, 0.3, 1)",
-          }}
-        />
-      </div>
+      <ProgressBar value={pct / 100} label={label} style={{ height: 6 }} />
       <span
         className="mono tabular-nums"
         style={{

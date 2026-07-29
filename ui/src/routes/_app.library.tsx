@@ -6,6 +6,7 @@ import { booksQuery, librariesQuery, shelvesQuery } from "@/api/books"
 import { useApiQuery } from "@/api/query"
 import { Cover, StarRating } from "@/components/Cover"
 import { Icon } from "@/components/Icon"
+import { ProgressBar } from "@/components/ProgressBar"
 import { NotebookEmpty } from "@/components/SettingsShared"
 import { ShelfIcon } from "@/components/ShelfIcon"
 import { TopBar } from "@/components/TopBar"
@@ -405,9 +406,11 @@ function BookCard({
           {book.author}
         </div>
         {book.progress > 0 && book.progress < 1 && (
-          <div className="progress" style={{ marginTop: 6, height: 2 }}>
-            <div style={{ width: `${book.progress * 100}%` }} />
-          </div>
+          <ProgressBar
+            value={book.progress}
+            label={`Progress through ${book.title}`}
+            style={{ marginTop: 6, height: 2 }}
+          />
         )}
       </div>
     </button>

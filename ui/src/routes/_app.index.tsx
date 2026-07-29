@@ -9,6 +9,7 @@ import { booksQuery, librariesQuery } from "@/api/books"
 import { readingStatsQuery } from "@/api/reading"
 import { apiQueryOptions } from "@/api/query"
 import { Cover } from "@/components/Cover"
+import { ProgressBar } from "@/components/ProgressBar"
 import { TopBar } from "@/components/TopBar"
 
 export const Route = createFileRoute("/_app/")({
@@ -423,9 +424,7 @@ function ReadingCard({
               {Math.round(progress * 100)}%
             </span>
           </div>
-          <div className="progress">
-            <div style={{ width: `${progress * 100}%` }} />
-          </div>
+          <ProgressBar value={progress} label="Reading progress" />
         </div>
       </div>
     </button>

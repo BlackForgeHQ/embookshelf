@@ -22,6 +22,7 @@ import { librariesQuery } from "@/api/books"
 import { useApiQuery } from "@/api/query"
 import { Icon } from "@/components/Icon"
 import { TopBar } from "@/components/TopBar"
+import { ProgressBar } from "@/components/ProgressBar"
 import { Button } from "@/components/ui/button"
 import {
   BOOKDROP_STATE_LABEL,
@@ -275,15 +276,11 @@ function DropZone({ onUploaded }: { onUploaded: () => void }) {
         </div>
 
         {uploading && (
-          <div className="mt-3 h-[3px] overflow-hidden rounded-[2px] bg-(--color-paper-3)">
-            <div
-              className="h-full bg-(--color-editorial-accent)"
-              style={{
-                width: `${Math.round(progress * 100)}%`,
-                transition: "width 80ms linear",
-              }}
-            />
-          </div>
+          <ProgressBar
+            value={progress}
+            label="Upload progress"
+            style={{ marginTop: 12, height: 3 }}
+          />
         )}
 
         <input

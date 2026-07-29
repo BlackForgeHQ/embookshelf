@@ -20,6 +20,7 @@ import type { Locator } from "@/lib/locator"
 import { useApiMutation } from "@/api/mutation"
 import { useReadingPosition } from "@/hooks/useReadingPosition"
 import { isNarratableFormat, readerKindForFormat } from "@/lib/formats"
+import { ProgressBar } from "@/components/ProgressBar"
 import {
   decodeLocator,
   encodeLocator,
@@ -786,25 +787,7 @@ function ReaderShell({ book }: { book: BookDetail }) {
           >
             {footerPageLabel}
           </span>
-          <div
-            style={{
-              flex: 1,
-              position: "relative",
-              height: 4,
-              background: "var(--color-paper-3)",
-              borderRadius: 2,
-            }}
-          >
-            <div
-              style={{
-                height: 4,
-                width: `${Math.round(percent * 100)}%`,
-                background: "var(--color-accent)",
-                borderRadius: 2,
-                transition: "width 120ms ease",
-              }}
-            />
-          </div>
+          <ProgressBar value={percent} label="Reading progress" />
           <span
             className="mono"
             style={{ fontSize: 10.5, color: "var(--color-ink-3)" }}
@@ -1020,36 +1003,21 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
           >
             p.{page + 1}
           </span>
-          <div
-            style={{
-              flex: 1,
-              position: "relative",
-              height: 4,
-              background: "var(--color-paper-3)",
-              borderRadius: 2,
-              cursor: total > 0 ? "pointer" : "default",
-            }}
-            onClick={(e) => {
-              if (total <= 0) return
-              const rect = e.currentTarget.getBoundingClientRect()
-              const ratio = (e.clientX - rect.left) / rect.width
-              const target = Math.max(
-                0,
-                Math.min(total - 1, Math.round(ratio * (total - 1)))
-              )
-              comicRef.current?.goTo(target)
-            }}
-          >
-            <div
-              style={{
-                height: 4,
-                width: `${Math.round(percent * 100)}%`,
-                background: "var(--color-accent)",
-                borderRadius: 2,
-                transition: "width 120ms ease",
-              }}
-            />
-          </div>
+          <ProgressBar
+            value={percent}
+            label="Page progress"
+            onSeek={
+              total > 0
+                ? (fraction) =>
+                    comicRef.current?.goTo(
+                      Math.max(
+                        0,
+                        Math.min(total - 1, Math.round(fraction * (total - 1)))
+                      )
+                    )
+                : undefined
+            }
+          />
           <span
             className="mono"
             style={{ fontSize: 10.5, color: "var(--color-ink-3)" }}
@@ -1325,34 +1293,19 @@ function AudioReaderShell({
             >
               {formatHMS(seconds)}
             </span>
-            <div
-              style={{
-                flex: 1,
-                position: "relative",
-                height: 4,
-                background: "var(--color-paper-3)",
-                borderRadius: 2,
-                cursor: duration > 0 ? "pointer" : "default",
-              }}
-              onClick={(e) => {
-                if (duration <= 0) return
-                const rect = e.currentTarget.getBoundingClientRect()
-                const ratio = (e.clientX - rect.left) / rect.width
-                audioRef.current?.seekTo(
-                  Math.max(0, Math.min(duration, ratio * duration))
-                )
-              }}
+            <ProgressBar
+              value={percent}
+              label="Listening progress"
+              onSeek={
+                duration > 0
+                  ? (fraction) =>
+                      audioRef.current?.seekTo(
+                        Math.max(0, Math.min(duration, fraction * duration))
+                      )
+                  : undefined
+              }
             >
-              <div
-                style={{
-                  height: 4,
-                  width: `${Math.round(percent * 100)}%`,
-                  background: "var(--color-accent)",
-                  borderRadius: 2,
-                  transition: "width 120ms linear",
-                }}
-              />
-              {/* Chapter tick marks */}
+              {/* Chapter tick marks — the one bar with children. */}
               {book.chapters?.map((c, i) => {
                 if (duration <= 0) return null
                 const left = (c.startS / duration) * 100
@@ -1373,7 +1326,7 @@ function AudioReaderShell({
                   />
                 )
               })}
-            </div>
+            </ProgressBar>
             <span
               className="mono"
               style={{
