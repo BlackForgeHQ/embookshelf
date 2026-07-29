@@ -26,6 +26,15 @@ type FormatSpec struct {
 	// and the worker — because a re-import can change a book's format
 	// between enqueue and dispatch. Three gates, one declaration.
 	Narratable bool
+	// KindleEligible is whether Amazon's Send-to-Kindle service accepts
+	// the format (ADR-0021). EPUB and PDF.
+	//
+	// Deliberately its own field rather than a reuse of Narratable. The
+	// two overlap at EPUB today and answer different questions — one is
+	// "does Amazon take this", the other "is there text to read aloud" —
+	// and a single set standing for both would silently make PDF
+	// narratable the day Amazon changed its mind.
+	KindleEligible bool
 }
 
 // FormatSpecs is every format the library can hold. The client keeps one
@@ -35,8 +44,8 @@ type FormatSpec struct {
 // union, and for the same reason: a runtime fetch to learn that EPUB has
 // text would be absurd, so the pair is guarded instead.
 var FormatSpecs = []FormatSpec{
-	{Format: "EPUB", Narratable: true},
-	{Format: "PDF"},
+	{Format: "EPUB", Narratable: true, KindleEligible: true},
+	{Format: "PDF", KindleEligible: true},
 	{Format: "CBZ"},
 	{Format: "MP3"},
 	{Format: "M4B"},
@@ -65,16 +74,22 @@ func Narratable(format string) bool {
 	return ok && s.Narratable
 }
 
+// KindleEligible reports whether Send-to-Kindle accepts a book's format.
+func KindleEligible(format string) bool {
+	s, ok := LookupFormat(format)
+	return ok && s.KindleEligible
+}
+
 // NarratableFormats lists the formats that can be read aloud, in table
 // order.
 func NarratableFormats() []string {
-	var out []string
-	for _, s := range FormatSpecs {
-		if s.Narratable {
-			out = append(out, s.Format)
-		}
-	}
-	return out
+	return formatsWhere(func(s FormatSpec) bool { return s.Narratable })
+}
+
+// KindleEligibleFormats lists the formats Send-to-Kindle accepts, in
+// table order.
+func KindleEligibleFormats() []string {
+	return formatsWhere(func(s FormatSpec) bool { return s.KindleEligible })
 }
 
 // NarratableFormatList renders those formats for a sentence shown to a
@@ -82,7 +97,29 @@ func NarratableFormats() []string {
 // that sentence appeared verbatim in five places, and a second narratable
 // format would have left every one of them wrong.
 func NarratableFormatList() string {
-	names := NarratableFormats()
+	return formatList(NarratableFormats())
+}
+
+// KindleEligibleFormatList does the same for "Send-to-Kindle accepts
+// EPUB and PDF only", which the handler and the client's disabled
+// tooltip each spelled out.
+func KindleEligibleFormatList() string {
+	return formatList(KindleEligibleFormats())
+}
+
+func formatsWhere(pred func(FormatSpec) bool) []string {
+	var out []string
+	for _, s := range FormatSpecs {
+		if pred(s) {
+			out = append(out, s.Format)
+		}
+	}
+	return out
+}
+
+// formatList renders format names as a sentence fragment: "EPUB", "EPUB
+// and PDF", "EPUB, PDF and CBZ".
+func formatList(names []string) string {
 	switch len(names) {
 	case 0:
 		return "no"

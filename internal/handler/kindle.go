@@ -3,6 +3,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/jobs"
+	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/service"
 )
 
@@ -81,7 +83,7 @@ func (h *Handler) SendToKindle(c *gin.Context, s bookScope) {
 	book := s.Book
 	if !service.IsKindleEligible(book.Format) {
 		writeErrorCode(c, http.StatusUnsupportedMediaType, CodeFormatNotSupported,
-			"Send-to-Kindle accepts EPUB and PDF only")
+			fmt.Sprintf("Send-to-Kindle accepts %s only", model.KindleEligibleFormatList()))
 		return
 	}
 

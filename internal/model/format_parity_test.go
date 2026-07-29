@@ -15,9 +15,12 @@ import (
 // internal/sse's catalog parity and internal/handler's error-code union.
 const clientFormatFile = "../../ui/src/lib/formats.ts"
 
-// clientNarratableAnchor is matched exactly, so renaming the constant
-// cannot leave this test parsing something else and reporting success.
-const clientNarratableAnchor = "export const NARRATABLE_FORMATS = ["
+// The anchors are matched exactly, so renaming a constant cannot leave
+// this test parsing something else and reporting success.
+const (
+	clientNarratableAnchor = "export const NARRATABLE_FORMATS = ["
+	clientKindleAnchor     = "export const KINDLE_ELIGIBLE_FORMATS = ["
+)
 
 // TestNarratableFormatsMatchClient asserts the two declarations are the
 // same set, in both directions.
@@ -29,7 +32,7 @@ const clientNarratableAnchor = "export const NARRATABLE_FORMATS = ["
 func TestNarratableFormatsMatchClient(t *testing.T) {
 	t.Parallel()
 
-	client := clientNarratableFormats(t)
+	client := clientFormatList(t, clientNarratableAnchor)
 
 	for _, format := range NarratableFormats() {
 		if !client[format] {
@@ -45,8 +48,51 @@ func TestNarratableFormatsMatchClient(t *testing.T) {
 	}
 }
 
-// clientNarratableFormats parses the members of the client's list.
-func clientNarratableFormats(t *testing.T) map[string]bool {
+// TestKindleEligibleFormatsMatchClient guards the other capability the
+// client answers locally.
+//
+// Divergence here is a disabled button for a format Amazon would have
+// taken, or an enabled one that 415s after the user clicks it — and
+// Send-to-Kindle has no end-to-end coverage, so this pair of lists is
+// most of what stands behind that gate.
+func TestKindleEligibleFormatsMatchClient(t *testing.T) {
+	t.Parallel()
+
+	client := clientFormatList(t, clientKindleAnchor)
+
+	for _, format := range KindleEligibleFormats() {
+		if !client[format] {
+			t.Errorf("format %q is Send-to-Kindle eligible server-side but absent from %s — "+
+				"the UI disables a send that would have worked", format, clientFormatFile)
+		}
+	}
+	for format := range client {
+		if !KindleEligible(format) {
+			t.Errorf("format %q is listed as Kindle-eligible in %s but the server refuses it — "+
+				"the UI offers a send that 415s", format, clientFormatFile)
+		}
+	}
+}
+
+// The two capabilities are separate sets that happen to overlap. A
+// client module that reused one list for both would pass each test above
+// while making PDF narratable, so the difference itself is asserted.
+func TestClientKeepsTheTwoCapabilitiesApart(t *testing.T) {
+	t.Parallel()
+
+	narratable := clientFormatList(t, clientNarratableAnchor)
+	kindle := clientFormatList(t, clientKindleAnchor)
+
+	if narratable["PDF"] {
+		t.Error("the client lists PDF as narratable — the Kindle set has been reused for narration")
+	}
+	if !kindle["PDF"] {
+		t.Error("the client omits PDF from the Kindle set — the narration set has been reused for sending")
+	}
+}
+
+// clientFormatList parses the members of one of the client's lists.
+func clientFormatList(t *testing.T, anchor string) map[string]bool {
 	t.Helper()
 
 	src, err := os.ReadFile(clientFormatFile)
@@ -59,7 +105,7 @@ func clientNarratableFormats(t *testing.T) map[string]bool {
 	inList := false
 	for _, line := range strings.Split(string(src), "\n") {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == clientNarratableAnchor {
+		if trimmed == anchor {
 			inList = true
 			continue
 		}
@@ -77,7 +123,7 @@ func clientNarratableFormats(t *testing.T) map[string]bool {
 
 	if len(names) == 0 {
 		t.Fatalf("parsed no members from %s in %s — the declaration's shape changed "+
-			"and this test is no longer checking anything", clientNarratableAnchor, clientFormatFile)
+			"and this test is no longer checking anything", anchor, clientFormatFile)
 	}
 	return names
 }

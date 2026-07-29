@@ -18,7 +18,6 @@ import {
   bookQuery,
   bookQueryKey,
   deleteBook,
-  isKindleEligibleFormat,
   patchBook,
   removeBookFromShelf,
   sendBookToKindle,
@@ -26,6 +25,7 @@ import {
   shelvesQueryKey,
 } from "@/api/books"
 import { appConfigQuery } from "@/api/settings"
+import { kindleAction } from "@/lib/kindle"
 import {
   DEVICE_KIND_LABELS,
   devicesQuery,
@@ -1028,30 +1028,28 @@ function SendToKindleButton({
     errorToast: (e) => e.message || "Send to Kindle failed.",
   })
 
-  const eligible = isKindleEligibleFormat(book.format)
-  const emailEnabled = cfg.data?.emailEnabled !== false
-  const hasKindle = kindleEmail.trim() !== ""
+  // The three preconditions, and their order, live in lib/kindle.ts:
+  // they mirror the handler's three outcomes, and as early returns here
+  // no test could reach them (#193).
+  const action = kindleAction({
+    emailEnabled: cfg.data?.emailEnabled !== false,
+    format: book.format,
+    kindleEmail,
+  })
 
-  if (!emailEnabled) {
-    // Hide entirely when the instance has no SMTP wired up — avoids
-    // teasing a feature the admin can't enable in this session.
+  if (action.kind === "hidden") {
     return null
   }
 
-  if (!eligible) {
+  if (action.kind === "ineligible") {
     return (
-      <Button
-        variant="outline"
-        size="sm"
-        disabled
-        title="Send-to-Kindle accepts EPUB and PDF only"
-      >
+      <Button variant="outline" size="sm" disabled title={action.reason}>
         <Icon name="device" size={13} /> Send to Kindle
       </Button>
     )
   }
 
-  if (!hasKindle) {
+  if (action.kind === "needs-address") {
     return (
       <Button
         variant="outline"

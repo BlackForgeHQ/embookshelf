@@ -33,20 +33,17 @@ const InviteTTL = 7 * 24 * time.Hour
 // SendToKindleMaxBytes mirrors Amazon's per-attachment cap. ADR-0021.
 const SendToKindleMaxBytes int64 = 50 * 1024 * 1024
 
-// kindleEligibleFormat is the set of book formats Send-to-Kindle
-// accepts. The set is duplicated server-side and in the UI; both
-// callers consult constants in their own layer rather than a runtime
-// fetch. ADR-0021.
-var kindleEligibleFormat = map[string]struct{}{
-	"epub": {},
-	"pdf":  {},
-}
-
 // IsKindleEligible reports whether a book's primary format can be
-// shipped via Send-to-Kindle. Format is compared case-insensitively.
+// shipped via Send-to-Kindle (ADR-0021). Format is compared
+// case-insensitively.
+//
+// The set is model.FormatSpecs, alongside narratability and for the same
+// reason: the answer was declared here and again in the client, with the
+// rejection sentence written out in both (#193). The client still keeps
+// its own copy — a round-trip to learn that Amazon takes PDF would be
+// absurd — but a parity test now holds the two equal.
 func IsKindleEligible(format string) bool {
-	_, ok := kindleEligibleFormat[strings.ToLower(format)]
-	return ok
+	return model.KindleEligible(format)
 }
 
 // ErrEmailDisabled is returned by Notifier methods when the
