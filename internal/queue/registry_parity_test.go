@@ -10,7 +10,10 @@ import (
 )
 
 // architectureDoc holds the register §4.4 describes in prose.
-const architectureDoc = "../../docs/ARCHITECTURE.md"
+// Lower-case, as on disk. This read spelled it ARCHITECTURE.md and
+// passed on macOS, whose filesystem is case-insensitive, then failed on
+// the first Linux CI run that ever executed it (#216).
+const architectureDoc = "../../docs/architecture.md"
 
 // workerBullet matches one entry of the §4.4 worker list: a bullet whose
 // first backticked token is the job kind.

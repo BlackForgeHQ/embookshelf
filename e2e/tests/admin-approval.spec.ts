@@ -66,7 +66,11 @@ test.describe('OIDC admin approval', () => {
     page,
   }) => {
     await page.goto('/settings')
-    await page.getByRole('button', { name: 'Users & roles', exact: true }).click()
+    // Not exact: the pending badge renders inside this button, so
+    // seeding the users these specs need changes the button's own
+    // accessible name to "Users & roles 2". The exact match could
+    // only ever pass when the fixture had not been applied (#216).
+    await page.getByRole('button', { name: 'Users & roles' }).click()
     await expect(
       page.getByRole('main').getByRole('heading', { name: 'Users & roles' })
     ).toBeVisible()
@@ -89,7 +93,11 @@ test.describe('OIDC admin approval', () => {
 
   test('deny flips status to denied and keeps row durable', async ({ page }) => {
     await page.goto('/settings')
-    await page.getByRole('button', { name: 'Users & roles', exact: true }).click()
+    // Not exact: the pending badge renders inside this button, so
+    // seeding the users these specs need changes the button's own
+    // accessible name to "Users & roles 2". The exact match could
+    // only ever pass when the fixture had not been applied (#216).
+    await page.getByRole('button', { name: 'Users & roles' }).click()
     await expect(
       page.getByRole('main').getByRole('heading', { name: 'Users & roles' })
     ).toBeVisible()

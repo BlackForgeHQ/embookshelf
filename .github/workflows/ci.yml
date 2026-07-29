@@ -54,7 +54,10 @@ jobs:
       - name: actionlint
         uses: raven-actions/actionlint@v2
         with:
-          flags: -ignore "create-github-app-token"
+          # Unquoted: the action splits flags with a regex that keeps
+          # quotes in the token, so a quoted value reaches actionlint as
+          # part of the pattern and matches nothing.
+          flags: -ignore create-github-app-token
 
   go-test:
     name: go-test
