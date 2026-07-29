@@ -140,18 +140,24 @@ test.describe('library', () => {
     // input (also role="combobox") doesn't shadow it under strict mode.
     const trigger = page.locator('[data-slot="select-trigger"]');
 
-    const sorted = page.waitForResponse(
-      (r) => /\/api\/v1\/books\?.*sort=title/.test(r.url()) && r.ok(),
-    );
-    await trigger.click();
-    await page.getByRole('option', { name: 'Title' }).click();
-    await sorted;
-
+    // Neither selection may be the route's default, which is `title`.
+    // Choosing Title changed nothing, so react-query served the cache
+    // and no request went out; the wait only ever succeeded by catching
+    // the page's own initial load still in flight. That race is why this
+    // spec was green locally and failed in CI (#216).
     const authorSorted = page.waitForResponse(
       (r) => /\/api\/v1\/books\?.*sort=author/.test(r.url()) && r.ok(),
     );
     await trigger.click();
     await page.getByRole('option', { name: 'Author' }).click();
     await authorSorted;
+
+    // "Recently added" is the UI's name for the backend's `recent`.
+    const recentSorted = page.waitForResponse(
+      (r) => /\/api\/v1\/books\?.*sort=recent/.test(r.url()) && r.ok(),
+    );
+    await trigger.click();
+    await page.getByRole('option', { name: 'Recently added' }).click();
+    await recentSorted;
   });
 });
