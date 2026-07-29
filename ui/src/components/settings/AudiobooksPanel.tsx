@@ -22,6 +22,7 @@ import {
 } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { narratableFormatList } from "@/lib/formats"
 
 const emptyForm: AudiobookSettings = {
   enabled: false,
@@ -94,8 +95,9 @@ export function AudiobooksPanel() {
       <Card>
         <h3 className="t-h3 mb-2">Audiobook narration</h3>
         <p className="t-small mb-4">
-          Reads an EPUB aloud with a text-to-speech engine and saves the result
-          beside the book as an MP3 with chapter marks. Generation is admin-only
+          Reads {narratableFormatList()} books aloud with a text-to-speech
+          engine and saves the result beside the book as an MP3 with chapter
+          marks. Generation is admin-only
           and always per book — there is no bulk run, because narrating a
           thousand-book library would cost thousands of dollars.
         </p>

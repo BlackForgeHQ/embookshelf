@@ -16,11 +16,8 @@ import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/Icon"
+import { isNarratableFormat, narratableFormatList } from "@/lib/formats"
 
-// Only EPUB carries text an engine can read. The first of the Narratable
-// format's three gates — the handler and the worker hold the other two,
-// because a re-import can change a book's format between them.
-const NARRATABLE = new Set(["EPUB"])
 
 function isRunning(a: Audiobook): boolean {
   return a.state === "pending" || a.state === "running"
@@ -120,11 +117,12 @@ function EmptyState({
   confirming: boolean
   setConfirming: (v: boolean) => void
 }) {
-  if (!NARRATABLE.has(format.toUpperCase())) {
+  if (!isNarratableFormat(format)) {
     return (
       <p className="t-small">
-        Only EPUB books can be narrated — this one is {format}. Text has to
-        come from somewhere, and no other format in the library carries any.
+        Only {narratableFormatList()} books can be narrated — this one is{" "}
+        {format}. Text has to come from somewhere, and no other format in the
+        library carries any.
       </p>
     )
   }
@@ -362,12 +360,12 @@ function RegenerateButton({
       err.code === "AUDIOBOOKS_DISABLED"
         ? "No text-to-speech engine is configured. An admin can set one up in Settings."
         : err.code === "FORMAT_NOT_NARRATABLE"
-          ? "Only EPUB books can be narrated."
+          ? `Only ${narratableFormatList()} books can be narrated.`
           : err.message,
     onSuccess: () => setConfirming(false),
   })
 
-  if (!NARRATABLE.has(format.toUpperCase())) return null
+  if (!isNarratableFormat(format)) return null
 
   if (!confirming) {
     return (

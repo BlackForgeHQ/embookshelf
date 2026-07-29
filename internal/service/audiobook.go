@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
@@ -20,7 +19,10 @@ import (
 //
 // Unlike a reading guide, there is no degraded mode to fall back to —
 // nobody wants a narrated blurb — so this is a gate, not a downgrade.
-var ErrNotNarratable = errors.New("only EPUB books can be narrated")
+//
+// The message names the formats from the spec table rather than spelling
+// EPUB out, because this sentence had four other copies (#192).
+var ErrNotNarratable = fmt.Errorf("only %s books can be narrated", model.NarratableFormatList())
 
 // charsPerMinuteOfSpeech converts characters to audio duration for the
 // pre-flight estimate. Around 150 words per minute at roughly 6
@@ -165,8 +167,12 @@ func (s *AudiobookService) dispatchFinalize(ctx context.Context, bookID string) 
 // at three points like Send-to-Kindle's Eligible format — the UI button,
 // the handler, and the worker — because a re-import can change a book's
 // format between enqueue and dispatch.
+//
+// The set itself is model.FormatSpecs. This stays as the name the
+// audiobook code calls, so the three gates read the same as they did,
+// but it no longer knows which formats qualify (#192).
 func Narratable(format string) bool {
-	return strings.EqualFold(strings.TrimSpace(format), "EPUB")
+	return model.Narratable(format)
 }
 
 // Estimate reports what a run would cost without starting one.

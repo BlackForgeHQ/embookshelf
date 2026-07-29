@@ -19,6 +19,7 @@ import type { PdfProgress, PdfReaderHandle } from "@/components/PdfReader"
 import type { Locator } from "@/lib/locator"
 import { useApiMutation } from "@/api/mutation"
 import { useReadingPosition } from "@/hooks/useReadingPosition"
+import { isNarratableFormat } from "@/lib/formats"
 import {
   decodeLocator,
   encodeLocator,
@@ -96,7 +97,10 @@ function Reader() {
     )
   }
 
-  if (b.format === "EPUB") {
+  // Narratable rather than EPUB: what makes a book worth checking for an
+  // audio rendition is that something could have narrated it, which is
+  // the same question the panel and the handler ask (#192).
+  if (isNarratableFormat(b.format)) {
     return <NarratableShell book={b} />
   }
   return <ReaderShell book={b} />

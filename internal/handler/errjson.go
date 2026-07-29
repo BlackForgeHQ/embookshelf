@@ -37,7 +37,8 @@ const (
 	// cannot be generated (ADR-0026).
 	CodeAudiobooksDisabled = "AUDIOBOOKS_DISABLED"
 	// CodeFormatNotNarratable — the book's format is outside the
-	// Narratable set, which is EPUB alone (ADR-0028 §4). Distinct from
+	// Narratable set, which is model.FormatSpecs' business to name and
+	// today is EPUB alone (ADR-0028 §4). Distinct from
 	// CodeFormatNotSupported, which is Send-to-Kindle's different gate.
 	CodeFormatNotNarratable = "FORMAT_NOT_NARRATABLE"
 )

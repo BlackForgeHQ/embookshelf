@@ -271,7 +271,7 @@ func (h *Handler) audiobookPreflight(c *gin.Context, book model.Book) (model.Boo
 	// worker. A re-import can change a book's format between them.
 	if !service.Narratable(book.Format) {
 		writeErrorCode(c, http.StatusUnsupportedMediaType, CodeFormatNotNarratable,
-			"only EPUB books can be narrated")
+			service.ErrNotNarratable.Error())
 		return zeroBook, zeroOpts, false
 	}
 
@@ -361,7 +361,7 @@ func (h *Handler) writeAudiobookError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrNotNarratable):
 		writeErrorCode(c, http.StatusUnsupportedMediaType, CodeFormatNotNarratable,
-			"only EPUB books can be narrated")
+			service.ErrNotNarratable.Error())
 	case errors.Is(err, tts.ErrPermanent):
 		writeError(c, http.StatusBadGateway, err.Error())
 	case errors.Is(err, repo.ErrNotFound):
