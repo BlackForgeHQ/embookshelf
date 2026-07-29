@@ -168,13 +168,24 @@ type AudiobookOutcome struct {
 // and must not be resurrected (ADR-0028 §6), and a failed run does not
 // need its failure recorded a second time.
 func NextForRun(state AudiobookState, cov AudiobookCoverage) AudiobookNext {
-	if state == AudiobookReady || state == AudiobookCanceled {
+	// All three outrank Coverage, and failed belongs here rather than on
+	// the fail arm alone. A run whose every Segment landed but whose
+	// *finalize* failed keeps complete Coverage forever, so guarding only
+	// the fail arm left this answering Finalize on every read — and it is
+	// read on every book-detail load, so each answer re-assembled a file
+	// that can be half a gigabyte, failed again, and re-marked failed.
+	// Unbounded, unlogged, and contradicted by this function's own
+	// docstring (#206).
+	//
+	// Recovering such a run is Retry's job: an explicit action, once,
+	// rather than reconcile-on-read guessing forever.
+	if state == AudiobookReady || state == AudiobookCanceled || state == AudiobookFailed {
 		return AudiobookNextNothing
 	}
 	switch {
 	case cov.Complete():
 		return AudiobookNextFinalize
-	case cov.Settled() && cov.Failed > 0 && state != AudiobookFailed:
+	case cov.Settled() && cov.Failed > 0:
 		return AudiobookNextFail
 	default:
 		return AudiobookNextNothing

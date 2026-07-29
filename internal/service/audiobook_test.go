@@ -736,3 +736,45 @@ func TestRetryFinalizesAStrandedRunInsteadOfRefusing(t *testing.T) {
 		t.Errorf("re-synthesized %v — every one of those segments is already paid for", segs)
 	}
 }
+
+// Reconcile-on-read no longer re-dispatches finalize for a failed run
+// (#206), so Retry is the only route back for one whose Segments all
+// landed and whose finalize was what broke. If this stops working, that
+// run is stranded with its audio bought and no way to assemble it.
+func TestRetryFinalizesARunThatFailedAtFinalize(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeAudiobookStore{
+		run:      model.Audiobook{BookID: "b1", State: model.AudiobookFailed},
+		coverage: model.AudiobookCoverage{Total: 3, Done: 3},
+	}
+	rec := &recordingEnqueuer{}
+	svc := NewAudiobookService(store, nil, rec)
+
+	if err := svc.Retry(context.Background(), "b1"); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+
+	if got := rec.finalizes(); len(got) != 1 || got[0] != "b1" {
+		t.Errorf("finalizes = %v, want one for b1 — the run is stranded otherwise", got)
+	}
+}
+
+// A cancelled run stays cancelled however complete its Coverage is. The
+// user pressed stop; Retry must not be a way around that (ADR-0028 §6).
+func TestRetryDoesNotResurrectACanceledRunWithCompleteCoverage(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeAudiobookStore{
+		run:      model.Audiobook{BookID: "b1", State: model.AudiobookCanceled},
+		coverage: model.AudiobookCoverage{Total: 3, Done: 3},
+	}
+	rec := &recordingEnqueuer{}
+	svc := NewAudiobookService(store, nil, rec)
+
+	_ = svc.Retry(context.Background(), "b1")
+
+	if got := rec.finalizes(); len(got) != 0 {
+		t.Errorf("finalizes = %v, want none for a canceled run", got)
+	}
+}
