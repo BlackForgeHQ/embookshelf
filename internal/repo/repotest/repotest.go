@@ -106,6 +106,8 @@ yourself and export the DSN:
 
 	t.Cleanup(func() { _ = d.Close() })
 
+	ensurePgcrypto(t, d)
+
 	if _, err := d.SQL.ExecContext(ctx, `CREATE SCHEMA `+quoteIdent(schema)); err != nil {
 		t.Fatalf("repotest create schema: %v", err)
 	}
@@ -122,6 +124,52 @@ yourself and export the DSN:
 		t.Fatalf("repotest postgres migrate: %v", err)
 	}
 	return d
+}
+
+// ensurePgcrypto creates the extension once, under a lock, before any
+// schema migrates.
+//
+// `CREATE EXTENSION IF NOT EXISTS` is not atomic against a concurrent
+// twin: the existence check and the insert into pg_extension are
+// separate, so two sessions running it at the same instant both pass the
+// check and the loser gets "duplicate key value violates unique
+// constraint pg_extension_name_index". Every repotest.New runs the
+// migration set, and `go test ./...` runs packages in parallel, so a
+// fresh database gets a burst of exactly that.
+//
+// It never reproduced locally because a development database has had the
+// extension since its first migration, which makes the statement a
+// no-op. CI builds a new Postgres per run, so it hit on the first
+// enabled run and took six tests with it.
+//
+// An advisory lock rather than a retry: the contention is one statement
+// long and only at the very start of a run, and a lock says what is
+// actually true — this statement may not run twice at once.
+func ensurePgcrypto(t *testing.T, d *db.DB) {
+	t.Helper()
+	ctx := context.Background()
+
+	// Arbitrary but fixed: every repotest process must pick the same key
+	// for the lock to mean anything.
+	const lockKey = 4207180921
+
+	if _, err := d.SQL.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, lockKey); err != nil {
+		t.Fatalf("repotest advisory lock: %v", err)
+	}
+	defer func() {
+		if _, err := d.SQL.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, lockKey); err != nil {
+			t.Fatalf("repotest advisory unlock: %v", err)
+		}
+	}()
+
+	// Into public deliberately, not the test's own schema. The extension
+	// is database-wide — pg_extension is keyed by name alone — so letting
+	// the first test schema own it means dropping that schema on cleanup
+	// takes pgcrypto away from every schema still running.
+	if _, err := d.SQL.ExecContext(ctx,
+		`CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public`); err != nil {
+		t.Fatalf("repotest create pgcrypto: %v", err)
+	}
 }
 
 func applyMigrations(d *db.DB) error {

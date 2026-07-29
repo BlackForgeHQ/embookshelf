@@ -41,8 +41,20 @@ jobs:
           version: ${{ steps.golangci-version.outputs.version }}
           args: --timeout=5m
 
+      # actionlint's bundled metadata for actions/create-github-app-token
+      # is stale: it reports `app-id` as required and `client-id` as
+      # undefined, but the action's own action.yml declares both, each
+      # `required: false` — authenticating by Client ID is supported and
+      # is what release-please.yml does. Verified against the action
+      # repository rather than taken on faith, because the alternative
+      # "fix" is editing live release credentials to satisfy a linter.
+      #
+      # Scoped to the one action so every other input mistake still
+      # fails the job.
       - name: actionlint
         uses: raven-actions/actionlint@v2
+        with:
+          flags: -ignore "create-github-app-token"
 
   go-test:
     name: go-test
