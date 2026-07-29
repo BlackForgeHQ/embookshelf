@@ -57,13 +57,29 @@ func LibraryScan(ctx context.Context, args jobs.LibraryScanArgs, deps LibrarySca
 		return nil
 	}
 	store := handle.Storage
-	root := lib.Path
-	if lib.Root != nil && *lib.Root != "" {
-		root = *lib.Root
-	}
-	if root == "" {
-		slog.Warn("library scan: empty root, skipping", "library_id", lib.ID)
-		return nil
+
+	// Where the walk starts, and it differs by Backend kind.
+	//
+	// An object store owns its own per-library prefix, so the walk starts
+	// at the top of it and the keys come back already library-relative. A
+	// local Backend is rooted at "/" for the whole instance (ADR-0030
+	// §1), so the walk starts at the Library's own root and every entry
+	// has to be relativized against it.
+	//
+	// The previous guard could not tell those apart: an S3 Library has no
+	// root by design, that read as "not configured", and Library scan
+	// silently skipped every one of them while reporting success (#203).
+	prefix := ""
+	if !handle.IsObjectStore() {
+		prefix = lib.Path
+		if lib.Root != nil && *lib.Root != "" {
+			prefix = *lib.Root
+		}
+		if prefix == "" {
+			slog.Warn("library scan: local library has no root configured, skipping",
+				"library_id", lib.ID)
+			return nil
+		}
 	}
 
 	dbFiles, err := deps.Files.ListByLibrary(ctx, lib.ID)
@@ -72,11 +88,15 @@ func LibraryScan(ctx context.Context, args jobs.LibraryScanArgs, deps LibrarySca
 	}
 
 	var walked []scan.WalkEntry
-	entries, errc := scan.Walk(ctx, store, root)
+	entries, errc := scan.Walk(ctx, store, prefix)
 	for e := range entries {
-		// Convert the absolute key (LocalFS rooted at "/") to library-
-		// relative location so it matches what the DB stores.
-		e.Location = handle.Relativize("/" + e.Location)
+		if !handle.IsObjectStore() {
+			// A "/"-rooted local Backend lists absolute paths with the
+			// leading slash stripped; the DB stores library-relative
+			// locations. An object store already lists them relative to
+			// its own prefix, so there is nothing to strip.
+			e.Location = handle.Relativize("/" + e.Location)
+		}
 		walked = append(walked, e)
 	}
 	if walkErr := <-errc; walkErr != nil && !errors.Is(walkErr, context.Canceled) {
@@ -154,7 +174,7 @@ func LibraryScan(ctx context.Context, args jobs.LibraryScanArgs, deps LibrarySca
 		slog.Warn("library scan: touch", "id", lib.ID, "err", err)
 	}
 	slog.Info("library scan done",
-		"library", lib.ID, "root", root,
+		"library", lib.ID, "prefix", prefix, "object_store", handle.IsObjectStore(),
 		"files", len(walked),
 		"relocated", len(relocated),
 		"missing", len(cs.Missing),
