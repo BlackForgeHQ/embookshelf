@@ -17,11 +17,10 @@ import { useApiQuery } from "@/api/query"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/Icon"
 import { isNarratableFormat, narratableFormatList } from "@/lib/formats"
+import { runView } from "@/lib/audiobookRun"
+import { pollWhile } from "@/lib/poll"
+import type { RunView } from "@/lib/audiobookRun"
 
-
-function isRunning(a: Audiobook): boolean {
-  return a.state === "pending" || a.state === "running"
-}
 
 function formatDuration(seconds: number): string {
   if (seconds <= 0) return "—"
@@ -49,13 +48,9 @@ export function AudiobookPanel({
   const isAdmin = me.data?.role === "admin"
 
   const audiobook = useApiQuery(bookAudiobookQuery(bookId), {
-    // Poll only while something is actually moving, and stop on its own
-    // once it is not — the same self-terminating shape the guide run
-    // uses, so an idle instance is never polled.
-    refetchInterval: (q) => {
-      const d = q.state.data
-      return d && isRunning(d) ? 4000 : false
-    },
+    // Polls only while something is moving and stops on its own — the
+    // shape and the cadence are shared with the guide run (#197).
+    refetchInterval: pollWhile((a: Audiobook) => runView(a).phase === "running"),
   })
 
   const [confirming, setConfirming] = useState(false)
@@ -76,26 +71,30 @@ export function AudiobookPanel({
     )
   }
 
+  // Every branch below reads derived facts. The panel used to compare
+  // state strings in four places (#197).
+  const view = runView(a)
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 640 }}>
-      {isRunning(a) ? (
-        <RunProgress audiobook={a} bookId={bookId} isAdmin={isAdmin} />
-      ) : a.state === "ready" ? (
+      {view.phase === "running" ? (
+        <RunProgress audiobook={a} view={view} bookId={bookId} isAdmin={isAdmin} />
+      ) : view.phase === "ready" ? (
         <ReadyState audiobook={a} bookId={bookId} />
       ) : (
-        <StoppedState audiobook={a} bookId={bookId} isAdmin={isAdmin} />
+        <StoppedState audiobook={a} view={view} bookId={bookId} isAdmin={isAdmin} />
       )}
 
-      <Provenance audiobook={a} />
+      {view.showProvenance && <Provenance audiobook={a} />}
 
-      {isAdmin && !isRunning(a) && (
+      {isAdmin && view.canRegenerate && (
         <div style={{ display: "flex", gap: 8 }}>
           <RegenerateButton
             bookId={bookId}
             format={format}
             confirming={confirming}
             setConfirming={setConfirming}
-            hasExisting={a.state === "ready"}
+            hasExisting={view.phase === "ready"}
           />
           <DeleteButton bookId={bookId} />
         </div>
@@ -157,10 +156,12 @@ function EmptyState({
 // tens of minutes.
 function RunProgress({
   audiobook,
+  view,
   bookId,
   isAdmin,
 }: {
   audiobook: Audiobook
+  view: RunView
   bookId: string
   isAdmin: boolean
 }) {
@@ -168,10 +169,7 @@ function RunProgress({
     successToast: "Narration cancelled.",
   })
 
-  const pct =
-    audiobook.segmentsTotal > 0
-      ? Math.round((audiobook.segmentsDone / audiobook.segmentsTotal) * 100)
-      : 0
+  const pct = view.percent
 
   return (
     <div>
@@ -206,7 +204,7 @@ function RunProgress({
       <p className="t-small" style={{ marginTop: 8 }}>
         This runs in the background — you can leave this page.
       </p>
-      {isAdmin && (
+      {isAdmin && view.canCancel && (
         <div style={{ marginTop: 10 }}>
           <Button
             variant="outline"
@@ -259,10 +257,12 @@ function ReadyState({
 // Retry is cheap, while a cancel threw the partial away.
 function StoppedState({
   audiobook,
+  view,
   bookId,
   isAdmin,
 }: {
   audiobook: Audiobook
+  view: RunView
   bookId: string
   isAdmin: boolean
 }) {
@@ -270,7 +270,9 @@ function StoppedState({
     successToast: "Picking up where it stopped.",
   })
 
-  const failed = audiobook.state === "failed"
+  // Retry is offered on a failure and not on a cancellation, which is
+  // also what distinguishes the two sentences below.
+  const failed = view.canRetry
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <p
@@ -310,7 +312,6 @@ function StoppedState({
 }
 
 function Provenance({ audiobook }: { audiobook: Audiobook }) {
-  if (audiobook.state === "pending") return null
   return (
     <p
       className="t-small"
