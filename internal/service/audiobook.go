@@ -35,8 +35,16 @@ const charsPerMinuteOfSpeech = 900
 // Narrow so the lifecycle is exercisable without a database.
 type audiobookStore interface {
 	Start(ctx context.Context, ab model.Audiobook, segments []model.AudiobookSegment) error
+	// RecordSegment writes one segment's result and returns what the run
+	// does next, both under the run row's lock. The narrow declarations
+	// the segment worker and the finalize worker each kept over the same
+	// repo collapsed into this one (#190).
+	RecordSegment(ctx context.Context, bookID string, seq int, res model.SegmentResult) (model.AudiobookOutcome, error)
 	GetByBookID(ctx context.Context, bookID string) (model.Audiobook, error)
 	SetState(ctx context.Context, bookID string, state model.AudiobookState, msg string) error
+	// FailRun marks a run failed and reports whether it moved, so the
+	// publish that tells the UI to stop polling fires once.
+	FailRun(ctx context.Context, bookID, msg string) (bool, error)
 	ListUnfinishedSegments(ctx context.Context, bookID string) ([]model.AudiobookSegment, error)
 	Coverage(ctx context.Context, bookID string) (model.AudiobookCoverage, error)
 }
@@ -86,6 +94,9 @@ type AudiobookService struct {
 	// either a live client or a jobs.Deferred standing in for one.
 	enq   jobs.Enqueuer
 	sweep StagingSweeper
+	// pub emits a run's change over SSE. Optional: a deployment with no
+	// hub still runs, it just does not push.
+	pub func(bookID string)
 }
 
 // StagingSweeper discards a run's staged segments.
@@ -101,6 +112,12 @@ func NewAudiobookService(
 	enq jobs.Enqueuer,
 ) *AudiobookService {
 	return &AudiobookService{store: store, books: books, enq: enq}
+}
+
+// WithPublisher wires the SSE notification a transition emits.
+func (s *AudiobookService) WithPublisher(pub func(bookID string)) *AudiobookService {
+	s.pub = pub
+	return s
 }
 
 // WithStagingSweeper wires the cleanup Cancel performs.
@@ -141,20 +158,18 @@ func (s *AudiobookService) Status(ctx context.Context, bookID string) (model.Aud
 
 // reconcile applies whatever NextForRun derives, returning the run as it
 // stands afterwards.
+//
+// Best effort by construction: a queue that is down costs the recovery,
+// not the read — a status endpoint that 500s because finalize could not
+// be enqueued would hide the very progress it exists to show.
 func (s *AudiobookService) reconcile(ctx context.Context, run model.Audiobook, cov model.AudiobookCoverage) model.Audiobook {
-	switch model.NextForRun(run.State, cov) {
-	case model.AudiobookNextFinalize:
-		if err := s.dispatchFinalize(ctx, run.BookID); err != nil {
-			slog.Warn("audiobook: reconcile finalize", "book", run.BookID, "err", err)
-		}
-	case model.AudiobookNextFail:
-		msg := cov.FailureMessage()
-		if err := s.store.SetState(ctx, run.BookID, model.AudiobookFailed, msg); err != nil {
-			slog.Warn("audiobook: reconcile failure", "book", run.BookID, "err", err)
-			return run
-		}
-		run.State, run.Error = model.AudiobookFailed, msg
-	case model.AudiobookNextNothing:
+	state, err := s.advance(ctx, run.BookID, run.State, cov)
+	if err != nil {
+		slog.Warn("audiobook: reconcile", "book", run.BookID, "err", err)
+		return run
+	}
+	if state == model.AudiobookFailed {
+		run.State, run.Error = model.AudiobookFailed, cov.FailureMessage()
 	}
 	return run
 }
@@ -247,9 +262,9 @@ func (s *AudiobookService) dispatchAll(ctx context.Context, bookID string, segme
 			// from "engine rejected the text" with errors.Is. Same text
 			// either way — %w formats identically to %v in Error().
 			wrapped := fmt.Errorf("could not queue segment %d: %w", seg.Seq, err)
-			if serr := s.store.SetState(ctx, bookID, model.AudiobookFailed, wrapped.Error()); serr != nil {
-				slog.Warn("audiobook: mark failed after dispatch error", "book", bookID, "err", serr)
-			}
+			// FailRun logs rather than returning: what the caller needs to
+			// hear about is the dispatch failure it is already returning.
+			_ = s.FailRun(ctx, bookID, wrapped.Error())
 			return wrapped
 		}
 	}
@@ -339,7 +354,8 @@ func (s *AudiobookService) Retry(ctx context.Context, bookID string) error {
 	// done. Both of those guards fired on it, which is how the one thing
 	// the user could still press told them there was nothing to do.
 	if model.NextForRun(run.State, cov) == model.AudiobookNextFinalize {
-		return s.dispatchFinalize(ctx, bookID)
+		_, err := s.advance(ctx, bookID, run.State, cov)
+		return err
 	}
 	if run.State == model.AudiobookRunning {
 		return fmt.Errorf("audiobook for %s is already running", bookID)

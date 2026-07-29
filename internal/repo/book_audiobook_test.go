@@ -4,8 +4,14 @@ package repo_test
 
 import (
 	"context"
+	"database/sql"
+	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/fileproc"
@@ -120,11 +126,14 @@ func TestRecordSegmentPersistsTheSegmentItReportedOn(t *testing.T) {
 	}
 }
 
-// ADR-0028 §6: when the last outstanding segment gives up, the run fails
-// with a count of what was lost — and the run is failed by the same write
-// that recorded the segment, not by a follow-up call that a crash can
-// swallow.
-func TestRecordSegmentFailsTheRunWhenTheLastSegmentGivesUp(t *testing.T) {
+// ADR-0028 §6: when the last outstanding segment gives up, the write
+// reports that the run must fail — and reports it from under the run
+// row's lock, so exactly one landing reaches that verdict.
+//
+// Carrying it out is AudiobookService's, which is what made "mark the run
+// failed" one writer instead of four (#190). What this asserts is the
+// verdict and what survives it.
+func TestRecordSegmentReportsFailWhenTheLastSegmentGivesUp(t *testing.T) {
 	bookID, audiobooks := audiobookFixture(t, repotest.New(t), 3)
 	ctx := context.Background()
 
@@ -144,15 +153,20 @@ func TestRecordSegmentFailsTheRunWhenTheLastSegmentGivesUp(t *testing.T) {
 		t.Fatalf("next = %q, want fail", out.Next)
 	}
 
+	if !strings.Contains(out.Coverage.FailureMessage(), "1 of 3") {
+		t.Errorf("coverage message = %q, want it to say how much was lost",
+			out.Coverage.FailureMessage())
+	}
+
+	// Still running: the transition is the caller's to apply, and a
+	// crash before it does is what reconcile-on-read exists for.
 	run, err := audiobooks.GetByBookID(ctx, bookID)
 	if err != nil {
 		t.Fatalf("GetByBookID: %v", err)
 	}
-	if run.State != model.AudiobookFailed {
-		t.Fatalf("run state = %q, want failed", run.State)
-	}
-	if !strings.Contains(run.Error, "1 of 3") {
-		t.Errorf("run error = %q, want it to say how much was lost", run.Error)
+	if run.State != model.AudiobookRunning {
+		t.Errorf("run state = %q, want running — RecordSegment reports the transition, "+
+			"AudiobookService applies it", run.State)
 	}
 
 	// The two segments that succeeded keep their staged paths: Retry
@@ -198,6 +212,16 @@ func TestRecordSegmentDoesNotRefailAnAlreadyFailedRun(t *testing.T) {
 		t.Fatalf("next = %q, want fail on the segment that settled the run", out.Next)
 	}
 
+	// The caller applies that verdict. FailRun reports that it moved the
+	// run, which is what publishes exactly once.
+	moved, err := audiobooks.FailRun(ctx, bookID, out.Coverage.FailureMessage())
+	if err != nil {
+		t.Fatalf("FailRun: %v", err)
+	}
+	if !moved {
+		t.Fatal("FailRun reported no change on a running run")
+	}
+
 	// And once more, as a River retry of the first segment would do.
 	out, err = audiobooks.RecordSegment(ctx, bookID, 0, model.SegmentResult{
 		State: model.SegmentFailed, Error: "again",
@@ -207,6 +231,23 @@ func TestRecordSegmentDoesNotRefailAnAlreadyFailedRun(t *testing.T) {
 	}
 	if out.Next != model.AudiobookNextNothing {
 		t.Errorf("next = %q on an already-failed run, want nothing", out.Next)
+	}
+
+	// A second FailRun is a no-op, so the retry cannot re-publish a
+	// failure the user was already told about.
+	moved, err = audiobooks.FailRun(ctx, bookID, "something else")
+	if err != nil {
+		t.Fatalf("FailRun again: %v", err)
+	}
+	if moved {
+		t.Error("FailRun moved an already-failed run — the UI would be notified twice")
+	}
+	run, err := audiobooks.GetByBookID(ctx, bookID)
+	if err != nil {
+		t.Fatalf("GetByBookID: %v", err)
+	}
+	if run.Error == "something else" {
+		t.Error("the second failure overwrote the reason the run actually failed for")
 	}
 }
 
@@ -402,4 +443,101 @@ func TestSegmentCharsDefaultMatchesTheSplittersDefault(t *testing.T) {
 		t.Errorf("migration backfills segment_chars with %d, but the splitter defaults to %d",
 			backfill, fileproc.DefaultSegmentChars)
 	}
+}
+
+// RecordSegment must take the run row's lock before it reads coverage.
+//
+// This is the property the FOR UPDATE clause exists for: without it, two
+// segments completing at the same instant each read a coverage snapshot
+// missing the other's uncommitted write, both conclude the run is
+// unfinished, and neither dispatches finalize — a run stuck at 0% with
+// all its audio bought and staged.
+//
+// Racing two goroutines does not test it: whichever transaction commits
+// first is visible to the second under READ COMMITTED anyway, so that
+// test passes with the lock deleted. What does test it is holding the
+// row lock and watching RecordSegment wait for it.
+func TestRecordSegmentWaitsForTheRunRowLock(t *testing.T) {
+	d := repotest.New(t)
+	bookID, audiobooks := audiobookFixture(t, d, 2)
+	ctx := context.Background()
+
+	// A second connection of its own, because repotest's pool is capped
+	// at one so that SET search_path applies to everything it runs. Take
+	// the holder from that pool and RecordSegment blocks waiting for a
+	// free connection rather than for the lock — a test that passes with
+	// the lock deleted, which is worse than no test.
+	holder := secondSession(t, d)
+	defer func() { _ = holder.Rollback() }()
+	// FOR KEY SHARE, not FOR UPDATE, and the choice is the whole test.
+	// Writing a segment row takes a KEY SHARE lock on its parent by
+	// itself, to stop the referenced key moving — so a holder using FOR
+	// UPDATE blocks RecordSegment whether or not it locks the run row,
+	// and the test passes with the clause deleted. KEY SHARE conflicts
+	// with FOR UPDATE and with nothing the foreign key needs, so what
+	// blocks here is the explicit lock and only the explicit lock.
+	var state string
+	if err := holder.QueryRowContext(ctx,
+		`SELECT state FROM book_audiobooks WHERE book_id = $1 FOR KEY SHARE`, bookID).Scan(&state); err != nil {
+		t.Fatalf("hold the run row: %v", err)
+	}
+
+	landed := make(chan error, 1)
+	go func() { _, err := audiobooks.RecordSegment(ctx, bookID, 0, doneResult(0)); landed <- err }()
+
+	select {
+	case err := <-landed:
+		t.Fatalf("RecordSegment completed (err=%v) while another transaction held the run row — "+
+			"it is not taking the lock, so concurrent segments can each miss the other's write", err)
+	case <-time.After(300 * time.Millisecond):
+		// Blocked, which is the point.
+	}
+
+	if err := holder.Commit(); err != nil {
+		t.Fatalf("release the lock: %v", err)
+	}
+	select {
+	case err := <-landed:
+		if err != nil {
+			t.Fatalf("RecordSegment after the lock was released: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RecordSegment never completed after the lock was released")
+	}
+}
+
+// secondSession opens an independent connection into the same test
+// schema and begins a transaction on it.
+func secondSession(t *testing.T, d *db.DB) *sql.Tx {
+	t.Helper()
+	ctx := context.Background()
+
+	var schema string
+	if err := d.SQL.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		t.Fatalf("read the test schema: %v", err)
+	}
+
+	pool, err := pgxpool.New(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("second pool: %v", err)
+	}
+	other := stdlib.OpenDBFromPool(pool)
+	t.Cleanup(func() { _ = other.Close(); pool.Close() })
+	// search_path is per connection, so this one has to be told too.
+	other.SetMaxOpenConns(1)
+	if _, err := other.ExecContext(ctx, `SET search_path TO `+pq(schema)); err != nil {
+		t.Fatalf("second session search_path: %v", err)
+	}
+
+	tx, err := other.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("second session begin: %v", err)
+	}
+	return tx
+}
+
+// pq quotes an identifier for interpolation, which a schema name cannot
+// be parameterised into.
+func pq(ident string) string {
+	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
 }

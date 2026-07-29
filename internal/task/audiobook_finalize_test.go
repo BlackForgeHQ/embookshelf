@@ -165,6 +165,13 @@ func newFinalizeHarness(t *testing.T) *finalizeHarness {
 				Location: "Dune/Dune.mp3", Size: 1234, Mtime: time.Unix(0, 0).UTC(),
 			}, nil
 		},
+		// The one module that marks a run failed also publishes, so the
+		// worker no longer does either itself (#190).
+		Fail: func(_ context.Context, _ string, msg string) error {
+			h.runs.states = append(h.runs.states, stateWrite{State: model.AudiobookFailed, Msg: msg})
+			h.published++
+			return nil
+		},
 		Publish:  func(string) { h.published++ },
 		DataPath: h.dataPath,
 	}

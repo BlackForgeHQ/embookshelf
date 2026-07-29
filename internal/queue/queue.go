@@ -76,8 +76,11 @@ type Deps struct {
 	Guides      *repo.BookReadingGuideRepo
 	// Audiobook generation (ADR-0025 — ADR-0028).
 	Audiobooks *repo.BookAudiobookRepo
-	Covers     *coverstore.Store
-	DataPath   string
+	// AudiobookSvc owns what a run does next. The segment and finalize
+	// workers report to it instead of deciding for themselves (#190).
+	AudiobookSvc *service.AudiobookService
+	Covers       *coverstore.Store
+	DataPath     string
 	// Enqueue is the seam workers use to dispatch follow-on jobs. It is
 	// the same *jobs.Deferred the service tier holds: the registry below
 	// is built out of services that need it, so it cannot be the client

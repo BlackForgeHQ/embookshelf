@@ -31,6 +31,20 @@ type fakeAudiobookStore struct {
 	startErr   error
 	unfinished []model.AudiobookSegment
 	coverage   model.AudiobookCoverage
+	// gets counts run reads, so a test can prove the advancer trusts the
+	// outcome a locked write handed it instead of re-reading.
+	gets int
+	// recorded and outcome stand in for RecordSegment: what the caller
+	// wrote, and what the repo's locked transaction decided follows.
+	recorded []model.SegmentResult
+	outcome  model.AudiobookOutcome
+}
+
+func (f *fakeAudiobookStore) RecordSegment(
+	_ context.Context, _ string, _ int, res model.SegmentResult,
+) (model.AudiobookOutcome, error) {
+	f.recorded = append(f.recorded, res)
+	return f.outcome, nil
 }
 
 func (f *fakeAudiobookStore) Start(_ context.Context, ab model.Audiobook, segs []model.AudiobookSegment) error {
@@ -44,6 +58,7 @@ func (f *fakeAudiobookStore) Start(_ context.Context, ab model.Audiobook, segs [
 }
 
 func (f *fakeAudiobookStore) GetByBookID(context.Context, string) (model.Audiobook, error) {
+	f.gets++
 	if f.getErr != nil {
 		return model.Audiobook{}, f.getErr
 	}
@@ -53,6 +68,17 @@ func (f *fakeAudiobookStore) GetByBookID(context.Context, string) (model.Audiobo
 func (f *fakeAudiobookStore) SetState(_ context.Context, _ string, s model.AudiobookState, msg string) error {
 	f.state, f.stateMsg = s, msg
 	return nil
+}
+
+// FailRun mirrors the repo's conditional write: a run already failed is
+// left alone and the caller told nothing moved, which is what keeps the
+// publish to one.
+func (f *fakeAudiobookStore) FailRun(_ context.Context, _ string, msg string) (bool, error) {
+	if f.state == model.AudiobookFailed {
+		return false, nil
+	}
+	f.state, f.stateMsg = model.AudiobookFailed, msg
+	return true, nil
 }
 
 func (f *fakeAudiobookStore) ListUnfinishedSegments(context.Context, string) ([]model.AudiobookSegment, error) {

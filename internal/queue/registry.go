@@ -132,6 +132,7 @@ func registry(deps Deps) []registration {
 		Config:   deps.AppSettings.GetAudiobook,
 		Engine:   repo.AudiobookConfig.SelectEngine,
 		Runs:     deps.Audiobooks,
+		Advance:  deps.AudiobookSvc,
 		Books:    deps.Books,
 		Open:     openBook,
 		DataPath: deps.DataPath,
@@ -143,6 +144,7 @@ func registry(deps Deps) []registration {
 
 	finalize := task.FinalizeDeps{
 		Runs:     deps.Audiobooks,
+		Fail:     deps.AudiobookSvc.FailRun,
 		Books:    deps.Books,
 		Files:    deps.FileRepo,
 		DataPath: deps.DataPath,

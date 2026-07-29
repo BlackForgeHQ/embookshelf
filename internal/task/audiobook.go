@@ -49,7 +49,17 @@ type segmentStore interface {
 	GetByBookID(ctx context.Context, bookID string) (model.Audiobook, error)
 	GetSegment(ctx context.Context, bookID string, seq int) (model.AudiobookSegment, error)
 	MarkSegmentRunning(ctx context.Context, bookID string, seq int) (bool, error)
-	RecordSegment(ctx context.Context, bookID string, seq int, res model.SegmentResult) (model.AudiobookOutcome, error)
+}
+
+// runAdvancer records a segment's result and carries out whatever the run
+// needs as a consequence.
+//
+// One seam where the worker used to hold the second half of a three-way
+// switch on model.AudiobookNext. Deciding what a landing means, and doing
+// it, is AudiobookService's job now — this worker's job is the engine
+// call and the bytes (#190).
+type runAdvancer interface {
+	AdvanceAfterSegment(ctx context.Context, bookID string, seq int, res model.SegmentResult) error
 }
 
 // bookReader is the one book-row read every generation job makes.
@@ -67,10 +77,11 @@ type bookReader interface {
 // disabled check and its permanent sentinel stay in the worker body,
 // where a reader asking why River does not retry will find them.
 type SegmentDeps struct {
-	Config func(context.Context) (repo.AudiobookConfig, error)
-	Engine func(repo.AudiobookConfig) (repo.ConfiguredEngine, error)
-	Runs   segmentStore
-	Books  bookReader
+	Config  func(context.Context) (repo.AudiobookConfig, error)
+	Engine  func(repo.AudiobookConfig) (repo.ConfiguredEngine, error)
+	Runs    segmentStore
+	Advance runAdvancer
+	Books   bookReader
 	// Open yields the book's bytes with random access. Always through the
 	// library handle, never os.Open(book.Path), which is how device push
 	// on S3 libraries was once silently broken.
@@ -186,35 +197,15 @@ func AudiobookSegment(ctx context.Context, a jobs.AudiobookSegmentArgs, deps Seg
 	return nil
 }
 
-// recordSegment writes a segment's result and carries out whatever the
-// run needs as a consequence.
-//
-// The write and the transition are one operation in the repo, so this is
-// no longer a pair of calls a worker has to sequence — the only thing
-// left outside the transaction is the enqueue, which is a different
-// system and cannot join it. A crash between the commit and the dispatch
-// still loses the finalize job, but no longer loses the *fact*: the
-// segment rows say the run is complete, and AudiobookService.Status
-// re-derives the same transition on every read, so whoever next looks at
-// the book dispatches what this dropped (#157).
+// recordSegment hands a segment's result to the module that owns what
+// follows from it.
 //
 // Deliberately does not return an error. A failure here is worth a log
 // and nothing more: returning it would hand River a segment to retry
 // whose audio is already staged and already paid for.
 func recordSegment(ctx context.Context, deps SegmentDeps, a jobs.AudiobookSegmentArgs, res model.SegmentResult) {
-	outcome, err := deps.Runs.RecordSegment(ctx, a.BookID, a.Seq, res)
-	if err != nil {
-		slog.Warn("audiobook: record segment", "book", a.BookID, "seq", a.Seq, "err", err)
-		return
-	}
-	switch outcome.Next {
-	case model.AudiobookNextFinalize:
-		if err := deps.Enqueue.Enqueue(ctx, jobs.AudiobookFinalizeArgs{BookID: a.BookID}); err != nil {
-			slog.Warn("audiobook: dispatch finalize", "book", a.BookID, "err", err)
-		}
-	case model.AudiobookNextFail:
-		deps.publish(a.BookID)
-	case model.AudiobookNextNothing:
+	if err := deps.Advance.AdvanceAfterSegment(ctx, a.BookID, a.Seq, res); err != nil {
+		slog.Warn("audiobook: advance run", "book", a.BookID, "seq", a.Seq, "err", err)
 	}
 }
 

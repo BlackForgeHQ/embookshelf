@@ -28,7 +28,6 @@ type finalizeStore interface {
 	GetByBookID(ctx context.Context, bookID string) (model.Audiobook, error)
 	ListSegments(ctx context.Context, bookID string) ([]model.AudiobookSegment, error)
 	SetSegmentStart(ctx context.Context, bookID string, seq int, startMS int64) error
-	SetState(ctx context.Context, bookID string, state model.AudiobookState, msg string) error
 	SetReady(ctx context.Context, bookID, fileID string, durationMS int64) error
 }
 
@@ -62,7 +61,10 @@ type FinalizeDeps struct {
 	// Cover supplies the art embedded in the finished file. Nil-able and
 	// best effort: a narration without embedded art is still a good
 	// narration.
-	Cover   func(book model.Book) (io.ReadCloser, error)
+	Cover func(book model.Book) (io.ReadCloser, error)
+	// Fail marks the run failed and publishes, through the one module
+	// that owns that transition.
+	Fail    func(ctx context.Context, bookID, msg string) error
 	Publish func(bookID string)
 	// DataPath roots the staging directory. Per-segment MP3s live on
 	// local disk until finalize, outside storage.Storage, following the
@@ -323,14 +325,17 @@ func loadCover(deps FinalizeDeps, book model.Book) ([]byte, string) {
 
 // fail records the reason on the run and stops River retrying.
 //
+// The write goes through the one module that marks a run failed, which
+// is also what publishes — this worker used to do both itself, and the
+// status read doing the same thing published nothing (#190).
+//
 // Staging is deliberately left in place: Retry re-enqueues only the
 // segments that never finished, so every paid-for segment has to survive
 // a failed finalize (ADR-0028 §6).
 func fail(ctx context.Context, deps FinalizeDeps, bookID string, cause error) error {
-	if err := deps.Runs.SetState(ctx, bookID, model.AudiobookFailed, cause.Error()); err != nil {
+	if err := deps.Fail(ctx, bookID, cause.Error()); err != nil {
 		slog.Warn("audiobook: mark run failed", "book", bookID, "err", err)
 	}
-	deps.publish(bookID)
 	slog.Error("audiobook finalize failed", "book", bookID, "err", cause)
 	return nil
 }

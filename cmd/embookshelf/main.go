@@ -413,24 +413,44 @@ database must be empty; migrations are applied to it automatically.
 		slog.Info("email subsystem disabled — configure under admin settings to enable")
 	}
 
+	// Built before the queue: the workers advance a run through this
+	// service rather than switching on the transition themselves (#190),
+	// so the registry needs it. Its enqueuer is the deferred one, which
+	// is what makes that ordering possible at all.
+	audiobookSvc := service.NewAudiobookService(
+		audiobookRepo,
+		service.NewLibraryBookOpener(libStore),
+		enq,
+	).WithStagingSweeper(func(bookID string) {
+		if err := os.RemoveAll(task.StagingDir(cfg.DataPath, bookID)); err != nil {
+			slog.Warn("audiobook: sweep staging after cancel", "book", bookID, "err", err)
+		}
+	})
+	if hub != nil {
+		audiobookSvc = audiobookSvc.WithPublisher(func(bookID string) {
+			_ = hub.Publish(sse.AudiobookUpdated{BookID: bookID})
+		})
+	}
+
 	// Background queue, backed by River.
 	q, err := queue.New(ctx, dbh, queue.Deps{
-		BookDropSvc: bdropSvc,
-		Enrich:      enrichSvc,
-		LibSvc:      libSvc,
-		Resolver:    storageResolver,
-		LibStore:    libStore,
-		FileRepo:    fileRepo,
-		Books:       bookRepo,
-		Users:       userRepo,
-		Notifier:    notifier,
-		Hub:         hub,
-		AppSettings: appSettingsRepo,
-		Guides:      guideRepo,
-		Audiobooks:  audiobookRepo,
-		Covers:      covers,
-		DataPath:    cfg.DataPath,
-		Enqueue:     enq,
+		BookDropSvc:  bdropSvc,
+		Enrich:       enrichSvc,
+		LibSvc:       libSvc,
+		Resolver:     storageResolver,
+		LibStore:     libStore,
+		FileRepo:     fileRepo,
+		Books:        bookRepo,
+		Users:        userRepo,
+		Notifier:     notifier,
+		Hub:          hub,
+		AppSettings:  appSettingsRepo,
+		Guides:       guideRepo,
+		Audiobooks:   audiobookRepo,
+		AudiobookSvc: audiobookSvc,
+		Covers:       covers,
+		DataPath:     cfg.DataPath,
+		Enqueue:      enq,
 	})
 	if err != nil {
 		slog.Error("queue", "err", err)
@@ -456,16 +476,6 @@ database must be empty; migrations are applied to it automatically.
 		slog.Error("queue start", "err", err)
 		os.Exit(1)
 	}
-
-	audiobookSvc := service.NewAudiobookService(
-		audiobookRepo,
-		service.NewLibraryBookOpener(libStore),
-		enq,
-	).WithStagingSweeper(func(bookID string) {
-		if err := os.RemoveAll(task.StagingDir(cfg.DataPath, bookID)); err != nil {
-			slog.Warn("audiobook: sweep staging after cancel", "book", bookID, "err", err)
-		}
-	})
 
 	// Staging for abandoned failed or cancelled runs is dead weight after
 	// a week. Hourly loop, same shape as the missing-file and

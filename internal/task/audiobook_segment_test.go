@@ -37,21 +37,6 @@ func (r *recordingEnqueuer) Enqueue(_ context.Context, a jobs.Args) error {
 	return nil
 }
 
-// finalizes returns the BookID of every finalize job queued. A count
-// alone would pass a finalize dispatched for the wrong book; the payload
-// this whole seam exists to carry is the point of the assertion.
-func (r *recordingEnqueuer) finalizes() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var ids []string
-	for _, a := range r.args {
-		if f, ok := a.(jobs.AudiobookFinalizeArgs); ok {
-			ids = append(ids, f.BookID)
-		}
-	}
-	return ids
-}
-
 // ---------------------------------------------------------------------------
 // Fakes local to the segment worker
 // ---------------------------------------------------------------------------
@@ -66,15 +51,15 @@ type fakeSegmentRuns struct {
 	// plan is what the run was started with, the rows the planner wrote.
 	// A worker verifies its re-extraction against these, so a test can
 	// move one to stand for a book edited under a live run.
-	plan     []model.AudiobookSegment
-	getErr   error
-	gets     int
-	onGet    func(n int) model.Audiobook
-	claim    bool
-	claimErr error
-	claims   int
-	recorded []model.SegmentResult
-	outcome  model.AudiobookNext
+	plan       []model.AudiobookSegment
+	getErr     error
+	gets       int
+	onGet      func(n int) model.Audiobook
+	claim      bool
+	claimErr   error
+	claims     int
+	recorded   []model.SegmentResult
+	advanceErr error
 }
 
 func (f *fakeSegmentRuns) GetByBookID(context.Context, string) (model.Audiobook, error) {
@@ -95,16 +80,19 @@ func (f *fakeSegmentRuns) GetSegment(_ context.Context, _ string, seq int) (mode
 	return f.plan[seq], nil
 }
 
+// AdvanceAfterSegment stands in for AudiobookService: the worker hands
+// over a result and the module decides what the run does next, so what a
+// test asserts here is what was handed over (#190).
+func (f *fakeSegmentRuns) AdvanceAfterSegment(
+	_ context.Context, _ string, _ int, res model.SegmentResult,
+) error {
+	f.recorded = append(f.recorded, res)
+	return f.advanceErr
+}
+
 func (f *fakeSegmentRuns) MarkSegmentRunning(context.Context, string, int) (bool, error) {
 	f.claims++
 	return f.claim, f.claimErr
-}
-
-func (f *fakeSegmentRuns) RecordSegment(
-	_ context.Context, _ string, _ int, res model.SegmentResult,
-) (model.AudiobookOutcome, error) {
-	f.recorded = append(f.recorded, res)
-	return model.AudiobookOutcome{Next: f.outcome}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -183,8 +171,9 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 				Engine: h.engine,
 			}, nil
 		},
-		Runs:  h.runs,
-		Books: h.books,
+		Runs:    h.runs,
+		Advance: h.runs,
+		Books:   h.books,
 		Open: func(context.Context, model.Book) (storage.Source, error) {
 			return src, nil
 		},
@@ -641,32 +630,39 @@ func TestSegmentStagesItsAudioAndRecordsTheDuration(t *testing.T) {
 	}
 }
 
-// The segment that completes last is what turns a run into a book. A
-// dispatch that fires twice would assemble the same file twice.
-func TestSegmentDispatchesFinalizeExactlyOnceWhenTheRunCompletes(t *testing.T) {
+// A staged segment is handed over exactly once, with the audio it
+// produced. What follows — finalize when the run is complete, failed
+// when it settles with failures — is AudiobookService's, exercised in
+// its own tests without River or Postgres (#190). What this worker owes
+// is the handover, and owing it once: a second one would let the run be
+// finalized twice and the same file assembled twice.
+func TestSegmentHandsOverItsResultExactlyOnce(t *testing.T) {
 	h := newSegmentHarness(t)
-	h.runs.outcome = model.AudiobookNextFinalize
 
 	if err := h.run(t, 0); err != nil {
 		t.Fatalf("AudiobookSegment: %v", err)
 	}
-	if ids := h.enq.finalizes(); len(ids) != 1 || ids[0] != h.runs.run.BookID {
-		t.Fatalf("finalize dispatched %v, want exactly one for %q", ids, h.runs.run.BookID)
+
+	if len(h.runs.recorded) != 1 {
+		t.Fatalf("handed over %d results, want exactly one", len(h.runs.recorded))
+	}
+	got := h.runs.recorded[0]
+	if got.State != model.SegmentDone || got.StagedPath == "" || got.DurationMS <= 0 {
+		t.Errorf("handed over %+v, want a done segment with staged audio and a measured duration", got)
 	}
 }
 
-// A run the write decided has failed publishes so the UI stops polling.
-func TestSegmentPublishesOnceWhenTheWriteFailsTheRun(t *testing.T) {
+// The worker cannot act on a failure to advance: its audio is already
+// staged and already paid for, so returning the error would hand River a
+// segment to buy again.
+func TestSegmentSwallowsAnAdvanceFailure(t *testing.T) {
 	h := newSegmentHarness(t)
-	h.runs.outcome = model.AudiobookNextFail
+	h.runs.advanceErr = errors.New("db unavailable")
 
 	if err := h.run(t, 0); err != nil {
-		t.Fatalf("AudiobookSegment: %v", err)
+		t.Fatalf("AudiobookSegment returned %v — River would re-buy audio already staged", err)
 	}
-	if h.published != 1 {
-		t.Fatalf("published %d times, want exactly 1", h.published)
-	}
-	if ids := h.enq.finalizes(); len(ids) != 0 {
-		t.Errorf("finalize dispatched %v for a failed run", ids)
+	if !h.staged(0) {
+		t.Error("the staged audio was discarded along with the error")
 	}
 }

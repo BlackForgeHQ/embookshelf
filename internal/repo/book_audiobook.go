@@ -239,18 +239,14 @@ func (r *BookAudiobookRepo) RecordSegment(
 		return zero, fmt.Errorf("coverage for %s: %w", bookID, err)
 	}
 
+	// The transition is decided here, under the lock, and carried out by
+	// the caller. Writing the failed state inside this transaction made
+	// the repo the second of four places that marked a run failed; now it
+	// reports what follows and AudiobookService applies it (#190). What
+	// the lock is for survives: the state read, the segment write and the
+	// coverage read are one atomic view, so two segments landing together
+	// cannot both see themselves as last.
 	next := model.NextForRun(model.AudiobookState(state), cov)
-	if next == model.AudiobookNextFail {
-		// The staging directory is deliberately untouched. Retry
-		// re-enqueues only the segments that never finished, so every
-		// paid-for one has to survive the failure that stopped the run
-		// (ADR-0028 §6) — failure keeps the work, cancel does not.
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE book_audiobooks SET state = 'failed', error = $2, updated_at = now() WHERE book_id = $1`,
-			bookID, cov.FailureMessage()); err != nil {
-			return zero, fmt.Errorf("mark run failed: %w", err)
-		}
-	}
 
 	if err := tx.Commit(); err != nil {
 		return zero, err
@@ -296,6 +292,25 @@ func scanCoverage(ctx context.Context, q rowQuerier, bookID string) (model.Audio
 }
 
 // SetState moves the run. msg is the failure reason; empty otherwise.
+// FailRun marks a run failed, reporting whether it actually moved.
+//
+// The WHERE clause is what makes it idempotent: a run already failed is
+// left alone and the caller told so, which is how the publish that tells
+// the UI to stop polling fires exactly once even when two segments
+// settle a run at the same instant (#190).
+func (r *BookAudiobookRepo) FailRun(ctx context.Context, bookID, msg string) (bool, error) {
+	const q = `
+		UPDATE book_audiobooks SET state = 'failed', error = $2, updated_at = now()
+		WHERE book_id = $1 AND state <> 'failed'
+	`
+	res, err := r.db.SQL.ExecContext(ctx, q, bookID, msg)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 func (r *BookAudiobookRepo) SetState(ctx context.Context, bookID string, state model.AudiobookState, msg string) error {
 	const q = `UPDATE book_audiobooks SET state = $2, error = $3, updated_at = now() WHERE book_id = $1`
 	return execOne(ctx, r.db.SQL, q, bookID, string(state), msg)
