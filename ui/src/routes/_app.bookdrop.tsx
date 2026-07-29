@@ -4,11 +4,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 
 import type { ApiError } from "@/api/client"
-import type {
-  BookDropItem,
-  BookDropState,
-  BookDropUploadResult,
-} from "@/api/bookdrop"
+import type { BookDropItem, BookDropUploadResult } from "@/api/bookdrop"
 import type { Library } from "@/api/books"
 import {
   approveBookDrop,
@@ -28,6 +24,12 @@ import { Icon } from "@/components/Icon"
 import { TopBar } from "@/components/TopBar"
 import { Button } from "@/components/ui/button"
 import {
+  BOOKDROP_STATE_LABEL,
+  acceptsCoverUpload,
+  isActiveState,
+  isApprovableState,
+} from "@/lib/bookdropState"
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -39,15 +41,6 @@ export const Route = createFileRoute("/_app/bookdrop")({
   component: BookDrop,
 })
 
-const STATE_LABEL: Record<BookDropState, string> = {
-  ready: "ready",
-  processing: "processing",
-  discovered: "queued",
-  failed: "failed",
-  imported: "imported",
-  rejected: "discarded",
-}
-
 function BookDrop() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -57,9 +50,7 @@ function BookDrop() {
 
   const active = useMemo(
     () =>
-      (queue.data ?? []).filter(
-        (i) => i.state !== "imported" && i.state !== "rejected"
-      ),
+      (queue.data ?? []).filter((i) => isActiveState(i.state)),
     [queue.data]
   )
 
@@ -377,7 +368,7 @@ function QueueRow({
         </div>
         <div className="bdrop-row-meta">
           <span className="bdrop-dot" data-state={item.state} />
-          <span>{STATE_LABEL[item.state]}</span>
+          <span>{BOOKDROP_STATE_LABEL[item.state]}</span>
           <span className="bdrop-row-meta-divider" aria-hidden />
           <span>{formatBytes(item.fileSize)}</span>
           {item.author && (
@@ -441,7 +432,7 @@ function DetailPane({
         </div>
         <span className="bdrop-state-ribbon">
           <span className="bdrop-dot" data-state={item.state} />
-          {STATE_LABEL[item.state]}
+          {BOOKDROP_STATE_LABEL[item.state]}
         </span>
       </div>
 
@@ -467,7 +458,7 @@ function DetailPane({
             <MetaCell label="Format" value={item.format} mono />
             <MetaCell label="Size" value={formatBytes(item.fileSize)} mono />
             <MetaCell label="Language" value={item.language} mono missing="—" />
-            <MetaCell label="State" value={STATE_LABEL[item.state]} mono />
+            <MetaCell label="State" value={BOOKDROP_STATE_LABEL[item.state]} mono />
           </dl>
 
           {item.description && (
@@ -528,10 +519,7 @@ function CoverPanel({ item }: { item: BookDropItem }) {
   // component instance. Relies on backend 409 idempotency for
   // cross-mount duplicate suppression.
   const uploadedRef = useRef<Set<string>>(new Set())
-  const isPreapprovalState =
-    item.state === "discovered" ||
-    item.state === "processing" ||
-    item.state === "ready"
+  const isPreapprovalState = acceptsCoverUpload(item.state)
 
   useEffect(() => {
     if (item.format !== "PDF") return
@@ -590,7 +578,7 @@ function ApprovalBar({
   const [libraryId, setLibraryId] = useState<string | undefined>(
     libraries[0]?.id
   )
-  const approvable = item.state === "ready" || item.state === "failed"
+  const approvable = isApprovableState(item.state)
 
   return (
     <>

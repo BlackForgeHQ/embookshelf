@@ -18,6 +18,7 @@ import {
   NotebookEmpty,
 } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
+import { isTerminalState } from "@/lib/bookdropState"
 import {
   Dialog,
   DialogContent,
@@ -35,7 +36,7 @@ export function BookDropPanel() {
   const processed = useMemo(
     () =>
       (queue.data ?? [])
-        .filter((i) => i.state === "imported" || i.state === "rejected")
+        .filter((i) => isTerminalState(i.state))
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     [queue.data]
   )
