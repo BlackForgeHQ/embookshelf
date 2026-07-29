@@ -50,6 +50,7 @@ export default async function globalSetup() {
     storageState: statePath,
   });
   try {
+    await clearE2EArtifacts(authed);
     await ensureLibrary(authed);
     await ensureBook(authed);
   } finally {
@@ -70,6 +71,30 @@ export default async function globalSetup() {
 // inserting rows: seed rows drift from what ingestion actually produces,
 // and a fixture that lies is worse than none.
 const LIBRARY_NAME = 'E2E Library';
+
+// Each run used to inherit the last one's mess. Specs reject bookdrop
+// rows rather than removing them, and a spec that times out never
+// reaches the cleanup in its finally — so processed rows and
+// `e2e-toggle-*` shelves piled up run after run, and a sidebar full of
+// them is what a later spec's strict-mode locator trips over (#216).
+//
+// Scoped to what the suite itself creates. A developer's own books,
+// shelves and queue are none of this function's business.
+async function clearE2EArtifacts(ctx: APIRequestContext): Promise<void> {
+  // Imported and discarded rows, through the same endpoint the settings
+  // panel uses. In-flight rows are left alone by the server.
+  await ctx.delete('/api/v1/settings/bookdrop/processed');
+
+  const res = await ctx.get('/api/v1/shelves');
+  if (!res.ok()) return;
+  const { shelves } = (await res.json()) as {
+    shelves?: { slug: string; name: string }[];
+  };
+  for (const shelf of shelves ?? []) {
+    if (!shelf.name.startsWith('e2e-')) continue;
+    await ctx.delete(`/api/v1/shelves/${encodeURIComponent(shelf.slug)}`);
+  }
+}
 
 async function ensureLibrary(ctx: APIRequestContext): Promise<string> {
   const existing = await ctx.get('/api/v1/libraries');

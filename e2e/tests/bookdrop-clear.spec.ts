@@ -45,6 +45,24 @@ async function seedRejectedItem(
 // spec would race the other's Clear button visibility.
 test.describe.configure({ mode: 'serial' });
 
+// Clearing processed history lives in Settings → BookDrop, not on the
+// /bookdrop queue page. It moved with the redesign and these specs kept
+// driving the old page, where neither the Clear button nor the processed
+// rows exist any more (#216).
+async function openBookDropSettings(page: import('@playwright/test').Page) {
+  await page.goto('/settings');
+  await page.getByRole('button', { name: 'BookDrop' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Recently processed' }),
+  ).toBeVisible();
+}
+
+// The trigger is gated on there being processed items, so its enabled
+// state is the precondition these specs used to check by looking for a
+// filename in a list. The panel headlines rows by title, not filename.
+const clearTrigger = (page: import('@playwright/test').Page) =>
+  page.getByRole('button', { name: 'Clear processed history' });
+
 test.describe('bookdrop · clear processed dialog', () => {
   test('Clear button opens a confirm dialog; Cancel leaves the finished list intact', async ({
     page,
@@ -55,15 +73,10 @@ test.describe('bookdrop · clear processed dialog', () => {
     const { filename, cleanup } = await seedRejectedItem(adminApi, 'clear-cancel');
 
     try {
-      await page.goto('/bookdrop');
+      await openBookDropSettings(page);
 
-      // Finished list header is scoped by the filename row — wait for it so
-      // we know the Clear button (gated on finished.length > 0) is rendered.
-      await expect(page.getByText(filename).first()).toBeVisible({
-        timeout: 10_000,
-      });
-
-      const clearBtn = page.getByRole('button', { name: /^Clear$/ });
+      const clearBtn = clearTrigger(page);
+      await expect(clearBtn).toBeEnabled({ timeout: 10_000 });
       await clearBtn.click();
 
       // shadcn Dialog renders title + Cancel/Clear buttons in the dialog
@@ -78,14 +91,14 @@ test.describe('bookdrop · clear processed dialog', () => {
       await dialog.getByRole('button', { name: 'Cancel' }).click();
       await expect(dialog).toBeHidden();
 
-      // Row should still be there — Cancel must not hit the API.
-      await expect(page.getByText(filename).first()).toBeVisible();
+      // Still processed items to clear — Cancel must not hit the API.
+      await expect(clearTrigger(page)).toBeEnabled();
     } finally {
       await cleanup();
     }
   });
 
-  test('confirming Clear removes the processed rows and fires DELETE /bookdrop/processed', async ({
+  test('confirming Clear removes the processed rows and fires DELETE /settings/bookdrop/processed', async ({
     page,
     adminApi,
   }) => {
@@ -94,27 +107,25 @@ test.describe('bookdrop · clear processed dialog', () => {
     const { filename, cleanup } = await seedRejectedItem(adminApi, 'clear-confirm');
 
     try {
-      await page.goto('/bookdrop');
-      await expect(page.getByText(filename).first()).toBeVisible({
-        timeout: 10_000,
-      });
-
-      await page.getByRole('button', { name: /^Clear$/ }).click();
+      await openBookDropSettings(page);
+      await expect(clearTrigger(page)).toBeEnabled({ timeout: 10_000 });
+      await clearTrigger(page).click();
       const dialog = page.getByRole('dialog');
       await expect(dialog).toBeVisible();
 
       const deleteCall = page.waitForResponse(
         (r) =>
           r.request().method() === 'DELETE' &&
-          r.url().endsWith('/api/v1/bookdrop/processed') &&
+          // The endpoint moved under /settings with the feature.
+          r.url().endsWith('/api/v1/settings/bookdrop/processed') &&
           r.ok(),
       );
       await dialog.getByRole('button', { name: /^Clear$/ }).click();
       await deleteCall;
 
       await expect(dialog).toBeHidden();
-      // After clear, our seeded filename disappears from the queue.
-      await expect(page.getByText(filename)).toHaveCount(0);
+      // Nothing processed left, so the trigger gates itself off again.
+      await expect(clearTrigger(page)).toBeDisabled();
 
       // And the API confirms it's gone too.
       const res = await adminApi.get('/api/v1/bookdrop');

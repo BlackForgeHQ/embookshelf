@@ -126,14 +126,22 @@ test.describe('settings · metadata (auto-enrich + provider rows)', () => {
     await openProvidersPanel(page);
     const main = page.getByRole('main');
 
-    // The provider row card contains the "Google Books" name + its
-    // schema-driven form rows. Labels are rendered as <span>s (no
-    // htmlFor binding), so we find the input via its placeholder /
-    // the visible label text.
     await expect(main.getByText('Google Books', { exact: true })).toBeVisible();
-    await expect(main.getByText('API key', { exact: true })).toBeVisible();
-    await expect(main.getByText('Language', { exact: true })).toBeVisible();
+
+    // The schema-driven fields live behind a per-provider "Config"
+    // toggle and start collapsed. This spec asserted them on a closed
+    // row, so it could only ever have passed while the rows rendered
+    // their config inline (#216). aria-controls names the region, which
+    // makes both the toggle and the panel addressable without guessing
+    // at row nesting.
+    await main.locator('button[aria-controls="provider-config-google_books"]').click();
+    const config = main.locator('#provider-config-google_books');
+
+    // Labels are rendered as <span>s (no htmlFor binding), so we match
+    // the visible label text and the input by its placeholder.
+    await expect(config.getByText('API key', { exact: true })).toBeVisible();
+    await expect(config.getByText('Language', { exact: true })).toBeVisible();
     // Google Books' apiKey field has the "AIza…" placeholder.
-    await expect(main.locator('input[placeholder^="AIza"]')).toBeVisible();
+    await expect(config.locator('input[placeholder^="AIza"]')).toBeVisible();
   });
 });

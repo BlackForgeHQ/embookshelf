@@ -350,6 +350,10 @@ function QueueRow({
       onClick={onSelect}
       aria-pressed={selected}
       data-selected={selected}
+      // The row shows the extracted title, so two drops of the same
+      // fixture are indistinguishable in the DOM. This is what lets a
+      // caller address one exact row it already knows the id of.
+      data-item-id={item.id}
       className="bdrop-queue-row card-row"
       style={{ ["--bdrop-i" as string]: index }}
     >

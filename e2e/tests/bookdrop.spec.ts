@@ -44,7 +44,18 @@ test.describe('bookdrop', () => {
       page.getByText(/Drop files into \/bookdrop/),
     ).toBeVisible();
     await expect(page.getByRole('button', { name: /Rescan/ })).toBeVisible();
-    await expect(page.getByText(/In queue · \d+/)).toBeVisible();
+
+    // Label and count are separate elements. This matched them as one
+    // text node, `In queue · N`, which the header stopped rendering when
+    // the count became its own pill — the separator went with the
+    // markup and was never re-added, in CSS or otherwise (#216).
+    const queueHeader = page
+      .locator('.bdrop-section-header')
+      .filter({ hasText: 'In queue' });
+    await expect(queueHeader).toBeVisible();
+    await expect(
+      queueHeader.locator('.bdrop-section-header-count'),
+    ).toHaveText(/^\d+$/);
   });
 
   test('rescan button triggers a queue refetch', async ({ page }) => {
@@ -72,18 +83,27 @@ test.describe('bookdrop', () => {
 
       await page.goto('/bookdrop');
 
-      // Click the queue row for our file so the detail panel focuses on it.
-      await page.getByText(filename).first().click();
+      // Address the row by id. Queue rows show the *extracted title*,
+      // never the filename — the redesign made that the row's headline —
+      // so getByText(filename) matched nothing here and the detail panel
+      // this spec exists to check was never opened (#216). Two drops of
+      // the same fixture also share a title, so the id is the only
+      // discriminator.
+      await page.locator(`[data-item-id="${item.id}"]`).click();
 
-      // Review panel echoes the file path and surfaces extracted metadata
-      // in `<input>` fields. The Field component uses defaultValue, so we
-      // match on the DOM value attribute via a CSS selector.
+      // The review panel echoes the file path and lists the extracted
+      // metadata. It used to render editable `<input>` fields and this
+      // read their value attributes; the panel is a read-only definition
+      // list now, so `input[value=…]` matched nothing and this spec
+      // could not have passed since the redesign (#216).
       await expect(page.getByText(`bookdrop/${filename}`)).toBeVisible({
         timeout: 10_000,
       });
-      await expect(page.locator('input[value="E2E Sample Book"]')).toBeVisible();
-      await expect(page.locator('input[value="E2E Author"]')).toBeVisible();
-      await expect(page.locator('input[value="EPUB"]')).toBeVisible();
+      const cell = (label: string) =>
+        page.locator('.bdrop-meta-cell').filter({ hasText: label });
+      await expect(cell('Title')).toContainText('E2E Sample Book');
+      await expect(cell('Author')).toContainText('E2E Author');
+      await expect(cell('Format')).toContainText('EPUB');
 
       // Reject via API so state clears when the spec ends.
       const rej = await adminApi.post(`/api/v1/bookdrop/${item.id}/reject`);
@@ -108,9 +128,13 @@ test.describe('bookdrop', () => {
       expect(item.state).not.toBe('rejected');
 
       await page.goto('/bookdrop');
-      // The filename appears both in the queue list and in the detail
-      // panel's `path` field. One `.first()` is enough.
-      await expect(page.getByText(filename).first()).toBeVisible({
+      // The queue row is keyed by id, not filename: rows headline the
+      // extracted title. The filename lives in the detail panel's path
+      // field, which is what the next assertion reads.
+      const row = page.locator(`[data-item-id="${item.id}"]`);
+      await expect(row).toBeVisible({ timeout: 10_000 });
+      await row.click();
+      await expect(page.getByText(`bookdrop/${filename}`)).toBeVisible({
         timeout: 10_000,
       });
 

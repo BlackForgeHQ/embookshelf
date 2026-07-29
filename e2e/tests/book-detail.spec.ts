@@ -110,15 +110,31 @@ test.describe('book detail', () => {
 
     try {
       await page.goto(`/book/${book.id}`);
-      const shelfCard = page.locator('main').getByText('Shelves', { exact: true }).locator('..');
 
-      // Open the picker.
-      await shelfCard.getByRole('button', { name: /Add/ }).click();
-      // The test shelf appears in the picker since the book isn't on it.
-      await shelfCard.getByRole('button', { name: shelf.name }).click();
+      // Anchored on the trigger's own aria-label rather than by walking
+      // up from the "Shelves" text. That walk reached the card's header
+      // row — label plus counts — once the header became its own flex
+      // container, so the buttons underneath were out of scope and the
+      // picker never opened (#216). "Shelves" also appears in the
+      // sidebar, which the `main` scope was there to dodge.
+      await page.getByRole('button', { name: 'Add to shelf' }).click();
 
-      // After add, the chip for the shelf shows up with a close icon.
-      const chip = page.getByRole('button', { name: new RegExp(shelf.name) });
+      // The picker is a Radix popover holding a cmdk list, so its rows
+      // are options rather than buttons.
+      const picker = page.getByRole('dialog');
+      await picker.getByRole('option', { name: shelf.name }).click();
+
+      // Dismiss the picker before touching the chip behind it.
+      await page.keyboard.press('Escape');
+
+      // Exact, because the sidebar renders a "Share <shelf> with all
+      // users" button for the same shelf and a substring match claims
+      // both. Whether the sidebar had refetched by this point decided
+      // whether the spec passed, which is what made it flaky in a full
+      // run and green on its own (#216).
+      const chip = page
+        .locator('main')
+        .getByRole('button', { name: shelf.name, exact: true });
       await expect(chip).toBeVisible();
 
       // API should reflect membership now.
