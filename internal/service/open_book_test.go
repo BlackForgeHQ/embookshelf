@@ -260,3 +260,54 @@ func TestOpenBookResolvesRelativeLocationsOnALocalLibrary(t *testing.T) {
 		t.Errorf("content = %q, want epub-bytes", got)
 	}
 }
+
+// A legacy row holds an absolute path: books.path predates storage-v2,
+// and the storage-v2 backfill wrote files.location verbatim whenever the
+// library root was unknown at seed time
+// (migrator.seedFilesFromBooks). Those strings are already the key a
+// "/"-rooted LocalFS wants, so joining them onto the root would ask for
+// /lib/root/lib/root/... and find nothing.
+//
+// The shim has to be total over both shapes, because the edit-side write
+// pipeline reads books.path — which is mixed — through it.
+func TestStorageKeyLeavesALegacyAbsolutePathAlone(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	rootedAtSlash, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	handle := &LibraryHandle{
+		Library: model.Library{ID: "lib1", Root: &root},
+		Storage: rootedAtSlash,
+	}
+
+	legacy := filepath.Join(root, "Kobo Abe", "Woman in the Dunes", "dunes.epub")
+
+	if got := handle.storageKey(legacy); got != legacy {
+		t.Errorf("storageKey(%q) = %q, want it unchanged", legacy, got)
+	}
+}
+
+// The relative shape still resolves against the root, which is the case
+// the shim was written for.
+func TestStorageKeyResolvesARelativeLocationAgainstTheRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	rootedAtSlash, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	handle := &LibraryHandle{
+		Library: model.Library{ID: "lib1", Root: &root},
+		Storage: rootedAtSlash,
+	}
+
+	want := filepath.Join(root, "Kobo Abe", "dunes.epub")
+
+	if got := handle.storageKey("Kobo Abe/dunes.epub"); got != want {
+		t.Errorf("storageKey = %q, want %q", got, want)
+	}
+}

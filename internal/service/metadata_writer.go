@@ -765,9 +765,16 @@ func (w *MetadataWriter) embedAndStamp(ctx context.Context, b model.Book, handle
 		// broke", which the previous bare false could not express.
 		return err
 	}
-	src, err := handle.Storage.Open(ctx, b.Path)
+	// Through storageKey, for the same reason OpenBook goes through it: a
+	// local install's LocalFS is rooted at "/", and books.path is
+	// library-relative for everything placed since storage-v2. Handing it
+	// over raw asked the filesystem for /Author/Title/book.epub, failed,
+	// and logged a warning — so the in-file embed ADR-0001 promises has
+	// been quietly off for every locally-approved book (#168).
+	key := handle.storageKey(b.Path)
+	src, err := handle.Storage.Open(ctx, key)
 	if err != nil {
-		slog.Warn("metadata writer: open source", "book_id", b.ID, "path", b.Path, "err", err)
+		slog.Warn("metadata writer: open source", "book_id", b.ID, "key", key, "err", err)
 		return err
 	}
 	defer func() { _ = src.Close() }()
@@ -779,8 +786,8 @@ func (w *MetadataWriter) embedAndStamp(ctx context.Context, b model.Book, handle
 		slog.Warn("metadata writer: embed", "book_id", b.ID, "format", b.Format, "err", err)
 		return err
 	}
-	if _, err := handle.Storage.Put(ctx, b.Path, bytes.NewReader(out)); err != nil {
-		slog.Warn("metadata writer: put", "book_id", b.ID, "path", b.Path, "err", err)
+	if _, err := handle.Storage.Put(ctx, key, bytes.NewReader(out)); err != nil {
+		slog.Warn("metadata writer: put", "book_id", b.ID, "key", key, "err", err)
 		return err
 	}
 	if w.deps.Files != nil {
@@ -834,7 +841,10 @@ func (w *MetadataWriter) stampFileHash(ctx context.Context, b model.Book, out []
 // Outcome.InFileWritten). handle is required (DecideEffects only
 // schedules sidecar when Storage != nil); failures are logged.
 func (w *MetadataWriter) writeSidecar(ctx context.Context, b model.Book, handle *LibraryHandle, mode sidecar.WriteMode) error {
-	key := handle.SidecarKey(b.Path)
+	// storageKey first: SidecarKey only swaps the filename, so a
+	// library-relative books.path would have written the sidecar to the
+	// filesystem root on a local install (#168).
+	key := handle.SidecarKey(handle.storageKey(b.Path))
 	side := b.Editable()
 	side.PublishedDate = dateString(b.PublishDate)
 	if err := w.deps.Sidecar.Write(ctx, handle.Storage, key, side, mode, b.Format); err != nil {

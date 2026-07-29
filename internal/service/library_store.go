@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -106,6 +107,19 @@ func (h *LibraryHandle) IsBackendBacked() bool {
 // object keys, and the backend encodes its own prefix.
 func (h *LibraryHandle) storageKey(location string) string {
 	if h.IsBackendBacked() {
+		return location
+	}
+	// Already absolute: a legacy row. books.path predates storage-v2, and
+	// the storage-v2 backfill wrote files.location verbatim whenever the
+	// library root was unknown at seed time (migrator.seedFilesFromBooks,
+	// which its own tests pin). Such a string is already the key a
+	// "/"-rooted LocalFS wants; joining it onto the root asks for
+	// /lib/root/lib/root/… and finds nothing.
+	//
+	// This is what makes the shim total over both shapes, which is what
+	// lets the edit-side write pipeline read books.path — mixed to this
+	// day — through it (#168).
+	if filepath.IsAbs(location) {
 		return location
 	}
 	if abs := h.LocalPath(location); abs != "" {
@@ -345,7 +359,11 @@ func (h *LibraryHandle) BookSource(ctx context.Context, book model.Book) (BookSo
 
 	if h.presignFallback == BookDeliveryPresign && h.Storage.Capabilities()&storage.CapPresign != 0 {
 		if ps, ok := h.Storage.(Presigner); ok && ferr == nil {
-			if url, err := ps.PresignGet(ctx, f.Location, h.presignTTL); err == nil {
+			// A no-op today — only backend-backed libraries advertise
+			// CapPresign, and storageKey passes their keys through
+			// untouched — but the raw location was the odd one out among
+			// this file's four key resolutions (#168).
+			if url, err := ps.PresignGet(ctx, h.storageKey(f.Location), h.presignTTL); err == nil {
 				return BookSource{Kind: BookDeliveryPresign, URL: url, TTL: h.presignTTL}, nil
 			}
 		}

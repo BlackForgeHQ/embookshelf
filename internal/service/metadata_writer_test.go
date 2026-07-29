@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -943,5 +944,53 @@ func TestMetadataWriter_FolderRename_BackendNoOrphansRepo(t *testing.T) {
 	}
 	if len(books.renameTxCalls) != 0 {
 		t.Errorf("RenameFolderTx called %d times; want 0", len(books.renameTxCalls))
+	}
+}
+
+// Reproduces the production shape the other tests in this file miss:
+// LocalFS rooted at "/", which is what boot builds for an install with
+// no storage backend, and a library-relative books.path, which is what
+// every approve has written since storage-v2.
+//
+// Before #168 the sidecar key was taken straight from books.path, so
+// this wrote to /books/metadata.embookshelf.json — the filesystem root —
+// and the in-file embed opened nothing. Both failed as warnings, so
+// ADR-0001's write-back was quietly off for every locally-approved book
+// while the tests above passed by rooting LocalFS at a temp dir.
+func TestMetadataWriter_LocalLibrary_ResolvesSidecarAgainstTheLibraryRoot(t *testing.T) {
+	root := t.TempDir()
+	rootedAtSlash, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	rec := &recordingSidecarWriter{}
+	handle := &LibraryHandle{
+		Library: model.Library{ID: "lib1", Root: &root},
+		Storage: rootedAtSlash,
+	}
+	mw := NewMetadataWriter(MetadataWriterDeps{
+		Books:    &fakeBookWriter{},
+		LibStore: &fakeLibStore{handle: handle},
+		Sidecar:  rec,
+	})
+	book := model.Book{
+		ID:        "b1",
+		LibraryID: "lib1",
+		Path:      "Kobo Abe/Woman in the Dunes/dunes.pdf",
+		Title:     "Woman in the Dunes",
+		Format:    "PDF",
+	}
+
+	if _, err := mw.Write(context.Background(), book, TriggerManualEdit); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if len(rec.calls) != 1 {
+		t.Fatalf("Sidecar.Write called %d times; want 1", len(rec.calls))
+	}
+	want := filepath.Join(root, "Kobo Abe", "Woman in the Dunes", "metadata.embookshelf.json")
+	if got := rec.calls[0].Key; got != want {
+		t.Errorf("sidecar key = %q, want %q — a relative key against a \"/\"-rooted "+
+			"LocalFS writes at the filesystem root", got, want)
 	}
 }
