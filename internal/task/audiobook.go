@@ -85,12 +85,7 @@ type SegmentDeps struct {
 	// Open yields the book's bytes with random access. Always through the
 	// library handle, never os.Open(book.Path), which is how device push
 	// on S3 libraries was once silently broken.
-	Open func(context.Context, model.Book) (storage.Source, error)
-	// Enqueue dispatches the finalize job when this segment completes
-	// the run. An ordinary jobs.Enqueuer, resolved by the composition
-	// root before queue.Client.Start is ever called, so no worker here
-	// can observe it unset.
-	Enqueue jobs.Enqueuer
+	Open    func(context.Context, model.Book) (storage.Source, error)
 	Publish func(bookID string)
 	// DataPath roots the staging directory. Per-segment MP3s live on
 	// local disk until finalize, outside storage.Storage, following the

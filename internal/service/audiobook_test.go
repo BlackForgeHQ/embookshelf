@@ -666,8 +666,10 @@ func TestStatusFailsARunWhoseSegmentsHaveAllSettledWithFailures(t *testing.T) {
 	}
 	rec := &recordingEnqueuer{}
 	swept := 0
+	var published []string
 	svc := NewAudiobookService(store, &epubOpener{}, rec).
-		WithStagingSweeper(func(string) { swept++ })
+		WithStagingSweeper(func(string) { swept++ }).
+		WithPublisher(func(bookID string) { published = append(published, bookID) })
 
 	run, _, err := svc.Status(context.Background(), "b1")
 	if err != nil {
@@ -687,6 +689,9 @@ func TestStatusFailsARunWhoseSegmentsHaveAllSettledWithFailures(t *testing.T) {
 	}
 	if swept != 0 {
 		t.Error("a failed run's staging was swept — Retry would have to buy nine segments again")
+	}
+	if len(published) != 1 {
+		t.Errorf("published %d times, want one so an open client stops polling", len(published))
 	}
 }
 

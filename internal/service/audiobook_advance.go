@@ -10,27 +10,6 @@ import (
 	"github.com/blackforge/embookshelf/internal/model"
 )
 
-// Advance moves a run to wherever its Coverage says it should be.
-//
-// The read-side entry point: it takes no segment result, so it reads the
-// run and its Coverage and applies whatever follows. This is
-// reconcile-on-read — the status endpoint is polled every four seconds
-// while a run is live and hit on every book-detail load, so a finalize
-// job a crash lost is re-dispatched by the next person who looks at the
-// book (ADR-0028 §7).
-func (s *AudiobookService) Advance(ctx context.Context, bookID string) error {
-	run, err := s.store.GetByBookID(ctx, bookID)
-	if err != nil {
-		return err
-	}
-	cov, err := s.store.Coverage(ctx, bookID)
-	if err != nil {
-		return err
-	}
-	_, err = s.advance(ctx, bookID, run.State, cov)
-	return err
-}
-
 // AdvanceAfterSegment records a segment's result and applies whatever
 // that landing decided.
 //

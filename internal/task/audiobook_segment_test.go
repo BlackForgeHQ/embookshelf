@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/audio/audiotest"
@@ -22,20 +21,6 @@ import (
 	"github.com/blackforge/embookshelf/internal/task"
 	"github.com/blackforge/embookshelf/internal/tts"
 )
-
-// recordingEnqueuer captures the jobs a segment worker hands to the
-// pool, so a test can count finalize dispatches without a real queue.
-type recordingEnqueuer struct {
-	mu   sync.Mutex
-	args []jobs.Args
-}
-
-func (r *recordingEnqueuer) Enqueue(_ context.Context, a jobs.Args) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.args = append(r.args, a)
-	return nil
-}
 
 // ---------------------------------------------------------------------------
 // Fakes local to the segment worker
@@ -104,7 +89,6 @@ type segmentHarness struct {
 	runs      *fakeSegmentRuns
 	books     *fakeBooks
 	engine    *fakeEngine
-	enq       *recordingEnqueuer
 	published int
 	engineErr error
 	dataPath  string
@@ -150,7 +134,6 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 			ID: "b1", LibraryID: "lib1", Title: "Dune", Author: "Frank Herbert", Format: "EPUB",
 		}},
 		engine:   &fakeEngine{reply: audiotest.Frames(4)},
-		enq:      &recordingEnqueuer{},
 		dataPath: t.TempDir(),
 	}
 	src := epubWithChapters(t, "One sentence. Another sentence. A third one.", "Second chapter here.")
@@ -177,7 +160,6 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 		Open: func(context.Context, model.Book) (storage.Source, error) {
 			return src, nil
 		},
-		Enqueue:  h.enq,
 		Publish:  func(string) { h.published++ },
 		DataPath: h.dataPath,
 	}

@@ -427,7 +427,6 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 		AudiobookSvc: audiobookSvc,
 		Covers:       covers,
 		DataPath:     cfg.DataPath,
-		Enqueue:      enq,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("queue: %w", err)

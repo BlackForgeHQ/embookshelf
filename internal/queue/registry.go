@@ -136,7 +136,6 @@ func registry(deps Deps) []registration {
 		Books:    deps.Books,
 		Open:     openBook,
 		DataPath: deps.DataPath,
-		Enqueue:  deps.Enqueue,
 	}
 	if deps.Hub != nil {
 		segment.Publish = publishAudiobook

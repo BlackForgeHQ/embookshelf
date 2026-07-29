@@ -81,11 +81,6 @@ type Deps struct {
 	AudiobookSvc *service.AudiobookService
 	Covers       *coverstore.Store
 	DataPath     string
-	// Enqueue is the seam workers use to dispatch follow-on jobs. It is
-	// the same *jobs.Deferred the service tier holds: the registry below
-	// is built out of services that need it, so it cannot be the client
-	// this call is constructing.
-	Enqueue jobs.Enqueuer
 }
 
 // New constructs the River-backed Client but does not start it. River
