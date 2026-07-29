@@ -77,6 +77,8 @@ export type Book = {
   language?: string
   progress: number
   resumeCfi?: string
+  /** The same reader's position in this book's narration, if it has one. */
+  resumeAudio?: string
   rating: number
   palette: string
   description?: string

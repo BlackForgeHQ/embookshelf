@@ -30,7 +30,7 @@ func TestBookProjection_RendersTheJoinedSelect(t *testing.T) {
 		`b.cover_palette, b.description, b.isbn, b.isbn10, b.publisher, b.series, ` +
 		`b.series_index, b.series_total, b.genres, b.moods, b.tags, b.age_rating, ` +
 		`b.content_rating, b.pages, b.public_reviews, b.created_at, b.path, b.has_cover, ` +
-		`b.cover_mime, b.cover_hash, COALESCE(ubp.resume_cfi, '') AS resume_cfi, ` +
+		`b.cover_mime, b.cover_hash, COALESCE(ubp.resume_cfi, '') AS resume_cfi, COALESCE(ubp.resume_audio, '') AS resume_audio, ` +
 		`b.title_locked, b.subtitle_locked, b.author_locked, b.description_locked, ` +
 		`b.publisher_locked, b.series_locked, b.isbn_locked, b.isbn10_locked, ` +
 		`b.language_locked, b.publish_date_locked, b.genres_locked, b.moods_locked, ` +
@@ -49,6 +49,7 @@ func TestBookCreateQuery_RendersTheSharedProjection(t *testing.T) {
 	want := strings.NewReplacer(
 		`COALESCE(ubp.progress, 0) AS progress`, `0 AS progress`,
 		`COALESCE(ubp.resume_cfi, '') AS resume_cfi`, `'' AS resume_cfi`,
+		`COALESCE(ubp.resume_audio, '') AS resume_audio`, `'' AS resume_audio`,
 	).Replace(bookCols)
 	if !strings.Contains(bookCreateQuery, want) {
 		t.Fatalf("create query does not select the shared projection:\n%s", bookCreateQuery)

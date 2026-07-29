@@ -1,0 +1,22 @@
+-- A second resume position, for the narration Rendition. See #200.
+--
+-- All four Locator kinds — epubcfi, page:, time:, unknown — were written
+-- into resume_cfi. That is fine while a book has one reader, and a
+-- narrated book has two: the text shell writes a CFI, the audio shell
+-- writes a timestamp, and each overwrites the other. Read → Listen →
+-- Read lost the reader's place in both directions, and the second toggle
+-- destroyed a position that had been correct before the first.
+--
+-- ADR-0025 §3 says reading and listening share one progress value,
+-- bridged by the alignment map, and defers the sync itself. Until that
+-- bridge exists the two are different currencies, and storing both is
+-- what the deferral actually means in the data. When it lands
+-- (ADR-0029 §4) one of these becomes derived from the other — a
+-- simplification then, not a rewrite.
+--
+-- progress deliberately stays shared. "How far through this book am I"
+-- is one question about the work however it was consumed, and it is what
+-- the library card and the dashboard show; the most recent activity is
+-- the best answer available until the bridge can reconcile them.
+ALTER TABLE user_book_progress
+    ADD COLUMN IF NOT EXISTS resume_audio TEXT NOT NULL DEFAULT '';

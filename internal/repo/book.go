@@ -70,6 +70,7 @@ func buildBookProjection() projection[model.Book] {
 		{name: "cover_mime", dest: func(b *model.Book) any { return &b.CoverMime }},
 		{name: "cover_hash", dest: func(b *model.Book) any { return &b.CoverHash }},
 		{name: "resume_cfi", expr: `COALESCE(ubp.resume_cfi, '') AS resume_cfi`, dest: func(b *model.Book) any { return &b.ResumeCFI }},
+		{name: "resume_audio", expr: `COALESCE(ubp.resume_audio, '') AS resume_audio`, dest: func(b *model.Book) any { return &b.ResumeAudio }},
 	}
 	for _, spec := range model.LockSpecs {
 		p = append(p, lockColumn(spec))
@@ -218,6 +219,7 @@ var bookCreateQuery = `
 	SELECT ` + bookProjection.
 	with("progress", `0 AS progress`).
 	with("resume_cfi", `'' AS resume_cfi`).
+	with("resume_audio", `'' AS resume_audio`).
 	selectList("b") + `
 	FROM inserted b
 `

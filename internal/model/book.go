@@ -85,6 +85,11 @@ type Book struct {
 	// ResumeCFI is the current user's last-known reading position (EPUB CFI).
 	// Empty when the user hasn't opened the reader yet.
 	ResumeCFI string
+	// ResumeAudio is the same reader's position in the book's narration.
+	// A second column because the two are different currencies until the
+	// alignment map bridges them, and one column meant each Rendition
+	// overwrote the other's place (#200).
+	ResumeAudio string
 	// Audiobook fields — populated for MP3 / M4B and left zero for other
 	// formats. DurationSeconds is nil when unknown (no MP3 frame header,
 	// no MP4 mvhd atom, or simply non-audio); the UI treats nil as "—".

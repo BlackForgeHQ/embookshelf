@@ -1051,9 +1051,14 @@ function AudioReaderShell({
   const navigate = useNavigate()
 
   const initialSeconds = useMemo(() => {
-    const resume = decodeLocator(book.resumeCfi)
+    // resumeAudio, not resumeCfi: this book's two Renditions keep two
+    // positions, because a CFI and a timestamp are different currencies
+    // until the alignment map bridges them. Reading the shared field is
+    // what lost the listener's place on every Read → Listen → Read
+    // round trip (#200).
+    const resume = decodeLocator(book.resumeAudio)
     return resume?.kind === "time" ? Math.max(0, resume.seconds) : 0
-  }, [book.resumeCfi])
+  }, [book.resumeAudio])
 
   const [seconds, setSeconds] = useState(initialSeconds)
   const [duration, setDuration] = useState(book.durationSeconds ?? 0)

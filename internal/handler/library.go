@@ -60,6 +60,7 @@ type bookDTO struct {
 	Language      string   `json:"language,omitempty"`
 	Progress      float64  `json:"progress"`
 	ResumeCFI     string   `json:"resumeCfi,omitempty"`
+	ResumeAudio   string   `json:"resumeAudio,omitempty"`
 	Rating        int      `json:"rating"`
 	Palette       string   `json:"palette"`
 	Description   string   `json:"description,omitempty"`
@@ -133,6 +134,7 @@ func toBookDTO(b model.Book) bookDTO {
 		Language:        b.Language,
 		Progress:        float64(b.Progress) / 100.0,
 		ResumeCFI:       b.ResumeCFI,
+		ResumeAudio:     b.ResumeAudio,
 		Rating:          b.Rating,
 		Palette:         firstNonEmpty(b.CoverPalette, "navy"),
 		Description:     b.Description,

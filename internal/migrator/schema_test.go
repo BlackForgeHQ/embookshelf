@@ -48,6 +48,11 @@ var allowedDivergence = map[string]bool{
 	"book_reading_guides":     true, // PG-only, post-freeze (ADR-0023, ADR-0024)
 	"book_audiobooks":         true, // PG-only, post-freeze (ADR-0023, ADR-0025)
 	"book_audiobook_segments": true, // PG-only, post-freeze (ADR-0023, ADR-0028)
+
+	// PG-only column on a table that predates the freeze, so it needs a
+	// column-level entry rather than a table-level one. A second resume
+	// position, for the narration Rendition (#200).
+	"user_book_progress.resume_audio": true,
 }
 
 // TestSchemaEquivalence migrates both trees end-to-end against
