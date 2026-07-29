@@ -74,11 +74,21 @@ func (f *probingFiles) ListByBook(_ context.Context, bookID string) ([]model.Fil
 // a live catalog entry pointing at nothing if the row delete then failed.
 type probingStorage struct {
 	storage.Storage
-	probe    *rowProbe
-	deleted  []string
-	rowSeen  []bool
-	failKey  string
-	failWith error
+	objectStore bool
+	probe       *rowProbe
+	deleted     []string
+	rowSeen     []bool
+	failKey     string
+	failWith    error
+}
+
+// What IsObjectStore reads. A local filesystem advertises nothing;
+// setting objectStore makes this double stand in for S3 (#202).
+func (s *probingStorage) Capabilities() storage.Capability {
+	if s.objectStore {
+		return storage.CapObjectStore
+	}
+	return 0
 }
 
 func (s *probingStorage) Delete(_ context.Context, key string, _ ...storage.DeleteOption) error {
@@ -295,7 +305,7 @@ func TestDeleteBookEnqueuesPendingOrphansOnBackendBackedLibrary(t *testing.T) {
 		"libraries/deletable/Author/Title/book.epub",
 		"libraries/deletable/Author/Title/book.mp3",
 	}}
-	store := &probingStorage{probe: fx.probe}
+	store := &probingStorage{probe: fx.probe, objectStore: true}
 	orphans := &probingOrphans{probe: fx.probe}
 	handle := &LibraryHandle{Library: fx.lib, Storage: store, files: files, orphans: orphans}
 

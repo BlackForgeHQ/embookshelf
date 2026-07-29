@@ -751,6 +751,10 @@ type copyingBackend struct {
 	*local.LocalFS
 }
 
+// Advertising the capability is what marks it as remote; a backend id
+// no longer does (#202).
+func (copyingBackend) Capabilities() storage.Capability { return storage.CapObjectStore }
+
 func (c copyingBackend) MovePrefix(ctx context.Context, oldPrefix, newPrefix string) (storage.MoveResult, error) {
 	src := strings.Trim(oldPrefix, "/") + "/"
 	dst := strings.Trim(newPrefix, "/") + "/"

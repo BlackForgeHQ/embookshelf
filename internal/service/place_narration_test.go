@@ -19,6 +19,10 @@ type putRecordingStorage struct {
 	puts map[string][]byte
 }
 
+// These doubles stand in for an object store, and it is the advertised
+// capability that says so now — a backend id no longer does (#202).
+func (*putRecordingStorage) Capabilities() storage.Capability { return storage.CapObjectStore }
+
 func (p *putRecordingStorage) Put(_ context.Context, key string, r io.Reader, _ ...storage.PutOption) (storage.PutResult, error) {
 	b, err := io.ReadAll(r)
 	if err != nil {

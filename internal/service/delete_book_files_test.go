@@ -16,10 +16,21 @@ import (
 // deleteRecordingStorage records Delete calls and can fail a chosen key,
 // so a test can prove one bad object does not abandon the rest.
 type deleteRecordingStorage struct {
+	objectStore bool
 	fakeStorage
 	deleted  []string
 	failKey  string
 	failWith error
+}
+
+// What IsObjectStore reads. This double serves both shapes in this
+// file, so the capability is a field rather than a constant — a backend
+// id no longer decides it (#202).
+func (s *deleteRecordingStorage) Capabilities() storage.Capability {
+	if s.objectStore {
+		return storage.CapObjectStore
+	}
+	return 0
 }
 
 func (d *deleteRecordingStorage) Delete(_ context.Context, key string, _ ...storage.DeleteOption) error {
@@ -138,7 +149,7 @@ func TestDeleteBookBytesEnqueuesOrphansOnBackendBackedLibrary(t *testing.T) {
 	t.Parallel()
 
 	backendID := "backend-1"
-	store := &deleteRecordingStorage{}
+	store := &deleteRecordingStorage{objectStore: true}
 	orphans := &recordingOrphans{}
 	handle := &LibraryHandle{
 		Library: model.Library{ID: "lib1", BackendID: &backendID},

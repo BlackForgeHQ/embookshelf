@@ -77,13 +77,30 @@ type bookFileLister interface {
 	ListByBook(ctx context.Context, bookID string) ([]model.File, error)
 }
 
-// IsBackendBacked reports whether this library's bytes live in a
-// Storage backend rather than on the local filesystem. Names the
-// question once so callers stop peeking at libraries.backend_id: the
-// in-file metadata embed (ADR-0001) and the folder-rename strategy
-// (ADR-0005) both branch on it.
-func (h *LibraryHandle) IsBackendBacked() bool {
-	return h.Library.BackendID != nil
+// IsObjectStore reports whether this library's bytes live in a remote
+// object store rather than on the local filesystem. Names the question
+// once: the in-file metadata embed (ADR-0001), the folder-rename
+// strategy (ADR-0005), narration placement and the key rule all branch
+// on it.
+//
+// Asked of the adapter, not of libraries.backend_id. That column was
+// the previous answer and it was wrong for exactly one install shape:
+// the storage-v2 backfill gave every pre-existing *local* library a
+// kind=local backend row, so a non-NULL backend_id meant "a backend row
+// exists" to the migrator and "is not local" to this tier. A migrated
+// local library therefore took every object-store branch — the key rule
+// handed a "/"-rooted local backend a library-relative key, the in-file
+// embed switched itself off, and a folder rename enqueued pending
+// orphans that CONTEXT says local backends do not produce (#202).
+//
+// A nil Storage answers false: a library whose backend could not be
+// resolved is not an object store, it is unusable, and every caller
+// guards Storage separately.
+func (h *LibraryHandle) IsObjectStore() bool {
+	if h.Storage == nil {
+		return false
+	}
+	return h.Storage.Capabilities()&storage.CapObjectStore != 0
 }
 
 // StorageKey turns a files.location into the key this library's Storage
@@ -111,7 +128,7 @@ func (h *LibraryHandle) IsBackendBacked() bool {
 // Backend-backed libraries are untouched: their keys are already the
 // object keys, and the backend encodes its own prefix.
 func (h *LibraryHandle) StorageKey(location string) string {
-	if h.IsBackendBacked() {
+	if h.IsObjectStore() {
 		return location
 	}
 	// Already absolute: a legacy row. books.path predates storage-v2, and
@@ -220,7 +237,7 @@ func (h *LibraryHandle) DeleteBookBytes(ctx context.Context, bookID string, loca
 		return nil
 	}
 
-	if h.IsBackendBacked() {
+	if h.IsObjectStore() {
 		if h.orphans == nil {
 			return nil
 		}

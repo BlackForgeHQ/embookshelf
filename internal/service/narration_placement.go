@@ -22,7 +22,7 @@ import (
 // filesystem to resolve against.
 func (h *LibraryHandle) LocalPath(location string) string {
 	root := h.localRoot()
-	if root == "" || h.IsBackendBacked() {
+	if root == "" || h.IsObjectStore() {
 		return ""
 	}
 	return filepath.Join(root, filepath.FromSlash(location))
@@ -102,7 +102,7 @@ func (h *LibraryHandle) PlaceNarration(ctx context.Context, book model.Book, src
 		return PlaceResult{}, fmt.Errorf("stat narration: %w", err)
 	}
 
-	if h.IsBackendBacked() {
+	if h.IsObjectStore() {
 		if h.Storage == nil {
 			return PlaceResult{}, errors.New("library has no storage backend")
 		}

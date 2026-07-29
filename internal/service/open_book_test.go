@@ -197,20 +197,37 @@ func TestOpenBookErrorsWhenNoBytesAvailable(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// IsBackendBacked — the named capability question
+// IsObjectStore — the named capability question
 // ---------------------------------------------------------------------------
 
-func TestIsBackendBacked(t *testing.T) {
+// Asked of the adapter, so a backend id is not the answer: the
+// storage-v2 backfill gave every migrated local library one (#202).
+func TestIsObjectStore(t *testing.T) {
 	t.Parallel()
 
-	backendID := "backend-1"
-	if !(&LibraryHandle{Library: model.Library{BackendID: &backendID}}).IsBackendBacked() {
-		t.Error("library with a backend id must report backend-backed")
+	localFS, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
 	}
-	if (&LibraryHandle{Library: model.Library{}}).IsBackendBacked() {
-		t.Error("library without a backend id must report local")
+	backendID := "backend-1"
+
+	if (&LibraryHandle{Library: model.Library{BackendID: &backendID}, Storage: localFS}).IsObjectStore() {
+		t.Error("a local backend must not report as an object store, backend row or not")
+	}
+	if (&LibraryHandle{Storage: objectStoreStub{}}).IsObjectStore() != true {
+		t.Error("a backend advertising CapObjectStore must report as one")
+	}
+	// A library whose backend could not be resolved is unusable, not an
+	// object store; every caller guards Storage separately.
+	if (&LibraryHandle{Library: model.Library{BackendID: &backendID}}).IsObjectStore() {
+		t.Error("a handle with no Storage must not report as an object store")
 	}
 }
+
+// objectStoreStub advertises the one capability under test.
+type objectStoreStub struct{ storage.Storage }
+
+func (objectStoreStub) Capabilities() storage.Capability { return storage.CapObjectStore }
 
 // A local library stores files.location relative to the library root
 // (CONTEXT, "Files row"), while its LocalFS is rooted at "/" and expects
@@ -309,5 +326,43 @@ func TestStorageKeyResolvesARelativeLocationAgainstTheRoot(t *testing.T) {
 
 	if got := handle.StorageKey("Kobo Abe/dunes.epub"); got != want {
 		t.Errorf("storageKey = %q, want %q", got, want)
+	}
+}
+
+// The storage-v2 backfill wired every pre-existing local library to a
+// kind=local backend row, so libraries.backend_id is non-NULL for them.
+// Libraries created since get NULL. The two shapes must behave
+// identically — the column says a backend row exists, not that the bytes
+// live in an object store (#202).
+func TestALocalLibraryWithABackendRowResolvesKeysLikeOneWithout(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	rootedAtSlash, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	backendID := "backend-1"
+
+	migrated := &LibraryHandle{
+		// What the backfill leaves behind: a local library pointing at a
+		// kind=local backend row, resolved to the same "/"-rooted store.
+		Library: model.Library{ID: "lib1", Root: &root, BackendID: &backendID},
+		Storage: rootedAtSlash,
+	}
+	fresh := &LibraryHandle{
+		Library: model.Library{ID: "lib2", Root: &root},
+		Storage: rootedAtSlash,
+	}
+
+	const location = "Kobo Abe/Woman in the Dunes/dunes.epub"
+	want := filepath.Join(root, "Kobo Abe", "Woman in the Dunes", "dunes.epub")
+
+	if got := fresh.StorageKey(location); got != want {
+		t.Fatalf("fresh library: StorageKey = %q, want %q", got, want)
+	}
+	if got := migrated.StorageKey(location); got != want {
+		t.Errorf("migrated library: StorageKey = %q, want %q — a kind=local backend row "+
+			"made it answer as though its bytes were in an object store", got, want)
 	}
 }

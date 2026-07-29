@@ -298,7 +298,7 @@ func (h *Handler) serveNarrationRendition(c *gin.Context, book model.Book) {
 				asciiFallback(filename), url.PathEscape(filename)))
 	}
 
-	if handle.IsBackendBacked() {
+	if handle.IsObjectStore() {
 		src := service.BookSource{
 			Kind:    service.BookDeliveryStream,
 			Storage: handle.Storage,

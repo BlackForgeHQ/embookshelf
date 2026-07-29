@@ -66,6 +66,21 @@ const (
 	// CapConditional indicates the backend supports If-Match /
 	// If-None-Match preconditions on Put.
 	CapConditional
+	// CapObjectStore indicates the backend is a remote object store
+	// rather than a local filesystem.
+	//
+	// It is the one capability callers read to answer a question about
+	// *keys* rather than about features: an object store owns its own
+	// per-library prefix, so a stored location is already the key it
+	// answers to, while the local backend is rooted at "/" for the whole
+	// instance and a location has to be resolved against the library
+	// root first (ADR-0030 §1).
+	//
+	// Read from the adapter, not from libraries.backend_id. The
+	// storage-v2 backfill gave every pre-existing local library a
+	// kind=local backend row, so that column says "a backend row exists",
+	// which is not the same question (#202).
+	CapObjectStore
 	// CapRange indicates the backend supports byte-range reads on Get.
 	CapRange
 )

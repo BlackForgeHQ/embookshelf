@@ -306,7 +306,7 @@ func (w *MetadataWriter) renameFolder(
 	handle *LibraryHandle,
 	oldFolder, newFolder string,
 ) (bool, string) {
-	if handle.IsBackendBacked() {
+	if handle.IsObjectStore() {
 		return w.renameFolderBackend(ctx, b, handle, oldFolder, newFolder)
 	}
 	return w.renameFolderLocal(ctx, b, handle, oldFolder, newFolder)

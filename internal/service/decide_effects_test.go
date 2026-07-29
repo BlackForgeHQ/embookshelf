@@ -28,7 +28,9 @@ func TestDecideEffects(t *testing.T) {
 	}
 	s3Handle := &service.LibraryHandle{
 		Library: model.Library{ID: "lib2", BackendID: &backendID},
-		Storage: localFS, // any non-nil Storage; the BackendID is what matters
+		// The adapter is what makes it an object store, not the backend
+		// id — a migrated local library has one of those too (#202).
+		Storage: objectStore{localFS},
 	}
 	degradedHandle := &service.LibraryHandle{
 		Library: model.Library{ID: "lib3", BackendID: nil},
@@ -136,3 +138,9 @@ func TestDecideEffects(t *testing.T) {
 		})
 	}
 }
+
+// objectStore wraps any Storage and advertises the one capability that
+// makes the write pipeline treat a library as remote.
+type objectStore struct{ storage.Storage }
+
+func (objectStore) Capabilities() storage.Capability { return storage.CapObjectStore }
