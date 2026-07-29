@@ -1,6 +1,5 @@
 import { useMemo, useRef, useState } from "react"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { toast } from "sonner"
 
 import type { BookDetail } from "@/api/books"
 import type { AudioProgress, AudioReaderHandle } from "@/components/AudioReader"
@@ -21,6 +20,14 @@ import { useApiMutation } from "@/api/mutation"
 import { useReadingPosition } from "@/hooks/useReadingPosition"
 import { isNarratableFormat, readerKindForFormat } from "@/lib/formats"
 import { ProgressBar } from "@/components/ProgressBar"
+import {
+  BookmarkButton,
+  ChromeRestoreButton,
+  ExitButton,
+  ReaderContainer,
+  ReaderFooter,
+  ReaderHeader,
+} from "@/components/reader/Chrome"
 import {
   decodeLocator,
   encodeLocator,
@@ -243,19 +250,16 @@ function ReaderShell({ book }: { book: BookDetail }) {
     errorToast: (err) => err.message || "Bookmark failed",
   })
 
-  const onBookmark = () => {
-    const locator: Locator | null =
-      book.format === "PDF" && pageState
-        ? { kind: "page", page: pageState.current }
-        : book.format === "EPUB" && cfiState
-          ? { kind: "cfi", cfi: cfiState }
-          : null
-    if (!locator) {
-      toast.info("Open the book first, then bookmark.")
-      return
-    }
-    bookmarkMut.mutate({ bookId: book.id, locator })
-  }
+  // Null until the reader has reported a position: the shell mounts
+  // before either renderer knows where it is, and this is the only shell
+  // with that gap — hence the only one whose bookmark button has a null
+  // path to take.
+  const bookmarkLocator: Locator | null =
+    book.format === "PDF" && pageState
+      ? { kind: "page", page: pageState.current }
+      : book.format === "EPUB" && cfiState
+        ? { kind: "cfi", cfi: cfiState }
+        : null
 
   // EPUB highlights for the rendition overlay. Stable reference when the
   // annotation list hasn't changed, so the effect in EpubReader doesn't
@@ -304,31 +308,10 @@ function ReaderShell({ book }: { book: BookDetail }) {
     book.format === "PDF" && pageState ? `p.${pageState.total}` : ""
 
   return (
-    <div
-      className="fade-in"
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "var(--color-paper-0)",
-        zIndex: 200,
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
+    <ReaderContainer background="var(--color-paper-0)">
       {chromeVisible && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            padding: "10px 22px",
-            borderBottom: "1px solid var(--color-rule-soft)",
-            background: "var(--color-paper-1)",
-          }}
-        >
-          <Button variant="ghost" size="sm" onClick={exit}>
-            <Icon name="arrow-left" size={14} /> Library
-          </Button>
+        <ReaderHeader>
+          <ExitButton onExit={exit} />
           <div
             style={{
               flex: 1,
@@ -369,15 +352,13 @@ function ReaderShell({ book }: { book: BookDetail }) {
           >
             <Icon name="aA" size={14} />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Bookmark"
-            disabled={bookmarkMut.isPending}
-            onClick={onBookmark}
-          >
-            <Icon name="bookmark" size={14} />
-          </Button>
+          <BookmarkButton
+            locator={bookmarkLocator}
+            pending={bookmarkMut.isPending}
+            onBookmark={(locator) =>
+              bookmarkMut.mutate({ bookId: book.id, locator })
+            }
+          />
           <Button
             variant={notesOpen ? "default" : "ghost"}
             size="icon-sm"
@@ -397,7 +378,7 @@ function ReaderShell({ book }: { book: BookDetail }) {
           >
             <Icon name="close" size={14} />
           </Button>
-        </div>
+        </ReaderHeader>
       )}
 
       <div
@@ -459,7 +440,13 @@ function ReaderShell({ book }: { book: BookDetail }) {
           </aside>
         )}
 
-        {/* Reading area */}
+        {/* Reading area.
+
+            Pre-existing: the chrome-restore gesture differs in kind from
+            the comic shell's, which double-clicks to toggle. A single
+            click can restore here because an EPUB renders into an iframe
+            that swallows it, so only the letterbox margins respond.
+            Left as-is — unifying the two is a behaviour change. */}
         <div
           onClick={() => setChromeVisible(true)}
           style={{
@@ -756,69 +743,32 @@ function ReaderShell({ book }: { book: BookDetail }) {
         )}
       </div>
 
-      {/* Bottom — progress + page controls */}
-      <div
-        style={{
-          borderTop: "1px solid var(--color-rule-soft)",
-          padding: "10px 22px",
-          display: "flex",
-          alignItems: "center",
-          gap: 14,
-          background: "var(--color-paper-1)",
-        }}
+      {/* Bottom — progress + page controls.
+
+          Pre-existing (ADR-0029 "Consequences"): this sits outside the
+          `chromeVisible` guard, so "hide chrome" hides only the header.
+          Preserved rather than fixed — it is tracked on its own. */}
+      <ReaderFooter
+        onPrev={() =>
+          book.format === "EPUB"
+            ? epubRef.current?.prev()
+            : pdfRef.current?.prev()
+        }
+        onNext={() =>
+          book.format === "EPUB"
+            ? epubRef.current?.next()
+            : pdfRef.current?.next()
+        }
+        leftLabel={footerPageLabel}
+        rightLabel={footerTotalLabel || `${Math.round(percent * 100)}%`}
       >
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() =>
-            book.format === "EPUB"
-              ? epubRef.current?.prev()
-              : pdfRef.current?.prev()
-          }
-        >
-          <Icon name="chevron-left" size={14} /> Prev
-        </Button>
-        <div
-          style={{ flex: 1, display: "flex", alignItems: "center", gap: 12 }}
-        >
-          <span
-            className="mono"
-            style={{ fontSize: 10.5, color: "var(--color-ink-3)" }}
-          >
-            {footerPageLabel}
-          </span>
-          <ProgressBar value={percent} label="Reading progress" />
-          <span
-            className="mono"
-            style={{ fontSize: 10.5, color: "var(--color-ink-3)" }}
-          >
-            {footerTotalLabel || `${Math.round(percent * 100)}%`}
-          </span>
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() =>
-            book.format === "EPUB"
-              ? epubRef.current?.next()
-              : pdfRef.current?.next()
-          }
-        >
-          Next <Icon name="chevron-right" size={14} />
-        </Button>
-      </div>
+        <ProgressBar value={percent} label="Reading progress" />
+      </ReaderFooter>
 
       {!chromeVisible && (
-        <Button
-          variant="outline"
-          size="icon-sm"
-          onClick={() => setChromeVisible(true)}
-          className="absolute top-2 right-2 z-10"
-        >
-          <Icon name="menu" size={14} />
-        </Button>
+        <ChromeRestoreButton onRestore={() => setChromeVisible(true)} />
       )}
-    </div>
+    </ReaderContainer>
   )
 }
 
@@ -871,31 +821,10 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
   const percent = total <= 1 ? 1 : page / Math.max(1, total - 1)
 
   return (
-    <div
-      className="fade-in"
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "var(--color-paper-2)",
-        zIndex: 200,
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
+    <ReaderContainer background="var(--color-paper-2)">
       {chromeVisible && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            padding: "10px 22px",
-            borderBottom: "1px solid var(--color-rule-soft)",
-            background: "var(--color-paper-1)",
-          }}
-        >
-          <Button variant="ghost" size="sm" onClick={exit}>
-            <Icon name="arrow-left" size={14} /> Library
-          </Button>
+        <ReaderHeader>
+          <ExitButton onExit={exit} />
           <div
             style={{
               flex: 1,
@@ -938,20 +867,15 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
               H
             </Button>
           </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Bookmark"
-            disabled={bookmarkMut.isPending}
-            onClick={() =>
-              bookmarkMut.mutate({
-                bookId: book.id,
-                locator: { kind: "page", page: page + 1 },
-              })
+          <BookmarkButton
+            // Never null: the comic shell resumes to a page before it
+            // mounts the reader, so there is always a page to point at.
+            locator={{ kind: "page", page: page + 1 }}
+            pending={bookmarkMut.isPending}
+            onBookmark={(locator) =>
+              bookmarkMut.mutate({ bookId: book.id, locator })
             }
-          >
-            <Icon name="bookmark" size={14} />
-          </Button>
+          />
           <Button
             variant="ghost"
             size="icon-sm"
@@ -960,9 +884,13 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
           >
             <Icon name="close" size={14} />
           </Button>
-        </div>
+        </ReaderHeader>
       )}
 
+      {/* Pre-existing: this restores chrome on a *double* click and
+          toggles rather than shows, where the text shell takes a single
+          click and only shows. A single click here is already a page
+          turn. Preserved — unifying them is a behaviour change. */}
       <div
         onDoubleClick={() => setChromeVisible((v) => !v)}
         style={{ flex: 1, position: "relative", overflow: "hidden" }}
@@ -977,74 +905,36 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
         />
       </div>
 
-      <div
-        style={{
-          borderTop: "1px solid var(--color-rule-soft)",
-          padding: "10px 22px",
-          display: "flex",
-          alignItems: "center",
-          gap: 14,
-          background: "var(--color-paper-1)",
-        }}
+      {/* Pre-existing (ADR-0029 "Consequences"): outside the
+          `chromeVisible` guard, same as the text shell — "hide chrome"
+          hides only the header. Preserved; tracked on its own. */}
+      <ReaderFooter
+        onPrev={() => comicRef.current?.prev()}
+        onNext={() => comicRef.current?.next()}
+        leftLabel={`p.${page + 1}`}
+        rightLabel={total > 0 ? `p.${total}` : "—"}
       >
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => comicRef.current?.prev()}
-        >
-          <Icon name="chevron-left" size={14} /> Prev
-        </Button>
-        <div
-          style={{ flex: 1, display: "flex", alignItems: "center", gap: 12 }}
-        >
-          <span
-            className="mono"
-            style={{ fontSize: 10.5, color: "var(--color-ink-3)" }}
-          >
-            p.{page + 1}
-          </span>
-          <ProgressBar
-            value={percent}
-            label="Page progress"
-            onSeek={
-              total > 0
-                ? (fraction) =>
-                    comicRef.current?.goTo(
-                      Math.max(
-                        0,
-                        Math.min(total - 1, Math.round(fraction * (total - 1)))
-                      )
+        <ProgressBar
+          value={percent}
+          label="Page progress"
+          onSeek={
+            total > 0
+              ? (fraction) =>
+                  comicRef.current?.goTo(
+                    Math.max(
+                      0,
+                      Math.min(total - 1, Math.round(fraction * (total - 1)))
                     )
-                : undefined
-            }
-          />
-          <span
-            className="mono"
-            style={{ fontSize: 10.5, color: "var(--color-ink-3)" }}
-          >
-            {total > 0 ? `p.${total}` : "—"}
-          </span>
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => comicRef.current?.next()}
-        >
-          Next <Icon name="chevron-right" size={14} />
-        </Button>
-      </div>
+                  )
+              : undefined
+          }
+        />
+      </ReaderFooter>
 
       {!chromeVisible && (
-        <Button
-          variant="outline"
-          size="icon-sm"
-          onClick={() => setChromeVisible(true)}
-          className="absolute top-2 right-2 z-10"
-        >
-          <Icon name="menu" size={14} />
-        </Button>
+        <ChromeRestoreButton onRestore={() => setChromeVisible(true)} />
       )}
-    </div>
+    </ReaderContainer>
   )
 }
 
@@ -1111,30 +1001,12 @@ function AudioReaderShell({
   const percent = duration > 0 ? seconds / duration : 0
 
   return (
-    <div
-      className="fade-in"
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "var(--color-paper-1)",
-        zIndex: 200,
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          padding: "10px 22px",
-          borderBottom: "1px solid var(--color-rule-soft)",
-          background: "var(--color-paper-1)",
-        }}
-      >
-        <Button variant="ghost" size="sm" onClick={exit}>
-          <Icon name="arrow-left" size={14} /> Library
-        </Button>
+    <ReaderContainer background="var(--color-paper-1)">
+      {/* Pre-existing: this shell has no `chromeVisible` at all, so its
+          header is unconditional and there is nothing to restore.
+          Preserved — adding the state would be a behaviour change. */}
+      <ReaderHeader>
+        <ExitButton onExit={exit} />
         <div style={{ flex: 1 }} />
         <Button
           variant={chaptersOpen ? "default" : "ghost"}
@@ -1145,21 +1017,16 @@ function AudioReaderShell({
         >
           <Icon name="contents" size={14} />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Bookmark"
-          disabled={bookmarkMut.isPending}
-          onClick={() =>
-            bookmarkMut.mutate({
-              bookId: book.id,
-              locator: { kind: "time", seconds },
-            })
+        <BookmarkButton
+          // Never null: playback position starts at the resume offset, so
+          // zero seconds is a real position rather than "not open yet".
+          locator={{ kind: "time", seconds }}
+          pending={bookmarkMut.isPending}
+          onBookmark={(locator) =>
+            bookmarkMut.mutate({ bookId: book.id, locator })
           }
-        >
-          <Icon name="bookmark" size={14} />
-        </Button>
-      </div>
+        />
+      </ReaderHeader>
 
       <div
         style={{
@@ -1413,7 +1280,7 @@ function AudioReaderShell({
           if (!v) flushProgress()
         }}
       />
-    </div>
+    </ReaderContainer>
   )
 }
 
