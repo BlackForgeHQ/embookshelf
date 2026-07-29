@@ -3,9 +3,11 @@ import { Link } from "@tanstack/react-router"
 
 import type { BookDropItem } from "@/api/bookdrop"
 import {
+  BOOKDROP_STATE_LABEL,
   bookdropFilesQuery,
   bookdropQuery,
   clearProcessedBookDrop,
+  isTerminalState,
   wipeBookDropFiles,
 } from "@/api/bookdrop"
 import { useApiMutation } from "@/api/mutation"
@@ -18,7 +20,6 @@ import {
   NotebookEmpty,
 } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
-import { isTerminalState } from "@/lib/bookdropState"
 import {
   Dialog,
   DialogContent,
@@ -186,6 +187,10 @@ function ProcessedRow({ item }: { item: BookDropItem }) {
       })
   const title = item.title?.trim() || item.filename
   const isImported = item.state === "imported"
+  // The shared map, not a third spelling of the same two words: this
+  // panel used to render "Imported"/"Discarded" while the queue route
+  // rendered "imported"/"discarded" from the map (#213).
+  const stateLabel = BOOKDROP_STATE_LABEL[item.state]
   return (
     <li className="flex items-center gap-3 border-t border-dashed border-border py-2 first:border-0">
       <span
@@ -198,13 +203,13 @@ function ProcessedRow({ item }: { item: BookDropItem }) {
         <div className="truncate text-[13.5px]">{title}</div>
         <div className="t-small text-muted-foreground">
           <span
-            className={
+            className={`capitalize ${
               isImported
                 ? "text-(--color-editorial-accent)"
                 : "text-(--color-accent-ink)"
-            }
+            }`}
           >
-            {isImported ? "Imported" : "Discarded"}
+            {stateLabel}
           </span>
           {item.author ? <> · {item.author}</> : null} · {dateLabel}
         </div>

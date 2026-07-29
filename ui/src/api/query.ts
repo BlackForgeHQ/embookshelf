@@ -27,6 +27,20 @@ import type { ApiError } from "./client"
 // the arguments change. What it may not say is how long the answer keeps,
 // because that is a property of the endpoint, not of the screen.
 
+/**
+ * How often a live thing is re-read while it is still moving.
+ *
+ * Here for the reason the policy above is here: a narration run and the
+ * reading-guide backfill both poll, and each wrote four seconds down
+ * itself (#197). It sits with the rest of "how long is this answer good
+ * for" rather than in a module of its own, which is all the previous
+ * home had left in it once the wrapper around it went (#213).
+ *
+ * Pair it with a predicate that stops: an idle instance should never be
+ * polled, and a run that has finished has nothing left to report.
+ */
+export const LIVE_POLL_MS = 4000
+
 export type ApiQuery<TData> = {
   key: QueryKey
   fn: () => Promise<TData>

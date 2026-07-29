@@ -7,11 +7,13 @@ import type { ApiError } from "@/api/client"
 import type { BookDropItem, BookDropUploadResult } from "@/api/bookdrop"
 import type { Library } from "@/api/books"
 import {
+  BOOKDROP_STATE_LABEL,
   approveBookDrop,
   bookdropCoverUrl,
   bookdropFileUrl,
   bookdropQuery,
   bookdropQueryKey,
+  isTerminalState,
   putBookDropCover,
   rejectBookDrop,
   uploadBookDrop,
@@ -24,12 +26,6 @@ import { Icon } from "@/components/Icon"
 import { TopBar } from "@/components/TopBar"
 import { ProgressBar } from "@/components/ProgressBar"
 import { Button } from "@/components/ui/button"
-import {
-  BOOKDROP_STATE_LABEL,
-  acceptsCoverUpload,
-  isActiveState,
-  isApprovableState,
-} from "@/lib/bookdropState"
 import {
   Select,
   SelectContent,
@@ -51,7 +47,8 @@ function BookDrop() {
 
   const active = useMemo(
     () =>
-      (queue.data ?? []).filter((i) => isActiveState(i.state)),
+      // Still in the queue: anything not yet finished with.
+      (queue.data ?? []).filter((i) => !isTerminalState(i.state)),
     [queue.data]
   )
 
@@ -516,7 +513,17 @@ function CoverPanel({ item }: { item: BookDropItem }) {
   // component instance. Relies on backend 409 idempotency for
   // cross-mount duplicate suppression.
   const uploadedRef = useRef<Set<string>>(new Set())
-  const isPreapprovalState = acceptsCoverUpload(item.state)
+  // Whether a pre-approval cover can still be uploaded for this row.
+  // The server enforces the same three states in BookDropPutCover
+  // (internal/handler/bookdrop.go) and refuses the rest with a 409 —
+  // this is the client half of that pair. Failed rows are excluded even
+  // though they are approvable: the upload exists to supply a cover the
+  // extractor could not find, and a failed extraction has no page to
+  // render one from.
+  const isPreapprovalState =
+    item.state === "discovered" ||
+    item.state === "processing" ||
+    item.state === "ready"
 
   useEffect(() => {
     if (item.format !== "PDF") return
@@ -575,7 +582,10 @@ function ApprovalBar({
   const [libraryId, setLibraryId] = useState<string | undefined>(
     libraries[0]?.id
   )
-  const approvable = isApprovableState(item.state)
+  // Failed rows are approvable on purpose: extraction failing means the
+  // metadata is poor, not that the file is unusable, and the user can
+  // fill the gaps in by hand rather than losing the book.
+  const approvable = item.state === "ready" || item.state === "failed"
 
   return (
     <>

@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 
-import type { ApiError } from "@/api/client"
+import type { ApiError, ApiErrorCode } from "@/api/client"
 import type { BookDetail as BookDetailPayload } from "@/api/books"
 import {
   annotationKind,
@@ -26,8 +26,8 @@ import {
 } from "@/api/books"
 import { appConfigQuery } from "@/api/settings"
 import type { Viewer } from "@/lib/affordance"
-import { messageForCode } from "@/lib/affordance"
-import { kindleAction } from "@/lib/kindle"
+import { affordanceFor, messageForCode } from "@/lib/affordance"
+import { isKindleEligibleFormat } from "@/lib/formats"
 import {
   DEVICE_KIND_LABELS,
   devicesQuery,
@@ -1012,10 +1012,38 @@ function NotesPanel({ bookId }: { bookId: string }) {
   )
 }
 
+/**
+ * The code `POST /books/:id/kindle` would answer with, or null if it
+ * would accept.
+ *
+ * The branch order is Handler.SendToKindle's, and deliberately so: the
+ * handler checks the transport, then the caller's address, then the
+ * book's format (internal/handler/kindle.go). Reading them in any other
+ * order predicts a refusal the server would not have sent — which is
+ * what this did before #171, telling a user with no Kindle address about
+ * a format rule the server would never have reached.
+ *
+ * The format is the book's **primary** one, deliberately: Send-to-Kindle
+ * ships the file the library ingested, not whichever Rendition the
+ * reader last opened. Those diverge for a narrated book (ADR-0025 §3).
+ * If it ever offers the narration, this becomes a Rendition question and
+ * moves to `renditionsFor`.
+ */
+export function kindleRefusal(
+  emailEnabled: boolean,
+  kindleEmail: string,
+  format: string,
+): ApiErrorCode | null {
+  if (!emailEnabled) return "EMAIL_DISABLED"
+  if (kindleEmail.trim() === "") return "KINDLE_EMAIL_UNSET"
+  if (!isKindleEligibleFormat(format)) return "FORMAT_NOT_SUPPORTED"
+  return null
+}
+
 // SendToKindleButton fires the book at the user's @kindle.com address.
 // What it does when it can't — hide, explain, or lead to the fix — is not
-// this component's call: lib/kindle.ts names the refusal the server would
-// send and lib/affordance.ts decides the affordance and writes the
+// this component's call: the rule above names the refusal the server
+// would send and lib/affordance.ts decides the affordance and writes the
 // sentence (#171). All that is left here is the router and the markup.
 function SendToKindleButton({
   book,
@@ -1035,19 +1063,16 @@ function SendToKindleButton({
       messageForCode(e.code, e.message, viewer) || "Send to Kindle failed.",
   })
 
-  // The three preconditions, and their order, live in lib/kindle.ts:
-  // they mirror the handler's three outcomes, and as early returns here
-  // no test could reach them (#193).
-  const action = kindleAction({
+  const refusal = kindleRefusal(
     // Tri-state on purpose: `undefined` means the config has not landed
     // yet, which is not grounds to claim email is off.
-    emailEnabled: cfg.data?.emailEnabled !== false,
-    // The primary format on purpose — this sends the book's own file,
-    // not whichever Rendition the reader last opened. See KindleState.
-    format: book.format,
+    cfg.data?.emailEnabled !== false,
     kindleEmail,
-    viewer,
-  })
+    book.format,
+  )
+  const action = refusal === null
+    ? ({ kind: "send" } as const)
+    : affordanceFor(refusal, viewer)
 
   if (action.kind === "hidden") {
     return null

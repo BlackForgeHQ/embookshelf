@@ -7,7 +7,7 @@ import {
   testReadingGuide,
 } from "@/api/guides"
 import { useApiMutation } from "@/api/mutation"
-import { useApiQuery } from "@/api/query"
+import { LIVE_POLL_MS, useApiQuery } from "@/api/query"
 import { useConnectionTest } from "@/hooks/useConnectionTest"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
 import {
@@ -22,7 +22,6 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ProgressBar } from "@/components/ProgressBar"
-import { pollWhile } from "@/lib/poll"
 
 // Roughly the opening 30-40 pages. A 300-page EPUB extracts to about nine
 // times this, so the cap binds for most books — deliberately, since it is
@@ -254,9 +253,9 @@ function GuideRunCard() {
     // Poll while books still need a guide. Coverage is two counts on a
     // query that already runs, so this is cheap; it stops on its own once
     // nothing is outstanding rather than polling an idle instance
-    // forever. Same helper and same cadence as the narration panel — the
-    // two used to declare four seconds separately (#197).
-    refetchInterval: pollWhile((d: { books: number }) => d.books > 0),
+    // forever. Same cadence as the narration panel — the two used to
+    // declare four seconds separately (#197).
+    refetchInterval: (q) => (q.state.data?.books ? LIVE_POLL_MS : false),
   })
 
   const runMut = useApiMutation(startGuideRun, {

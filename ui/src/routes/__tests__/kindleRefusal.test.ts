@@ -1,20 +1,35 @@
 import { describe, expect, it } from "vitest"
 
-import { kindleAction } from "@/lib/kindle"
+import { affordanceFor } from "@/lib/affordance"
+import type { Viewer } from "@/lib/affordance"
+import { kindleRefusal } from "@/routes/_app.book.$id"
 
-// The gate predicts which of three server outcomes a click would get —
+// The rule predicts which of three server outcomes a click would get —
 // no SMTP wired up at all (503), a user with no Kindle address (412), or
-// a format Amazon will not take (415) — and then asks lib/affordance.ts
-// what to do about it. Nothing here decides hide-versus-explain on its
-// own; that rule is one rule for the whole app and is tested next door.
-describe("kindleAction", () => {
-  const reader = { isAdmin: false }
-  const admin = { isAdmin: true }
+// a format Amazon will not take (415) — and the button asks
+// lib/affordance.ts what to do about it. Nothing here decides
+// hide-versus-explain on its own; that rule is one rule for the whole
+// app and is tested next door.
+//
+// Composed here exactly as the button composes it, so what these tests
+// assert is what the button renders. The pair used to be one exported
+// wrapper over a four-field state type, which is packaging rather than
+// rule (#213).
+describe("the Send-to-Kindle refusal", () => {
+  const reader: Viewer = { isAdmin: false }
+  const admin: Viewer = { isAdmin: true }
   const ready = {
     emailEnabled: true,
     format: "EPUB",
     kindleEmail: "x@kindle.com",
     viewer: reader,
+  }
+
+  function kindleAction(s: typeof ready) {
+    const refusal = kindleRefusal(s.emailEnabled, s.kindleEmail, s.format)
+    return refusal === null
+      ? ({ kind: "send" } as const)
+      : affordanceFor(refusal, s.viewer)
   }
 
   it("offers the send when every precondition holds", () => {

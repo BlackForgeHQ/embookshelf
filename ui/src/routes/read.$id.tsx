@@ -21,9 +21,12 @@ import {
   CONTINUOUS_DEBOUNCE_MS,
   useReadingPosition,
 } from "@/hooks/useReadingPosition"
-import { isNarratableFormat, readerKindForFormat } from "@/lib/formats"
-import { renditionsFor } from "@/lib/rendition"
-import type { Rendition } from "@/lib/rendition"
+import {
+  isNarratableFormat,
+  readerKindForFormat,
+  renditionsFor,
+} from "@/lib/formats"
+import type { Rendition } from "@/lib/formats"
 import { ProgressBar } from "@/components/ProgressBar"
 import {
   BookmarkButton,

@@ -13,7 +13,7 @@ import {
 } from "@/api/audiobooks"
 import { meQuery } from "@/api/auth"
 import { useApiMutation } from "@/api/mutation"
-import { useApiQuery } from "@/api/query"
+import { LIVE_POLL_MS, useApiQuery } from "@/api/query"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/Icon"
 import { ProgressBar } from "@/components/ProgressBar"
@@ -21,7 +21,6 @@ import type { Viewer } from "@/lib/affordance"
 import { affordanceFor, messageForCode } from "@/lib/affordance"
 import { isNarratableFormat, narratableFormatList } from "@/lib/formats"
 import { runView } from "@/lib/audiobookRun"
-import { pollWhile } from "@/lib/poll"
 import type { RunView } from "@/lib/audiobookRun"
 
 
@@ -51,9 +50,13 @@ export function AudiobookPanel({
   const isAdmin = me.data?.role === "admin"
 
   const audiobook = useApiQuery(bookAudiobookQuery(bookId), {
-    // Polls only while something is moving and stops on its own — the
-    // shape and the cadence are shared with the guide run (#197).
-    refetchInterval: pollWhile((a: Audiobook) => runView(a).phase === "running"),
+    // Polls only while the run is moving and stops on its own. Undefined
+    // is a first fetch still in flight and null is a book with no run at
+    // all; neither is something to poll about.
+    refetchInterval: (q) =>
+      q.state.data && runView(q.state.data).phase === "running"
+        ? LIVE_POLL_MS
+        : false,
   })
 
   const [confirming, setConfirming] = useState(false)

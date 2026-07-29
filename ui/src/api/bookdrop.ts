@@ -8,6 +8,36 @@ import type { BookDetail } from "./books"
 export type BookDropState =
   "discovered" | "processing" | "ready" | "failed" | "imported" | "rejected"
 
+/**
+ * What a queue row's state is called in the interface.
+ *
+ * The wire words and the shown words differ deliberately — "discovered"
+ * is what the scanner did, "queued" is what the user sees waiting — so
+ * this map is the only place either vocabulary meets the other. It lived
+ * inside the queue route, which is why the settings panel could not
+ * reach it and recomputed what it needed instead (#198), and then in a
+ * module of its own alongside four predicates only the queue route used
+ * (#213). Here, beside the type it maps, both surfaces can reach it and
+ * neither can add a third vocabulary without seeing this one.
+ */
+export const BOOKDROP_STATE_LABEL: Record<BookDropState, string> = {
+  discovered: "queued",
+  processing: "processing",
+  ready: "ready",
+  failed: "failed",
+  imported: "imported",
+  rejected: "discarded",
+}
+
+/**
+ * Terminal rows are done with: imported into the library, or discarded.
+ * They are what the settings panel's cleanup sweeps and what the queue
+ * hides from its active list.
+ */
+export function isTerminalState(state: BookDropState): boolean {
+  return state === "imported" || state === "rejected"
+}
+
 export type BookDropItem = {
   id: string
   filename: string
