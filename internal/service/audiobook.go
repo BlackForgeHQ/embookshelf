@@ -10,6 +10,7 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/repo"
 )
 
 // ErrNotNarratable is returned for a book whose format has no text to
@@ -47,6 +48,7 @@ type audiobookStore interface {
 	FailRun(ctx context.Context, bookID, msg string) (bool, error)
 	ListUnfinishedSegments(ctx context.Context, bookID string) ([]model.AudiobookSegment, error)
 	Coverage(ctx context.Context, bookID string) (model.AudiobookCoverage, error)
+	Delete(ctx context.Context, bookID string) error
 }
 
 // AudiobookOptions is one run's configuration, resolved from the
@@ -97,6 +99,11 @@ type AudiobookService struct {
 	// pub emits a run's change over SSE. Optional: a deployment with no
 	// hub still runs, it just does not push.
 	pub func(bookID string)
+	// settings, hash and sweepNarration are what preflight, staleness and
+	// delete need to be this service's rather than the handler's (#191).
+	settings       func(context.Context) (repo.AudiobookConfig, error)
+	hash           func(context.Context, model.Book) []byte
+	sweepNarration func(ctx context.Context, book model.Book, run model.Audiobook) error
 }
 
 // StagingSweeper discards a run's staged segments.

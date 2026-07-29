@@ -38,6 +38,10 @@ type fakeAudiobookStore struct {
 	// wrote, and what the repo's locked transaction decided follows.
 	recorded []model.SegmentResult
 	outcome  model.AudiobookOutcome
+	deleted  bool
+	// onDelete records when the row went, so a test can assert the
+	// ordering against the byte cleanup rather than just the outcome.
+	onDelete func()
 }
 
 func (f *fakeAudiobookStore) RecordSegment(
@@ -87,6 +91,14 @@ func (f *fakeAudiobookStore) ListUnfinishedSegments(context.Context, string) ([]
 
 func (f *fakeAudiobookStore) Coverage(context.Context, string) (model.AudiobookCoverage, error) {
 	return f.coverage, nil
+}
+
+func (f *fakeAudiobookStore) Delete(context.Context, string) error {
+	f.deleted = true
+	if f.onDelete != nil {
+		f.onDelete()
+	}
+	return nil
 }
 
 // recordingEnqueuer captures the payloads a run hands to the pool, so a

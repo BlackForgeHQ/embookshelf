@@ -3,11 +3,9 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 
@@ -77,14 +75,11 @@ func (h *Handler) BookAudiobookGet(c *gin.Context, s bookScope) {
 		writeError(c, http.StatusNotFound, "this book has no generated narration")
 		return
 	}
-	ctx := c.Request.Context()
-	id, book := s.Book.ID, s.Book
-
-	// Status rather than a repo read, because it reconciles the run with
-	// its segments before answering: this endpoint is the poll a live run
-	// is watched through, so it is also where a run that lost its finalize
-	// job gets it back.
-	run, cov, err := h.audiobooks.Status(ctx, id)
+	// Report rather than a repo read: it reconciles the run with its
+	// segments before answering, so this poll is also where a run that
+	// lost its finalize job gets it back, and it derives staleness where
+	// the run's provenance lives (#191).
+	rep, err := h.audiobooks.Report(c.Request.Context(), s.Book)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "this book has no generated narration")
@@ -93,19 +88,20 @@ func (h *Handler) BookAudiobookGet(c *gin.Context, s bookScope) {
 		writeServerError(c, "audiobook get", err)
 		return
 	}
-	c.JSON(http.StatusOK, h.audiobookDTO(c, book, run, cov))
+	c.JSON(http.StatusOK, audiobookDTOFrom(rep))
 }
 
 // BookAudiobookEstimate reports what a run would cost without starting
 // one. Admin-only like generation itself: the number is the guardrail,
 // and it is only useful to whoever can act on it.
 func (h *Handler) BookAudiobookEstimate(c *gin.Context, s bookScope) {
-	book, opts, ok := h.audiobookPreflight(c, s.Book)
-	if !ok {
+	if h.audiobooks == nil {
+		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled,
+			service.ErrAudiobooksNotConfigured.Error())
 		return
 	}
 
-	est, err := h.audiobooks.Estimate(c.Request.Context(), book, opts)
+	est, err := h.audiobooks.EstimateRun(c.Request.Context(), s.Book, service.GenerateOverride{})
 	if err != nil {
 		h.writeAudiobookError(c, err)
 		return
@@ -127,8 +123,9 @@ func (h *Handler) BookAudiobookEstimate(c *gin.Context, s bookScope) {
 // overwrites an existing narration. The type-to-confirm lives in the UI,
 // where the user can see what they are replacing.
 func (h *Handler) BookAudiobookGenerate(c *gin.Context, s bookScope) {
-	book, opts, ok := h.audiobookPreflight(c, s.Book)
-	if !ok {
+	if h.audiobooks == nil {
+		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled,
+			service.ErrAudiobooksNotConfigured.Error())
 		return
 	}
 
@@ -136,14 +133,9 @@ func (h *Handler) BookAudiobookGenerate(c *gin.Context, s bookScope) {
 	// A body is optional: generating with the instance defaults is the
 	// common case and should not require one.
 	_ = c.ShouldBindJSON(&req)
-	if req.Voice != "" {
-		opts.Voice = req.Voice
-	}
-	if req.Model != "" {
-		opts.Model = req.Model
-	}
 
-	if err := h.audiobooks.Start(c.Request.Context(), book, opts); err != nil {
+	over := service.GenerateOverride{Voice: req.Voice, Model: req.Model}
+	if err := h.audiobooks.Generate(c.Request.Context(), s.Book, over); err != nil {
 		h.writeAudiobookError(c, err)
 		return
 	}
@@ -190,116 +182,23 @@ func (h *Handler) BookAudiobookDelete(c *gin.Context, s bookScope) {
 		writeError(c, http.StatusNotFound, "this book has no generated narration")
 		return
 	}
-	ctx := c.Request.Context()
-	id := s.Book.ID
-
-	run, err := h.audiobookRepo.GetByBookID(ctx, id)
-	if err != nil {
+	// One call: the ordering invariant — resolve the location while the
+	// row that names it still exists, delete the bytes only once the row
+	// is gone — belongs with the delete, the way DeleteBook has it (#191).
+	if err := h.audiobooks.DeleteNarration(c.Request.Context(), s.Book); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "this book has no generated narration")
 			return
 		}
-		writeServerError(c, "audiobook delete lookup", err)
-		return
-	}
-
-	// Resolve the key before the row goes, exactly as BookDelete does:
-	// deleting the files row is what makes the location unknowable.
-	// Deliberately not deferred — a deferred cleanup would also fire on
-	// the failure path below, deleting the audio out from under a run
-	// that still points at it.
-	var (
-		handle   *service.LibraryHandle
-		location string
-	)
-	if run.FileID != nil && h.libStore != nil {
-		if lh, herr := h.libStore.For(ctx, s.Book.LibraryID); herr == nil {
-			handle = lh
-			location = narrationLocation(ctx, handle, id, run)
-		}
-	}
-
-	if err := h.audiobookRepo.Delete(ctx, id); err != nil {
 		writeServerError(c, "audiobook delete", err)
 		return
 	}
-
-	if handle != nil && location != "" {
-		if derr := handle.DeleteBookBytes(ctx, id, []string{location}); derr != nil {
-			slog.Warn("audiobook delete: byte cleanup", "book", id, "err", derr)
-		}
-	}
-	h.publishAudiobookUpdated(id)
+	h.publishAudiobookUpdated(s.Book.ID)
 	c.Status(http.StatusNoContent)
 }
 
-// audiobookPreflight resolves the settings and the run options every
-// generate-shaped endpoint needs for an already-resolved book, writing the
-// error response itself when anything is missing. Returns ok=false once a
-// response is written. The book arrives from the book-scoped seam; this
-// used to load it a third time, with `requireUserID(c)` inlined into the
-// call — which is the defect the seam generalises away.
-func (h *Handler) audiobookPreflight(c *gin.Context, book model.Book) (model.Book, service.AudiobookOptions, bool) {
-	var (
-		zeroBook model.Book
-		zeroOpts service.AudiobookOptions
-	)
-	if h.audiobooks == nil || h.appSettings == nil {
-		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled,
-			"audiobook generation is not configured")
-		return zeroBook, zeroOpts, false
-	}
-
-	cfg, err := h.appSettings.GetAudiobook(c.Request.Context())
-	if err != nil {
-		writeServerError(c, "audiobook settings", err)
-		return zeroBook, zeroOpts, false
-	}
-	if !cfg.Enabled {
-		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled,
-			"audiobook generation is not enabled")
-		return zeroBook, zeroOpts, false
-	}
-	id, engine, err := cfg.SelectedEngine()
-	if err != nil {
-		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled, err.Error())
-		return zeroBook, zeroOpts, false
-	}
-
-	// The first of the three gates the Narratable format passes through,
-	// mirroring Send-to-Kindle's eligible-format checks: UI, handler,
-	// worker. A re-import can change a book's format between them.
-	if !service.Narratable(book.Format) {
-		writeErrorCode(c, http.StatusUnsupportedMediaType, CodeFormatNotNarratable,
-			service.ErrNotNarratable.Error())
-		return zeroBook, zeroOpts, false
-	}
-
-	return book, service.AudiobookOptions{
-		Engine:               string(id),
-		Voice:                engine.DefaultVoice,
-		Model:                engine.Model,
-		SegmentChars:         cfg.SegmentChars,
-		PricePerMillionChars: engine.PricePerMillionChars,
-		SourceContentHash:    h.primaryContentHash(c, book),
-	}, true
-}
-
-// primaryContentHash reads the hash of the book's own file so the run can
-// record what it was made from. Best effort — a missing hash costs the
-// staleness badge, not the narration.
-func (h *Handler) primaryContentHash(c *gin.Context, book model.Book) []byte {
-	if h.libStore == nil {
-		return nil
-	}
-	handle, err := h.libStore.For(c.Request.Context(), book.LibraryID)
-	if err != nil {
-		return nil
-	}
-	return handle.PrimaryContentHash(c.Request.Context(), book)
-}
-
-func (h *Handler) audiobookDTO(c *gin.Context, book model.Book, run model.Audiobook, cov model.AudiobookCoverage) audiobookDTO {
+func audiobookDTOFrom(rep service.AudiobookReport) audiobookDTO {
+	run, cov := rep.Run, rep.Coverage
 	return audiobookDTO{
 		BookID:         run.BookID,
 		State:          string(run.State),
@@ -311,30 +210,14 @@ func (h *Handler) audiobookDTO(c *gin.Context, book model.Book, run model.Audiob
 		SegmentsDone:   cov.Done,
 		SegmentsFailed: cov.Failed,
 		DurationS:      float64(run.DurationMS) / 1000,
-		Stale:          h.narrationIsStale(c, book, run),
+		Stale:          rep.Stale,
 	}
-}
-
-// narrationIsStale compares what the run was made from against the book's
-// current file. A mismatch means the user replaced their EPUB after
-// narrating it, and the audio is of the older text.
-func (h *Handler) narrationIsStale(c *gin.Context, book model.Book, run model.Audiobook) bool {
-	if len(run.SourceContentHash) == 0 {
-		return false
-	}
-	current := h.primaryContentHash(c, book)
-	if len(current) == 0 {
-		return false
-	}
-	return !bytes.Equal(current, run.SourceContentHash)
 }
 
 // narrationLocation resolves the storage key of a run's generated audio.
-//
-// Matches on file_id rather than on the ".mp3" extension. Provenance is
-// the pointer (ADR-0025 §2), and an extension check would misidentify an
-// ingested MP3 audiobook sitting beside a narrated EPUB as ours to
-// delete.
+// Serving it needs the same lookup deleting it does; what differs is that
+// the delete has an ordering to respect, which is why that one lives with
+// the delete in AudiobookService rather than here (#191).
 func narrationLocation(ctx context.Context, handle *service.LibraryHandle, bookID string, run model.Audiobook) string {
 	if run.FileID == nil || handle == nil {
 		return ""

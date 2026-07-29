@@ -28,6 +28,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/ingest"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/migrator"
+	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/provider"
 	"github.com/blackforge/embookshelf/internal/queue"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -425,7 +426,32 @@ database must be empty; migrations are applied to it automatically.
 		if err := os.RemoveAll(task.StagingDir(cfg.DataPath, bookID)); err != nil {
 			slog.Warn("audiobook: sweep staging after cancel", "book", bookID, "err", err)
 		}
-	})
+	}).WithSettings(appSettingsRepo.GetAudiobook).
+		// The hash of the book's own file, for provenance and for the
+		// staleness comparison. Injected because it lives on the files row
+		// behind a library handle, which the service deliberately cannot
+		// reach (#191).
+		WithContentHash(func(ctx context.Context, book model.Book) []byte {
+			handle, err := libStore.For(ctx, book.LibraryID)
+			if err != nil {
+				return nil
+			}
+			return handle.PrimaryContentHash(ctx, book)
+		}).
+		WithNarrationSweeper(func(ctx context.Context, book model.Book, run model.Audiobook) error {
+			if run.FileID == nil {
+				return nil
+			}
+			handle, err := libStore.For(ctx, book.LibraryID)
+			if err != nil {
+				return err
+			}
+			f, ok := handle.BookFile(ctx, book.ID, *run.FileID)
+			if !ok {
+				return nil
+			}
+			return handle.DeleteBookBytes(ctx, book.ID, []string{f.Location})
+		})
 	if hub != nil {
 		audiobookSvc = audiobookSvc.WithPublisher(func(bookID string) {
 			_ = hub.Publish(sse.AudiobookUpdated{BookID: bookID})
