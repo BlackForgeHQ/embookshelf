@@ -1,5 +1,63 @@
 # Changelog
 
+## [0.6.2](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.1...v0.6.2) (2026-07-29)
+
+
+### Features
+
+* **jobs:** one enqueue seam, in a package both tiers can import ([dc3180c](https://github.com/BlackForgeHQ/embookshelf/commit/dc3180c89607918060ba07f3df720490640c646a))
+* **storage:** folder rename is one operation with two adapters ([423605d](https://github.com/BlackForgeHQ/embookshelf/commit/423605da12a73b88f2296dcc909543c83b97b69c)), closes [#168](https://github.com/BlackForgeHQ/embookshelf/issues/168)
+* **ui:** a module answers which Renditions a book has ([dcbb775](https://github.com/BlackForgeHQ/embookshelf/commit/dcbb77526dc7dc20a835573b7f646dfa3ec1c61d))
+* **ui:** one module decides what an error code means for the UI ([3367245](https://github.com/BlackForgeHQ/embookshelf/commit/33672450565e120b176516e0467a4d88788462d0))
+
+
+### Bug Fixes
+
+* **audiobook:** a run that failed at finalize stops re-dispatching it ([37e9c1e](https://github.com/BlackForgeHQ/embookshelf/commit/37e9c1e258db0ff92175f3f3db6bf412751a3178)), closes [#206](https://github.com/BlackForgeHQ/embookshelf/issues/206)
+* **audiobook:** an unset data path refuses instead of writing to the CWD ([85f218a](https://github.com/BlackForgeHQ/embookshelf/commit/85f218a9cf64bc383f24985db88402d887916686)), closes [#207](https://github.com/BlackForgeHQ/embookshelf/issues/207)
+* **audiobook:** deleting a narration undoes everything finalize wrote ([f5a6670](https://github.com/BlackForgeHQ/embookshelf/commit/f5a6670fc65823412908a7d2d3c8af398c11eb29)), closes [#208](https://github.com/BlackForgeHQ/embookshelf/issues/208)
+* **audiobook:** record a Segment and advance the run as one operation ([309c763](https://github.com/BlackForgeHQ/embookshelf/commit/309c7633e6e10c3af7dc8808b64edb91e117fc79)), closes [#157](https://github.com/BlackForgeHQ/embookshelf/issues/157)
+* **audiobook:** stop discarding the detail handler's book lookup ([d7addf2](https://github.com/BlackForgeHQ/embookshelf/commit/d7addf2d9be99f31d048c08123d2d47ad1b71517)), closes [#159](https://github.com/BlackForgeHQ/embookshelf/issues/159)
+* **audiobook:** the run pins the cap it was split at ([85fa198](https://github.com/BlackForgeHQ/embookshelf/commit/85fa1981a00054cd22bd56cc2c4fedd9573ab14d)), closes [#189](https://github.com/BlackForgeHQ/embookshelf/issues/189)
+* **config:** resolve DATA_PATH, and give the e2e suite its preconditions ([42df0d4](https://github.com/BlackForgeHQ/embookshelf/commit/42df0d46d6ab0fa8e6f03d43b8215f37740ba7b8))
+* **enrich:** apply-match silently drops a degraded write ([c310934](https://github.com/BlackForgeHQ/embookshelf/commit/c31093492ba498ef96f2efd7309e5e644748b962)), closes [#174](https://github.com/BlackForgeHQ/embookshelf/issues/174)
+* **guides:** the reading guide job ignores the configured auth style ([1736849](https://github.com/BlackForgeHQ/embookshelf/commit/17368497bf796d65966869956cf219d2aa0b7d36)), closes [#156](https://github.com/BlackForgeHQ/embookshelf/issues/156)
+* **jobs:** correct stale seam comments and pin BookID in dispatch tests ([d131985](https://github.com/BlackForgeHQ/embookshelf/commit/d1319856584249073bb3c13bb7333715abf2e468))
+* **jobs:** restore lost doc comments and pin the audiobook queue value ([26cf037](https://github.com/BlackForgeHQ/embookshelf/commit/26cf037e36cd273383ea63b7971bc8ed4987e55d))
+* **metadata:** a folder rename follows from author or title changing ([dcd81d1](https://github.com/BlackForgeHQ/embookshelf/commit/dcd81d1e9321fddd476424000b4ce64c4e6084bb)), closes [#211](https://github.com/BlackForgeHQ/embookshelf/issues/211)
+* **queue:** split queue.New from Start to actually close the abandonment window ([16a4949](https://github.com/BlackForgeHQ/embookshelf/commit/16a4949c49cdf8c361d718d6b1438ee438e49cab))
+* **reader:** each Rendition keeps its own resume position ([441ef88](https://github.com/BlackForgeHQ/embookshelf/commit/441ef88ced458ace2ea7f2ee92b7a24db1d54b94)), closes [#200](https://github.com/BlackForgeHQ/embookshelf/issues/200)
+* **reader:** the position module owns backgrounding and the long listen ([c4ad2a6](https://github.com/BlackForgeHQ/embookshelf/commit/c4ad2a63181ab610974dc70f2e739cad641f1291)), closes [#204](https://github.com/BlackForgeHQ/embookshelf/issues/204)
+* **scan:** Library scan silently skipped every S3-backed library ([cd23e77](https://github.com/BlackForgeHQ/embookshelf/commit/cd23e7708cd27dd14ff455daf5d3541f8ce92af0)), closes [#203](https://github.com/BlackForgeHQ/embookshelf/issues/203)
+* **service:** the edit-side write pipeline resolves keys like every other reader ([5e49c7f](https://github.com/BlackForgeHQ/embookshelf/commit/5e49c7f1a85e4a93af29aa3d95ac1007f29da4dc)), closes [#168](https://github.com/BlackForgeHQ/embookshelf/issues/168)
+* **storage:** the adapter decides whether a library is an object store ([2b6035d](https://github.com/BlackForgeHQ/embookshelf/commit/2b6035d7d7df9f92fe76eec704ffed952c8f0f7b)), closes [#202](https://github.com/BlackForgeHQ/embookshelf/issues/202)
+* **task:** a drain logs to its own logger, not the process default ([e8e56c8](https://github.com/BlackForgeHQ/embookshelf/commit/e8e56c80d73aee54588b54c11df8c0b890cc04ec)), closes [#186](https://github.com/BlackForgeHQ/embookshelf/issues/186)
+* **task:** close the review's fix wave on generation-worker seams ([8d23b4e](https://github.com/BlackForgeHQ/embookshelf/commit/8d23b4ecb2211d10a5cb4adf735e9af41a0b4e36))
+* **task:** pin the multi-chunk unusable-audio gap and tighten assertions ([2523224](https://github.com/BlackForgeHQ/embookshelf/commit/252322414b6cb3a4643451bd517c8616867213db))
+* **task:** replace unused-lint suppressions with compile-time proof ([59d0bd3](https://github.com/BlackForgeHQ/embookshelf/commit/59d0bd31b0a29d04b48672c5715fbbcf171827d4))
+* **tts,queue:** unusable audio is permanent however many chunks it took ([544af03](https://github.com/BlackForgeHQ/embookshelf/commit/544af03407e17807a3cae125fbd13b34f171eb62)), closes [#185](https://github.com/BlackForgeHQ/embookshelf/issues/185)
+* **tts,repo:** retire the per-request-cap seam the adapter absorbed ([c33e6f0](https://github.com/BlackForgeHQ/embookshelf/commit/c33e6f0f8aba6245ef4b5603de4c3be9c61cc67b))
+* **ui:** keep one realtime connection for the whole session ([bc4c1bc](https://github.com/BlackForgeHQ/embookshelf/commit/bc4c1bc0c57cab3ad7c3b644f854bc387ccb719a)), closes [#158](https://github.com/BlackForgeHQ/embookshelf/issues/158)
+* **ui:** key predicate rows by identity, and clear the Biome backlog ([bd54259](https://github.com/BlackForgeHQ/embookshelf/commit/bd54259ecbfc9e909661bcbb60957d87d08dfaa4))
+
+
+### Documentation
+
+* **adr:** the local backend stays rooted at /, and the shim stays with it ([86663a1](https://github.com/BlackForgeHQ/embookshelf/commit/86663a15c46b6f4b339e65e150283a1555dff63d)), closes [#168](https://github.com/BlackForgeHQ/embookshelf/issues/168)
+* **adr:** the reader gets shared chrome, not a shared shell ([7e27d0d](https://github.com/BlackForgeHQ/embookshelf/commit/7e27d0d09d299b2078d0696d4b21feeec34bbf7b)), closes [#199](https://github.com/BlackForgeHQ/embookshelf/issues/199)
+* **architecture:** register the splitter and audio fixture leaves ([1ca5790](https://github.com/BlackForgeHQ/embookshelf/commit/1ca5790f3a338498882b6bb2f1b33d6fdd43e6a1))
+* **architecture:** the register describes the workers that exist ([8d024cb](https://github.com/BlackForgeHQ/embookshelf/commit/8d024cbe630865f8bc3f86126e88b181c4a423e8)), closes [#215](https://github.com/BlackForgeHQ/embookshelf/issues/215)
+* **ci:** the linter pin is written once, in the Makefile ([d5d54da](https://github.com/BlackForgeHQ/embookshelf/commit/d5d54da943159bd664ee5e27468864aca564f8bb)), closes [#187](https://github.com/BlackForgeHQ/embookshelf/issues/187)
+* **jobs:** restate comments and docs for the world the seam left behind ([b564d9c](https://github.com/BlackForgeHQ/embookshelf/commit/b564d9cdb177ec61fe06cf142ce5d9c603b577cb))
+* **plan:** task-by-task plan for chunking in the adapter ([9bc66ee](https://github.com/BlackForgeHQ/embookshelf/commit/9bc66eefe51c768a45e5b0c490ffd78bfebb424b))
+* **plan:** task-by-task plan for the generation-worker seams ([a75fd87](https://github.com/BlackForgeHQ/embookshelf/commit/a75fd877e5b5da460fa101cb8d7b26ff0e8404a9))
+* **plan:** task-by-task plan for the one enqueue seam ([3a250ac](https://github.com/BlackForgeHQ/embookshelf/commit/3a250aca4847699f2f7068742ee76a6ad66eb76b))
+* **spec:** agree the generation-worker seam shape for [#177](https://github.com/BlackForgeHQ/embookshelf/issues/177) ([86e10c4](https://github.com/BlackForgeHQ/embookshelf/commit/86e10c475a16a7f1c9fcf4963f38c8bb2b82adeb))
+* **spec:** chunking moves inside the engine adapter ([f25d4b1](https://github.com/BlackForgeHQ/embookshelf/commit/f25d4b1adad71fcd4bb556a05ff69ee5a361b7a5))
+* **spec:** one enqueue seam, and the race the holders were hiding ([87f4375](https://github.com/BlackForgeHQ/embookshelf/commit/87f4375e5c46bfa864da10b92c079f2e39bf33ee))
+* the TTS caps stop being quoted, and the register lists every package ([dbd07f1](https://github.com/BlackForgeHQ/embookshelf/commit/dbd07f1de9139403a845b1a238d523772e136387)), closes [#188](https://github.com/BlackForgeHQ/embookshelf/issues/188)
+* update README and add backups documentation ([7cd3767](https://github.com/BlackForgeHQ/embookshelf/commit/7cd3767daf0c5ef6ae79a55e9e7279ed7f42f29f))
+
 ## [0.6.1](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.0...v0.6.1) (2026-07-27)
 
 
