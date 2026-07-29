@@ -194,23 +194,14 @@ func relativeToRoot(abs, root string) string {
 	return abs
 }
 
-// storageMIMEForFormat mirrors the Content-Type the file handler emits
-// for downloads. Used by BackendPlacer on Put so presigned URLs serve
-// with the correct content-type header.
+// storageMIMEForFormat is the Content-Type a presigned URL should serve
+// the bytes under. Used by BackendPlacer on Put.
+//
+// It used to be a hand-copy of the file handler's table, under a comment
+// saying so. Both now read model.FormatSpecs, so "mirrors" is structural
+// rather than aspirational (#194).
 func storageMIMEForFormat(format string) string {
-	switch format {
-	case "EPUB":
-		return "application/epub+zip"
-	case "PDF":
-		return "application/pdf"
-	case "CBZ":
-		return "application/vnd.comicbook+zip"
-	case "MP3":
-		return "audio/mpeg"
-	case "M4B":
-		return "audio/mp4"
-	}
-	return ""
+	return model.MIMEForFormat(format)
 }
 
 // moveFile atomically moves src to dest, falling back to copy+remove

@@ -127,3 +127,73 @@ func clientFormatList(t *testing.T, anchor string) map[string]bool {
 	}
 	return names
 }
+
+// clientReaderAnchor opens the client's reader-kind map.
+const clientReaderAnchor = "export const FORMAT_READERS: Record<string, ReaderKind> = {"
+
+// TestReaderKindsMatchClient guards the third capability the client
+// answers locally: which surface opens a format.
+//
+// Drift here is the reader route sending a book to a surface the server
+// will not serve bytes for — an EPUB opened in the comic reader, or a
+// "reader not implemented" page for a format the API happily streams.
+// The route enumerated the format set itself before this (#194).
+func TestReaderKindsMatchClient(t *testing.T) {
+	t.Parallel()
+
+	client := clientReaderKinds(t)
+
+	for _, s := range FormatSpecs {
+		if s.Reader == ReaderNone {
+			if kind, ok := client[s.Format]; ok {
+				t.Errorf("format %q has no reader server-side but %s sends it to the %q reader",
+					s.Format, clientFormatFile, kind)
+			}
+			continue
+		}
+		if got := client[s.Format]; got != string(s.Reader) {
+			t.Errorf("format %q opens the %q reader server-side but %q in %s",
+				s.Format, s.Reader, got, clientFormatFile)
+		}
+	}
+	for format := range client {
+		if ReaderForFormat(format) == ReaderNone {
+			t.Errorf("format %q is mapped to a reader in %s but the server has none for it",
+				format, clientFormatFile)
+		}
+	}
+}
+
+// clientReaderKinds parses the client's format → reader map.
+func clientReaderKinds(t *testing.T) map[string]string {
+	t.Helper()
+
+	src, err := os.ReadFile(clientFormatFile)
+	if err != nil {
+		t.Fatalf("cannot read %s: %v", clientFormatFile, err)
+	}
+
+	kinds := map[string]string{}
+	inMap := false
+	for _, line := range strings.Split(string(src), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == clientReaderAnchor {
+			inMap = true
+			continue
+		}
+		if !inMap {
+			continue
+		}
+		format, kind, found := strings.Cut(trimmed, ":")
+		if !found {
+			break
+		}
+		kinds[strings.TrimSpace(format)] = strings.Trim(strings.TrimSpace(kind), `",`)
+	}
+
+	if len(kinds) == 0 {
+		t.Fatalf("parsed no entries from %s in %s — the map's shape changed and this "+
+			"test is no longer checking anything", clientReaderAnchor, clientFormatFile)
+	}
+	return kinds
+}

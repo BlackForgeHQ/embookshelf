@@ -357,12 +357,12 @@ func kindleAttachmentName(book model.Book) string {
 }
 
 func kindleContentType(format string) string {
-	switch strings.ToLower(format) {
-	case "epub":
-		return "application/epub+zip"
-	case "pdf":
-		return "application/pdf"
-	default:
-		return "application/octet-stream"
+	// The type comes from the format spec; the fallback is this caller's
+	// own, and is the part that genuinely differs — an attachment has to
+	// carry some content type, so an unknown format ships as opaque bytes
+	// rather than not shipping (#194).
+	if mime := model.MIMEForFormat(format); mime != "" {
+		return mime
 	}
+	return "application/octet-stream"
 }

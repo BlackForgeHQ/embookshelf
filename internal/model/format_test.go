@@ -121,3 +121,84 @@ func TestNarratableFormatListReadsAsProse(t *testing.T) {
 		t.Errorf("NarratableFormatList() = %q, want something a sentence can contain", got)
 	}
 }
+
+// The download extension and Content-Type are one fact per format, and
+// they had five copies between them: two tables in the handler, the
+// placer's deliberate "mirrors the file handler" copy, the Kindle
+// attachment type and the reMarkable upload type (#194).
+func TestFormatSpecsCarryExtensionAndMIME(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ format, ext, mime string }{
+		{"EPUB", ".epub", "application/epub+zip"},
+		{"PDF", ".pdf", "application/pdf"},
+		{"CBZ", ".cbz", "application/vnd.comicbook+zip"},
+		{"MP3", ".mp3", "audio/mpeg"},
+		// Apple uses audio/mp4; the m4b container is identical to m4a.
+		{"M4B", ".m4b", "audio/mp4"},
+	} {
+		if got := ExtForFormat(tc.format); got != tc.ext {
+			t.Errorf("ExtForFormat(%s) = %q, want %q", tc.format, got, tc.ext)
+		}
+		if got := MIMEForFormat(tc.format); got != tc.mime {
+			t.Errorf("MIMEForFormat(%s) = %q, want %q", tc.format, got, tc.mime)
+		}
+	}
+}
+
+// A format with no reader still downloads, and still downloads with the
+// right name. The empty MIME is what the file handler turns into a 415;
+// an extension guessed from nothing would have produced "Dune" with no
+// suffix, which no e-reader will open.
+func TestFormatsWithNoReaderStillNameTheirFile(t *testing.T) {
+	t.Parallel()
+
+	for _, format := range []string{"MOBI", "AZW3", "FB2"} {
+		if got := ExtForFormat(format); got == "" {
+			t.Errorf("ExtForFormat(%s) = %q, want the conventional extension", format, got)
+		}
+		if got := MIMEForFormat(format); got != "" {
+			t.Errorf("MIMEForFormat(%s) = %q, want empty — there is no reader to serve it to",
+				format, got)
+		}
+	}
+}
+
+// An unknown format answers empty rather than guessing, which is what
+// lets the file handler return 415 instead of serving bytes under a
+// content type it invented.
+func TestUnknownFormatHasNoExtensionOrMIME(t *testing.T) {
+	t.Parallel()
+
+	if got := ExtForFormat("DJVU"); got != "" {
+		t.Errorf("ExtForFormat(DJVU) = %q, want empty", got)
+	}
+	if got := MIMEForFormat("DJVU"); got != "" {
+		t.Errorf("MIMEForFormat(DJVU) = %q, want empty", got)
+	}
+	if got := ReaderForFormat("DJVU"); got != ReaderNone {
+		t.Errorf("ReaderForFormat(DJVU) = %q, want none", got)
+	}
+}
+
+// Which surface opens a book. Distinct from the Rendition the user then
+// picks inside it: an EPUB with a narration is still ReaderText here,
+// and the audio/text choice happens after (ADR-0025 §3).
+func TestReaderKindPerFormat(t *testing.T) {
+	t.Parallel()
+
+	for format, want := range map[string]ReaderKind{
+		"EPUB": ReaderText,
+		"PDF":  ReaderText,
+		"CBZ":  ReaderComic,
+		"MP3":  ReaderAudio,
+		"M4B":  ReaderAudio,
+		"MOBI": ReaderNone,
+		"AZW3": ReaderNone,
+		"FB2":  ReaderNone,
+	} {
+		if got := ReaderForFormat(format); got != want {
+			t.Errorf("ReaderForFormat(%s) = %q, want %q", format, got, want)
+		}
+	}
+}

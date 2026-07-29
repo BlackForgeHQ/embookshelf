@@ -628,27 +628,9 @@ func asciiFallback(s string) string {
 	return b.String()
 }
 
-// extForFormat maps our Format tag to the conventional file
-// extension. "" for unsupported formats so the download still works
-// (no extension) rather than failing.
+// extForFormat maps our Format tag to the conventional file extension.
+// "" for unsupported formats so the download still works (no extension)
+// rather than failing. The table is model.FormatSpecs (#194).
 func extForFormat(format string) string {
-	switch format {
-	case "EPUB":
-		return ".epub"
-	case "PDF":
-		return ".pdf"
-	case "CBZ":
-		return ".cbz"
-	case "CBR":
-		return ".cbr"
-	case "MOBI":
-		return ".mobi"
-	case "AZW3":
-		return ".azw3"
-	case "FB2":
-		return ".fb2"
-	case "TXT":
-		return ".txt"
-	}
-	return ""
+	return model.ExtForFormat(format)
 }

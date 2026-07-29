@@ -17,23 +17,14 @@ import (
 	"github.com/blackforge/embookshelf/internal/storage"
 )
 
-// mimeForFormat returns the response Content-Type for a given book format,
-// or "" when the format doesn't have a reader yet.
+// mimeForFormat returns the response Content-Type for a given book
+// format, or "" when the format has no reader — which every caller here
+// turns into a 415.
+//
+// The table is model.FormatSpecs. This name survives because five call
+// sites read better for it, but the fact lives with the format (#194).
 func mimeForFormat(format string) string {
-	switch format {
-	case "EPUB":
-		return "application/epub+zip"
-	case "PDF":
-		return "application/pdf"
-	case "CBZ":
-		return "application/vnd.comicbook+zip"
-	case "MP3":
-		return "audio/mpeg"
-	case "M4B":
-		// Apple uses audio/mp4; the m4b container is identical to m4a.
-		return "audio/mp4"
-	}
-	return ""
+	return model.MIMEForFormat(format)
 }
 
 // serveBookFile chooses between a presigned redirect and local serve

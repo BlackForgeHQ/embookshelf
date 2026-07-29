@@ -186,26 +186,23 @@ func (d *RemarkableDriver) refreshUserToken(ctx context.Context, deviceToken str
 	return strings.TrimSpace(string(body)), nil
 }
 
+// remarkableMIME is the upload's Content-Type, and the gate on what the
+// device will take.
+//
+// The accepted set stays local: it is reMarkable's rule, not a property
+// of the format, and it happens to coincide with Send-to-Kindle's today.
+// Only the type itself comes from the spec (#194).
 func remarkableMIME(format string) (string, error) {
 	switch strings.ToUpper(format) {
-	case "EPUB":
-		return "application/epub+zip", nil
-	case "PDF":
-		return "application/pdf", nil
+	case "EPUB", "PDF":
+		return model.MIMEForFormat(format), nil
 	default:
 		return "", fmt.Errorf("reMarkable accepts EPUB/PDF only — got %s", format)
 	}
 }
 
 func extensionForFormat(format string) string {
-	switch strings.ToUpper(format) {
-	case "EPUB":
-		return ".epub"
-	case "PDF":
-		return ".pdf"
-	default:
-		return ""
-	}
+	return model.ExtForFormat(format)
 }
 
 // sanitizeFilename keeps only characters that are safe across the FAT32

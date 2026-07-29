@@ -26,6 +26,34 @@ export const KINDLE_ELIGIBLE_FORMATS = [
   "PDF",
 ] as const
 
+/** Which reading surface opens a format. */
+export type ReaderKind = "text" | "comic" | "audio"
+
+/**
+ * Format → reading surface.
+ *
+ * Distinct from the Rendition the user picks inside that surface: an
+ * EPUB with a narration is still "text" here, and the text-or-audio
+ * choice happens after (ADR-0025 §3). books.format stays the
+ * primary-format cache.
+ *
+ * A format absent from this map has no reader — it downloads and nothing
+ * else. The Go parity test reads this by exact anchor, so keep it one
+ * entry per line.
+ */
+export const FORMAT_READERS: Record<string, ReaderKind> = {
+  EPUB: "text",
+  PDF: "text",
+  CBZ: "comic",
+  MP3: "audio",
+  M4B: "audio",
+}
+
+/** The surface that opens this book, or null when nothing reads it. */
+export function readerKindForFormat(format: string): ReaderKind | null {
+  return FORMAT_READERS[format.trim().toUpperCase()] ?? null
+}
+
 /**
  * Whether this book's format carries text a speech engine can read.
  *

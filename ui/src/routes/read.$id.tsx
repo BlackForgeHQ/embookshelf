@@ -19,7 +19,7 @@ import type { PdfProgress, PdfReaderHandle } from "@/components/PdfReader"
 import type { Locator } from "@/lib/locator"
 import { useApiMutation } from "@/api/mutation"
 import { useReadingPosition } from "@/hooks/useReadingPosition"
-import { isNarratableFormat } from "@/lib/formats"
+import { isNarratableFormat, readerKindForFormat } from "@/lib/formats"
 import {
   decodeLocator,
   encodeLocator,
@@ -75,13 +75,17 @@ function Reader() {
     return <FullScreenMessage>Book not found.</FullScreenMessage>
   }
   const b = book.data
-  if (b.format === "CBZ") {
+  // Which surface opens the book comes from the shared format table, so
+  // the route cannot send a book somewhere the server will not serve
+  // bytes for. The Rendition choice below is a separate decision (#194).
+  const reader = readerKindForFormat(b.format)
+  if (reader === "comic") {
     return <ComicReaderShell book={b} />
   }
-  if (b.format === "MP3" || b.format === "M4B") {
+  if (reader === "audio") {
     return <AudioReaderShell book={b} />
   }
-  if (b.format !== "EPUB" && b.format !== "PDF") {
+  if (reader === null) {
     return (
       <FullScreenMessage>
         Reader not implemented for <code>{b.format}</code> yet.

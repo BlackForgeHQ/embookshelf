@@ -4,6 +4,7 @@ import {
   NARRATABLE_FORMATS,
   isNarratableFormat,
   narratableFormatList,
+  readerKindForFormat,
 } from "@/lib/formats"
 
 describe("isNarratableFormat", () => {
@@ -28,6 +29,36 @@ describe("isNarratableFormat", () => {
   // fail loudly rather than pass vacuously.
   it("has at least one format", () => {
     expect(NARRATABLE_FORMATS.length).toBeGreaterThan(0)
+  })
+})
+
+describe("readerKindForFormat", () => {
+  it("routes each format to its surface", () => {
+    expect(readerKindForFormat("EPUB")).toBe("text")
+    expect(readerKindForFormat("PDF")).toBe("text")
+    expect(readerKindForFormat("CBZ")).toBe("comic")
+    expect(readerKindForFormat("M4B")).toBe("audio")
+  })
+
+  // null is what the route turns into "reader not implemented". A
+  // default of "text" would have opened the EPUB reader on a .mobi and
+  // failed somewhere deep inside epub.js instead.
+  it("returns null for a format nothing reads", () => {
+    expect(readerKindForFormat("MOBI")).toBeNull()
+    expect(readerKindForFormat("DJVU")).toBeNull()
+    expect(readerKindForFormat("")).toBeNull()
+  })
+
+  it("ignores case, like the rest of the table", () => {
+    expect(readerKindForFormat("epub")).toBe("text")
+  })
+
+  // The reader kind is not the Rendition. An EPUB with a finished
+  // narration still opens the text surface; the Listen toggle lives
+  // inside it (ADR-0025 §3).
+  it("does not answer the rendition question", () => {
+    expect(readerKindForFormat("EPUB")).toBe("text")
+    expect(isNarratableFormat("EPUB")).toBe(true)
   })
 })
 
