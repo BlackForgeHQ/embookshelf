@@ -2,6 +2,7 @@ import { request, type APIRequestContext } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
+import { dropFixture } from './fixtures/bookdrop';
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
@@ -42,7 +43,111 @@ export default async function globalSetup() {
   const statePath = resolve(ADMIN_STATE_PATH);
   await mkdir(dirname(statePath), { recursive: true });
   await ctx.storageState({ path: statePath });
+
+  const authed = await request.newContext({
+    baseURL: BASE_URL,
+    extraHTTPHeaders: { Origin: BASE_URL },
+    storageState: statePath,
+  });
+  try {
+    await ensureLibrary(authed);
+    await ensureBook(authed);
+  } finally {
+    await authed.dispose();
+  }
   await ctx.dispose();
+}
+
+// The suite's unstated precondition. Most read specs assert
+// `books.length > 0` and none of them creates a book: the bookdrop specs
+// drop a file and then *reject* it, so they leave the queue as they
+// found it and the library empty. On a fresh database — or on one whose
+// last run left bookdrop rows and nothing to approve them into — every
+// one of those specs failed on an empty list, and the failure looked
+// like a broken feature rather than a missing fixture.
+//
+// Built through the real endpoints and the real watcher rather than by
+// inserting rows: seed rows drift from what ingestion actually produces,
+// and a fixture that lies is worse than none.
+const LIBRARY_NAME = 'E2E Library';
+
+async function ensureLibrary(ctx: APIRequestContext): Promise<string> {
+  const existing = await ctx.get('/api/v1/libraries');
+  if (existing.ok()) {
+    const body = (await existing.json()) as { libraries?: { id: string; name: string }[] };
+    const found = body.libraries?.find((l) => l.name === LIBRARY_NAME) ?? body.libraries?.[0];
+    if (found) return found.id;
+  }
+
+  const created = await ctx.post('/api/v1/settings/libraries', {
+    data: { name: LIBRARY_NAME, kind: 'local', scan: false },
+  });
+  if (!created.ok()) {
+    throw new Error(
+      `globalSetup: could not create a library (${created.status()}).\n` +
+        `Local libraries need DATA_PATH set on the server.\n${await created.text()}`,
+    );
+  }
+  const { library } = (await created.json()) as { library: { id: string } };
+  return library.id;
+}
+
+async function ensureBook(ctx: APIRequestContext): Promise<void> {
+  const have = await ctx.get('/api/v1/books?limit=1');
+  if (have.ok()) {
+    const { books } = (await have.json()) as { books: unknown[] };
+    if (books.length > 0) return;
+  }
+
+  const libraryID = await ensureLibrary(ctx);
+  const { filename, cleanup } = await dropFixture('epub', 'seed');
+  try {
+    // The watcher ticks at 5 s and extraction adds a second or two, so
+    // this is the same wait the bookdrop specs budget for.
+    const item = await waitForDrop(ctx, filename, 45_000);
+    const approved = await ctx.post(`/api/v1/bookdrop/${item.id}/approve`, {
+      data: { libraryId: libraryID },
+    });
+    if (!approved.ok()) {
+      throw new Error(
+        `globalSetup: could not approve the seed book (${approved.status()}).\n` +
+          `${await approved.text()}`,
+      );
+    }
+  } finally {
+    // Approve consumes the staged file; the unlink is for the path that
+    // threw before it got there.
+    await cleanup();
+  }
+}
+
+async function waitForDrop(
+  ctx: APIRequestContext,
+  filename: string,
+  timeoutMs: number,
+): Promise<{ id: string; state: string }> {
+  const deadline = Date.now() + timeoutMs;
+  let last = 'never appeared';
+  while (Date.now() < deadline) {
+    const res = await ctx.get('/api/v1/bookdrop');
+    if (res.ok()) {
+      const { items } = (await res.json()) as {
+        items: { id: string; filename: string; state: string }[];
+      };
+      const mine = items.find((i) => i.filename === filename);
+      if (mine) {
+        last = mine.state;
+        // `discovered` still has extraction ahead of it; approving then
+        // imports a book with no metadata.
+        if (mine.state === 'ready' || mine.state === 'failed') return mine;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  throw new Error(
+    `globalSetup: ${filename} did not reach a reviewable state within ` +
+      `${timeoutMs}ms (last seen: ${last}). Is the bookdrop watcher running?`,
+  );
 }
 
 async function login(ctx: APIRequestContext) {

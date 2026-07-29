@@ -155,6 +155,20 @@ func Load() (Config, error) {
 		}
 	}
 
+	// Same reasoning for DataPath, which roots every local library.
+	// LibraryService.Create makes the directory relative to the working
+	// directory and stores that on the row; every later read resolves it
+	// as an absolute key against the "/"-rooted LocalFS. Left relative
+	// the two disagree, so the library is created, the books import, and
+	// every file fetch 403s with "no such file or directory /data/...".
+	// The default is "./data" and the repo's own .env sets it, so this
+	// was the out-of-the-box behaviour.
+	if cfg.DataPath != "" {
+		if abs, err := filepath.Abs(cfg.DataPath); err == nil {
+			cfg.DataPath = abs
+		}
+	}
+
 	return cfg, nil
 }
 

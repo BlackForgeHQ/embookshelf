@@ -3,6 +3,8 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/config"
@@ -74,5 +76,52 @@ func TestLoad_SharedS3_DefaultRegion(t *testing.T) {
 	}
 	if cfg.SharedS3.Region != "us-east-1" {
 		t.Errorf("Region=%q want %q", cfg.SharedS3.Region, "us-east-1")
+	}
+}
+
+// DataPath roots every local library, and since ADR-0030 a local
+// library's storage is rooted at "/" — so the path stored on the row is
+// resolved as an absolute key on read.
+//
+// Left relative, the two disagree: LibraryService.Create makes the
+// directory relative to the process's working directory, and every
+// later read looks for it at the filesystem root. The library is created
+// successfully, the books import successfully, and every file fetch
+// 403s with "no such file or directory /data/...". The repo's own .env
+// ships DATA_PATH=./data, so this was the default dev experience.
+func TestLoadResolvesARelativeDataPath(t *testing.T) {
+	t.Setenv("DATA_PATH", "./data")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if !filepath.IsAbs(cfg.DataPath) {
+		t.Errorf("DataPath = %q, want it resolved against the working directory — "+
+			"a local library rooted here is read back from the filesystem root (ADR-0030 §1)",
+			cfg.DataPath)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if want := filepath.Join(wd, "data"); cfg.DataPath != want {
+		t.Errorf("DataPath = %q, want %q", cfg.DataPath, want)
+	}
+}
+
+// An absolute path is already what everything downstream expects and
+// must survive untouched — this is the deployed shape (DATA_PATH=/data
+// in the container).
+func TestLoadLeavesAnAbsoluteDataPathAlone(t *testing.T) {
+	t.Setenv("DATA_PATH", "/srv/embookshelf/data")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DataPath != "/srv/embookshelf/data" {
+		t.Errorf("DataPath = %q, want it unchanged", cfg.DataPath)
 	}
 }
