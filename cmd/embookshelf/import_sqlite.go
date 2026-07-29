@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/blackforge/embookshelf/internal/app"
 	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/sqliteimport"
@@ -106,7 +107,7 @@ func openMigratedPostgres(ctx context.Context, cfg config.Config) (*db.DB, error
 		return nil, errors.New(
 			"DATABASE_URL must point at Postgres for an import — set it to your postgres:// DSN")
 	}
-	if err := runAppMigrations(target); err != nil {
+	if err := app.RunMigrations(target); err != nil {
 		_ = target.Close()
 		return nil, fmt.Errorf("migrate target: %w", err)
 	}
@@ -122,7 +123,7 @@ func openMigratedSQLite(ctx context.Context, path string) (*db.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open source database: %w", err)
 	}
-	if err := runAppMigrations(source); err != nil {
+	if err := app.RunMigrations(source); err != nil {
 		_ = source.Close()
 		return nil, fmt.Errorf("migrate source: %w", err)
 	}

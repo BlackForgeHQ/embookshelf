@@ -122,7 +122,7 @@ is historical and superseded by ADR-0023, not current design guidance.
 ```
 embookshelf/
 ├── cmd/
-│   ├── embookshelf/                # main.go — composition root
+│   ├── embookshelf/                # main.go — flags, build, start, serve, close
 │   └── migrate/                    # CLI around internal/migrator (up/down/version/force)
 │
 ├── internal/                       # Backend packages — tiered below
@@ -141,10 +141,16 @@ embookshelf/
 
 ### `internal/` — tiered
 
-The backend has 39 packages (`go list ./internal/...`), subpackages
+The backend has 40 packages (`go list ./internal/...`), subpackages
 included. Tiered by role:
 
 **Core (request → domain → persistence)**
+- `app/` — The composition root as a value: `Build` wires every repo,
+  service, the queue and the handler and returns an `App`; `Start` runs
+  the boot-time side effects (seeds, queue, sweepers); `Close` is the
+  single shutdown path. Split from `main` so construction is callable
+  from a test — a seam left unassigned fails an assertion instead of
+  nil-dereferencing in production (#196).
 - `handler/` — Gin `HandlerFunc`s; one file per resource group, plus
   `router.go` (route assembly + SPA fallback), `handler.go`
   (`Handler` + `Deps`), `errjson.go` (JSON error envelope).
@@ -320,7 +326,9 @@ Handler → Service → Repository → PostgreSQL
   unreadable). Responses are pure JSON on `/api/v1/*`, XML on OPDS,
   `text/event-stream` on `/events`.
 - **Services** — Business logic. Plain Go structs wired with constructor
-  functions in `cmd/embookshelf/main.go`. Current set:
+  functions in `internal/app` (`Build` constructs, `Start` runs the
+  boot-time side effects, `Close` shuts down; `cmd/embookshelf/main.go`
+  is flags, build, start, serve, close). Current set:
   `AuthService`, `LibraryService` (+ `LibraryStore`), `ShelfService`,
   `BookDropService`, `ProgressService`, `EnrichmentService`,
   `AnnotationService`, `StatsService`, `ReadingSessionService`,

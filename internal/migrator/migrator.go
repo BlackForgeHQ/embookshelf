@@ -2,7 +2,7 @@
 
 // Package migrator wraps golang-migrate/migrate with the embedded
 // migrations and a dialect-aware driver. Callers (the migrate CLI and
-// the server's runAppMigrations) supply a db.Dialect and *sql.DB; the
+// the server's app.RunMigrations) supply a db.Dialect and *sql.DB; the
 // migrator picks the right migration subpath and driver instance.
 package migrator
 
