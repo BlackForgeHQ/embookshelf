@@ -186,3 +186,74 @@ describe("identity", () => {
     expect(newer).toHaveBeenCalledExactlyOnceWith(0.2, "page:2")
   })
 })
+
+describe("a reader that never settles", () => {
+  // The debounce restarts on every call, which is right for page turns —
+  // they land seconds apart, so the window elapses normally. Audio
+  // reports progress several times a second, so the window was cancelled
+  // and restarted faster than it could ever fire: the 5 s "much longer
+  // window" was infinity, and only an explicit flush ever wrote (#204).
+  it("still writes while progress keeps arriving", () => {
+    const { result } = setup(5000)
+
+    // Twenty-five seconds of playback at four reports a second — past
+    // the ceiling, which is what a listener who never pauses looks like.
+    for (let i = 0; i < 100; i++) {
+      act(() => {
+        result.current.queue(i / 100, `time:${i * 0.25}`)
+        vi.advanceTimersByTime(250)
+      })
+    }
+
+    expect(save).toHaveBeenCalled()
+  })
+
+  it("still holds the newest position, not the one that opened the window", () => {
+    const { result } = setup(5000)
+
+    for (let i = 0; i < 100; i++) {
+      act(() => {
+        result.current.queue(i / 100, `time:${i}`)
+        vi.advanceTimersByTime(250)
+      })
+    }
+
+    // The position it wrote is the newest one held, not the one that
+    // opened the window.
+    const [, token] = save.mock.calls[save.mock.calls.length - 1] ?? []
+    // The 80th report is the newest one held when the ceiling elapses.
+    expect(token).toBe("time:79")
+  })
+})
+
+describe("backgrounding", () => {
+  // The hook's own contract names backgrounding as one of the three
+  // exits a caller must flush on, and no caller ever did — so a mobile
+  // listener who swiped the browser away lost the session, because
+  // unmount effects do not run on a tab kill (#204).
+  it("writes the held position when the tab is hidden", () => {
+    const { result } = setup()
+    act(() => result.current.queue(0.4, "epubcfi(/6/14)"))
+
+    act(() => {
+      Object.defineProperty(document, "visibilityState", {
+        value: "hidden",
+        configurable: true,
+      })
+      document.dispatchEvent(new Event("visibilitychange"))
+    })
+
+    expect(save).toHaveBeenCalledWith(0.4, "epubcfi(/6/14)")
+  })
+
+  it("writes the held position on pagehide", () => {
+    const { result } = setup()
+    act(() => result.current.queue(0.6, "page:12"))
+
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"))
+    })
+
+    expect(save).toHaveBeenCalledWith(0.6, "page:12")
+  })
+})

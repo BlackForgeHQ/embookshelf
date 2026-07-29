@@ -26,6 +26,21 @@ export type UseReadingPositionOptions = {
 const DEFAULT_DEBOUNCE_MS = 600
 
 /**
+ * The longest a position is held while progress keeps arriving.
+ *
+ * The debounce restarts on every call, which is right for page turns —
+ * they land seconds apart, so the window elapses normally. Audio reports
+ * progress several times a second, so the window was cancelled and
+ * restarted faster than it could ever fire and the debounce was
+ * effectively infinite: only an explicit flush wrote anything (#204).
+ *
+ * Twenty seconds is the most a continuously-reporting reader can lose to
+ * a crash, and it is far enough above the audio window that a settling
+ * reader still writes on the debounce rather than on the ceiling.
+ */
+const MAX_HOLD_MS = 20_000
+
+/**
  * useReadingPosition debounces reading-position writes and guarantees the
  * last one is not lost.
  *
@@ -35,9 +50,10 @@ const DEFAULT_DEBOUNCE_MS = 600
  * to extend: previously each shell decided for itself, and the audio shell
  * carried a comment promising a save-on-pause path it never actually had.
  *
- * Callers must flush on every exit that isn't an unmount — pausing playback,
- * navigating away, backgrounding the tab. Unmount is handled here as a
- * backstop, not as the primary path.
+ * The exits are this module's, not its callers': backgrounding, page
+ * hide and unmount are all handled here. A caller still flushes for the
+ * moments only it can see — pausing playback, leaving the reader — and
+ * a duplicate flush is a no-op.
  */
 export function useReadingPosition({
   save,
@@ -45,6 +61,10 @@ export function useReadingPosition({
 }: UseReadingPositionOptions) {
   const pendingRef = useRef<ReadingPosition | null>(null)
   const timerRef = useRef<number | null>(null)
+  // Fires MAX_HOLD_MS after the first still-unwritten position and is
+  // deliberately not restarted by later ones, so a reader that never
+  // settles cannot hold a position indefinitely.
+  const ceilingRef = useRef<number | null>(null)
 
   // Held in a ref so queue and flush keep a stable identity: the shells pass
   // them straight into child reader props, and a fresh function each render
@@ -66,6 +86,10 @@ export function useReadingPosition({
   /** Writes any held position now. No-op when nothing is pending. */
   const flush = useCallback(() => {
     cancelTimer()
+    if (ceilingRef.current !== null) {
+      window.clearTimeout(ceilingRef.current)
+      ceilingRef.current = null
+    }
     const snapshot = pendingRef.current
     pendingRef.current = null
     if (snapshot) saveRef.current(snapshot.progress, snapshot.token)
@@ -79,11 +103,38 @@ export function useReadingPosition({
   const queue = useCallback(
     (progress: number, token: string) => {
       pendingRef.current = { progress, token }
+
+      // Latest-wins, but not for longer than the ceiling. The debounce
+      // restarts on every call; this one does not, which is what makes
+      // it reachable for a reader reporting faster than the window.
+      if (ceilingRef.current === null) {
+        ceilingRef.current = window.setTimeout(flush, MAX_HOLD_MS)
+      }
       cancelTimer()
       timerRef.current = window.setTimeout(flush, debounceMs)
     },
     [cancelTimer, debounceMs, flush]
   )
+
+  // The exits that are not an unmount. The hook's contract named all
+  // three and enforced one; the other two were left to callers, who
+  // implemented "leaving the reader" four times by copy-paste and
+  // backgrounding not at all — so a mobile listener who swiped the
+  // browser away lost the session, because unmount effects do not run on
+  // a tab kill (#204).
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === "hidden") flush()
+    }
+    // pagehide as well as visibilitychange: iOS Safari has historically
+    // fired one without the other, and a duplicate flush is a no-op.
+    document.addEventListener("visibilitychange", onHide)
+    window.addEventListener("pagehide", flush)
+    return () => {
+      document.removeEventListener("visibilitychange", onHide)
+      window.removeEventListener("pagehide", flush)
+    }
+  }, [flush])
 
   // Backstop for a session too short to close a single debounce window.
   // Effects run cleanup on unmount only for an empty dep list, and the refs
@@ -91,6 +142,7 @@ export function useReadingPosition({
   useEffect(() => {
     return () => {
       cancelTimer()
+      if (ceilingRef.current !== null) window.clearTimeout(ceilingRef.current)
       const snapshot = pendingRef.current
       pendingRef.current = null
       if (snapshot) saveRef.current(snapshot.progress, snapshot.token)
