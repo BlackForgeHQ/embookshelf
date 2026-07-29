@@ -1,28 +1,29 @@
 import { useState } from "react"
 
-import {
-  createInvite,
-  emailSettingsQuery,
-  invitesQuery,
-  revokeInvite,
-} from "@/api/email"
+import { createInvite, invitesQuery, revokeInvite } from "@/api/email"
 import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
+import { appConfigQuery } from "@/api/settings"
+import { affordanceFor } from "@/lib/affordance"
 import { Icon } from "@/components/Icon"
 import { Card, Field, Select } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
 export function InvitesPanel() {
-  const emailSettings = useApiQuery(emailSettingsQuery)
+  // Read from the app config every screen already holds, not from the
+  // admin SMTP settings: the question is one boolean, and answering it
+  // by fetching host, port, username and from-address is a second,
+  // heavier source for a fact the first one states.
+  const cfg = useApiQuery(appConfigQuery)
 
   // Every invites endpoint answers 503 EMAIL_DISABLED while SMTP is off.
-  // This is that same rule, read once from the email settings and used
-  // for both consequences: don't ask (TanStack Query would retry-storm
-  // the server with failed GETs), and say why. Deliberately tri-state —
-  // `undefined` means the settings haven't loaded, which is neither
-  // permission to fetch nor grounds to claim email is disabled.
-  const emailEnabled = emailSettings.data?.enabled
+  // This is that same rule, read once and used for both consequences:
+  // don't ask (TanStack Query would retry-storm the server with failed
+  // GETs), and say why. Deliberately tri-state — `undefined` means the
+  // config hasn't loaded, which is neither permission to fetch nor
+  // grounds to claim email is disabled.
+  const emailEnabled = cfg.data?.emailEnabled
 
   const invites = useApiQuery(invitesQuery, {
     enabled: emailEnabled === true,
@@ -49,6 +50,15 @@ export function InvitesPanel() {
   })
 
   if (emailEnabled === false) {
+    // The sentence comes from the affordance module so this panel and
+    // the Send-to-Kindle button cannot describe the same refusal two
+    // ways. Only admins reach /settings at all (SETTINGS_SECTIONS marks
+    // every section adminOnly), so the viewer is known here. The fix it
+    // names is the "Email delivery" section one tab away — that panel is
+    // this route's local state, so there is no link to render.
+    const refusal = affordanceFor("EMAIL_DISABLED", { isAdmin: true })
+    const why = refusal.kind === "hidden" ? "" : refusal.reason
+
     return (
       <>
         <div className="mb-4 flex items-center justify-between">
@@ -57,8 +67,8 @@ export function InvitesPanel() {
           </h2>
         </div>
         <p className="text-sm text-muted-foreground italic">
-          Email delivery is disabled. Enable SMTP in “Email delivery” to
-          send invitations.
+          {why} Invitations go out by email, so there is nothing to send
+          until it is on.
         </p>
       </>
     )

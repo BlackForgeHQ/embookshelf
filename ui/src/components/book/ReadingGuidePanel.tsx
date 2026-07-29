@@ -6,6 +6,7 @@ import { bookGuideQuery, generateBookGuide, saveBookGuide } from "@/api/guides"
 import { meQuery } from "@/api/auth"
 import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
+import { messageForCode } from "@/lib/affordance"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/Icon"
 
@@ -47,10 +48,10 @@ export function ReadingGuidePanel({ bookId }: { bookId: string }) {
     // 202: the work is queued. The guide.updated SSE event busts the
     // cache when it lands, so there is nothing to refetch here.
     successToast: "Generating — this can take a minute.",
+    // One sentence per code, from lib/affordance.ts, rather than a
+    // ternary that only this panel knows about (#171).
     errorToast: (err: ApiError) =>
-      err.code === "GUIDES_DISABLED"
-        ? "Reading guides aren't configured. An admin can set this up in Settings."
-        : err.message,
+      messageForCode(err.code, err.message, { isAdmin }),
   })
 
   const saveMut = useApiMutation(saveBookGuide, {

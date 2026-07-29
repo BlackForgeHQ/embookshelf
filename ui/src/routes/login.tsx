@@ -290,6 +290,14 @@ function LoginPage() {
                   />
                 </Field>
 
+                {/*
+                  The one place email-enabled is read from something
+                  other than appConfigQuery, and it has to be: GET
+                  /api/v1/config sits behind the auth middleware
+                  (router.go), so this page would get a 401 asking it.
+                  signup-status is the pre-auth source. Don't "unify"
+                  this into the config query — see #171.
+                */}
                 {mode === "login" && signupOpen.data?.emailEnabled && (
                   <div style={{ marginTop: -4, textAlign: "right" }}>
                     <Link

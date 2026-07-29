@@ -25,6 +25,8 @@ import {
   shelvesQueryKey,
 } from "@/api/books"
 import { appConfigQuery } from "@/api/settings"
+import type { Viewer } from "@/lib/affordance"
+import { messageForCode } from "@/lib/affordance"
 import { kindleAction } from "@/lib/kindle"
 import {
   DEVICE_KIND_LABELS,
@@ -166,7 +168,11 @@ function BookDetail() {
             <Icon name="download" size={13} /> Download
           </a>
         </Button>
-        <SendToKindleButton book={b} kindleEmail={me.data?.kindleEmail ?? ""} />
+        <SendToKindleButton
+          book={b}
+          kindleEmail={me.data?.kindleEmail ?? ""}
+          viewer={{ isAdmin: me.data?.role === "admin" }}
+        />
         <SendToDeviceButton bookId={id} />
       </div>
 
@@ -1007,60 +1013,75 @@ function NotesPanel({ bookId }: { bookId: string }) {
 }
 
 // SendToKindleButton fires the book at the user's @kindle.com address.
-// Disabled with an explanatory tooltip when (a) the format isn't supported
-// by Amazon's converter, (b) the user hasn't set a Kindle email yet, or
-// (c) email delivery is off on this instance. The "set email" path
-// deep-links to the account section so the user can fill it in once and
-// come back.
+// What it does when it can't — hide, explain, or lead to the fix — is not
+// this component's call: lib/kindle.ts names the refusal the server would
+// send and lib/affordance.ts decides the affordance and writes the
+// sentence (#171). All that is left here is the router and the markup.
 function SendToKindleButton({
   book,
   kindleEmail,
+  viewer,
 }: {
   book: BookDetailPayload
   kindleEmail: string
+  viewer: Viewer
 }) {
   const navigate = useNavigate()
   const cfg = useApiQuery(appConfigQuery)
 
   const sendMut = useApiMutation(sendBookToKindle, {
     successToast: "Send-to-Kindle queued.",
-    errorToast: (e) => e.message || "Send to Kindle failed.",
+    errorToast: (e) =>
+      messageForCode(e.code, e.message, viewer) || "Send to Kindle failed.",
   })
 
   // The three preconditions, and their order, live in lib/kindle.ts:
   // they mirror the handler's three outcomes, and as early returns here
   // no test could reach them (#193).
   const action = kindleAction({
+    // Tri-state on purpose: `undefined` means the config has not landed
+    // yet, which is not grounds to claim email is off.
     emailEnabled: cfg.data?.emailEnabled !== false,
     // The primary format on purpose — this sends the book's own file,
     // not whichever Rendition the reader last opened. See KindleState.
     format: book.format,
     kindleEmail,
+    viewer,
   })
 
   if (action.kind === "hidden") {
     return null
   }
 
-  if (action.kind === "ineligible") {
-    return (
-      <Button variant="outline" size="sm" disabled title={action.reason}>
-        <Icon name="device" size={13} /> Send to Kindle
-      </Button>
-    )
-  }
-
-  if (action.kind === "needs-address") {
+  if (action.kind === "navigate") {
+    // The Fix says where, not how — affordance.ts holds no router. A
+    // settings fix can only land on /settings because the active panel
+    // is that route's local state, which is why the sentence names it.
+    const fix = action.fix
     return (
       <Button
         variant="outline"
         size="sm"
         onClick={() =>
-          navigate({ to: "/account", search: { section: "account" } })
+          void navigate(
+            fix.where === "account"
+              ? { to: "/account", search: { section: "account" } }
+              : { to: "/settings" }
+          )
         }
-        title="Set your @kindle.com address in Account settings first"
+        title={action.reason}
       >
-        <Icon name="device" size={13} /> Set Kindle email
+        <Icon name="device" size={13} /> {action.label}
+      </Button>
+    )
+  }
+
+  if (action.kind !== "send") {
+    // "explain", plus "report" for a code this build has never heard of:
+    // visible, refused, and saying why.
+    return (
+      <Button variant="outline" size="sm" disabled title={action.reason}>
+        <Icon name="device" size={13} /> Send to Kindle
       </Button>
     )
   }

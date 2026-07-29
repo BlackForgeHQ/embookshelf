@@ -19,6 +19,8 @@ import {
 import { appConfigQuery } from "@/api/settings"
 import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
+import type { Viewer } from "@/lib/affordance"
+import { affordanceFor } from "@/lib/affordance"
 import { Avatar, Card, Field } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -402,7 +404,10 @@ export function AccountPanel() {
         )}
       </div>
 
-      <SendToKindleSection currentEmail={user?.kindleEmail ?? ""} />
+      <SendToKindleSection
+        currentEmail={user?.kindleEmail ?? ""}
+        viewer={{ isAdmin: user?.role === "admin" }}
+      />
     </>
   )
 }
@@ -410,8 +415,17 @@ export function AccountPanel() {
 // SendToKindleSection lets users register the @kindle.com address Amazon
 // will accept files at. Server-side validation enforces the domain shape;
 // the panel just trims whitespace and reflects the saved value back so
-// the form can be cleared by saving an empty string.
-function SendToKindleSection({ currentEmail }: { currentEmail: string }) {
+// the form can be cleared by saving an empty string. With email off on
+// the instance there is no address worth registering, and what the
+// section does about that is lib/affordance.ts's call.
+function SendToKindleSection({
+  currentEmail,
+  viewer,
+}: {
+  currentEmail: string
+  viewer: Viewer
+}) {
+  const navigate = useNavigate()
   const cfg = useApiQuery(appConfigQuery)
   const [draft, setDraft] = useState(currentEmail)
 
@@ -435,7 +449,16 @@ function SendToKindleSection({ currentEmail }: { currentEmail: string }) {
   const trimmed = draft.trim()
   const dirty = trimmed !== currentEmail
 
-  if (cfg.data && cfg.data.emailEnabled === false) {
+  // Tri-state on purpose: `undefined` means the config hasn't loaded,
+  // which is not grounds to claim email is off.
+  if (cfg.data?.emailEnabled === false) {
+    // What to do about it is the affordance module's call, not this
+    // panel's: a reader cannot enable SMTP and cannot enable it by being
+    // told about it, so the section goes away; an admin gets the way to
+    // the panel that turns it on (#171).
+    const refusal = affordanceFor("EMAIL_DISABLED", viewer)
+    if (refusal.kind === "hidden") return null
+
     return (
       <div id="kindle">
         <div className="t-label" style={{ marginTop: 24, marginBottom: 10 }}>
@@ -449,9 +472,18 @@ function SendToKindleSection({ currentEmail }: { currentEmail: string }) {
           }}
           className="t-small"
         >
-          Send-to-Kindle is unavailable on this instance. Ask an administrator
-          to configure SMTP under{" "}
-          <strong>Settings &rarr; Email delivery</strong> to enable it.
+          {refusal.reason}
+          {refusal.kind === "navigate" && (
+            <div style={{ marginTop: 10 }}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void navigate({ to: "/settings" })}
+              >
+                {refusal.label}
+              </Button>
+            </div>
+          )}
         </div>
       </div>
     )

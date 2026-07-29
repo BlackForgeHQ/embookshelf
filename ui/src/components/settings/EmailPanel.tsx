@@ -8,6 +8,8 @@ import {
 } from "@/api/email"
 import { useConnectionTest } from "@/hooks/useConnectionTest"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
+import type { Viewer } from "@/lib/affordance"
+import { messageForCode } from "@/lib/affordance"
 import { Icon } from "@/components/Icon"
 import {
   Card,
@@ -40,6 +42,10 @@ const emptyForm: EmailSettings = {
 
 const INTRO = `SMTP configuration powers password resets, admin invites, and Send-to-Kindle. Disable to silence all outbound mail without losing the credentials.`
 
+// Only admins reach any /settings section, so the affordance module's
+// viewer is not in question here.
+const SETTINGS_VIEWER: Viewer = { isAdmin: true }
+
 export function EmailPanel() {
   const draft = useSettingsDraft({
     queryKey: emailSettingsQuery.key,
@@ -47,6 +53,22 @@ export function EmailPanel() {
     initial: emptyForm,
     save: updateEmailSettings,
     successToast: "Email settings saved.",
+    // PUT answers 502 EMAIL_RELOAD_FAILED when the row saved but the
+    // mail sender could not be rebuilt from it (settings_email.go). Left
+    // unread, that surfaced as a raw SMTP construction error — "dial
+    // tcp: lookup smtp.exmaple.com" — in a red toast, right after the
+    // save the admin can see went through.
+    //
+    // Still missing: the handler comment asks for this *inline*, and a
+    // toast is not that. The honest surface is a warning beside the save
+    // button — the settings did save — which needs useSettingsDraft to
+    // expose the failed save rather than only toast it, and every panel
+    // to have somewhere to render it. The module's sentence in the toast
+    // is the part that fits in this slice.
+    //
+    // The viewer is fixed because it has to be: every /settings section
+    // is adminOnly (SETTINGS_SECTIONS), so nobody else is reading this.
+    errorToast: (err) => messageForCode(err.code, err.message, SETTINGS_VIEWER),
     toPayload: (form, secrets) => ({
       ...form,
       smtp: { ...form.smtp, password: secrets.value("smtpPassword") },

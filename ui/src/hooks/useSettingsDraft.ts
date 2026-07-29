@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { QueryKey } from "@tanstack/react-query"
 
+import type { ApiError } from "@/api/client"
 import type { ApiMutation } from "@/api/mutation"
 import { useApiMutation } from "@/api/mutation"
 
@@ -248,6 +249,10 @@ export type SettingsDraftOptions<TData, TPayload, TResult> = {
   // is called with the current draft, never with stale state.
   toPayload: (value: TData, secrets: SecretSubmission) => TPayload
   successToast?: string
+  // What a failed save says. Panels whose endpoint answers with an error
+  // code pass a reader of it; the rest fall through to useApiMutation's
+  // default, which is the server's own message.
+  errorToast?: (err: ApiError) => string
   onSaved?: (result: TResult) => void
 }
 
@@ -269,6 +274,7 @@ export function useSettingsDraft<TData, TPayload, TResult>(
 
   const saveMut = useApiMutation(opts.save, {
     successToast: opts.successToast,
+    errorToast: opts.errorToast,
     onSuccess: (result) => {
       // Settle before the invalidated query comes back: the refetch is
       // then free to hydrate, and the panel converges on what the server

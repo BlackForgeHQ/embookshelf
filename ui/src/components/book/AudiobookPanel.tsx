@@ -17,6 +17,8 @@ import { useApiQuery } from "@/api/query"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/Icon"
 import { ProgressBar } from "@/components/ProgressBar"
+import type { Viewer } from "@/lib/affordance"
+import { affordanceFor, messageForCode } from "@/lib/affordance"
 import { isNarratableFormat, narratableFormatList } from "@/lib/formats"
 import { runView } from "@/lib/audiobookRun"
 import { pollWhile } from "@/lib/poll"
@@ -93,6 +95,7 @@ export function AudiobookPanel({
           <RegenerateButton
             bookId={bookId}
             format={format}
+            viewer={{ isAdmin }}
             confirming={confirming}
             setConfirming={setConfirming}
             hasExisting={view.phase === "ready"}
@@ -144,6 +147,7 @@ function EmptyState({
       <RegenerateButton
         bookId={bookId}
         format={format}
+        viewer={{ isAdmin }}
         confirming={confirming}
         setConfirming={setConfirming}
         hasExisting={false}
@@ -324,12 +328,14 @@ function Provenance({ audiobook }: { audiobook: Audiobook }) {
 function RegenerateButton({
   bookId,
   format,
+  viewer,
   confirming,
   setConfirming,
   hasExisting,
 }: {
   bookId: string
   format: string
+  viewer: Viewer
   confirming: boolean
   setConfirming: (v: boolean) => void
   hasExisting: boolean
@@ -341,16 +347,28 @@ function RegenerateButton({
 
   const generateMut = useApiMutation(generateAudiobook, {
     successToast: "Narrating — this takes a while.",
-    errorToast: (err: ApiError) =>
-      err.code === "AUDIOBOOKS_DISABLED"
-        ? "No text-to-speech engine is configured. An admin can set one up in Settings."
-        : err.code === "FORMAT_NOT_NARRATABLE"
-          ? `Only ${narratableFormatList()} books can be narrated.`
-          : err.message,
+    // One sentence per code, from lib/affordance.ts, rather than a
+    // ternary chain that only this panel knows about (#171).
+    errorToast: (err: ApiError) => messageForCode(err.code, err.message, viewer),
     onSuccess: () => setConfirming(false),
   })
 
-  if (!isNarratableFormat(format)) return null
+  if (!isNarratableFormat(format)) {
+    // A format nobody can change explains itself rather than vanishing
+    // (lib/affordance.ts): the feature stays discoverable and says why
+    // it does not apply here. EmptyState says the same thing at more
+    // length before it ever renders this, so in practice this is the
+    // re-import case — a book whose format changed under an existing
+    // narration.
+    const refusal = affordanceFor("FORMAT_NOT_NARRATABLE", viewer)
+    if (refusal.kind === "hidden") return null
+    return (
+      <Button variant="outline" size="sm" disabled title={refusal.reason}>
+        <Icon name="sparkle" size={14} />{" "}
+        {hasExisting ? "Regenerate" : "Generate narration"}
+      </Button>
+    )
+  }
 
   if (!confirming) {
     return (

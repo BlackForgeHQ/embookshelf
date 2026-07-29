@@ -1,11 +1,18 @@
-import { isKindleEligibleFormat, kindleEligibleFormatList } from "@/lib/formats"
+import type { ApiErrorCode } from "@/api/client"
+import type { Affordance, Viewer } from "@/lib/affordance"
+import { affordanceFor } from "@/lib/affordance"
+import { isKindleEligibleFormat } from "@/lib/formats"
 
-/** What the book page should offer for Send-to-Kindle. */
-export type KindleAction =
-  | { kind: "send" }
-  | { kind: "hidden" }
-  | { kind: "ineligible"; reason: string }
-  | { kind: "needs-address" }
+/**
+ * What the book page should offer for Send-to-Kindle.
+ *
+ * Everything except `send` is an {@link Affordance}: this module decides
+ * *which refusal* the server would return, and `lib/affordance.ts`
+ * decides what the UI does about it. Splitting it that way is the point
+ * of #171 — the sentence, and the hide-versus-explain-versus-navigate
+ * call, are one rule for every feature rather than one per control.
+ */
+export type KindleAction = { kind: "send" } | Affordance
 
 export type KindleState = {
   /** Whether the instance has an email transport configured at all. */
@@ -27,6 +34,8 @@ export type KindleState = {
   format: string
   /** The signed-in user's Kindle address, possibly blank. */
   kindleEmail: string
+  /** Who is looking. An admin can clear an instance-wide obstacle. */
+  viewer: Viewer
 }
 
 /**
@@ -34,27 +43,36 @@ export type KindleState = {
  * preconditions the handler checks, in the same order.
  *
  * The order is the point. The server answers a request with one of three
- * outcomes — no transport, 415 for the format, 412 for a missing Kindle
- * address — and the UI mirrors them so what the button says matches what
- * clicking it would have done. That mirroring used to be a chain of
+ * outcomes and the UI predicts which, so what the button says matches
+ * what clicking it would have done. That mirroring used to be a chain of
  * early returns inside the book-detail route, restating the handler's
  * branch order and its rejection sentence word for word, where no test
  * could reach it (#193).
+ *
+ * What it no longer does is decide what to *do* about the outcome. It
+ * names the code and hands it to `affordanceFor`, so the button and
+ * every other refusal in the app obey one rule and quote one sentence.
  */
 export function kindleAction(state: KindleState): KindleAction {
-  // Hidden rather than disabled: an instance with no SMTP cannot enable
-  // this in the current session, and a permanently greyed button is a
-  // tease.
-  if (!state.emailEnabled) return { kind: "hidden" }
+  const refusal = refusalCode(state)
+  if (refusal === null) return { kind: "send" }
+  return affordanceFor(refusal, state.viewer)
+}
 
-  if (!isKindleEligibleFormat(state.format)) {
-    return {
-      kind: "ineligible",
-      reason: `Send-to-Kindle accepts ${kindleEligibleFormatList()} only`,
-    }
-  }
-
-  if (state.kindleEmail.trim() === "") return { kind: "needs-address" }
-
-  return { kind: "send" }
+/**
+ * The code `POST /books/:id/kindle` would answer with, or null if it
+ * would accept.
+ *
+ * The branch order is Handler.SendToKindle's, and deliberately so: the
+ * handler checks the transport, then the caller's address, then the
+ * book's format (internal/handler/kindle.go). Reading them in any other
+ * order predicts a refusal the server would not have sent — which is
+ * what this did before #171, telling a user with no Kindle address about
+ * a format rule the server would never have reached.
+ */
+function refusalCode(state: KindleState): ApiErrorCode | null {
+  if (!state.emailEnabled) return "EMAIL_DISABLED"
+  if (state.kindleEmail.trim() === "") return "KINDLE_EMAIL_UNSET"
+  if (!isKindleEligibleFormat(state.format)) return "FORMAT_NOT_SUPPORTED"
+  return null
 }
