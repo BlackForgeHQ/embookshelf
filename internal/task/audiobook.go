@@ -107,7 +107,18 @@ func (d SegmentDeps) publish(bookID string) {
 }
 
 // StagingDir is where one book's per-segment MP3s live until finalize.
+//
+// An empty dataPath yields an empty directory, which every caller reads
+// as "no staging area is configured". That reading used to be agreed by
+// two of the three callers: joining an empty root gives the *relative*
+// path audiobooks/{book_id}, so the segment worker created it under the
+// process working directory and wrote hundreds of megabytes into it,
+// while the sweeper that reclaims staging had already decided there was
+// nothing to reclaim (#207).
 func StagingDir(dataPath, bookID string) string {
+	if dataPath == "" {
+		return ""
+	}
 	return filepath.Join(dataPath, "audiobooks", bookID)
 }
 
@@ -129,6 +140,13 @@ func AudiobookSegment(ctx context.Context, a jobs.AudiobookSegmentArgs, deps Seg
 	}
 	if !cfg.Enabled {
 		return ErrAudiobooksDisabled
+	}
+	// Before the engine call, deliberately. By the time staging is
+	// written the audio has been bought, so a job that cannot stage must
+	// find that out while a retry is still free (#207).
+	dir := StagingDir(deps.DataPath, a.BookID)
+	if dir == "" {
+		return fmt.Errorf("audiobook segment %d: no staging area configured", a.Seq)
 	}
 
 	run, err := deps.Runs.GetByBookID(ctx, a.BookID)
@@ -171,7 +189,6 @@ func AudiobookSegment(ctx context.Context, a jobs.AudiobookSegmentArgs, deps Seg
 		return err
 	}
 
-	dir := StagingDir(deps.DataPath, a.BookID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create staging dir: %w", err)
 	}

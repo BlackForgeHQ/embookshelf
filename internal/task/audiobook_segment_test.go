@@ -666,3 +666,31 @@ func TestSegmentSwallowsAnAdvanceFailure(t *testing.T) {
 		t.Error("the staged audio was discarded along with the error")
 	}
 }
+
+// The data path roots the Staging area. The finalize worker and the
+// staging sweeper both read an empty value as "no staging configured,
+// do nothing"; the segment worker did not guard it at all, so joining an
+// empty root yielded the *relative* path audiobooks/{book_id}, which it
+// created and wrote MP3s into — under whatever the process working
+// directory happened to be. It then recorded that relative path on the
+// Segment, and the sweeper that exists to reclaim staging had already
+// decided there was nothing to reclaim (#207).
+func TestSegmentRefusesWhenNoStagingAreaIsConfigured(t *testing.T) {
+	h := newSegmentHarness(t)
+	h.deps.DataPath = ""
+
+	err := h.run(t, 0)
+
+	if err == nil {
+		t.Fatal("AudiobookSegment accepted a job with no staging area configured")
+	}
+	// Before the engine call, so a retry costs nothing: by the time
+	// staging is written the audio has already been bought.
+	if h.engine.calls != 0 {
+		t.Errorf("engine called %d times before the staging check — a retry re-buys the audio",
+			h.engine.calls)
+	}
+	if _, statErr := os.Stat(filepath.Join("audiobooks", "b1")); statErr == nil {
+		t.Error("a relative staging directory was created in the working directory")
+	}
+}

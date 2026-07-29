@@ -342,10 +342,13 @@ func fail(ctx context.Context, deps FinalizeDeps, bookID string, cause error) er
 
 // cleanStaging removes a book's staged segments.
 func cleanStaging(dataPath, bookID string) {
-	if dataPath == "" {
+	// Empty means no staging area is configured — StagingDir's reading,
+	// shared by all three callers (#207).
+	dir := StagingDir(dataPath, bookID)
+	if dir == "" {
 		return
 	}
-	if err := os.RemoveAll(StagingDir(dataPath, bookID)); err != nil {
+	if err := os.RemoveAll(dir); err != nil {
 		slog.Warn("audiobook: clean staging", "book", bookID, "err", err)
 	}
 }
