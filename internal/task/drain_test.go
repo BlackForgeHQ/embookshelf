@@ -86,10 +86,13 @@ func TestDrain_happyPath(t *testing.T) {
 func TestDrain_perItemFailure(t *testing.T) {
 	t.Parallel()
 
-	// Capture slog output.
+	// Capture this drain's own log output. Deliberately not
+	// slog.SetDefault: that is a process global, and writing it from a
+	// parallel test races every other test in the package reading it —
+	// which is what kept `go test -race ./internal/task/` from being
+	// usable as a gate (#186).
 	var buf bytes.Buffer
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(slog.Default()) })
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
 	items := []int{10, 20, 30}
 	list := intList(items)
@@ -97,7 +100,7 @@ func TestDrain_perItemFailure(t *testing.T) {
 
 	n, err := task.Drain(
 		context.Background(),
-		task.DrainConfig{Name: "per-item-fail"},
+		task.DrainConfig{Name: "per-item-fail", Logger: logger},
 		list,
 		keyOfInt,
 		func(_ context.Context, item int) error {

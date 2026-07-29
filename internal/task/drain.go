@@ -13,6 +13,25 @@ type DrainConfig struct {
 	Name      string        // log tag (e.g. "files", "covers")
 	BatchSize int           // 0 → 100
 	Sleep     time.Duration // pause between batches; 0 = none
+	// Logger receives this drain's own output. Nil means the process
+	// default, which is what every production caller wants.
+	//
+	// It exists so a test can read back what a drain logged without
+	// installing a handler globally: slog.SetDefault is a process global,
+	// and a parallel test writing it races every other test in the
+	// package that logs — the one failure that stopped `go test -race
+	// ./internal/task/` being a gate, and so hid any genuine race behind
+	// known noise (#186).
+	Logger *slog.Logger
+}
+
+// log is the drain's own logger, falling back to the process default so
+// no caller has to supply one.
+func (c DrainConfig) log() *slog.Logger {
+	if c.Logger != nil {
+		return c.Logger
+	}
+	return slog.Default()
 }
 
 // Drain is the loop shape shared by boot-time backfills:
@@ -55,7 +74,7 @@ func Drain[T any](
 		}
 		if len(batch) == 0 {
 			if total > 0 {
-				slog.Info("drain complete", "drainer", cfg.Name, "processed", total)
+				cfg.log().Info("drain complete", "drainer", cfg.Name, "processed", total)
 			}
 			return total, nil
 		}
@@ -70,7 +89,7 @@ func Drain[T any](
 				continue
 			}
 			if err := process(ctx, item); err != nil {
-				slog.Warn("drain: process failed",
+				cfg.log().Warn("drain: process failed",
 					"drainer", cfg.Name, "key", k, "err", err)
 				skipped[k] = true
 				continue
@@ -83,7 +102,7 @@ func Drain[T any](
 			// failed during this iteration. The predicate query will
 			// keep returning the same set; another iteration would
 			// loop forever. Stop and let the next boot retry.
-			slog.Info("drain stopped: no progress in batch",
+			cfg.log().Info("drain stopped: no progress in batch",
 				"drainer", cfg.Name, "processed", total, "batch_size", len(batch))
 			return total, nil
 		}
