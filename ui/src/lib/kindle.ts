@@ -10,7 +10,20 @@ export type KindleAction =
 export type KindleState = {
   /** Whether the instance has an email transport configured at all. */
   emailEnabled: boolean
-  /** The book's primary format, as the API reports it. */
+  /**
+   * The book's **primary** format, and deliberately that one.
+   *
+   * Send-to-Kindle ships the file the library ingested, so the question
+   * here is "what is this book's own file", not "what is the reader
+   * currently showing". Those diverge for a narrated book: the page
+   * above this control can be playing a narration while the file that
+   * would be sent is still the EPUB (ADR-0025 §3, and the drift it
+   * predicted — several call sites branch on the primary format and are
+   * answering a subtly different question than they appear to).
+   *
+   * If Send-to-Kindle ever offers the narration, this becomes a
+   * Rendition question and moves to `lib/rendition.ts`.
+   */
   format: string
   /** The signed-in user's Kindle address, possibly blank. */
   kindleEmail: string

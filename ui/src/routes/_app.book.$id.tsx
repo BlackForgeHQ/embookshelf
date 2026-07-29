@@ -1032,6 +1032,8 @@ function SendToKindleButton({
   // no test could reach them (#193).
   const action = kindleAction({
     emailEnabled: cfg.data?.emailEnabled !== false,
+    // The primary format on purpose — this sends the book's own file,
+    // not whichever Rendition the reader last opened. See KindleState.
     format: book.format,
     kindleEmail,
   })
