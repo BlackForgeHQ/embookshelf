@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 )
@@ -217,6 +216,7 @@ func (s *AudiobookService) Start(ctx context.Context, book model.Book, opts Audi
 		Engine:            opts.Engine,
 		Voice:             opts.Voice,
 		Model:             opts.Model,
+		SegmentChars:      resolveSegmentChars(opts.SegmentChars),
 		SourceContentHash: opts.SourceContentHash,
 		TotalChars:        chars,
 	}
@@ -265,29 +265,25 @@ func (s *AudiobookService) plan(ctx context.Context, book model.Book, opts Audio
 	}
 	defer func() { _ = src.Close() }()
 
-	raw, err := fileproc.ExtractEPUBSegments(ctx, src, fileproc.SegmentOptions{MaxChars: opts.SegmentChars})
+	raw, err := SegmentBook(ctx, src, opts.SegmentChars)
 	if err != nil {
 		return nil, fmt.Errorf("segment %s: %w", book.ID, err)
 	}
 
 	out := make([]model.AudiobookSegment, 0, len(raw))
-	offset := 0
 	for _, seg := range raw {
-		length := len([]rune(seg.Text))
 		out = append(out, model.AudiobookSegment{
 			BookID:       book.ID,
 			Seq:          seg.Seq,
 			ChapterIndex: seg.ChapterIndex,
 			ChapterTitle: seg.ChapterTitle,
-			// Offsets are contiguous over the narrated text, not over the
-			// EPUB's raw bytes: skipped front matter and stripped markup
-			// have no audio, so including them would make every later
-			// position drift.
-			CharStart: offset,
-			CharEnd:   offset + length,
+			// The offsets come from the splitter rather than being
+			// recomputed here, so the range a worker re-extracts and the
+			// range stored on the row are the same arithmetic.
+			CharStart: seg.CharStart,
+			CharEnd:   seg.CharEnd,
 			State:     model.SegmentPending,
 		})
-		offset += length
 	}
 	return out, nil
 }

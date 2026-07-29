@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/storage"
@@ -296,6 +297,48 @@ func TestStartPersistsThePlanAndDispatchesEverySegment(t *testing.T) {
 	}
 	if store.run.TotalChars <= 0 {
 		t.Error("run does not record the character count the estimate was based on")
+	}
+}
+
+// The cap is pinned on the run for the same reason engine and voice are:
+// every segment job re-extracts the book, and an admin editing the
+// setting mid-run would otherwise hand the later jobs a different split
+// of the same book (#189).
+func TestStartRecordsTheCapItPlannedWith(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeAudiobookStore{}
+	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))},
+		&recordingEnqueuer{})
+
+	if err := svc.Start(context.Background(), narratableBook(), testOptions()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if store.run.SegmentChars != 500 {
+		t.Errorf("run records SegmentChars %d, want the 500 it planned with", store.run.SegmentChars)
+	}
+}
+
+// A caller that names no cap gets the default, and the run says so: a
+// zero on the row would leave a worker unable to tell "planned at the
+// default" from "planned before the column existed".
+func TestStartRecordsTheDefaultCapWhenNoneWasAsked(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeAudiobookStore{}
+	opts := testOptions()
+	opts.SegmentChars = 0
+	svc := NewAudiobookService(store, &epubOpener{src: buildTestEPUB(t, strings.Repeat("abcdefghij", 100))},
+		&recordingEnqueuer{})
+
+	if err := svc.Start(context.Background(), narratableBook(), opts); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if store.run.SegmentChars != fileproc.DefaultSegmentChars {
+		t.Errorf("run records SegmentChars %d, want the default %d",
+			store.run.SegmentChars, fileproc.DefaultSegmentChars)
 	}
 }
 

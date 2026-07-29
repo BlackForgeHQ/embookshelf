@@ -12,7 +12,6 @@ import (
 	"strconv"
 
 	"github.com/blackforge/embookshelf/internal/audio"
-	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -46,6 +45,7 @@ func canceled(ctx context.Context, bookID string, deps SegmentDeps) bool {
 // since it was written, and these workers did not (#177).
 type segmentStore interface {
 	GetByBookID(ctx context.Context, bookID string) (model.Audiobook, error)
+	GetSegment(ctx context.Context, bookID string, seq int) (model.AudiobookSegment, error)
 	MarkSegmentRunning(ctx context.Context, bookID string, seq int) (bool, error)
 	RecordSegment(ctx context.Context, bookID string, seq int, res model.SegmentResult) (model.AudiobookOutcome, error)
 }
@@ -248,7 +248,7 @@ func synthesizeSegment(
 		return nil, fmt.Errorf("%w: run uses %s but %s is now selected", tts.ErrPermanent, run.Engine, sel.ID)
 	}
 
-	text, err := segmentText(ctx, book, cfg, a.Seq, deps)
+	text, err := segmentText(ctx, book, run, a.Seq, deps)
 	if err != nil {
 		return nil, err
 	}
@@ -273,30 +273,42 @@ func synthesizeSegment(
 // segmentText re-extracts the book and returns the seq-th segment's prose.
 //
 // Re-extraction rather than a stored copy keeps the EPUB the single
-// source of truth for what a character range contains. The guard below is
-// what makes that safe: if the plan and the file no longer agree on how
-// many segments the book has, the file changed under the run, and
-// narrating segment 12 of a different book is worse than failing.
+// source of truth for what a character range contains. Two things make
+// that safe. The split uses the run's own cap, not the live settings
+// value, so an admin editing the setting mid-run cannot hand the
+// remaining jobs a different division of the same book. And the range the
+// planner stored is compared against the range re-extraction produced: a
+// file edited under the run moves every offset after the edit while
+// keeping its segment count, which the count comparison this replaced
+// waved through and narrated from text nobody planned (#189).
 func segmentText(
 	ctx context.Context,
 	book model.Book,
-	cfg repo.AudiobookConfig,
+	run model.Audiobook,
 	seq int,
 	deps SegmentDeps,
 ) (string, error) {
+	planned, err := deps.Runs.GetSegment(ctx, book.ID, seq)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return "", fmt.Errorf("%w: segment %d is not in this run's plan", tts.ErrPermanent, seq)
+		}
+		return "", fmt.Errorf("load segment %d: %w", seq, err)
+	}
+
 	src, err := deps.Open(ctx, book)
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", book.ID, err)
 	}
 	defer func() { _ = src.Close() }()
 
-	segs, err := fileproc.ExtractEPUBSegments(ctx, src, fileproc.SegmentOptions{MaxChars: cfg.SegmentChars})
+	segs, err := service.SegmentBook(ctx, src, run.SegmentChars)
 	if err != nil {
 		return "", fmt.Errorf("%w: re-extract %s: %v", tts.ErrPermanent, book.ID, err)
 	}
-	if seq < 0 || seq >= len(segs) {
-		return "", fmt.Errorf("%w: segment %d no longer exists — the source file changed mid-run",
-			tts.ErrPermanent, seq)
+	text, err := service.SegmentTextAt(segs, planned)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", tts.ErrPermanent, err)
 	}
-	return segs[seq].Text, nil
+	return text, nil
 }

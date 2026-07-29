@@ -61,7 +61,11 @@ func (r *recordingEnqueuer) finalizes() []string {
 // re-read before every engine call, so a test proving a mid-run cancel
 // stops the spend has to change the answer between reads.
 type fakeSegmentRuns struct {
-	run      model.Audiobook
+	run model.Audiobook
+	// plan is what the run was started with, the rows the planner wrote.
+	// A worker verifies its re-extraction against these, so a test can
+	// move one to stand for a book edited under a live run.
+	plan     []model.AudiobookSegment
 	getErr   error
 	gets     int
 	onGet    func(n int) model.Audiobook
@@ -81,6 +85,13 @@ func (f *fakeSegmentRuns) GetByBookID(context.Context, string) (model.Audiobook,
 		return f.onGet(f.gets), nil
 	}
 	return f.run, nil
+}
+
+func (f *fakeSegmentRuns) GetSegment(_ context.Context, _ string, seq int) (model.AudiobookSegment, error) {
+	if seq < 0 || seq >= len(f.plan) {
+		return model.AudiobookSegment{}, repo.ErrNotFound
+	}
+	return f.plan[seq], nil
 }
 
 func (f *fakeSegmentRuns) MarkSegmentRunning(context.Context, string, int) (bool, error) {
@@ -110,6 +121,29 @@ type segmentHarness struct {
 	dataPath  string
 }
 
+// harnessSegmentChars is the cap the harness's run was planned at. Large
+// enough that the fixture's chapters are one segment each.
+const harnessSegmentChars = 1000
+
+// planSegments builds the rows the planner would have written, through
+// the same module the worker re-extracts with — which is the point: a
+// plan assembled by hand here would not catch the two sides drifting.
+func planSegments(t *testing.T, src storage.Source, maxChars int) []model.AudiobookSegment {
+	t.Helper()
+	segs, err := service.SegmentBook(context.Background(), src, maxChars)
+	if err != nil {
+		t.Fatalf("SegmentBook: %v", err)
+	}
+	out := make([]model.AudiobookSegment, 0, len(segs))
+	for _, s := range segs {
+		out = append(out, model.AudiobookSegment{
+			BookID: "b1", Seq: s.Seq, ChapterIndex: s.ChapterIndex, ChapterTitle: s.ChapterTitle,
+			CharStart: s.CharStart, CharEnd: s.CharEnd, State: model.SegmentPending,
+		})
+	}
+	return out
+}
+
 // newSegmentHarness wires a worker whose every collaborator is in
 // process: a claimable run, an EPUB of two short chapters, and an engine
 // that returns four frames of silence.
@@ -117,7 +151,10 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 	t.Helper()
 	h := &segmentHarness{
 		runs: &fakeSegmentRuns{
-			run:   model.Audiobook{BookID: "b1", State: model.AudiobookRunning, Engine: "openai", Voice: "alloy"},
+			run: model.Audiobook{
+				BookID: "b1", State: model.AudiobookRunning, Engine: "openai", Voice: "alloy",
+				SegmentChars: harnessSegmentChars,
+			},
 			claim: true,
 		},
 		books: &fakeBooks{book: model.Book{
@@ -128,9 +165,13 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 		dataPath: t.TempDir(),
 	}
 	src := epubWithChapters(t, "One sentence. Another sentence. A third one.", "Second chapter here.")
+	h.runs.plan = planSegments(t, src, harnessSegmentChars)
 	h.deps = task.SegmentDeps{
+		// No SegmentChars: the split comes from the run's own pinned cap,
+		// and a worker that reached for this one would produce a segment
+		// the plan never described.
 		Config: func(context.Context) (repo.AudiobookConfig, error) {
-			return repo.AudiobookConfig{Enabled: true, Engine: "openai", SegmentChars: 1000}, nil
+			return repo.AudiobookConfig{Enabled: true, Engine: "openai"}, nil
 		},
 		Engine: func(repo.AudiobookConfig) (repo.ConfiguredEngine, error) {
 			if h.engineErr != nil {
@@ -468,6 +509,78 @@ func TestSegmentRefusesASeqThePlanNoLongerHas(t *testing.T) {
 	}
 	if h.engine.calls != 0 {
 		t.Errorf("engine called %d times for a segment that does not exist", h.engine.calls)
+	}
+}
+
+// The cap the run was planned with wins over the live settings row, the
+// same way its engine and voice do. An admin editing the setting while a
+// run is in flight used to re-split the book for every remaining segment
+// and fail all of them permanently — after the money for the earlier ones
+// was already spent (#189).
+func TestSegmentSplitsAtTheRunsOwnCapNotTheLiveSetting(t *testing.T) {
+	h := newSegmentHarness(t)
+	h.deps.Config = func(context.Context) (repo.AudiobookConfig, error) {
+		return repo.AudiobookConfig{Enabled: true, Engine: "openai", SegmentChars: 20}, nil
+	}
+
+	if err := h.run(t, 0); err != nil {
+		t.Fatalf("AudiobookSegment: %v", err)
+	}
+
+	for _, rec := range h.runs.recorded {
+		if rec.State == model.SegmentFailed {
+			t.Fatalf("the segment failed after the cap was edited mid-run: %s", rec.Error)
+		}
+	}
+	if h.engine.calls == 0 {
+		t.Fatal("engine was never called")
+	}
+	if got := h.engine.requests[0].Text; !strings.Contains(got, "A third one.") {
+		t.Errorf("engine got %q, want the whole first chapter the run planned", got)
+	}
+}
+
+// The verification a count comparison could not make: a book re-uploaded
+// with a paragraph added keeps its segment count and moves every offset
+// after the edit. The stored character range is what notices, and the
+// message has to name the drift — an operator told "count mismatch" would
+// go looking for a chapter that is still there.
+func TestSegmentRefusesASegmentWhoseTextMovedUnderTheRun(t *testing.T) {
+	h := newSegmentHarness(t)
+	h.runs.plan[0].CharStart += 7
+	h.runs.plan[0].CharEnd += 7
+
+	if err := h.run(t, 0); err != nil {
+		t.Fatalf("AudiobookSegment returned %v, want nil for a permanent failure", err)
+	}
+	if len(h.runs.recorded) != 1 || h.runs.recorded[0].State != model.SegmentFailed {
+		t.Fatalf("recorded %+v, want one failed segment", h.runs.recorded)
+	}
+	if msg := h.runs.recorded[0].Error; !strings.Contains(msg, "planned") {
+		t.Errorf("failure says %q, want it to name the range that drifted", msg)
+	}
+	if h.engine.calls != 0 {
+		t.Errorf("engine called %d times for text the run never planned", h.engine.calls)
+	}
+}
+
+// A book that lost a chapter under a live run still has the plan row the
+// job addresses — the plan is in Postgres, the chapter was in the file.
+// Re-extraction is where that is noticed, and narrating segment 12 of a
+// different book is worse than failing.
+func TestSegmentRefusesASegmentTheFileNoLongerHas(t *testing.T) {
+	h := newSegmentHarness(t)
+	shorter := epubWithChapters(t, "One sentence. Another sentence. A third one.")
+	h.deps.Open = func(context.Context, model.Book) (storage.Source, error) { return shorter, nil }
+
+	if err := h.run(t, 1); err != nil {
+		t.Fatalf("AudiobookSegment returned %v, want nil for a permanent failure", err)
+	}
+	if len(h.runs.recorded) != 1 || h.runs.recorded[0].State != model.SegmentFailed {
+		t.Fatalf("recorded %+v, want one failed segment", h.runs.recorded)
+	}
+	if h.engine.calls != 0 {
+		t.Errorf("engine called %d times for a chapter the file no longer has", h.engine.calls)
 	}
 }
 

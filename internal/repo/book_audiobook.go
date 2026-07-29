@@ -27,7 +27,7 @@ func NewBookAudiobookRepo(d *db.DB) *BookAudiobookRepo {
 }
 
 const audiobookCols = `
-	book_id, state, engine, voice, model, source_content_hash,
+	book_id, state, engine, voice, model, segment_chars, source_content_hash,
 	file_id, error, total_chars, duration_ms, created_at, updated_at
 `
 
@@ -53,14 +53,15 @@ func (r *BookAudiobookRepo) Start(ctx context.Context, ab model.Audiobook, segme
 
 	const upsert = `
 		INSERT INTO book_audiobooks (
-			book_id, state, engine, voice, model, source_content_hash,
+			book_id, state, engine, voice, model, segment_chars, source_content_hash,
 			file_id, error, total_chars, duration_ms, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, NULL, '', $7, 0, now(), now())
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, '', $8, 0, now(), now())
 		ON CONFLICT (book_id) DO UPDATE SET
 			state               = EXCLUDED.state,
 			engine              = EXCLUDED.engine,
 			voice               = EXCLUDED.voice,
 			model               = EXCLUDED.model,
+			segment_chars       = EXCLUDED.segment_chars,
 			source_content_hash = EXCLUDED.source_content_hash,
 			file_id             = NULL,
 			error               = '',
@@ -70,7 +71,7 @@ func (r *BookAudiobookRepo) Start(ctx context.Context, ab model.Audiobook, segme
 	`
 	if _, err := tx.ExecContext(ctx, upsert,
 		ab.BookID, string(model.AudiobookPending), ab.Engine, ab.Voice, ab.Model,
-		ab.SourceContentHash, ab.TotalChars,
+		ab.SegmentChars, ab.SourceContentHash, ab.TotalChars,
 	); err != nil {
 		return fmt.Errorf("upsert audiobook: %w", err)
 	}
@@ -104,7 +105,7 @@ func (r *BookAudiobookRepo) GetByBookID(ctx context.Context, bookID string) (mod
 	)
 	row := r.db.SQL.QueryRowContext(ctx, q, bookID)
 	if err := row.Scan(
-		&ab.BookID, &state, &ab.Engine, &ab.Voice, &ab.Model, &ab.SourceContentHash,
+		&ab.BookID, &state, &ab.Engine, &ab.Voice, &ab.Model, &ab.SegmentChars, &ab.SourceContentHash,
 		&ab.FileID, &ab.Error, &ab.TotalChars, &ab.DurationMS, &ab.CreatedAt, &ab.UpdatedAt,
 	); err != nil {
 		if dberr.IsNotFound(err) {

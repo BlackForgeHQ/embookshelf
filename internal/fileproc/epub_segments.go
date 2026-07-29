@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/blackforge/embookshelf/internal/storage"
 	"github.com/blackforge/embookshelf/internal/textsplit"
@@ -31,6 +32,19 @@ type Segment struct {
 	ChapterIndex int
 	ChapterTitle string
 	Text         string
+	// CharStart and CharEnd locate this segment in the narrated text:
+	// contiguous rune offsets over the prose that actually gets read, not
+	// over the EPUB's bytes — skipped front matter and stripped markup
+	// have no audio, so counting them would make every later position
+	// drift.
+	//
+	// Computed here rather than by each caller because they are both the
+	// alignment map's text side and the run's record of what it planned:
+	// a worker re-extracting hours later compares its own range against
+	// the stored one, which only means anything if one piece of
+	// arithmetic produced both (#189).
+	CharStart int
+	CharEnd   int
 }
 
 // SegmentOptions tunes the split. The zero value is the intended
@@ -85,6 +99,7 @@ func ExtractEPUBSegments(ctx context.Context, src storage.Source, opts SegmentOp
 
 	var segs []Segment
 	chapterIndex := 0
+	offset := 0
 	for _, ref := range doc.Spine.ItemRefs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -121,12 +136,16 @@ func ExtractEPUBSegments(ctx context.Context, src storage.Source, opts SegmentOp
 		}
 
 		for _, chunk := range textsplit.OnSentences(text, opts.maxChars()) {
+			length := utf8.RuneCountInString(chunk)
 			segs = append(segs, Segment{
 				Seq:          len(segs),
 				ChapterIndex: chapterIndex,
 				ChapterTitle: title,
 				Text:         chunk,
+				CharStart:    offset,
+				CharEnd:      offset + length,
 			})
+			offset += length
 		}
 		chapterIndex++
 	}

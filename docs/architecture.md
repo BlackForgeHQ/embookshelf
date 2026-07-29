@@ -937,7 +937,7 @@ route change.
 
 ### 6.1 Core Domain Entities
 
-Schema is at migration `000032`. Paired up/down SQL files live under
+Schema is at migration `000041`. Paired up/down SQL files live under
 `internal/migrator/migrations/postgres/`.
 
 The catalog backbone:
@@ -981,6 +981,12 @@ Other tables, grouped by role:
 - **System.** `app_settings` (singleton k/v config — instance name,
   signup-open flag, default library), `oidc_settings`
   (DB-backed OIDC config replacing env vars).
+- **Generation.** `book_reading_guides` (one guide per book, ADR-0024),
+  `book_audiobooks` (one narration run per book: state plus the engine,
+  voice, model and `segment_chars` it was planned with — the pins that
+  survive an admin editing settings mid-run) and
+  `book_audiobook_segments` (one row per unit of synthesis, carrying the
+  `(char_start, char_end)` half of the alignment map, ADR-0028).
 - **Queue.** River's `river_*` tables, created by `rivermigrate` on
   boot.
 

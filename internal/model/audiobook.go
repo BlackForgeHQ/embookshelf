@@ -41,6 +41,11 @@ type Audiobook struct {
 	Engine string
 	Voice  string
 	Model  string
+	// SegmentChars is the cap the plan was split at, pinned for the same
+	// reason engine and voice are: every segment job re-extracts the book
+	// from the EPUB, and a cap edited mid-run would hand the remaining
+	// jobs a different split of the same text (#189).
+	SegmentChars int
 	// SourceContentHash is the EPUB this narration was made from.
 	// Compared against the book's current hash to tell the user the audio
 	// predates their newer copy. Never used to invalidate anything.

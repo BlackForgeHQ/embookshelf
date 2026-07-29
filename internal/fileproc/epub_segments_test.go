@@ -412,3 +412,76 @@ func TestExtractEPUBSegmentsSplitsMultibyteTextSafely(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Character ranges — the alignment map, and the run's proof of its own plan
+// ---------------------------------------------------------------------------
+
+// The offsets are the alignment map's text side, and they are also what a
+// segment worker re-extracting the book hours later compares against to
+// know it is narrating the same prose the plan priced. Computing them
+// here rather than at the two call sites is what makes the two agree by
+// construction (#189).
+func TestExtractEPUBSegmentsCarriesContiguousCharacterRanges(t *testing.T) {
+	src := buildEPUB(t, "OEBPS/content.opf", `<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <manifest>
+    <item id="c1" href="one.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c2" href="two.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="c1"/><itemref idref="c2"/></spine>
+</package>`,
+		epubFile{"OEBPS/one.xhtml", xhtml(`<p>First chapter.</p>`)},
+		epubFile{"OEBPS/two.xhtml", xhtml(`<p>Second chapter.</p>`)},
+	)
+
+	segs, err := ExtractEPUBSegments(context.Background(), src, SegmentOptions{})
+	if err != nil {
+		t.Fatalf("ExtractEPUBSegments: %v", err)
+	}
+	if segs[0].CharStart != 0 {
+		t.Errorf("segs[0].CharStart = %d, want 0 — the first segment opens the narrated text", segs[0].CharStart)
+	}
+	offset := 0
+	for i, s := range segs {
+		length := utf8.RuneCountInString(s.Text)
+		if s.CharStart != offset {
+			t.Errorf("segs[%d].CharStart = %d, want %d — ranges must be contiguous", i, s.CharStart, offset)
+		}
+		if s.CharEnd != offset+length {
+			t.Errorf("segs[%d].CharEnd = %d, want %d — the range must cover its own text",
+				i, s.CharEnd, offset+length)
+		}
+		offset += length
+	}
+}
+
+// The ranges count characters, not bytes: an offset that drifts on every
+// CJK chapter would put the audio and the text out of step for the rest
+// of the book.
+func TestExtractEPUBSegmentsCountsCharacterRangesInRunes(t *testing.T) {
+	src := buildEPUB(t, "OEBPS/content.opf", `<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <manifest>
+    <item id="c1" href="one.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c2" href="two.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="c1"/><itemref idref="c2"/></spine>
+</package>`,
+		epubFile{"OEBPS/one.xhtml", xhtml(`<p>彼は砂の中に降りていった。</p>`)},
+		epubFile{"OEBPS/two.xhtml", xhtml(`<p>Second chapter.</p>`)},
+	)
+
+	segs, err := ExtractEPUBSegments(context.Background(), src, SegmentOptions{})
+	if err != nil {
+		t.Fatalf("ExtractEPUBSegments: %v", err)
+	}
+	if len(segs) != 2 {
+		t.Fatalf("got %d segments, want 2", len(segs))
+	}
+	want := utf8.RuneCountInString(segs[0].Text)
+	if segs[1].CharStart != want {
+		t.Errorf("segs[1].CharStart = %d, want %d runes — the offset was counted in bytes",
+			segs[1].CharStart, want)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/db"
+	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/repo/repotest"
@@ -341,5 +342,64 @@ func TestListStaleStagingReclaimsAPublishedRun(t *testing.T) {
 	}
 	if len(ids) != 1 || ids[0] != bookID {
 		t.Fatalf("stale = %v, want the published run's leftover staging reclaimed", ids)
+	}
+}
+
+// The cap the plan was split at is part of what the run pins, and a
+// segment job hours later reads it back to reproduce that split. Losing
+// it in the round-trip would put the worker back on the live settings
+// value, which is the bug the column exists to close (#189).
+func TestStartRoundTripsTheSegmentationCap(t *testing.T) {
+	d := repotest.New(t)
+	ctx := context.Background()
+
+	lib, err := repo.NewLibraryRepo(d).CreateLibrary(ctx, "Narration", "narration-cap", "/tmp/narration-cap", nil)
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	b, err := repo.NewBookRepo(d).Create(ctx, model.Book{
+		LibraryID: lib.ID, Title: "Dune", Author: "Frank Herbert", Format: "EPUB", Path: "dune-cap.epub",
+	})
+	if err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+
+	audiobooks := repo.NewBookAudiobookRepo(d)
+	if err := audiobooks.Start(ctx, model.Audiobook{
+		BookID: b.ID, Engine: "openai", Voice: "alloy", Model: "tts-1", SegmentChars: 12_345,
+	}, []model.AudiobookSegment{
+		{BookID: b.ID, Seq: 0, ChapterTitle: "Chapter", State: model.SegmentPending, CharStart: 0, CharEnd: 100},
+	}); err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	run, err := audiobooks.GetByBookID(ctx, b.ID)
+	if err != nil {
+		t.Fatalf("GetByBookID: %v", err)
+	}
+	if run.SegmentChars != 12_345 {
+		t.Errorf("SegmentChars = %d, want the 12345 the plan was split at", run.SegmentChars)
+	}
+}
+
+// The migration's backfill value and the splitter's default are the same
+// number written twice, once in Go and once in SQL that cannot reference
+// it. They mean "the cap every run before the column existed was planned
+// at", so a change to one that misses the other silently mis-describes
+// every old run.
+func TestSegmentCharsDefaultMatchesTheSplittersDefault(t *testing.T) {
+	d := repotest.New(t)
+
+	var backfill int
+	err := d.SQL.QueryRowContext(context.Background(),
+		`SELECT column_default::int FROM information_schema.columns
+		 WHERE table_name = 'book_audiobooks' AND column_name = 'segment_chars'`).Scan(&backfill)
+	if err != nil {
+		t.Fatalf("read column default: %v", err)
+	}
+
+	if backfill != fileproc.DefaultSegmentChars {
+		t.Errorf("migration backfills segment_chars with %d, but the splitter defaults to %d",
+			backfill, fileproc.DefaultSegmentChars)
 	}
 }
