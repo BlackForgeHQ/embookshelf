@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-embookshelf: Go (Gin) + React 19 (TanStack Start) + Postgres **or** SQLite, single binary with embedded UI. See `docs/ARCHITECTURE.md` and `docs/prd.md`.
+embookshelf: Go (Gin) + React 19 (TanStack Start) + Postgres, single binary with embedded UI. See `docs/architecture.md` and `docs/PRD.md`.
 
 ## Commands
 
@@ -9,7 +9,7 @@ make up               # backend (:6060) + Vite (:5173)
 make build            # ui-build + go build → ./tmp/embookshelf
 make test             # go test ./...
 make ci-local         # all CI checks in parallel
-make go-lint          # golangci-lint v2.12.2
+make go-lint          # golangci-lint (version pinned in Makefile)
 make ui-lint          # Biome lint (cd ui && bun run lint)
 make ui-typecheck     # tsc --noEmit
 make ui-test          # vitest run

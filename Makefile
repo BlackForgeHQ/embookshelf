@@ -208,7 +208,16 @@ test-db: ## Start the dev Postgres and wait for it to accept connections
 	done; \
 	echo "error: Postgres did not become ready in 30s"; exit 1
 
+# The one place the linter version is written. CI reads it from here via
+# `make print-golangci-version` rather than restating it, and CLAUDE.md
+# points at this line rather than naming a version — a pin restated by
+# hand is a pin that drifts, which is how the docs came to name v2.11.4
+# while this said v2.12.2 (#187).
 GOLANGCI_LINT_VERSION ?= v2.12.2
+
+.PHONY: print-golangci-version
+print-golangci-version: ## Print the pinned golangci-lint version (used by CI)
+	@echo $(GOLANGCI_LINT_VERSION)
 
 .PHONY: go-lint
 go-lint: ## Run golangci-lint (pinned version fetched via `go run` if not on PATH)

@@ -26,13 +26,19 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Read from the Makefile rather than restated here: "keep in sync"
+      # is a comment, not a mechanism, and the same instruction in
+      # CLAUDE.md drifted a minor version without anyone noticing (#187).
+      # Older linter builds miscompile under newer Go toolchains (e.g.
+      # staticcheck under go1.26 lost the t.Fatal noreturn fact, causing
+      # false SA5011), so the version matters. Bump on release cadence —
+      # in the Makefile, and everything follows.
+      - id: golangci-version
+        run: echo "version=$(make -s print-golangci-version)" >> "$GITHUB_OUTPUT"
+
       - uses: golangci/golangci-lint-action@v9
         with:
-          # Keep in sync with GOLANGCI_LINT_VERSION in the Makefile.
-          # Older builds miscompile under newer Go toolchains (e.g.
-          # staticcheck under go1.26 lost the t.Fatal noreturn fact,
-          # causing false SA5011). Bump on release cadence.
-          version: v2.12.2
+          version: ${{ steps.golangci-version.outputs.version }}
           args: --timeout=5m
 
       - name: actionlint
