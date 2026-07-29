@@ -80,3 +80,76 @@ func clientErrorCodes(t *testing.T) map[string]bool {
 	}
 	return names
 }
+
+// clientAffordanceFile holds the client's own copy of the code list,
+// the one every affordance is keyed on.
+const clientAffordanceFile = "../../ui/src/lib/affordance.ts"
+
+const clientAffordanceAnchor = "export const ALL_ERROR_CODES = ["
+
+// TestErrorCodesHaveClientAffordances guards the list the UI decides
+// with, which is a different list from the union it merely types.
+//
+// The union above only says a code may arrive. This one says the client
+// knows what to do about it — hide the control, explain it, or point at
+// the fix. A code declared here and missing there falls through to
+// whatever sentence the server happened to send, which is the state
+// five of the eight codes were in before #171.
+func TestErrorCodesHaveClientAffordances(t *testing.T) {
+	client := clientAffordanceCodes(t)
+
+	for _, code := range AllErrorCodes {
+		if !client[code] {
+			t.Errorf("code %q has no affordance in %s — the UI cannot decide what to "+
+				"do about it and will show the raw server message", code, clientAffordanceFile)
+		}
+	}
+	for code := range client {
+		found := false
+		for _, declared := range AllErrorCodes {
+			if declared == code {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("code %q has an affordance in %s but the server no longer sends it",
+				code, clientAffordanceFile)
+		}
+	}
+}
+
+func clientAffordanceCodes(t *testing.T) map[string]bool {
+	t.Helper()
+
+	src, err := os.ReadFile(clientAffordanceFile)
+	if err != nil {
+		t.Fatalf("cannot read %s: %v", clientAffordanceFile, err)
+	}
+
+	names := map[string]bool{}
+	inList := false
+	for _, line := range strings.Split(string(src), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == clientAffordanceAnchor {
+			inList = true
+			continue
+		}
+		if !inList {
+			continue
+		}
+		if strings.HasPrefix(trimmed, `"`) {
+			names[strings.Trim(trimmed, `",`)] = true
+			continue
+		}
+		if trimmed != "" {
+			break
+		}
+	}
+
+	if len(names) == 0 {
+		t.Fatalf("parsed no codes from %s in %s — the list's shape changed and this "+
+			"test is no longer checking anything", clientAffordanceAnchor, clientAffordanceFile)
+	}
+	return names
+}
