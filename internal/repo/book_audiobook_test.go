@@ -50,7 +50,9 @@ func audiobookFixture(t *testing.T, d *db.DB, segments int) (string, *repo.BookA
 	}, plan); err != nil {
 		t.Fatalf("start run: %v", err)
 	}
-	if err := audiobooks.SetState(ctx, b.ID, model.AudiobookRunning, ""); err != nil {
+	if _, err := audiobooks.Transition(ctx, b.ID, model.Transition{
+		To: model.AudiobookRunning, From: []model.AudiobookState{model.AudiobookPending, model.AudiobookRunning},
+	}); err != nil {
 		t.Fatalf("set running: %v", err)
 	}
 	return b.ID, audiobooks
@@ -212,14 +214,17 @@ func TestRecordSegmentDoesNotRefailAnAlreadyFailedRun(t *testing.T) {
 		t.Fatalf("next = %q, want fail on the segment that settled the run", out.Next)
 	}
 
-	// The caller applies that verdict. FailRun reports that it moved the
-	// run, which is what publishes exactly once.
-	moved, err := audiobooks.FailRun(ctx, bookID, out.Coverage.FailureMessage())
+	// The caller applies that verdict. The transition reports that it
+	// moved the run, which is what publishes exactly once.
+	moved, err := audiobooks.Transition(ctx, bookID, model.Transition{
+		To: model.AudiobookFailed, From: []model.AudiobookState{model.AudiobookPending, model.AudiobookRunning, model.AudiobookReady, model.AudiobookCanceled},
+		Error: out.Coverage.FailureMessage(),
+	})
 	if err != nil {
-		t.Fatalf("FailRun: %v", err)
+		t.Fatalf("Transition to failed: %v", err)
 	}
 	if !moved {
-		t.Fatal("FailRun reported no change on a running run")
+		t.Fatal("the transition reported no change on a running run")
 	}
 
 	// And once more, as a River retry of the first segment would do.
@@ -235,7 +240,10 @@ func TestRecordSegmentDoesNotRefailAnAlreadyFailedRun(t *testing.T) {
 
 	// A second FailRun is a no-op, so the retry cannot re-publish a
 	// failure the user was already told about.
-	moved, err = audiobooks.FailRun(ctx, bookID, "something else")
+	moved, err = audiobooks.Transition(ctx, bookID, model.Transition{
+		To: model.AudiobookFailed, From: []model.AudiobookState{model.AudiobookPending, model.AudiobookRunning, model.AudiobookReady, model.AudiobookCanceled},
+		Error: "something else",
+	})
 	if err != nil {
 		t.Fatalf("FailRun again: %v", err)
 	}
@@ -258,7 +266,9 @@ func TestRecordSegmentDoesNotFinalizeACanceledRun(t *testing.T) {
 	bookID, audiobooks := audiobookFixture(t, repotest.New(t), 1)
 	ctx := context.Background()
 
-	if err := audiobooks.SetState(ctx, bookID, model.AudiobookCanceled, ""); err != nil {
+	if _, err := audiobooks.Transition(ctx, bookID, model.Transition{
+		To: model.AudiobookCanceled, From: []model.AudiobookState{model.AudiobookPending, model.AudiobookRunning},
+	}); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
 	out, err := audiobooks.RecordSegment(ctx, bookID, 0, doneResult(0))
@@ -372,7 +382,9 @@ func TestListStaleStagingReclaimsAPublishedRun(t *testing.T) {
 	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, doneResult(0)); err != nil {
 		t.Fatalf("RecordSegment: %v", err)
 	}
-	if err := audiobooks.SetState(ctx, bookID, model.AudiobookReady, ""); err != nil {
+	if _, err := audiobooks.Transition(ctx, bookID, model.Transition{
+		To: model.AudiobookReady, From: []model.AudiobookState{model.AudiobookPending, model.AudiobookRunning},
+	}); err != nil {
 		t.Fatalf("set ready: %v", err)
 	}
 	age(t, d, bookID, 14)
@@ -540,4 +552,78 @@ func secondSession(t *testing.T, d *db.DB) *sql.Tx {
 // be parameterised into.
 func pq(ident string) string {
 	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
+}
+
+// The write this refactor exists for. SetReady was an unconditional
+// UPDATE, so a finalize job already assembling when the user cancelled
+// marked the run ready anyway — the user was billed for a run they
+// stopped and then handed the audiobook (#210, ADR-0028 §6).
+//
+// At this layer rather than only against the service's fake: the guard
+// is a WHERE clause, and a fake that reimplements it proves nothing
+// about the SQL.
+func TestTransitionRefusesToMoveAConcludedRun(t *testing.T) {
+	bookID, audiobooks := audiobookFixture(t, repotest.New(t), 2)
+	ctx := context.Background()
+
+	moved, err := audiobooks.Transition(ctx, bookID, model.Transition{
+		To: model.AudiobookCanceled, From: model.LiveStates(),
+	})
+	if err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	if !moved {
+		t.Fatal("a running run refused a cancel")
+	}
+
+	fileID, totalMS := "11111111-1111-1111-1111-111111111111", int64(90_000)
+	moved, err = audiobooks.Transition(ctx, bookID, model.Transition{
+		To: model.AudiobookReady, From: model.LiveStates(),
+		FileID: &fileID, DurationMS: &totalMS,
+	})
+	if err != nil {
+		t.Fatalf("finalize after cancel: %v", err)
+	}
+	if moved {
+		t.Error("a finalize in flight moved a canceled run to ready")
+	}
+
+	run, err := audiobooks.GetByBookID(ctx, bookID)
+	if err != nil {
+		t.Fatalf("GetByBookID: %v", err)
+	}
+	if run.State != model.AudiobookCanceled {
+		t.Errorf("state = %q, want canceled to have survived the late write", run.State)
+	}
+	if run.FileID != nil {
+		t.Errorf("file_id = %q — a refused transition wrote its payload anyway", *run.FileID)
+	}
+}
+
+// The moved flag is the other half of the guard: it is what keeps the
+// SSE publish to one when two segments settle a run at the same instant.
+func TestTransitionReportsWhetherTheRowMoved(t *testing.T) {
+	bookID, audiobooks := audiobookFixture(t, repotest.New(t), 2)
+	ctx := context.Background()
+
+	fail := model.Transition{
+		To: model.AudiobookFailed,
+		From: []model.AudiobookState{
+			model.AudiobookPending, model.AudiobookRunning,
+			model.AudiobookReady, model.AudiobookCanceled,
+		},
+		Error: "1 of 2 segments failed",
+	}
+
+	first, err := audiobooks.Transition(ctx, bookID, fail)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	second, err := audiobooks.Transition(ctx, bookID, fail)
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if !first || second {
+		t.Errorf("moved = (%v, %v), want (true, false) so the UI is told once", first, second)
+	}
 }

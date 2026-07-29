@@ -152,11 +152,13 @@ func (h *Handler) BookAudiobookCancel(c *gin.Context, s bookScope) {
 		return
 	}
 	id := s.Book.ID
+	// No publish here: Cancel makes the transition and the module that
+	// makes a transition emits it. This handler used to remember to, and
+	// a second caller of Cancel would not have (#210).
 	if err := h.audiobooks.Cancel(c.Request.Context(), id); err != nil {
 		h.writeAudiobookError(c, err)
 		return
 	}
-	h.publishAudiobookUpdated(id)
 	c.Status(http.StatusNoContent)
 }
 
@@ -230,9 +232,11 @@ func narrationLocation(ctx context.Context, handle *service.LibraryHandle, bookI
 	return f.Location
 }
 
-// publishAudiobookUpdated tells open pages the narration changed. The
-// workers publish their own terminal states; these two transitions are
-// user-driven and would otherwise be silent until a refresh.
+// publishAudiobookUpdated tells open pages the narration changed.
+//
+// One caller left: deleting a narration removes the row rather than
+// moving it, so there is no transition to hang the event off. Every
+// state change publishes from AudiobookService.transition instead.
 func (h *Handler) publishAudiobookUpdated(bookID string) {
 	if h.hub == nil {
 		return

@@ -39,6 +39,9 @@ type fakeAudiobookStore struct {
 	recorded []model.SegmentResult
 	outcome  model.AudiobookOutcome
 	deleted  bool
+	// onSetState fires on each state write, so a test can assert when it
+	// happened relative to the dispatches.
+	onSetState func(model.AudiobookState)
 	// onDelete records when the row went, so a test can assert the
 	// ordering against the byte cleanup rather than just the outcome.
 	onDelete func()
@@ -69,19 +72,31 @@ func (f *fakeAudiobookStore) GetByBookID(context.Context, string) (model.Audiobo
 	return f.run, nil
 }
 
-func (f *fakeAudiobookStore) SetState(_ context.Context, _ string, s model.AudiobookState, msg string) error {
-	f.state, f.stateMsg = s, msg
-	return nil
-}
-
-// FailRun mirrors the repo's conditional write: a run already failed is
-// left alone and the caller told nothing moved, which is what keeps the
-// publish to one.
-func (f *fakeAudiobookStore) FailRun(_ context.Context, _ string, msg string) (bool, error) {
-	if f.state == model.AudiobookFailed {
+// Transition mirrors the repo's guarded write: the run has to be in one
+// of the states the caller expects, and the caller is told whether it
+// moved. Without the guard here a test could not tell a transition that
+// was refused from one that happened (#210).
+func (f *fakeAudiobookStore) Transition(
+	_ context.Context, _ string, tr model.Transition,
+) (bool, error) {
+	current := f.state
+	if current == "" {
+		current = f.run.State
+	}
+	allowed := false
+	for _, from := range tr.From {
+		if from == current {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
 		return false, nil
 	}
-	f.state, f.stateMsg = model.AudiobookFailed, msg
+	f.state, f.stateMsg = tr.To, tr.Error
+	if f.onSetState != nil {
+		f.onSetState(tr.To)
+	}
 	return true, nil
 }
 
@@ -108,6 +123,9 @@ type recordingEnqueuer struct {
 	mu   sync.Mutex
 	args []jobs.Args
 	err  error
+	// onEnqueue fires per accepted job, for tests asserting when a
+	// dispatch happened relative to a write.
+	onEnqueue func()
 }
 
 func (r *recordingEnqueuer) Enqueue(_ context.Context, a jobs.Args) error {
@@ -117,6 +135,9 @@ func (r *recordingEnqueuer) Enqueue(_ context.Context, a jobs.Args) error {
 		return r.err
 	}
 	r.args = append(r.args, a)
+	if r.onEnqueue != nil {
+		r.onEnqueue()
+	}
 	return nil
 }
 

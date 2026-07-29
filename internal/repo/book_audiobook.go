@@ -291,40 +291,37 @@ func scanCoverage(ctx context.Context, q rowQuerier, bookID string) (model.Audio
 	return c, nil
 }
 
-// SetState moves the run. msg is the failure reason; empty otherwise.
-// FailRun marks a run failed, reporting whether it actually moved.
+// Transition moves a run's state, but only out of one of the states the
+// caller says it expects, and reports whether the row actually moved.
 //
-// The WHERE clause is what makes it idempotent: a run already failed is
-// left alone and the caller told so, which is how the publish that tells
-// the UI to stop polling fires exactly once even when two segments
-// settle a run at the same instant (#190).
-func (r *BookAudiobookRepo) FailRun(ctx context.Context, bookID, msg string) (bool, error) {
+// The one write to book_audiobooks.state. There were four before, three
+// of them reached from a different module and two of them unguarded, and
+// the unguarded pair is what let a late write undo a conclusion — a
+// finalize in flight marking a cancelled run ready, and a trailing
+// `running` write putting back a run a segment had already moved
+// forward (#210).
+//
+// The moved flag is the other half: it is how the SSE publish fires
+// exactly once when two segments settle a run at the same instant.
+func (r *BookAudiobookRepo) Transition(
+	ctx context.Context, bookID string, t model.Transition,
+) (bool, error) {
 	const q = `
-		UPDATE book_audiobooks SET state = 'failed', error = $2, updated_at = now()
-		WHERE book_id = $1 AND state <> 'failed'
+		UPDATE book_audiobooks
+		SET state       = $2,
+		    error       = $3,
+		    file_id     = COALESCE($4::uuid, file_id),
+		    duration_ms = COALESCE($5, duration_ms),
+		    updated_at  = now()
+		WHERE book_id = $1 AND state = ANY($6::text[])
 	`
-	res, err := r.db.SQL.ExecContext(ctx, q, bookID, msg)
+	res, err := r.db.SQL.ExecContext(ctx, q,
+		bookID, string(t.To), t.Error, t.FileID, t.DurationMS, t.FromStrings())
 	if err != nil {
 		return false, err
 	}
 	n, err := res.RowsAffected()
 	return n > 0, err
-}
-
-func (r *BookAudiobookRepo) SetState(ctx context.Context, bookID string, state model.AudiobookState, msg string) error {
-	const q = `UPDATE book_audiobooks SET state = $2, error = $3, updated_at = now() WHERE book_id = $1`
-	return execOne(ctx, r.db.SQL, q, bookID, string(state), msg)
-}
-
-// SetReady completes a run: the file exists, the duration is known.
-func (r *BookAudiobookRepo) SetReady(ctx context.Context, bookID, fileID string, durationMS int64) error {
-	const q = `
-		UPDATE book_audiobooks
-		SET state = 'ready', file_id = $2, duration_ms = $3, error = '', updated_at = now()
-		WHERE book_id = $1
-	`
-	_, err := r.db.SQL.ExecContext(ctx, q, bookID, fileID, durationMS)
-	return err
 }
 
 // Delete removes a run and, by cascade, its segments.

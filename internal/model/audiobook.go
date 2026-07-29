@@ -123,6 +123,45 @@ func (c AudiobookCoverage) FailureMessage() string {
 	return fmt.Sprintf("%d of %d segments failed", c.Failed, c.Total)
 }
 
+// Transition is one move of a run's state, with the states it is
+// allowed to move from.
+//
+// From is not optional and there is no "any" value: every transition in
+// the system names what it expects the run to be, so a write that
+// arrives late cannot undo a conclusion reached while it was in flight.
+// That was not hypothetical — the → ready write was unguarded, so a
+// finalize job already assembling when the user cancelled marked the run
+// ready anyway, billing them for a run they stopped (#210).
+//
+// The repo reports whether the row moved, which is what makes the
+// publish fire exactly once: two segments settling a run at the same
+// instant both attempt the transition and only one of them moved it.
+type Transition struct {
+	To    AudiobookState
+	From  []AudiobookState
+	Error string
+	// FileID and DurationMS are written only by the → ready transition,
+	// which is the one that has them. Nil leaves the columns alone.
+	FileID     *string
+	DurationMS *int64
+}
+
+// FromStrings renders From for the SQL guard.
+func (t Transition) FromStrings() []string {
+	out := make([]string, 0, len(t.From))
+	for _, s := range t.From {
+		out = append(out, string(s))
+	}
+	return out
+}
+
+// LiveStates are the states a run can still move out of under its own
+// steam: it has not concluded. The guard for every transition that a
+// concluded run must not accept.
+func LiveStates() []AudiobookState {
+	return []AudiobookState{AudiobookPending, AudiobookRunning}
+}
+
 // SegmentResult is everything a worker learned about one segment.
 //
 // A value rather than three repo methods, because it is the argument to

@@ -90,6 +90,51 @@ func (s *AudiobookService) applyNext(
 	return "", nil
 }
 
+// transition is the only place this service writes a run's state.
+//
+// One guarded write and one publish. Every caller states the transition
+// it expects — including which states it may move out of — so a write
+// that arrives after the run concluded moves nothing, and the publish
+// that tells open pages to stop polling fires only for the write that
+// actually moved the row.
+//
+// Errors are logged rather than returned, for the reason FailRun gives:
+// every caller is somewhere that cannot act on one. A status read still
+// has to answer, and a segment worker handed an error would make River
+// retry audio it has already staged and paid for.
+func (s *AudiobookService) transition(ctx context.Context, bookID string, t model.Transition) {
+	moved, err := s.d.Store.Transition(ctx, bookID, t)
+	if err != nil {
+		slog.Warn("audiobook: transition", "book", bookID, "to", t.To, "err", err)
+		return
+	}
+	if moved {
+		s.d.Publish(bookID)
+	}
+}
+
+// NarrationAssembled records that the finalize worker has the file.
+//
+// The worker reports the fact; this decides the state. It used to call
+// SetReady on the repo directly, bypassing the module documented as
+// owning transitions — which is why that module carried a comment
+// explaining the one transition it must not make (#210).
+//
+// Guarded on the live states: a run the user cancelled while finalize
+// was assembling stays cancelled, and the orphaned bytes are the
+// sweeper's (ADR-0028 §6).
+func (s *AudiobookService) NarrationAssembled(
+	ctx context.Context, bookID, fileID string, durationMS int64,
+) error {
+	s.transition(ctx, bookID, model.Transition{
+		To:         model.AudiobookReady,
+		From:       model.LiveStates(),
+		FileID:     &fileID,
+		DurationMS: &durationMS,
+	})
+	return nil
+}
+
 // FailRun is the one place a run is marked failed.
 //
 // Four writers reached this outcome before: the repo inside its
@@ -109,13 +154,13 @@ func (s *AudiobookService) applyNext(
 // segment worker handed an error would make River retry audio it has
 // already staged and paid for.
 func (s *AudiobookService) FailRun(ctx context.Context, bookID, msg string) error {
-	moved, err := s.d.Store.FailRun(ctx, bookID, msg)
-	if err != nil {
-		slog.Warn("audiobook: mark run failed", "book", bookID, "err", err)
-		return nil
-	}
-	if moved {
-		s.d.Publish(bookID)
-	}
+	// Every state but failed: a run already failed does not need its
+	// failure recorded a second time, and that idempotence is what keeps
+	// the publish to one when two segments settle a run at once.
+	s.transition(ctx, bookID, model.Transition{
+		To:    model.AudiobookFailed,
+		From:  []model.AudiobookState{model.AudiobookPending, model.AudiobookRunning, model.AudiobookReady, model.AudiobookCanceled},
+		Error: msg,
+	})
 	return nil
 }

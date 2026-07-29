@@ -43,10 +43,10 @@ type audiobookStore interface {
 	// repo collapsed into this one (#190).
 	RecordSegment(ctx context.Context, bookID string, seq int, res model.SegmentResult) (model.AudiobookOutcome, error)
 	GetByBookID(ctx context.Context, bookID string) (model.Audiobook, error)
-	SetState(ctx context.Context, bookID string, state model.AudiobookState, msg string) error
-	// FailRun marks a run failed and reports whether it moved, so the
-	// publish that tells the UI to stop polling fires once.
-	FailRun(ctx context.Context, bookID, msg string) (bool, error)
+	// Transition is the one write to the run's state. It reports whether
+	// the row moved, which is what keeps the publish that tells the UI to
+	// stop polling to exactly one (#210).
+	Transition(ctx context.Context, bookID string, t model.Transition) (bool, error)
 	ListUnfinishedSegments(ctx context.Context, bookID string) ([]model.AudiobookSegment, error)
 	Coverage(ctx context.Context, bookID string) (model.AudiobookCoverage, error)
 	Delete(ctx context.Context, bookID string) error
@@ -315,10 +315,16 @@ func (s *AudiobookService) Start(ctx context.Context, book model.Book, opts Audi
 		return fmt.Errorf("persist audiobook plan: %w", err)
 	}
 
-	if err := s.dispatchAll(ctx, book.ID, segments); err != nil {
-		return err
-	}
-	return s.d.Store.SetState(ctx, book.ID, model.AudiobookRunning, "")
+	// Running before dispatch, not after. A segment that lands while the
+	// rest are still being enqueued can drive the run forward, and a
+	// trailing write would put it back — the window is milliseconds
+	// against a synthesis measured in seconds, but ordering it this way
+	// costs nothing and removes the question (#210).
+	s.transition(ctx, book.ID, model.Transition{
+		To:   model.AudiobookRunning,
+		From: []model.AudiobookState{model.AudiobookPending},
+	})
+	return s.dispatchAll(ctx, book.ID, segments)
 }
 
 // dispatchAll enqueues every segment, failing the run if the queue is
@@ -387,9 +393,10 @@ func (s *AudiobookService) Cancel(ctx context.Context, bookID string) error {
 	if run.State.Terminal() {
 		return fmt.Errorf("audiobook for %s is already %s", bookID, run.State)
 	}
-	if err := s.d.Store.SetState(ctx, bookID, model.AudiobookCanceled, ""); err != nil {
-		return err
-	}
+	s.transition(ctx, bookID, model.Transition{
+		To:   model.AudiobookCanceled,
+		From: model.LiveStates(),
+	})
 	// Swept immediately, unlike a failure. A user who pressed stop does
 	// not want the partial, so holding half a gigabyte for the seven-day
 	// retry window would be the failure semantics exactly inverted
@@ -440,8 +447,10 @@ func (s *AudiobookService) Retry(ctx context.Context, bookID string) error {
 	if len(outstanding) == 0 {
 		return fmt.Errorf("audiobook for %s has no outstanding segments to retry", bookID)
 	}
-	if err := s.dispatchAll(ctx, bookID, outstanding); err != nil {
-		return err
-	}
-	return s.d.Store.SetState(ctx, bookID, model.AudiobookRunning, "")
+	// Before dispatch, for the reason Start gives.
+	s.transition(ctx, bookID, model.Transition{
+		To:   model.AudiobookRunning,
+		From: []model.AudiobookState{model.AudiobookPending, model.AudiobookFailed},
+	})
+	return s.dispatchAll(ctx, bookID, outstanding)
 }

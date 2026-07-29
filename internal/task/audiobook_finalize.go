@@ -28,7 +28,15 @@ type finalizeStore interface {
 	GetByBookID(ctx context.Context, bookID string) (model.Audiobook, error)
 	ListSegments(ctx context.Context, bookID string) ([]model.AudiobookSegment, error)
 	SetSegmentStart(ctx context.Context, bookID string, seq int, startMS int64) error
-	SetReady(ctx context.Context, bookID, fileID string, durationMS int64) error
+}
+
+// narrationReporter is the run service. The worker reports that it has
+// the file; what the run's state becomes, and whether an open page is
+// told, is the service's (#210). It used to mark the run ready through
+// the repo directly, which is how a run cancelled mid-assembly came back
+// as ready.
+type narrationReporter interface {
+	NarrationAssembled(ctx context.Context, bookID, fileID string, durationMS int64) error
 }
 
 // bookAudioWriter reads the book and writes back what only a finished
@@ -48,9 +56,10 @@ type narrationFiles interface {
 
 // FinalizeDeps groups the seams the finalize worker needs.
 type FinalizeDeps struct {
-	Runs  finalizeStore
-	Books bookAudioWriter
-	Files narrationFiles
+	Runs   finalizeStore
+	Report narrationReporter
+	Books  bookAudioWriter
+	Files  narrationFiles
 	// Place moves the assembled file into the book's own folder.
 	// Narrower than a LibraryStore on purpose: handing over the whole
 	// store would let a later edit reach more than placing one file
@@ -64,20 +73,11 @@ type FinalizeDeps struct {
 	Cover func(book model.Book) (io.ReadCloser, error)
 	// Fail marks the run failed and publishes, through the one module
 	// that owns that transition.
-	Fail    func(ctx context.Context, bookID, msg string) error
-	Publish func(bookID string)
+	Fail func(ctx context.Context, bookID, msg string) error
 	// DataPath roots the staging directory. Per-segment MP3s live on
 	// local disk until finalize, outside storage.Storage, following the
 	// coverstore precedent for derived bytes.
 	DataPath string
-}
-
-// publish emits the run's terminal event. See SegmentDeps.publish
-// (audiobook.go) for why a nil publisher is not an error.
-func (d FinalizeDeps) publish(bookID string) {
-	if d.Publish != nil {
-		d.Publish(bookID)
-	}
 }
 
 // AudiobookFinalize joins a finished run's staged segments into the one
@@ -164,11 +164,14 @@ func AudiobookFinalize(ctx context.Context, a jobs.AudiobookFinalizeArgs, deps F
 		slog.Warn("audiobook: update book audio fields", "book", a.BookID, "err", err)
 	}
 
-	if err := deps.Runs.SetReady(ctx, a.BookID, fileRow.ID, totalMS); err != nil {
+	// The service publishes if the run actually moved, so there is no
+	// publish here: a run the user cancelled while this was assembling
+	// does not move, and telling open pages otherwise would contradict
+	// the cancel they just watched land.
+	if err := deps.Report.NarrationAssembled(ctx, a.BookID, fileRow.ID, totalMS); err != nil {
 		return fmt.Errorf("mark ready: %w", err)
 	}
 	cleanStaging(deps.DataPath, a.BookID)
-	deps.publish(a.BookID)
 	return nil
 }
 

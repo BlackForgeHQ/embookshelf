@@ -45,7 +45,9 @@ func stagedRun(t *testing.T, d *db.DB, dataPath string, segments int) (string, *
 	}, plan); err != nil {
 		t.Fatalf("start run: %v", err)
 	}
-	if err := audiobooks.SetState(ctx, b.ID, model.AudiobookRunning, ""); err != nil {
+	if _, err := audiobooks.Transition(ctx, b.ID, model.Transition{
+		To: model.AudiobookRunning, From: []model.AudiobookState{model.AudiobookPending, model.AudiobookRunning},
+	}); err != nil {
 		t.Fatalf("set running: %v", err)
 	}
 

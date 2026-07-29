@@ -66,7 +66,9 @@ func (f *fakeFinalizeRuns) SetState(_ context.Context, _ string, state model.Aud
 	return nil
 }
 
-func (f *fakeFinalizeRuns) SetReady(_ context.Context, _, fileID string, totalMS int64) error {
+// NarrationAssembled stands in for AudiobookService: the worker reports
+// that it has the file and the service decides the state (#210).
+func (f *fakeFinalizeRuns) NarrationAssembled(_ context.Context, _, fileID string, totalMS int64) error {
 	f.ready = &readyWrite{FileID: fileID, TotalMS: totalMS}
 	return nil
 }
@@ -172,7 +174,7 @@ func newFinalizeHarness(t *testing.T) *finalizeHarness {
 			h.published++
 			return nil
 		},
-		Publish:  func(string) { h.published++ },
+		Report:   h.runs,
 		DataPath: h.dataPath,
 	}
 	return h
@@ -287,7 +289,11 @@ func TestFinalizeRetainsStagingWhenPlacementFails(t *testing.T) {
 // Completion
 // ---------------------------------------------------------------------------
 
-func TestFinalizePublishesTheNarrationAndSweeps(t *testing.T) {
+// The worker reports the assembled file and sweeps. It does not publish
+// and does not decide the state: the run service does both, from the one
+// guarded write, so a run cancelled mid-assembly is neither marked ready
+// nor announced (#210).
+func TestFinalizeReportsTheNarrationAndSweeps(t *testing.T) {
 	h := newFinalizeHarness(t)
 
 	if err := h.run(); err != nil {
@@ -330,8 +336,10 @@ func TestFinalizePublishesTheNarrationAndSweeps(t *testing.T) {
 	if h.stagingExists() {
 		t.Error("staging survived a successful finalize")
 	}
-	if h.published != 1 {
-		t.Errorf("published %d times, want exactly 1", h.published)
+	// Not the worker's: the service publishes from the write that moved
+	// the run, so a cancelled run gets neither the state nor the event.
+	if h.published != 0 {
+		t.Errorf("published %d times from the worker, want none — the transition emits it (#210)", h.published)
 	}
 	if got, want := h.runs.starts[0], int64(0); got != want {
 		t.Errorf("segment 0 starts at %dms, want %d", got, want)

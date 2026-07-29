@@ -143,6 +143,7 @@ func registry(deps Deps) []registration {
 
 	finalize := task.FinalizeDeps{
 		Runs:     deps.Audiobooks,
+		Report:   deps.AudiobookSvc,
 		Fail:     deps.AudiobookSvc.FailRun,
 		Books:    deps.Books,
 		Files:    deps.FileRepo,
@@ -161,9 +162,6 @@ func registry(deps Deps) []registration {
 	}
 	if deps.Covers != nil {
 		finalize.Cover = deps.Covers.Open
-	}
-	if deps.Hub != nil {
-		finalize.Publish = publishAudiobook
 	}
 
 	return []registration{
