@@ -17,7 +17,10 @@ import type {
 import type { PdfProgress, PdfReaderHandle } from "@/components/PdfReader"
 import type { Locator } from "@/lib/locator"
 import { useApiMutation } from "@/api/mutation"
-import { useReadingPosition } from "@/hooks/useReadingPosition"
+import {
+  CONTINUOUS_DEBOUNCE_MS,
+  useReadingPosition,
+} from "@/hooks/useReadingPosition"
 import { isNarratableFormat, readerKindForFormat } from "@/lib/formats"
 import { renditionsFor } from "@/lib/rendition"
 import type { Rendition } from "@/lib/rendition"
@@ -39,7 +42,7 @@ import {
   deleteAnnotation,
 } from "@/api/annotations"
 import { bookAudiobookQuery, narrationUrl } from "@/api/audiobooks"
-import { bookQuery, updateProgress } from "@/api/books"
+import { bookQuery } from "@/api/books"
 import { useApiQuery } from "@/api/query"
 import { AudioReader } from "@/components/AudioReader"
 import { ComicReader } from "@/components/ComicReader"
@@ -51,19 +54,6 @@ import { Button } from "@/components/ui/button"
 export const Route = createFileRoute("/read/$id")({
   component: Reader,
 })
-
-/**
- * How long a reading position is held before it is written. Page turns
- * land every few seconds, so a short window keeps the server roughly in
- * step without a request per turn.
- */
-const PROGRESS_DEBOUNCE_MS = 600
-/**
- * Audio timeupdate fires several times a second, so it gets a much longer
- * window. The cost of the longer wait is paid back by flushing on pause and
- * on exit, which is when a listening session actually ends.
- */
-const AUDIO_PROGRESS_DEBOUNCE_MS = 5000
 
 type TocItem = { label: string; href: string }
 
@@ -223,7 +213,6 @@ function RenditionSwitch({
 // What is EPUB-only and therefore lives here: the table of contents, the
 // selection toolbar, the highlight overlay, and a position named by CFI.
 function TextReaderShell({ book }: { book: BookDetail }) {
-  const navigate = useNavigate()
   // A resume token of another kind means "start from the beginning"
   // rather than a coerced position.
   //
@@ -255,9 +244,8 @@ function TextReaderShell({ book }: { book: BookDetail }) {
 
   const epubRef = useRef<EpubReaderHandle>(null)
 
-  const { queue: queueProgress, flush: flushProgress } = useReadingPosition({
-    save: (progress, token) => void updateProgress(book.id, progress, token),
-    debounceMs: PROGRESS_DEBOUNCE_MS,
+  const { report: reportPosition, exit } = useReadingPosition({
+    bookId: book.id,
   })
 
   // Annotations for this book — drives the notes panel AND the highlight
@@ -302,24 +290,13 @@ function TextReaderShell({ book }: { book: BookDetail }) {
   const onEpubProgress = (p: EpubProgress) => {
     setPercent(p.percent)
     setCfiState(p.cfi)
-    // The raw CFI, not `encodeLocator`: what epub.js emits already
-    // carries the prefix `lib/locator` reads a CFI back by, so the token
-    // is stored verbatim. The PDF shell's page number does not, which is
-    // why that one is encoded and this one is not.
-    queueProgress(p.percent, p.cfi)
+    reportPosition(p.percent, { kind: "cfi", cfi: p.cfi })
   }
 
   const closePanels = () => {
     setTocOpen(false)
     setNotesOpen(false)
     setTypePanelOpen(false)
-  }
-
-  const exit = () => {
-    // Write the position before unmounting rather than relying on the
-    // unmount backstop, which fires mid-teardown.
-    flushProgress()
-    void navigate({ to: "/book/$id", params: { id: book.id } })
   }
 
   // Derived labels. An EPUB has no page count, so how far through it the
@@ -613,7 +590,6 @@ function TextReaderShell({ book }: { book: BookDetail }) {
 // a percentage, and a notes panel whose new note attaches to the page on
 // screen because there is no text selection to attach it to.
 function PdfReaderShell({ book }: { book: BookDetail }) {
-  const navigate = useNavigate()
   // A resume token of another kind means "start from the beginning"
   // rather than a coerced position. Yields a primitive for the same
   // reason the text shell does: `initialPage` is a renderer prop, and a
@@ -635,9 +611,8 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
 
   const pdfRef = useRef<PdfReaderHandle>(null)
 
-  const { queue: queueProgress, flush: flushProgress } = useReadingPosition({
-    save: (progress, token) => void updateProgress(book.id, progress, token),
-    debounceMs: PROGRESS_DEBOUNCE_MS,
+  const { report: reportPosition, exit } = useReadingPosition({
+    bookId: book.id,
   })
 
   // This shell's own annotations query, for the notes panel. Not one
@@ -667,22 +642,12 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
   const onPdfProgress = (p: PdfProgress) => {
     setPercent(p.percent)
     setPageState({ current: p.page, total: p.totalPages })
-    // Encoded, unlike the text shell's raw CFI: a bare page number
-    // carries no prefix to read it back by, so `lib/locator` is what
-    // makes the stored token self-describing.
-    queueProgress(p.percent, encodeLocator({ kind: "page", page: p.page }))
+    reportPosition(p.percent, { kind: "page", page: p.page })
   }
 
   const closePanels = () => {
     setNotesOpen(false)
     setTypePanelOpen(false)
-  }
-
-  const exit = () => {
-    // Write the position before unmounting rather than relying on the
-    // unmount backstop, which fires mid-teardown.
-    flushProgress()
-    void navigate({ to: "/book/$id", params: { id: book.id } })
   }
 
   // Derived labels. Both are empty-ish until the document reports its
@@ -870,11 +835,9 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
 // a parallel implementation to ReaderShell rather than an extension: comics
 // have no TOC, no text selection / annotations flow, and use a 0-indexed
 // page model — folding all that into the existing shell would have made it
-// significantly harder to read. The two shells share the progress
-// debounce/persist pattern (queueProgress) but otherwise stand alone.
+// significantly harder to read. The two shells report their position
+// through the same module but otherwise stand alone.
 function ComicReaderShell({ book }: { book: BookDetail }) {
-  const navigate = useNavigate()
-
   // ComicReader counts pages from 0; a page token carries the human page
   // number. The shell converts at its own boundary — the alternative,
   // storing this reader's indexing in the token, is what made `page:7`
@@ -890,9 +853,8 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
   const [total, setTotal] = useState<number>(0)
   const comicRef = useRef<ComicReaderHandle>(null)
 
-  const { queue: queueProgress, flush: flushProgress } = useReadingPosition({
-    save: (progress, token) => void updateProgress(book.id, progress, token),
-    debounceMs: PROGRESS_DEBOUNCE_MS,
+  const { report: reportPosition, exit } = useReadingPosition({
+    bookId: book.id,
   })
 
   const bookmarkMut = useApiMutation(createBookmark, {
@@ -903,15 +865,11 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
   const onComicProgress = (p: ComicProgress) => {
     setPage(p.page)
     setTotal(p.totalPages)
-    queueProgress(p.percent, encodeLocator({ kind: "page", page: p.page + 1 }))
+    // +1 because this reader's page model is 0-indexed and a stored
+    // locator carries the human page number (`lib/locator`).
+    reportPosition(p.percent, { kind: "page", page: p.page + 1 })
   }
 
-  const exit = () => {
-    // Write the position before unmounting rather than relying on the
-    // unmount backstop, which fires mid-teardown.
-    flushProgress()
-    void navigate({ to: "/book/$id", params: { id: book.id } })
-  }
   const percent = total <= 1 ? 1 : page / Math.max(1, total - 1)
 
   return (
@@ -1048,8 +1006,6 @@ function AudioReaderShell({
   // itself an audiobook.
   audioUrl?: string
 }) {
-  const navigate = useNavigate()
-
   const initialSeconds = useMemo(() => {
     // resumeAudio, not resumeCfi: this book's two Renditions keep two
     // positions, because a CFI and a timestamp are different currencies
@@ -1068,9 +1024,13 @@ function AudioReaderShell({
   const [chaptersOpen, setChaptersOpen] = useState(false)
   const audioRef = useRef<AudioReaderHandle>(null)
 
-  const { queue: queueProgress, flush: flushProgress } = useReadingPosition({
-    save: (progress, token) => void updateProgress(book.id, progress, token),
-    debounceMs: AUDIO_PROGRESS_DEBOUNCE_MS,
+  const {
+    report: reportPosition,
+    settle: settlePosition,
+    exit,
+  } = useReadingPosition({
+    bookId: book.id,
+    debounceMs: CONTINUOUS_DEBOUNCE_MS,
   })
 
   const bookmarkMut = useApiMutation(createBookmark, {
@@ -1081,18 +1041,10 @@ function AudioReaderShell({
   const onAudioProgress = (p: AudioProgress) => {
     setSeconds(p.seconds)
     setDuration(p.duration)
-    queueProgress(
-      p.percent,
-      encodeLocator({ kind: "time", seconds: p.seconds })
-    )
+    reportPosition(p.percent, { kind: "time", seconds: p.seconds })
   }
 
-  const exit = () => {
-    flushProgress()
-    void navigate({ to: "/book/$id", params: { id: book.id } })
-  }
-
-  // No optimistic state update and no flush here: toggling the element makes
+  // No optimistic state update and no settle here: toggling the element makes
   // it fire play/pause, and onPlayingChange owns both. Keeping one path means
   // an in-page press and a headphone press behave identically.
   const togglePlay = () => audioRef.current?.toggle()
@@ -1376,7 +1328,7 @@ function AudioReaderShell({
         onPlayingChange={(v) => {
           setPlaying(v)
           // Pausing from anywhere is the end of a listening session.
-          if (!v) flushProgress()
+          if (!v) settlePosition()
         }}
       />
     </ReaderContainer>

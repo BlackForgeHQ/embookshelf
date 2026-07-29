@@ -38,7 +38,9 @@ Shared, extractable today, no lifecycle: the fullscreen container, the header wr
 
 Not shared, and the attempt to share them is what produced the 651-line component: renderer props (no two renderers agree beyond `onReady`/`onProgress`/`onError`), imperative handles (`goTo(href: string)` for EPUB against `goTo(page: number)` for PDF and comic, and audio's `play`/`seekTo`/`skip` overlapping neither), and restore timing (three incompatible answers to when it is safe to seek — after an async boot, after a `requestAnimationFrame` following a layout pass, and inside `onLoadedMetadata`).
 
-The position contract is already extracted and already correct: `useReadingPosition` owns queue/flush/unmount, and `lib/locator.ts` owns the encoding both ends must agree on. Neither needs a shell to hold it. This is the part of the original framing that survives — it survives by having been done already.
+The position contract is already extracted, and `lib/locator.ts` owns the encoding both ends must agree on. Neither needs a shell to hold it. This is the part of the original framing that survives — it survives by having been done already.
+
+*Amended (#205).* "Already correct" was too generous, and the third bullet under Consequences is the evidence: the module owned the timer and the unmount, and *documented* the rest as a contract for its callers — leave the reader, background the tab. Four shells implemented the first by copy-paste, none implemented the second, and a shell cannot see either exit better than the module can. `useReadingPosition` now takes the book and owns all of it: `report` a **Locator**, `settle` when the reader stops moving, `exit` to leave. A shell holds no timer, no token encoding, no API call and no lifecycle listener, which is what makes the module testable without mounting one.
 
 ### 3. The EPUB/PDF shell is split, not deepened
 
