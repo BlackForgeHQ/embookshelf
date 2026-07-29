@@ -16,18 +16,57 @@ const PROJECT_ROOT = resolve(__dirname, '../..')
 const FIXTURE = resolve(__dirname, '../fixtures/sql/pending-user.sql')
 const SQL_DELETE_PENDING = `DELETE FROM users WHERE email LIKE '%@e2e.local';`
 
-// psql shells out into the dev compose stack — same path `make seed` uses.
-// Service name is `postgres` (see compose.dev.yml). Working directory must
-// be the project root so docker compose resolves the file.
-function psql(sql: string) {
-  execSync(
-    'docker compose -f compose.dev.yml exec -T postgres psql -U embookshelf -d embookshelf -v ON_ERROR_STOP=1',
-    {
+// Two ways to reach Postgres, because the two environments differ.
+//
+// Locally it is the compose service and the host usually has no psql
+// client, so the only route in is `docker compose exec` — the same path
+// `make seed` uses, with the project root as cwd so the compose file
+// resolves. In CI it is a service container with the port published and
+// a psql client installed, and there is no compose stack at all.
+//
+// Trying compose first and calling it a day is what made these specs
+// skip silently in CI: the probe failed, `postgresReachable` went false,
+// and two specs reported success by not running.
+const DIRECT_PSQL_URL =
+  process.env.TEST_DATABASE_URL ??
+  process.env.DATABASE_URL ??
+  'postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable'
+
+type PsqlRunner = (sql: string) => void
+
+function composeRunner(): PsqlRunner {
+  return (sql) =>
+    execSync(
+      'docker compose -f compose.dev.yml exec -T postgres psql -U embookshelf -d embookshelf -v ON_ERROR_STOP=1',
+      { input: sql, stdio: ['pipe', 'pipe', 'inherit'], cwd: PROJECT_ROOT }
+    )
+}
+
+function directRunner(): PsqlRunner {
+  return (sql) =>
+    execSync(`psql "${DIRECT_PSQL_URL}" -v ON_ERROR_STOP=1`, {
       input: sql,
       stdio: ['pipe', 'pipe', 'inherit'],
-      cwd: PROJECT_ROOT,
+    })
+}
+
+// Picks whichever route actually answers, once.
+const runner: PsqlRunner | null = (() => {
+  for (const build of [directRunner, composeRunner]) {
+    const candidate = build()
+    try {
+      candidate('SELECT 1;')
+      return candidate
+    } catch {
+      // Try the other one.
     }
-  )
+  }
+  return null
+})()
+
+function psql(sql: string) {
+  if (!runner) throw new Error('no psql route to the test database')
+  runner(sql)
 }
 
 function loadFixture(path: string) {
@@ -38,17 +77,7 @@ function loadFixture(path: string) {
 // — they're meaningless on the SQLite e2e lane where no postgres
 // container is running. Skip the whole describe block if the container
 // isn't reachable instead of erroring out per-test in beforeEach.
-const postgresReachable = (() => {
-  try {
-    execSync(
-      'docker compose -f compose.dev.yml exec -T postgres pg_isready -U embookshelf -d embookshelf',
-      { cwd: PROJECT_ROOT, stdio: 'ignore' }
-    )
-    return true
-  } catch {
-    return false
-  }
-})()
+const postgresReachable = runner !== null
 
 test.beforeEach(() => {
   test.skip(!postgresReachable, 'dev Postgres container not running')

@@ -2,22 +2,22 @@ name: e2e
 
 on:
   workflow_dispatch:
-  # pull_request:
-  #   paths:
-  #     - "ui/**"
-  #     - "internal/handler/**"
-  #     - "internal/service/**"
-  #     - "internal/auth/**"
-  #     - "internal/migrator/migrations/**"
-  #     - "e2e/**"
-  #     - "Dockerfile"
-  #     - "Makefile"
-  #     - "go.mod"
-  #     - "go.sum"
-  #     - ".github/workflows/e2e.yml"
-  #     - "scripts/seed.sql"
-  # push:
-  #   branches: [main]
+  pull_request:
+    paths:
+      - "ui/**"
+      - "internal/handler/**"
+      - "internal/service/**"
+      - "internal/auth/**"
+      - "internal/migrator/migrations/**"
+      - "e2e/**"
+      - "Dockerfile"
+      - "Makefile"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/e2e.yml"
+      - "scripts/seed.sql"
+  push:
+    branches: [main]
 
 permissions:
   contents: read
