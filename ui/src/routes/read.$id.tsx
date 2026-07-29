@@ -19,6 +19,8 @@ import type { Locator } from "@/lib/locator"
 import { useApiMutation } from "@/api/mutation"
 import { useReadingPosition } from "@/hooks/useReadingPosition"
 import { isNarratableFormat, readerKindForFormat } from "@/lib/formats"
+import { renditionsFor } from "@/lib/rendition"
+import type { Rendition } from "@/lib/rendition"
 import { ProgressBar } from "@/components/ProgressBar"
 import {
   BookmarkButton,
@@ -67,8 +69,6 @@ type TocItem = { label: string; href: string }
 
 function Reader() {
   const { id } = Route.useParams()
-  const navigate = useNavigate()
-
   const book = useApiQuery(bookQuery(id))
 
   if (book.isLoading) {
@@ -77,21 +77,37 @@ function Reader() {
   if (book.isError || !book.data) {
     return <FullScreenMessage>Book not found.</FullScreenMessage>
   }
-  const b = book.data
-  // Which surface opens the book comes from the shared format table, so
-  // the route cannot send a book somewhere the server will not serve
-  // bytes for. The Rendition choice below is a separate decision (#194).
-  const reader = readerKindForFormat(b.format)
-  if (reader === "comic") {
-    return <ComicReaderShell book={b} />
-  }
-  if (reader === "audio") {
-    return <AudioReaderShell book={b} />
-  }
-  if (reader === null) {
+  return <RenditionReader book={book.data} />
+}
+
+/**
+ * Dispatches on the Rendition the reader selected — the whole reader's
+ * one decision about *what* to open (#179).
+ *
+ * ADR-0025 §3 moved the dispatch key off `books.format`, and this is
+ * where that lands: the module answers which Renditions this book has
+ * and which one was asked for, and the request falls back on its own
+ * when a narration is not ready. Before, that was three decisions in
+ * three components — a format check here, a narration check below it,
+ * and a `listening && ready` guard inside the shell that owned neither.
+ */
+function RenditionReader({ book }: { book: BookDetail }) {
+  const { id } = Route.useParams()
+  const navigate = useNavigate()
+
+  // Gated: a book nothing could have narrated has no run to fetch, and
+  // opening a comic should not cost a request that 404s.
+  const narration = useApiQuery(bookAudiobookQuery(book.id), {
+    enabled: isNarratableFormat(book.format),
+  })
+  const [prefer, setPrefer] = useState<Rendition>("primary")
+
+  const rendition = renditionsFor(book.format, narration.data, prefer)
+
+  if (rendition.selected === null) {
     return (
       <FullScreenMessage>
-        Reader not implemented for <code>{b.format}</code> yet.
+        Reader not implemented for <code>{book.format}</code> yet.
         <div style={{ marginTop: 16 }}>
           <Button
             variant="outline"
@@ -104,60 +120,47 @@ function Reader() {
     )
   }
 
-  // Narratable rather than EPUB: what makes a book worth checking for an
-  // audio rendition is that something could have narrated it, which is
-  // the same question the panel and the handler ask (#192).
-  if (isNarratableFormat(b.format)) {
-    return <NarratableShell book={b} />
-  }
-  return <PagedReaderShell book={b} />
-}
-
-// Which of the two paged shells opens the book.
-//
-// `readerKindForFormat` above already answered "a text surface", which
-// covers EPUB and PDF both; this is the rest of that question. It is the
-// only branch on `book.format` left in the file — the shells themselves
-// no longer have one (ADR-0029 §3) — and it stays a one-liner here
-// rather than growing a home of its own, because slice 4 folds both
-// halves of the question into the Rendition module (#179).
-function PagedReaderShell({ book }: { book: BookDetail }) {
-  return book.format === "EPUB" ? (
-    <TextReaderShell book={book} />
-  ) : (
-    <PdfReaderShell book={book} />
-  )
-}
-
-// NarratableShell picks which rendition of an EPUB to open.
-//
-// books.format names the *primary* format, so an EPUB with a narration
-// would otherwise always open the text reader and the audio would be
-// unreachable from here — the concrete cost of ADR-0025 §3 moving the
-// dispatch key off that column.
-//
-// The switch lives here rather than inside either shell: both are large,
-// self-contained, and have no business knowing the other exists.
-function NarratableShell({ book }: { book: BookDetail }) {
-  const narration = useApiQuery(bookAudiobookQuery(book.id))
-  const [listening, setListening] = useState(false)
-
-  const ready = narration.data?.state === "ready"
-  // Falling back to text when the narration is not ready matters on a
-  // reload mid-run: the toggle vanishes rather than opening a player with
-  // nothing behind it.
-  const listen = listening && ready
-
   return (
     <>
-      {ready && <RenditionSwitch listening={listen} onChange={setListening} />}
-      {listen ? (
+      {rendition.canSwitch && (
+        <RenditionSwitch
+          listening={rendition.selected === "narration"}
+          onChange={(listening) => setPrefer(listening ? "narration" : "primary")}
+        />
+      )}
+      {rendition.selected === "narration" ? (
         <AudioReaderShell book={book} audioUrl={narrationUrl(book.id)} />
       ) : (
-        <PagedReaderShell book={book} />
+        <PrimaryShell book={book} />
       )}
     </>
   )
+}
+
+/**
+ * Which renderer opens the book's own file.
+ *
+ * A different axis from the Rendition above, and deliberately still its
+ * own dispatch: "text or narration" is what the reader chose, "EPUB or
+ * PDF or comic" is what the file is. Collapsing them would put the drift
+ * ADR-0025 §3 predicted back into the one place that had just been
+ * cleared of it.
+ */
+function PrimaryShell({ book }: { book: BookDetail }) {
+  switch (readerKindForFormat(book.format)) {
+    case "comic":
+      return <ComicReaderShell book={book} />
+    case "audio":
+      return <AudioReaderShell book={book} />
+    default:
+      // Both paged surfaces; the shells themselves have no format
+      // branch (ADR-0029 §3).
+      return book.format === "EPUB" ? (
+        <TextReaderShell book={book} />
+      ) : (
+        <PdfReaderShell book={book} />
+      )
+  }
 }
 
 // RenditionSwitch floats above whichever shell is mounted, because
