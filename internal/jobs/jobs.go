@@ -10,7 +10,25 @@
 // tiers can depend on turns those into one ordinary argument.
 package jobs
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrDoNotRetry marks a failure that no amount of retrying improves, so
+// the queue tier stops the job instead of working through its attempts.
+//
+// Declared here because a worker cannot say this any other way: the task
+// packages deliberately do not import River, so a sentinel in the leaf
+// both tiers already speak is what lets internal/queue turn the claim
+// into a JobCancel. Before it existed, ErrAudiobooksDisabled and
+// ErrReadingGuidesDisabled each carried a comment asserting River treated
+// them as permanent — "a disabled feature will still be disabled in
+// thirty seconds" — and nothing implemented it (#185).
+//
+// Wrap it only for a genuinely closed outcome. An error that a retry
+// could plausibly clear is River's to keep.
+var ErrDoNotRetry = errors.New("job will not succeed on retry")
 
 // Args is one job's payload: a JSON-serializable struct that names its
 // own kind.

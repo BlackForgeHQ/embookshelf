@@ -5,6 +5,7 @@ package task_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -411,16 +412,14 @@ func TestSegmentRecordsAPermanentEngineFailureAndStopsRetrying(t *testing.T) {
 }
 
 // A transient error is River's to retry, so the worker has to return it.
-// This is also where the chunk-count asymmetry Task 5 used to pin at this
-// layer now lives in spirit: unusable audio tagged permanent at one chunk
-// but wrapped untagged, and so retried forever, at several, moved into
-// internal/tts with the chunking loop itself (Task 4) and is pinned there
-// by TestChunkedJoinWrapsMultiChunkFailureUntagged in
-// internal/tts/chunking_test.go (see #185). What survives at this layer
-// is this: whatever untagged error the engine reports, for whatever
-// reason, the worker returns it for River to retry, records exactly one
-// failed segment, and never publishes — it never promotes a bare error
-// to permanent on its own say-so.
+// Whatever untagged error the engine reports, for whatever reason, the
+// worker returns it for River, records exactly one failed segment, and
+// never publishes — it never promotes a bare error to permanent on its
+// own say-so. The converse, unusable audio, is tagged permanent by
+// whichever layer decodes it: internal/tts for a multi-chunk segment
+// (TestChunkedJoinTagsMultiChunkUnusableAudioPermanent) and the worker's
+// own audio.Payload call for one chunk. Both land in
+// TestSegmentRecordsUnusableAudioAsAPermanentFailure below.
 func TestSegmentReturnsATransientEngineFailureForRiver(t *testing.T) {
 	h := newSegmentHarness(t)
 	h.engine.err = errors.New("connection reset")
@@ -458,6 +457,26 @@ func TestSegmentRecordsUnusableAudioAsAPermanentFailure(t *testing.T) {
 	}
 	if h.published != 1 {
 		t.Errorf("published %d times, want exactly one", h.published)
+	}
+}
+
+// The same verdict when the adapter split the segment and reported the
+// bad bytes itself. The worker cannot see the chunk count and must not
+// behave as though it could: this used to be the retried path, and the
+// only one a real narration ever took (#185).
+func TestSegmentRecordsUnusableAudioAsPermanentWhateverTheChunkCount(t *testing.T) {
+	h := newSegmentHarness(t)
+	h.engine.chunks = 3
+	h.engine.err = fmt.Errorf("%w: chunk 0: audio: no MPEG frames found", tts.ErrPermanent)
+
+	if err := h.run(t, 0); err != nil {
+		t.Fatalf("AudiobookSegment returned %v, want nil so River stops retrying unusable audio", err)
+	}
+	if len(h.runs.recorded) != 1 || h.runs.recorded[0].State != model.SegmentFailed {
+		t.Fatalf("recorded %+v, want one failed segment", h.runs.recorded)
+	}
+	if h.published != 1 {
+		t.Errorf("published %d times, want exactly one so the UI stops polling", h.published)
 	}
 }
 

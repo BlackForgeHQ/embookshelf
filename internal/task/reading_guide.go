@@ -4,7 +4,6 @@ package task
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 
@@ -54,9 +53,11 @@ func (f bookOpenerFunc) Open(ctx context.Context, book model.Book) (storage.Sour
 }
 
 // ErrReadingGuidesDisabled is returned when the feature is off. River
-// treats it as a permanent failure rather than retrying: a disabled
-// feature will still be disabled in thirty seconds.
-var ErrReadingGuidesDisabled = errors.New("reading guides are not enabled")
+// treats it as a permanent failure rather than retrying — a disabled
+// feature will still be disabled in thirty seconds — because it wraps
+// jobs.ErrDoNotRetry, which internal/queue turns into a JobCancel. The
+// claim predated the mechanism by some months (#185).
+var ErrReadingGuidesDisabled = fmt.Errorf("reading guides are not enabled: %w", jobs.ErrDoNotRetry)
 
 // ReadingGuide generates and stores one book's guide.
 func ReadingGuide(ctx context.Context, a jobs.ReadingGuideArgs, deps ReadingGuideDeps) error {

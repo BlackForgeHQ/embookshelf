@@ -21,8 +21,10 @@ import (
 )
 
 // ErrAudiobooksDisabled is returned when the feature is off. Permanent —
-// a disabled feature will still be disabled in thirty seconds.
-var ErrAudiobooksDisabled = errors.New("audiobook generation is not enabled")
+// a disabled feature will still be disabled in thirty seconds — and it
+// wraps jobs.ErrDoNotRetry, which is what actually stops River rather
+// than a comment asserting it does (#185).
+var ErrAudiobooksDisabled = fmt.Errorf("audiobook generation is not enabled: %w", jobs.ErrDoNotRetry)
 
 // errCanceled unwinds a segment whose run was cancelled mid-flight. Never
 // recorded as a failure: the run is already in its final state and

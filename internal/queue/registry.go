@@ -4,6 +4,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/riverqueue/river"
@@ -37,7 +38,14 @@ type riverWorker[T jobs.Args] struct {
 }
 
 func (w *riverWorker[T]) Work(ctx context.Context, job *river.Job[T]) error {
-	return w.work(ctx, job.Args)
+	err := w.work(ctx, job.Args)
+	// A work function saying its failure is closed is the only place the
+	// task tier can express that — it does not import River. Honouring it
+	// here is what makes the claim true rather than a comment (#185).
+	if err != nil && errors.Is(err, jobs.ErrDoNotRetry) {
+		return river.JobCancel(err)
+	}
+	return err
 }
 
 // register builds a registration from a job's args type and the

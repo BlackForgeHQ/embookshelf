@@ -4,7 +4,12 @@ package queue
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/riverqueue/river"
 
 	"github.com/blackforge/embookshelf/internal/jobs"
 )
@@ -95,5 +100,52 @@ func TestRegistryRecordsEachJobsQueue(t *testing.T) {
 		if got := want[reg.kind]; got != reg.queue {
 			t.Errorf("kind %q runs on queue %q, want %q", reg.kind, reg.queue, got)
 		}
+	}
+}
+
+// A worker that says its failure is permanent must actually stop River
+// retrying it. ErrAudiobooksDisabled and ErrReadingGuidesDisabled both
+// carried a comment claiming River treated them as permanent — "a
+// disabled feature will still be disabled in thirty seconds" — while
+// nothing in the tree mapped either to a cancel, so they were retried
+// twenty-five times like any other error. The claim is now the
+// mechanism: jobs.ErrDoNotRetry becomes a River JobCancelError (#185).
+func TestRiverWorkerCancelsAJobThatWillNeverSucceed(t *testing.T) {
+	t.Parallel()
+
+	w := &riverWorker[jobs.AudiobookSegmentArgs]{
+		work: func(context.Context, jobs.AudiobookSegmentArgs) error {
+			return fmt.Errorf("audiobook generation is not enabled: %w", jobs.ErrDoNotRetry)
+		},
+	}
+
+	err := w.Work(context.Background(), &river.Job[jobs.AudiobookSegmentArgs]{})
+
+	var cancel *river.JobCancelError
+	if !errors.As(err, &cancel) {
+		t.Fatalf("err = %#v, want a river.JobCancelError so the job is not retried", err)
+	}
+	if !strings.Contains(err.Error(), "not enabled") {
+		t.Errorf("err = %q, want it to keep the reason the work function gave", err.Error())
+	}
+}
+
+// The ordinary case stays ordinary: a transient failure is River's to
+// retry, and wrapping every error as a cancel would silently disable
+// retries for the whole queue.
+func TestRiverWorkerLeavesAnOrdinaryFailureRetryable(t *testing.T) {
+	t.Parallel()
+
+	w := &riverWorker[jobs.AudiobookSegmentArgs]{
+		work: func(context.Context, jobs.AudiobookSegmentArgs) error {
+			return errors.New("connection reset")
+		},
+	}
+
+	err := w.Work(context.Background(), &river.Job[jobs.AudiobookSegmentArgs]{})
+
+	var cancel *river.JobCancelError
+	if errors.As(err, &cancel) {
+		t.Fatalf("err = %v was turned into a cancel — River would never retry a transient failure", err)
 	}
 }

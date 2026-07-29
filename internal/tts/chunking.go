@@ -60,10 +60,14 @@ func (c chunked) Synthesize(ctx context.Context, r Request) ([]byte, error) {
 // join concatenates the chunks' MPEG frames.
 //
 // A single chunk is returned untouched, tag and all — the caller strips
-// it once when measuring. Only a multi-chunk result has to be decoded,
-// and that asymmetry is why unusable audio is a permanent failure at one
-// chunk and a retryable error at several (#185). Preserved deliberately:
-// fixing it here would be a behaviour change inside a refactor.
+// it once when measuring. Only a multi-chunk result has to be decoded
+// here, and a chunk that will not decode is tagged permanent so the
+// answer does not depend on how many pieces this adapter happened to
+// split the segment into: the caller cannot see that count, and audio the
+// frame parser cannot read is not something a retry improves. Untagged,
+// it meant real narration — every catalog engine caps a request far below
+// one segment — retried unusable bytes forever while the single-chunk
+// path, which only tests take, failed at once (#185).
 func join(parts [][]byte) ([]byte, error) {
 	if len(parts) == 1 {
 		return parts[0], nil
@@ -72,7 +76,7 @@ func join(parts [][]byte) ([]byte, error) {
 	for i, p := range parts {
 		frames, _, err := audio.Payload(p)
 		if err != nil {
-			return nil, fmt.Errorf("chunk %d: %w", i, err)
+			return nil, fmt.Errorf("%w: chunk %d: %v", ErrPermanent, i, err)
 		}
 		buf = append(buf, frames...)
 	}

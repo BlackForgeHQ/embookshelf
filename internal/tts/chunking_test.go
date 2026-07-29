@@ -246,14 +246,18 @@ func TestChunkedSynthesizeStopsOnACanceledContextBeforeTheFirstCall(t *testing.T
 	}
 }
 
-// Pins #185 rather than endorsing it: unusable engine audio is a permanent
-// failure at one chunk (the caller's own audio.Payload check, outside this
-// package) but only this untagged "chunk %d: %w" here once a segment spans
-// more than one chunk — so the caller sees a plain error, not one matching
-// tts.ErrPermanent, and retries forever. Fixing that asymmetry here would
-// be a behaviour change smuggled into a refactor; it stays exactly as it
-// was in internal/task before this move.
-func TestChunkedJoinWrapsMultiChunkFailureUntagged(t *testing.T) {
+// Audio the frame parser cannot read is not something a retry improves,
+// and how many engine calls the adapter happened to split a segment into
+// is not something the caller can see. So the classification cannot
+// depend on it: unusable is unusable at one chunk and at twelve (#185).
+//
+// The chunk count used to decide it. A single chunk was returned
+// undecoded and failed the caller's own audio.Payload check as permanent;
+// several chunks were decoded here and wrapped untagged, so the caller
+// retried them forever. Every engine in the catalog caps a request far
+// below one segment, which made the retried path the only one real
+// narration ever took.
+func TestChunkedJoinTagsMultiChunkUnusableAudioPermanent(t *testing.T) {
 	t.Parallel()
 
 	text := strings.Repeat("Alpha beta gamma delta. ", 30)
@@ -266,11 +270,11 @@ func TestChunkedJoinWrapsMultiChunkFailureUntagged(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error joining unusable multi-chunk audio, got nil")
 	}
-	if !strings.HasPrefix(err.Error(), "chunk 0: ") {
-		t.Errorf("err = %q, want it to start with the untagged \"chunk N: \" wrap", err.Error())
+	if !errors.Is(err, ErrPermanent) {
+		t.Errorf("err = %v, want it tagged ErrPermanent so the caller stops retrying", err)
 	}
-	if errors.Is(err, ErrPermanent) {
-		t.Errorf("err = %v is tagged ErrPermanent — #185 is precisely that this join path is not", err)
+	if !strings.Contains(err.Error(), "chunk 0") {
+		t.Errorf("err = %q, want it to name the chunk that would not decode", err.Error())
 	}
 }
 
