@@ -241,9 +241,18 @@ func (h *Handler) writeAudiobookError(c *gin.Context, err error) {
 	// UI to say the same sentence twice. The sentinel's own message rather
 	// than err.Error(), because Preflight wraps it in "read audiobook
 	// settings: ...", which is phrasing for a log and not for a toast.
-	case errors.Is(err, service.ErrAudiobooksNotConfigured):
+	case errors.Is(err, service.ErrAudiobooksNotWired):
 		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled,
-			service.ErrAudiobooksNotConfigured.Error())
+			service.ErrAudiobooksNotWired.Error())
+	// The settings row names an engine the catalog does not have. Same
+	// status and same code again, and for the same reason: to a client
+	// this is one more way narration is unavailable here, cleared by one
+	// admin in one panel. What differs is only the sentence, and the
+	// sentence is the server's — err.Error() rather than the sentinel's,
+	// because the wrapping is what names the offending id, and that id is
+	// the only thing telling the admin what to fix (#274).
+	case errors.Is(err, repo.ErrUnknownAudiobookEngine):
+		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled, err.Error())
 	case errors.Is(err, service.ErrNotNarratable):
 		writeErrorCode(c, http.StatusUnsupportedMediaType, CodeFormatNotNarratable,
 			service.ErrNotNarratable.Error())

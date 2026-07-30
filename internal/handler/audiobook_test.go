@@ -231,45 +231,87 @@ func audiobookErrorResponse(t *testing.T, err error) (int, errorBody) {
 	return rec.Code, body
 }
 
-// TestAudiobookErrorDisabledIsA503WithTheDisabledCode pins the refusal an
-// admin causes by turning the feature off. It used to fall through the
-// mapper's default and reach the client as a bare 409 with no code, so
-// the UI — which branches on AUDIOBOOKS_DISABLED — rendered a generic
-// conflict toast instead of the disabled affordance.
-func TestAudiobookErrorDisabledIsA503WithTheDisabledCode(t *testing.T) {
-	status, body := audiobookErrorResponse(t, service.ErrAudiobooksDisabled)
-
-	if status != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 (body %+v)", status, body)
+// unknownEngineError is the refusal a settings row produces by naming an
+// engine the catalog does not have. Taken from SelectedEngine rather than
+// hand-written: a mapper case is only worth anything if it matches the
+// error the production path actually returns.
+func unknownEngineError(t *testing.T, id string) error {
+	t.Helper()
+	_, _, err := repo.AudiobookConfig{Engine: id}.SelectedEngine()
+	if err == nil {
+		t.Fatalf("SelectedEngine(%q) accepted an engine outside the catalog", id)
 	}
-	if body.Code != CodeAudiobooksDisabled {
-		t.Fatalf("code = %q, want %q", body.Code, CodeAudiobooksDisabled)
+	return err
+}
+
+// TestAudiobookErrorMapsEveryPreflightRefusal pins all three exits
+// Preflight has before the format gate, on one table, because they are
+// one decision: each is a way narration is unavailable on this instance,
+// so each answers 503 with the code the UI's affordance module branches
+// on. Any of them falling through to the default arm is the #221 bug,
+// and the third one did until #274.
+//
+// One code for three causes is deliberate. The obstacle and the fix are
+// identical — an admin, in the narration panel — and only the sentence
+// differs, which the server states and the client composes (#271). A
+// second code would buy a branch that decided the same thing twice.
+func TestAudiobookErrorMapsEveryPreflightRefusal(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		// wantMessage is exact where the mapper must answer with a
+		// particular sentence rather than whatever it was handed.
+		wantMessage string
+		// mustName is a substring the message has to carry.
+		mustName string
+	}{{
+		// The admin has the feature off. Reached the client as a bare 409
+		// until #221, so the UI showed a generic conflict toast instead of
+		// the disabled affordance.
+		name:        "generation is switched off",
+		err:         service.ErrAudiobooksDisabled,
+		wantMessage: service.ErrAudiobooksDisabled.Error(),
+	}, {
+		// Arrives wrapped: Preflight reads settings through the refusing
+		// reader NewAudiobookService installs when none is wired, and
+		// returns "read audiobook settings: %w". The mapper has to match
+		// through the wrapping and answer with the sentinel's own message,
+		// because the wrapped one is a log line, not a toast.
+		name:        "no settings reader is wired",
+		err:         fmt.Errorf("read audiobook settings: %w", service.ErrAudiobooksNotWired),
+		wantMessage: service.ErrAudiobooksNotWired.Error(),
+	}, {
+		// A mistyped engine id, or one an upgrade removed from under a
+		// stored selection. The message keeps its wrapping here, because
+		// the wrapping is what names the id the admin has to fix.
+		name:     "the named engine is not in the catalog",
+		err:      unknownEngineError(t, "kokoroo"),
+		mustName: "kokoroo",
+	}}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, body := audiobookErrorResponse(t, tc.err)
+
+			if status != http.StatusServiceUnavailable {
+				t.Errorf("status = %d, want 503 (body %+v)", status, body)
+			}
+			if body.Code != CodeAudiobooksDisabled {
+				t.Errorf("code = %q, want %q — without it the UI cannot branch",
+					body.Code, CodeAudiobooksDisabled)
+			}
+			if tc.wantMessage != "" && body.Error != tc.wantMessage {
+				t.Errorf("message = %q, want %q", body.Error, tc.wantMessage)
+			}
+			if tc.mustName != "" && !strings.Contains(body.Error, tc.mustName) {
+				t.Errorf("message = %q, want %q named — it is the one thing telling "+
+					"the admin what to fix", body.Error, tc.mustName)
+			}
+		})
 	}
 }
 
-// TestAudiobookErrorNotConfiguredIsA503WithTheDisabledCode is the other
-// refusal, and it arrives wrapped: Preflight reads the settings through
-// the default reader NewAudiobookService installs when none is wired, and
-// returns "read audiobook settings: %w". The mapper has to match through
-// the wrapping and answer with the sentinel's own message, because the
-// wrapped one is a log line rather than something to show a user.
-func TestAudiobookErrorNotConfiguredIsA503WithTheDisabledCode(t *testing.T) {
-	wrapped := fmt.Errorf("read audiobook settings: %w", service.ErrAudiobooksNotConfigured)
-
-	status, body := audiobookErrorResponse(t, wrapped)
-
-	if status != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 (body %+v)", status, body)
-	}
-	if body.Code != CodeAudiobooksDisabled {
-		t.Fatalf("code = %q, want %q", body.Code, CodeAudiobooksDisabled)
-	}
-	if body.Error != service.ErrAudiobooksNotConfigured.Error() {
-		t.Fatalf("message = %q, want the unwrapped sentinel", body.Error)
-	}
-}
-
-// TestAudiobookErrorDefaultsToA409 pins the arm the two cases above were
+// TestAudiobookErrorDefaultsToA409 pins the arm the cases above were
 // added in front of. The default is not a catch-all for "unclassified":
 // cancelling a finished run and retrying with nothing outstanding both
 // land there, and both are genuinely conflicts — the caller asked for

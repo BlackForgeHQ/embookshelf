@@ -154,14 +154,17 @@ export function affordanceFor(
         label: "Configure reading guides",
       })
 
-    // One branch, two causes: the admin has generation switched off, and
-    // the instance has no engine wired at all. Both are "narration is
-    // unavailable here", both are the admin's to clear, and both are
-    // cleared in the same panel — so they are one code and one
-    // affordance, and what differs is only the sentence. The server is
-    // the one that knows which, so it supplies it; the fallback holds
-    // for a caller that builds this refusal from the code alone, and is
-    // true of either cause.
+    // One branch, three causes: the admin has generation switched off,
+    // narration is not wired into this deployment at all, and the
+    // settings name an engine the catalog does not have. All three are
+    // "narration is unavailable here", all three are the admin's to
+    // clear, and all three are cleared in the same panel — so they are
+    // one code and one affordance, and what differs is only the
+    // sentence. The server is the one that knows which, so it supplies
+    // it — and for the third it is also the only one that knows *which
+    // engine*, which no client-side copy could have said. The fallback
+    // holds for a caller that builds this refusal from the code alone,
+    // and is true of any of them.
     case "AUDIOBOOKS_DISABLED":
       return instanceWide(viewer, {
         panel: "audiobooks",

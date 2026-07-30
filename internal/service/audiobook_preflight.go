@@ -13,12 +13,20 @@ import (
 	"github.com/blackforge/embookshelf/internal/repo"
 )
 
-// ErrAudiobooksNotConfigured is returned when the service has no settings
+// ErrAudiobooksNotWired is returned when the service has no settings
 // reader wired at all — a deployment without the feature, distinct from
 // one that has it and has turned it off.
 //
+// Named for what it means. It was ErrAudiobooksNotConfigured, carrying
+// "audiobook generation is not configured", which reads as "no engine is
+// configured" — a different and now genuinely reachable state, since
+// settings naming an engine outside the catalog is its own refusal
+// (repo.ErrUnknownAudiobookEngine). One name for two conditions is how
+// the wrong sentence gets shown for the wrong cause, which is the bug
+// #271 closed on the client side (#274).
+//
 // The handler answers it 503 with CodeAudiobooksDisabled.
-var ErrAudiobooksNotConfigured = errors.New("audiobook generation is not configured")
+var ErrAudiobooksNotWired = errors.New("audiobook generation is not available on this instance")
 
 // ErrAudiobooksDisabled is returned when the admin has the feature off.
 //

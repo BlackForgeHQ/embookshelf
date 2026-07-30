@@ -89,6 +89,20 @@ func (c *AudiobookConfig) EngineSlot(id tts.EngineID) *AudiobookEngineConfig {
 	return nil
 }
 
+// ErrUnknownAudiobookEngine is returned when the settings row names an
+// engine the catalog does not have — a mistyped id, or one an upgrade
+// removed from under a stored selection.
+//
+// A sentinel rather than a plain error because it is a refusal a caller
+// answers, not a fault it reports: it is the third of Preflight's exits
+// before the format gate, and the handler answers it 503 with
+// CodeAudiobooksDisabled like the other two. Plain, it fell through the
+// mapper's default arm to a bare 409 with no code (#274).
+//
+// The engine's own id is wrapped around it at each site, because naming
+// which id to fix is the whole affordance the admin gets.
+var ErrUnknownAudiobookEngine = errors.New("no narration engine by that name")
+
 // SelectedEngine resolves the configured engine to its catalog id and its
 // settings. Named once because every generate, estimate and connection
 // test asks the same question.
@@ -96,7 +110,7 @@ func (c AudiobookConfig) SelectedEngine() (tts.EngineID, AudiobookEngineConfig, 
 	id := tts.EngineID(c.Engine)
 	slot := (&c).EngineSlot(id)
 	if slot == nil {
-		return "", AudiobookEngineConfig{}, fmt.Errorf("audiobook: no engine %q in the catalog", c.Engine)
+		return "", AudiobookEngineConfig{}, fmt.Errorf("%w: %q", ErrUnknownAudiobookEngine, c.Engine)
 	}
 	return id, *slot, nil
 }

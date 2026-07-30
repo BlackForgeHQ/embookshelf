@@ -176,7 +176,7 @@ func NewAudiobookService(d AudiobookDeps) *AudiobookService {
 	}
 	if d.Settings == nil {
 		d.Settings = func(context.Context) (repo.AudiobookConfig, error) {
-			return repo.AudiobookConfig{}, ErrAudiobooksNotConfigured
+			return repo.AudiobookConfig{}, ErrAudiobooksNotWired
 		}
 	}
 	if d.Books == nil {

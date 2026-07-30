@@ -115,13 +115,18 @@ func TestPreflightRefusesWhenNothingIsConfigured(t *testing.T) {
 
 	_, err := svc.Preflight(context.Background(), narratableBook(), GenerateOverride{})
 
-	if !errors.Is(err, ErrAudiobooksNotConfigured) {
-		t.Errorf("err = %v, want ErrAudiobooksNotConfigured", err)
+	if !errors.Is(err, ErrAudiobooksNotWired) {
+		t.Errorf("err = %v, want ErrAudiobooksNotWired", err)
 	}
 }
 
-// A settings row naming an engine with no key selects nothing, and that
-// is a configuration problem the admin has to see.
+// A settings row naming an engine the catalog does not have selects
+// nothing, and that is a configuration problem the admin has to see —
+// with the id they typed in it, since that is what they have to fix.
+//
+// The third of Preflight's exits before the format gate. It came back as
+// a plain error, which the handler could only answer with its default
+// arm: a bare 409, no code, nothing naming the engine (#274).
 func TestPreflightSurfacesAnUnusableEngineSelection(t *testing.T) {
 	t.Parallel()
 
@@ -131,11 +136,14 @@ func TestPreflightSurfacesAnUnusableEngineSelection(t *testing.T) {
 
 	_, err := svc.Preflight(context.Background(), narratableBook(), GenerateOverride{})
 
-	if err == nil {
-		t.Fatal("Preflight accepted a settings row whose engine cannot run")
+	if !errors.Is(err, repo.ErrUnknownAudiobookEngine) {
+		t.Fatalf("err = %v, want repo.ErrUnknownAudiobookEngine so the handler can answer 503", err)
 	}
 	if errors.Is(err, ErrNotNarratable) {
 		t.Errorf("err = %v, want the engine-selection failure, not the format gate", err)
+	}
+	if !strings.Contains(err.Error(), "nonesuch") {
+		t.Errorf("err = %v, want the engine named", err)
 	}
 }
 

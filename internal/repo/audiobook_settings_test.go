@@ -3,6 +3,7 @@
 package repo
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -178,8 +179,15 @@ func TestSelectedEngineReturnsTheChosenEntry(t *testing.T) {
 		t.Errorf("engine = %+v, want the elevenlabs sub-struct", engine)
 	}
 
-	if _, _, err := (AudiobookConfig{Engine: "nope"}).SelectedEngine(); err == nil {
-		t.Error("want an error for an engine outside the catalog")
+	// A sentinel, and one that names the id: the handler answers this 503
+	// with the disabled code, and the only thing telling the admin which
+	// id to fix is the message (#274).
+	_, _, err = (AudiobookConfig{Engine: "nope"}).SelectedEngine()
+	if !errors.Is(err, ErrUnknownAudiobookEngine) {
+		t.Errorf("err = %v, want ErrUnknownAudiobookEngine for an engine outside the catalog", err)
+	}
+	if err != nil && !strings.Contains(err.Error(), "nope") {
+		t.Errorf("err = %v, want the engine named", err)
 	}
 }
 

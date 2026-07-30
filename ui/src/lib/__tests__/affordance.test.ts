@@ -132,9 +132,12 @@ describe("affordanceFor", () => {
 // ---------------------------------------------------------------------------
 //
 // One code can stand for more than one cause. `AUDIOBOOKS_DISABLED` is
-// both "the admin turned generation off" and "this instance has no
-// engine wired": one obstacle with one fix, so one branch — but two
+// "the admin turned generation off", "narration is not wired into this
+// deployment", and "the settings name an engine that is not in the
+// catalog": one obstacle with one fix, so one branch — but three
 // different things to say, and only the server knows which happened.
+// The third it also knows more about than any client could: which
+// engine id was named (#274).
 
 describe("messageForCode", () => {
   it("tells an admin who turned narration off that it is off", () => {
@@ -152,23 +155,37 @@ describe("messageForCode", () => {
     expect(said).not.toMatch(/engine/i)
   })
 
-  it("still tells an instance with nothing set up that it is not configured", () => {
+  it("still tells an instance with nothing wired that narration is unavailable", () => {
     const said = messageForCode(
       "AUDIOBOOKS_DISABLED",
-      "audiobook generation is not configured",
+      "audiobook generation is not available on this instance",
       admin,
     )
 
-    expect(said).toMatch(/not configured/i)
+    expect(said).toMatch(/not available on this instance/i)
   })
 
-  // Both sentences have to carry the fix as well as the cause, which is
+  // The engine id is the whole affordance for this cause — an admin who
+  // mistyped one has nothing else to go on — and it can only reach the
+  // toast by being carried through from the server's message.
+  it("keeps the engine the server named when the catalog has no such engine", () => {
+    const said = messageForCode(
+      "AUDIOBOOKS_DISABLED",
+      'no narration engine by that name: "kokoroo"',
+      admin,
+    )
+
+    expect(said).toMatch(/kokoroo/)
+  })
+
+  // Every sentence has to carry the fix as well as the cause, which is
   // the half a toast can hold: `errorToast` is `(err) => string`, so the
   // label and the route of a navigate affordance never render.
   it("points the admin at the panel whichever cause the server named", () => {
     for (const cause of [
       "audiobook generation is not enabled",
-      "audiobook generation is not configured",
+      "audiobook generation is not available on this instance",
+      'no narration engine by that name: "kokoroo"',
     ]) {
       expect(messageForCode("AUDIOBOOKS_DISABLED", cause, admin)).toMatch(
         /narration settings/i,
