@@ -143,7 +143,9 @@ func (h *Handler) SettingsLibraryCreate(c *gin.Context) {
 	}
 
 	// Optional async initial scan. River queue owns the actual work; a
-	// missing queue is a deployment smell but shouldn't block creation.
+	// missing queue is a deployment smell but shouldn't block creation —
+	// the library exists either way, so this site logs rather than taking
+	// requireQueue's degrade, which would fail a create that succeeded.
 	if body.Scan && h.queue != nil {
 		if err := h.queue.Enqueue(c.Request.Context(), jobs.LibraryScanArgs{LibraryID: lib.ID}); err != nil {
 			slog.Warn("enqueue library scan after create failed", "library", lib.ID, "err", err)
@@ -175,11 +177,11 @@ func (h *Handler) SettingsLibraryRescan(c *gin.Context) {
 		writeServerError(c, "settings library lookup", err)
 		return
 	}
-	if h.queue == nil {
-		writeError(c, http.StatusServiceUnavailable, "queue unavailable")
+	q, ok := h.requireQueue(c)
+	if !ok {
 		return
 	}
-	if err := h.queue.Enqueue(c.Request.Context(), jobs.LibraryScanArgs{LibraryID: id}); err != nil {
+	if err := q.Enqueue(c.Request.Context(), jobs.LibraryScanArgs{LibraryID: id}); err != nil {
 		writeServerError(c, "settings enqueue scan", err)
 		return
 	}

@@ -53,8 +53,9 @@ func (h *Handler) AccountKindleEmailUpdate(c *gin.Context) {
 // SendToKindle enqueues a delivery of the book to the caller's
 // kindle_email. Synchronous response: 202 once enqueued, 415 for an
 // ineligible format, 412 when the kindle_email isn't set, 503 when
-// the email subsystem is off. The actual send happens in
-// task.SendToKindle and reports completion via SSE. ADR-0021.
+// the email subsystem is off or there is no worker pool to dispatch
+// through. The actual send happens in task.SendToKindle and reports
+// completion via SSE. ADR-0021.
 func (h *Handler) SendToKindle(c *gin.Context, s bookScope) {
 	if !h.emailEnabled() {
 		writeEmailDisabled(c)
@@ -87,7 +88,11 @@ func (h *Handler) SendToKindle(c *gin.Context, s bookScope) {
 		return
 	}
 
-	if err := h.queue.Enqueue(c.Request.Context(), jobs.SendToKindleArgs{BookID: book.ID, UserID: u.ID}); err != nil {
+	q, ok := h.requireQueue(c)
+	if !ok {
+		return
+	}
+	if err := q.Enqueue(c.Request.Context(), jobs.SendToKindleArgs{BookID: book.ID, UserID: u.ID}); err != nil {
 		writeServerError(c, "send to kindle: enqueue", err)
 		return
 	}
