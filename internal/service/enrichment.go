@@ -635,12 +635,21 @@ func (s *EnrichmentService) AutoEnrich(ctx context.Context, book model.Book) (bo
 	// outcome away, and if the plan ever grew a step the comment would
 	// have gone on being wrong quietly. Now a degradation is an error and
 	// rides the return this path already has.
-	if _, err := s.ApplyMatch(ctx, book, *match, ApplyOptions{
+	_, applyErr := s.ApplyMatch(ctx, book, *match, ApplyOptions{
 		MergeCategories: true,
 		OnlyEmpty:       true,
 		ApplyCover:      !book.Locks.Cover && !book.HasCover,
-	}, TriggerAutoEnrichment); err != nil {
-		return false, err
+	}, TriggerAutoEnrichment)
+	if deg, fatal := Degradation(applyErr); fatal {
+		return false, applyErr
+	} else if deg != nil {
+		// The books row landed; only a copy on disk did not. The caller
+		// is a job, and returning this as an error would have River
+		// retry an apply that already succeeded. Unreachable while
+		// auto-enrichment stays DB-only (ADR-0001 §3) — which is exactly
+		// why it must not be left to whoever adds the step that breaks
+		// that.
+		slog.Warn("auto-enrich degraded", "book", book.ID, "warnings", deg.Warnings())
 	}
 	return true, nil
 }

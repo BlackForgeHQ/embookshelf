@@ -313,3 +313,57 @@ func TestComicResolveFailureDoesNotFallBackToDisk(t *testing.T) {
 			rec.Code, rec.Body.String())
 	}
 }
+
+// A book carrying a legacy path and no files row must still pass the
+// allow-list. serveBookFile gates exactly this read; before CBZ moved
+// onto the storage seam the comic handler gated it too, with its own
+// copy. Routing through the seam must not have dropped the gate — a
+// books.path is a stored string, and the sandbox exists because it is
+// not trusted to stay inside a library.
+func TestComicRefusesALegacyPathOutsideTheSandbox(t *testing.T) {
+	ctx := context.Background()
+	d := repotest.New(t)
+	libRepo := repo.NewLibraryRepo(d)
+	bookRepo := repo.NewBookRepo(d)
+	fileRepo := repo.NewFileRepo(d)
+
+	libRoot := t.TempDir()
+	lib, err := libRepo.CreateLibrary(ctx, "Comics", "comics", libRoot, nil)
+	if err != nil {
+		t.Fatalf("CreateLibrary: %v", err)
+	}
+
+	// Outside every root, and real, so a missing file cannot be what
+	// makes this pass.
+	outside := filepath.Join(t.TempDir(), "elsewhere.cbz")
+	if err := os.WriteFile(outside, cbzBytes(t, comicPages), 0o600); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+
+	book, err := bookRepo.Create(ctx, model.Book{
+		LibraryID: lib.ID,
+		Title:     "Escapee",
+		Author:    "Nobody",
+		Format:    "CBZ",
+		Path:      outside,
+	})
+	if err != nil {
+		t.Fatalf("Create book: %v", err)
+	}
+
+	h := &Handler{
+		books: bookRepo,
+		lib:   nil,
+		libStore: service.NewLibraryStore(service.LibraryStoreDeps{
+			Libs:     libRepo,
+			Resolver: storage.ConstantResolver{S: &objectStore{objects: map[string][]byte{}}},
+			Files:    fileRepo,
+		}),
+	}
+	f := comicFixture{h: h, book: book}
+
+	rec := comicRequest(t, f, f.h.ComicPagesIndex, "/api/v1/books/x/comic/pages", "")
+	if rec.Code == http.StatusOK {
+		t.Fatalf("status = 200 — a path outside every library root was served (body %s)", rec.Body.String())
+	}
+}

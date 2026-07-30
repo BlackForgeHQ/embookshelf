@@ -125,6 +125,18 @@ func (h *Handler) openComicSource(c *gin.Context, book model.Book) (storage.Sour
 			// disk for a library whose bytes may not be on it.
 			return nil, fmt.Errorf("resolve library: %w", err)
 		}
+		// A book with no files row has only its legacy path, and the
+		// handle would open that with a bare os.Open. That read is what
+		// the allow-list exists for — serveBookFile gates it, and this
+		// handler gated it too before CBZ moved onto the seam — so take
+		// the sandboxed route rather than letting the seam skip it.
+		locs, lerr := handle.BookFileLocations(ctx, book.ID)
+		if lerr != nil {
+			return nil, fmt.Errorf("list book files: %w", lerr)
+		}
+		if len(locs) == 0 {
+			return h.openSandboxedSource(c, book.Path)
+		}
 		src, oerr := handle.OpenBookSource(ctx, book)
 		if oerr != nil {
 			return nil, notePlacedFile(ctx, handle, book, oerr)

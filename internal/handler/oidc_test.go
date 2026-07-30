@@ -153,3 +153,20 @@ func TestOIDCErrorCodeMaps(t *testing.T) {
 		}
 	}
 }
+
+// A forwarded scheme is a string from a header, and only two schemes are
+// a public origin. Anything else falls back to what the connection
+// itself says, so a header cannot put an arbitrary scheme in front of
+// every OPDS href and the redirect URI the admin panel displays.
+func TestRequestOriginRefusesASchemeThatIsNotHTTP(t *testing.T) {
+	for _, proto := range []string{"javascript", "file", "HTTPS ", "gopher"} {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodGet, "http://books.example.com/opds", nil)
+		c.Request.Header.Set("X-Forwarded-Proto", proto)
+
+		got := requestOrigin(c)
+		if got != "http://books.example.com" && got != "https://books.example.com" {
+			t.Errorf("X-Forwarded-Proto %q gave origin %q — only http and https are origins", proto, got)
+		}
+	}
+}

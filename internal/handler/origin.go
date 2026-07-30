@@ -40,7 +40,16 @@ func requestOrigin(c *gin.Context) string {
 		if i := strings.IndexByte(xf, ','); i >= 0 {
 			xf = xf[:i]
 		}
-		scheme = strings.TrimSpace(xf)
+		// A header is a string, and this one ends up in front of every
+		// OPDS href and the redirect URI the admin panel displays. Only
+		// two schemes are a public origin; anything else keeps what the
+		// connection itself said.
+		switch strings.ToLower(strings.TrimSpace(xf)) {
+		case "http":
+			scheme = "http"
+		case "https":
+			scheme = "https"
+		}
 	}
 	host := c.Request.Host
 	if xh := c.GetHeader("X-Forwarded-Host"); xh != "" {
