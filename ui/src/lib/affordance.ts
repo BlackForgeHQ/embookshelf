@@ -1,4 +1,7 @@
+import type { AuthUser } from "@/api/auth"
+import { meQuery } from "@/api/auth"
 import type { ApiErrorCode } from "@/api/client"
+import { useApiQuery } from "@/api/query"
 import type { SettingsSectionKey } from "@/components/settings/sections"
 import { kindleEligibleFormatList, narratableFormatList } from "@/lib/formats"
 
@@ -23,6 +26,38 @@ export const ALL_ERROR_CODES = [
 
 /** Who is looking, which is what decides what an obstacle looks like. */
 export type Viewer = { isAdmin: boolean }
+
+/**
+ * Who is looking, from the current user.
+ *
+ * The one place the role vocabulary is read. Every screen that shows a
+ * refusal needs a viewer, so before this each built one by comparing
+ * `role === "admin"` itself — ten spellings of the word across seven
+ * components, and no way to change what admin means without finding
+ * them all. `Viewer` is this module's interface, so deciding who counts
+ * as one is this module's job.
+ *
+ * No current user — signed out, or `/me` still in flight — is not an
+ * admin. That is what every call site already did, and it is the right
+ * way round: a control that appears a beat late is better than one that
+ * flashes into view and then vanishes.
+ */
+export function viewerOf(user: AuthUser | null | undefined): Viewer {
+  return { isAdmin: user?.role === "admin" }
+}
+
+/**
+ * Who is looking, for a component that has no other use for the user.
+ *
+ * Most callers want the viewer and nothing else, and this saves them
+ * naming the query at all. A component that needs the user's own
+ * fields as well — their Kindle address, their display name — reads
+ * `meQuery` once and passes the result to `viewerOf`, rather than
+ * subscribing to the same query twice.
+ */
+export function useViewer(): Viewer {
+  return viewerOf(useApiQuery(meQuery).data)
+}
 
 /** Where the obstacle is cleared. The caller navigates; it holds the router. */
 export type Fix =

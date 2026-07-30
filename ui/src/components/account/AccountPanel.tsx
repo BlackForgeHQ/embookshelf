@@ -20,7 +20,7 @@ import { appConfigQuery } from "@/api/settings"
 import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
 import type { Viewer } from "@/lib/affordance"
-import { affordanceFor } from "@/lib/affordance"
+import { affordanceFor, viewerOf } from "@/lib/affordance"
 import { Avatar, Card, Field } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -60,6 +60,7 @@ export function AccountPanel() {
 
   const me = useApiQuery(meQuery)
   const user = me.data
+  const viewer = viewerOf(user)
   const identities = useApiQuery(accountIdentitiesQuery)
 
   const [editing, setEditing] = useState(false)
@@ -116,7 +117,7 @@ export function AccountPanel() {
         year: "numeric",
       })
     : "—"
-  const roleLabel = user?.role === "admin" ? "Admin" : "User"
+  const roleLabel = viewer.isAdmin ? "Admin" : "User"
 
   const data = identities.data
   const linkedCount = data?.providers.filter((p) => p.linked).length ?? 0
@@ -406,7 +407,7 @@ export function AccountPanel() {
 
       <SendToKindleSection
         currentEmail={user?.kindleEmail ?? ""}
-        viewer={{ isAdmin: user?.role === "admin" }}
+        viewer={viewer}
       />
     </>
   )

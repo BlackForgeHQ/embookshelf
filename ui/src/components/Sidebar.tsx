@@ -21,6 +21,7 @@ import {
 import { useApiMutation } from "@/api/mutation"
 import { meQuery } from "@/api/auth"
 import { useApiQuery } from "@/api/query"
+import { viewerOf } from "@/lib/affordance"
 import { useLogout } from "@/hooks/useLogout"
 import { useShelfDraftDialog } from "@/components/ShelfDraftProvider"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -79,7 +80,7 @@ export function AppSidebar() {
   const libs = libraries.data ?? []
   const allShelves = shelves.data?.shelves ?? []
   const unshelvedCount = shelves.data?.unshelvedCount ?? 0
-  const isAdmin = me.data?.role === "admin"
+  const { isAdmin } = viewerOf(me.data)
   // "reading" is promoted into the Browse section as a first-class nav item,
   // so drop it from the Shelves list to avoid rendering two links to the
   // same filtered view. Public shelves (own or otherwise) split off into
@@ -273,7 +274,7 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-        {me.data?.role === "admin" && (
+        {isAdmin && (
           <SidebarGroup className="mt-auto">
             <SidebarGroupContent>
               <SidebarMenu>

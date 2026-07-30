@@ -4,8 +4,8 @@ import { createFileRoute } from "@tanstack/react-router"
 import type { SettingsSectionKey } from "@/components/settings/sections"
 import { SETTINGS_SECTIONS } from "@/components/settings/sections"
 import { settingsUsersQuery } from "@/api/settings"
-import { meQuery } from "@/api/auth"
 import { useApiQuery } from "@/api/query"
+import { useViewer } from "@/lib/affordance"
 import { SettingsShell } from "@/components/SettingsShared"
 import { TopBar } from "@/components/TopBar"
 
@@ -14,8 +14,7 @@ export const Route = createFileRoute("/_app/settings")({
 })
 
 function Admin() {
-  const me = useApiQuery(meQuery)
-  const isAdmin = me.data?.role === "admin"
+  const { isAdmin } = useViewer()
   const [active, setActive] = useState<SettingsSectionKey>("libraries")
 
   const usersQuery = useApiQuery(settingsUsersQuery, { enabled: isAdmin })

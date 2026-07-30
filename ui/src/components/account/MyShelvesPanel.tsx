@@ -6,7 +6,6 @@ import { Card } from "@/components/SettingsShared"
 import { ShelfIcon } from "@/components/ShelfIcon"
 import { ShelfIconPicker } from "@/components/ShelfIconPicker"
 import { Button } from "@/components/ui/button"
-import { meQuery } from "@/api/auth"
 import {
   deleteShelf,
   publishShelf,
@@ -15,6 +14,7 @@ import {
 } from "@/api/books"
 import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
+import { useViewer } from "@/lib/affordance"
 
 // MyShelvesPanel — owned shelves overview. Heavy table view per ADR-0019:
 // icon · name · accent · kind · visibility · book count · created. Inline
@@ -22,7 +22,7 @@ import { useApiQuery } from "@/api/query"
 // for everyone. Re-uses the existing mutations so realtime SSE flows
 // cover this surface without extra wiring.
 export function MyShelvesPanel() {
-  const me = useApiQuery(meQuery)
+  const { isAdmin } = useViewer()
   const shelves = useApiQuery(shelvesQuery)
 
   const updateMut = useApiMutation(updateShelf)
@@ -31,7 +31,6 @@ export function MyShelvesPanel() {
   })
   const publishMut = useApiMutation(publishShelf)
 
-  const isAdmin = me.data?.role === "admin"
   const all = shelves.data?.shelves ?? []
   // Owner-only — non-owned public shelves never appear here.
   const owned = all.filter((s) => (s.ownerName ?? "") === "")

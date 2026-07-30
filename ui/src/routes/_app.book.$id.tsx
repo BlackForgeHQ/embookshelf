@@ -26,7 +26,7 @@ import {
 } from "@/api/books"
 import { appConfigQuery } from "@/api/settings"
 import type { Viewer } from "@/lib/affordance"
-import { affordanceFor, messageForCode } from "@/lib/affordance"
+import { affordanceFor, messageForCode, viewerOf } from "@/lib/affordance"
 import { isKindleEligibleFormat } from "@/lib/formats"
 import {
   DEVICE_KIND_LABELS,
@@ -80,7 +80,7 @@ function BookDetail() {
 
   const book = useApiQuery(bookQuery(id))
   const me = useApiQuery(meQuery)
-  const isAdmin = me.data?.role === "admin"
+  const viewer = viewerOf(me.data)
 
   const deleteMut = useApiMutation(deleteBook, {
     onSuccess: () => {
@@ -171,7 +171,7 @@ function BookDetail() {
         <SendToKindleButton
           book={b}
           kindleEmail={me.data?.kindleEmail ?? ""}
-          viewer={{ isAdmin: me.data?.role === "admin" }}
+          viewer={viewer}
         />
         <SendToDeviceButton bookId={id} />
       </div>
@@ -388,7 +388,7 @@ function BookDetail() {
                   </div>
                 </div>
 
-                {isAdmin && (
+                {viewer.isAdmin && (
                   <div
                     style={{
                       padding: 16,

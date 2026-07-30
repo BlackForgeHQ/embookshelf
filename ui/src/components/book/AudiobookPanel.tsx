@@ -11,14 +11,13 @@ import {
   narrationUrl,
   retryAudiobook,
 } from "@/api/audiobooks"
-import { meQuery } from "@/api/auth"
 import { useApiMutation } from "@/api/mutation"
 import { LIVE_POLL_MS, useApiQuery } from "@/api/query"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/Icon"
 import { ProgressBar } from "@/components/ProgressBar"
 import type { Viewer } from "@/lib/affordance"
-import { affordanceFor, messageForCode } from "@/lib/affordance"
+import { affordanceFor, messageForCode, useViewer } from "@/lib/affordance"
 import { isNarratableFormat, narratableFormatList } from "@/lib/formats"
 import { runView } from "@/lib/audiobookRun"
 import type { RunView } from "@/lib/audiobookRun"
@@ -46,8 +45,7 @@ export function AudiobookPanel({
   bookId: string
   format: string
 }) {
-  const me = useApiQuery(meQuery)
-  const isAdmin = me.data?.role === "admin"
+  const viewer = useViewer()
 
   const audiobook = useApiQuery(bookAudiobookQuery(bookId), {
     // Polls only while the run is moving and stops on its own. Undefined
@@ -70,7 +68,7 @@ export function AudiobookPanel({
       <EmptyState
         bookId={bookId}
         format={format}
-        isAdmin={isAdmin}
+        viewer={viewer}
         confirming={confirming}
         setConfirming={setConfirming}
       />
@@ -84,21 +82,21 @@ export function AudiobookPanel({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 640 }}>
       {view.phase === "running" ? (
-        <RunProgress audiobook={a} view={view} bookId={bookId} isAdmin={isAdmin} />
+        <RunProgress audiobook={a} view={view} bookId={bookId} viewer={viewer} />
       ) : view.phase === "ready" ? (
         <ReadyState audiobook={a} bookId={bookId} />
       ) : (
-        <StoppedState audiobook={a} view={view} bookId={bookId} isAdmin={isAdmin} />
+        <StoppedState audiobook={a} view={view} bookId={bookId} viewer={viewer} />
       )}
 
       {view.showProvenance && <Provenance audiobook={a} />}
 
-      {isAdmin && view.canRegenerate && (
+      {viewer.isAdmin && view.canRegenerate && (
         <div style={{ display: "flex", gap: 8 }}>
           <RegenerateButton
             bookId={bookId}
             format={format}
-            viewer={{ isAdmin }}
+            viewer={viewer}
             confirming={confirming}
             setConfirming={setConfirming}
             hasExisting={view.phase === "ready"}
@@ -113,13 +111,13 @@ export function AudiobookPanel({
 function EmptyState({
   bookId,
   format,
-  isAdmin,
+  viewer,
   confirming,
   setConfirming,
 }: {
   bookId: string
   format: string
-  isAdmin: boolean
+  viewer: Viewer
   confirming: boolean
   setConfirming: (v: boolean) => void
 }) {
@@ -132,7 +130,7 @@ function EmptyState({
       </p>
     )
   }
-  if (!isAdmin) {
+  if (!viewer.isAdmin) {
     return (
       <p className="t-small">
         No narration yet. An administrator can generate one — it costs real
@@ -150,7 +148,7 @@ function EmptyState({
       <RegenerateButton
         bookId={bookId}
         format={format}
-        viewer={{ isAdmin }}
+        viewer={viewer}
         confirming={confirming}
         setConfirming={setConfirming}
         hasExisting={false}
@@ -166,12 +164,12 @@ function RunProgress({
   audiobook,
   view,
   bookId,
-  isAdmin,
+  viewer,
 }: {
   audiobook: Audiobook
   view: RunView
   bookId: string
-  isAdmin: boolean
+  viewer: Viewer
 }) {
   const cancelMut = useApiMutation(cancelAudiobook, {
     successToast: "Narration cancelled.",
@@ -195,7 +193,7 @@ function RunProgress({
       <p className="t-small" style={{ marginTop: 8 }}>
         This runs in the background — you can leave this page.
       </p>
-      {isAdmin && view.canCancel && (
+      {viewer.isAdmin && view.canCancel && (
         <div style={{ marginTop: 10 }}>
           <Button
             variant="outline"
@@ -250,12 +248,12 @@ function StoppedState({
   audiobook,
   view,
   bookId,
-  isAdmin,
+  viewer,
 }: {
   audiobook: Audiobook
   view: RunView
   bookId: string
-  isAdmin: boolean
+  viewer: Viewer
 }) {
   const retryMut = useApiMutation(retryAudiobook, {
     successToast: "Picking up where it stopped.",
@@ -286,7 +284,7 @@ function StoppedState({
           ones that did not.
         </p>
       )}
-      {isAdmin && failed && (
+      {viewer.isAdmin && failed && (
         <div>
           <Button
             variant="outline"

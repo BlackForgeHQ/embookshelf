@@ -1,7 +1,20 @@
-import { describe, expect, it } from "vitest"
+// @vitest-environment jsdom
+import { createElement } from "react"
+import type { ReactNode } from "react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { cleanup, render } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
+import type { AuthUser } from "@/api/auth"
+import { meQueryKey } from "@/api/auth"
 import type { ApiErrorCode } from "@/api/client"
-import { ALL_ERROR_CODES, affordanceFor } from "@/lib/affordance"
+import type { Viewer } from "@/lib/affordance"
+import { ALL_ERROR_CODES, affordanceFor, useViewer } from "@/lib/affordance"
+
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 const admin = { isAdmin: true }
 const reader = { isAdmin: false }
@@ -111,5 +124,78 @@ describe("affordanceFor", () => {
     const got = affordanceFor("SOMETHING_NEW" as ApiErrorCode, reader)
 
     expect(got.kind).toBe("report")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Who is looking
+// ---------------------------------------------------------------------------
+//
+// `affordanceFor` takes a viewer, so every screen that shows a refusal had
+// to build one, and each built it by comparing the role string itself —
+// ten spellings of "admin" across seven components, three of which then
+// wrapped the result in a viewer literal on the spot. The comparison
+// belongs to the module that declares what a viewer is.
+
+function userWithRole(role: AuthUser["role"]): AuthUser {
+  return {
+    id: "u1",
+    email: "reader@example.com",
+    name: "Reader",
+    role,
+    status: "active",
+    display: "Reader",
+    initials: "R",
+    kindleEmail: "",
+    createdAt: "2026-01-01T00:00:00Z",
+  }
+}
+
+// Seeded rather than fetched: the hook's subject is what it makes of the
+// current user, not how the user is loaded — that policy is `meQuery`'s
+// and is tested with it. `undefined` is the exception, and the point of
+// the third case: nothing seeded is /me still in flight, so the request
+// is left hanging rather than answered.
+function viewerSeenBy(user: AuthUser | null | undefined): Viewer {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+  })
+  if (user === undefined) {
+    vi.stubGlobal("fetch", () => new Promise<Response>(() => {}))
+  } else {
+    client.setQueryData(meQueryKey, user)
+  }
+
+  let seen: Viewer | undefined
+  function Probe() {
+    seen = useViewer()
+    return null
+  }
+  render(
+    createElement(QueryClientProvider, { client }, createElement(Probe) as ReactNode),
+  )
+
+  if (!seen) throw new Error("the hook did not run")
+  return seen
+}
+
+describe("useViewer", () => {
+  it("is an admin when the signed-in user's role says so", () => {
+    expect(viewerSeenBy(userWithRole("admin"))).toEqual({ isAdmin: true })
+  })
+
+  it("is not an admin for an ordinary reader", () => {
+    expect(viewerSeenBy(userWithRole("user"))).toEqual({ isAdmin: false })
+  })
+
+  it("is not an admin when nobody is signed in", () => {
+    expect(viewerSeenBy(null)).toEqual({ isAdmin: false })
+  })
+
+  // The behaviour every call site already had, kept deliberately:
+  // an unanswered /me reads as not-an-admin, so an admin-only control
+  // appears a beat late rather than flashing into view and vanishing.
+  it("is not an admin while the current user is still loading", () => {
+    expect(viewerSeenBy(undefined)).toEqual({ isAdmin: false })
   })
 })

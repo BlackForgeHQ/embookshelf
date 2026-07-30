@@ -3,10 +3,9 @@ import { useState } from "react"
 import type { ApiError } from "@/api/client"
 import type { ReadingGuide } from "@/api/guides"
 import { bookGuideQuery, generateBookGuide, saveBookGuide } from "@/api/guides"
-import { meQuery } from "@/api/auth"
 import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
-import { messageForCode } from "@/lib/affordance"
+import { messageForCode, useViewer } from "@/lib/affordance"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/Icon"
 
@@ -36,8 +35,7 @@ function toDraft(g: ReadingGuide): EditDraft {
 }
 
 export function ReadingGuidePanel({ bookId }: { bookId: string }) {
-  const me = useApiQuery(meQuery)
-  const isAdmin = me.data?.role === "admin"
+  const viewer = useViewer()
 
   const guide = useApiQuery(bookGuideQuery(bookId))
 
@@ -51,7 +49,7 @@ export function ReadingGuidePanel({ bookId }: { bookId: string }) {
     // One sentence per code, from lib/affordance.ts, rather than a
     // ternary that only this panel knows about (#171).
     errorToast: (err: ApiError) =>
-      messageForCode(err.code, err.message, { isAdmin }),
+      messageForCode(err.code, err.message, viewer),
   })
 
   const saveMut = useApiMutation(saveBookGuide, {
@@ -69,7 +67,7 @@ export function ReadingGuidePanel({ bookId }: { bookId: string }) {
   const g = guide.data
 
   if (!g) {
-    if (!isAdmin) {
+    if (!viewer.isAdmin) {
       return (
         <p className="t-small">
           No reading guide yet. An administrator can generate one — it asks a
@@ -162,7 +160,7 @@ export function ReadingGuidePanel({ bookId }: { bookId: string }) {
 
       <GuideProvenance guide={g} />
 
-      {isAdmin && !editing && (
+      {viewer.isAdmin && !editing && (
         <div style={{ display: "flex", gap: 8 }}>
           <Button
             variant="outline"
