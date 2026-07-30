@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/jobs"
+	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/scan"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -85,11 +86,7 @@ func LibraryScan(ctx context.Context, args jobs.LibraryScanArgs, deps LibrarySca
 
 	// Unchanged: clear missing flag if file reappeared.
 	for _, f := range cs.Unchanged {
-		if f.MissingSince != nil {
-			if err := deps.Files.ClearMissing(ctx, f.ID); err != nil {
-				slog.Warn("library scan: clear missing", "id", f.ID, "err", err)
-			}
-		}
+		clearMissing(ctx, deps.Files, f)
 	}
 
 	// New: relocate by hash. A same-library content hit means the file
@@ -100,11 +97,20 @@ func LibraryScan(ctx context.Context, args jobs.LibraryScanArgs, deps LibrarySca
 	// Missing in this same scan.
 	relocated := scan.RelocateByHash(ctx, store, deps.Files, lib.ID, cs.New)
 
-	// Changed: no-op. Under ADR-0018 in-app edits are the only supported
-	// edit path; an external rewrite is out-of-scope and won't be merged
-	// back into DB.
+	// Changed: no-op on the metadata. Under ADR-0018 in-app edits are the
+	// only supported edit path; an external rewrite is out-of-scope and
+	// won't be merged back into DB.
+	//
+	// The missing flag is not metadata, though, and clearing it is not
+	// optional: a Changed row is a row whose file the walk just saw, and
+	// leaving a stale flag on it hands a present file to the purge
+	// sweeper. This is the arm that carries the migrated rows — they were
+	// seeded with size 0, so a real file never matches and they land here
+	// rather than in Unchanged, which is the only arm that used to clear
+	// (#264).
 	for _, ce := range cs.Changed {
 		slog.Debug("library scan: changed file (no-op)", "loc", ce.Walk.Location)
+		clearMissing(ctx, deps.Files, ce.DB)
 	}
 
 	// Missing: soft-flag for the 24h purge sweeper. Skip rows that were
@@ -131,4 +137,16 @@ func LibraryScan(ctx context.Context, args jobs.LibraryScanArgs, deps LibrarySca
 		"missing", len(cs.Missing),
 	)
 	return nil
+}
+
+// clearMissing lifts the soft-delete flag off a row the walk just saw.
+// A no-op when the row was never flagged, so both callers can hand it
+// every row they hold rather than each deciding when the flag matters.
+func clearMissing(ctx context.Context, files *repo.FileRepo, f model.File) {
+	if f.MissingSince == nil {
+		return
+	}
+	if err := files.ClearMissing(ctx, f.ID); err != nil {
+		slog.Warn("library scan: clear missing", "id", f.ID, "err", err)
+	}
 }

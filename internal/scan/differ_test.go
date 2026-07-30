@@ -32,6 +32,18 @@ func makeEntry(loc string, size int64, mtime time.Time) scan.WalkEntry {
 	}
 }
 
+// makeKeyedEntry is a walk entry in the shape service.LibraryHandle.Walk
+// actually produces: a library-relative Location, plus the key the
+// backend listed the object under. On a local library those differ —
+// the backend is rooted at "/" for the whole instance (ADR-0030 §1) — and
+// the difference is what lets the differ recognise a row that stores the
+// key rather than the relative location.
+func makeKeyedEntry(loc, key string, size int64, mtime time.Time) scan.WalkEntry {
+	e := makeEntry(loc, size, mtime)
+	e.Key = key
+	return e
+}
+
 func TestDiff_BothEmpty(t *testing.T) {
 	cs := scan.Diff(nil, nil)
 	if len(cs.Unchanged) != 0 {
@@ -256,44 +268,93 @@ func TestDiff_AllMissing(t *testing.T) {
 	}
 }
 
-// TestDiff_AbsoluteRowAgainstRelativeWalk pins the case ADR-0030's
-// Consequences names and nothing tested: a files row holding an
-// absolute location, against a walk of the library that yields
-// library-relative ones.
+// TestDiff_AbsoluteRowMatchesTheWalkEntryCarryingItsKey covers the case
+// ADR-0030's Consequences names: a files row holding an absolute
+// location, against a walk of the library that yields library-relative
+// ones.
 //
-// The differ compares locations by exact string, so the two are not the
-// same file to it — the row reads Missing while the very bytes it
-// describes read New. It is only representable now that the walk
-// guarantees one shape on its side; before, a walked location could come
-// back absolute too (the relativize fallback), so a test like this could
-// not say which side of the mismatch it was looking at.
+// The two strings are not equal and never will be — ADR-0030 §1 declines
+// to migrate those rows — but they are two vocabularies for one object,
+// and the walk carries both. Location is what a live write path stores;
+// Key is what the backend answers to, which is exactly what an absolute
+// location already is on a "/"-rooted local backend.
 //
-// This is deliberately a characterisation, not a wish. ADR-0030 §1
-// declines to migrate those rows, and the rescue lives one layer up in
-// RelocateByHash — which only fires for rows that carry a content hash.
-// The rows this shape actually comes from (migrator.seedFilesFromBooks)
-// carry none, so for them the Missing classification below is the final
-// answer and the purge sweeper acts on it.
-func TestDiff_AbsoluteRowAgainstRelativeWalk(t *testing.T) {
+// The row is the shape migrator.seedFilesFromBooks produced: size 0, no
+// content hash, so relocate-by-hash can never reach it. Before the key
+// lookup it read Missing on every scan while the very bytes it describes
+// read New, and the 24h purge sweeper deleted it (#264). Size 0 against
+// a real file means it lands in Changed, not Unchanged, which is why the
+// worker's Changed arm has to clear the missing flag too.
+func TestDiff_AbsoluteRowMatchesTheWalkEntryCarryingItsKey(t *testing.T) {
 	const (
 		rel = "Kobo Abe/Woman in the Dunes/dunes.epub"
-		abs = "/srv/library/" + rel
+		// The backend reports keys with the leading slash off, even though
+		// it also answers to the absolute form (storagetest,
+		// KeyShapesNameTheSameObject).
+		key = "srv/library/" + rel
+		abs = "/" + key
 	)
-	walked := []scan.WalkEntry{makeEntry(rel, 100, baseTime)}
-	dbFiles := []model.File{makeFile("id-legacy", abs, 100, baseTime)}
+	walked := []scan.WalkEntry{makeKeyedEntry(rel, key, 100, baseTime)}
+	dbFiles := []model.File{makeFile("id-seeded", abs, 0, baseTime)}
 
 	cs := scan.Diff(walked, dbFiles)
 
+	if len(cs.New) != 0 {
+		t.Errorf("New = %+v, want none: the walked file is the seeded row", cs.New)
+	}
+	if len(cs.Missing) != 0 {
+		t.Errorf("Missing = %+v, want none: the file is right there", cs.Missing)
+	}
+	if len(cs.Changed) != 1 || cs.Changed[0].DB.ID != "id-seeded" {
+		t.Fatalf("Changed = %+v, want the seeded row (size 0 vs 100)", cs.Changed)
+	}
+}
+
+// The key lookup must not turn every absolute row into a match. A row
+// pointing outside the walked library is a genuinely missing file, and
+// still has to be flagged and eventually purged.
+func TestDiff_AbsoluteRowUnderAnotherRootIsStillMissing(t *testing.T) {
+	const rel = "Kobo Abe/Woman in the Dunes/dunes.epub"
+	walked := []scan.WalkEntry{
+		makeKeyedEntry(rel, "srv/library/"+rel, 100, baseTime),
+	}
+	dbFiles := []model.File{
+		makeFile("id-elsewhere", "/mnt/old-disk/"+rel, 100, baseTime),
+	}
+
+	cs := scan.Diff(walked, dbFiles)
+
+	if len(cs.Missing) != 1 || cs.Missing[0].ID != "id-elsewhere" {
+		t.Fatalf("Missing = %+v, want the row under the other root", cs.Missing)
+	}
 	if len(cs.New) != 1 || cs.New[0].Location != rel {
-		t.Fatalf("New = %+v, want the walked relative location %q", cs.New, rel)
+		t.Fatalf("New = %+v, want the walked file %q", cs.New, rel)
 	}
-	if len(cs.Missing) != 1 || cs.Missing[0].ID != "id-legacy" {
-		t.Fatalf("Missing = %+v, want the absolute row id-legacy", cs.Missing)
+}
+
+// Both forms of the same file in one library is the UNIQUE collision
+// ADR-0030 anticipates — the hash-relocate having already written the
+// relative row next to the absolute one it could not update. The
+// relative row is the live one, so it takes the match; the absolute
+// duplicate reads Missing, which is the resolution the ADR agreed to.
+func TestDiff_RelativeRowWinsOverItsAbsoluteDuplicate(t *testing.T) {
+	const (
+		rel = "Kobo Abe/Woman in the Dunes/dunes.epub"
+		key = "srv/library/" + rel
+	)
+	walked := []scan.WalkEntry{makeKeyedEntry(rel, key, 100, baseTime)}
+	dbFiles := []model.File{
+		makeFile("id-absolute", "/"+key, 100, baseTime),
+		makeFile("id-relative", rel, 100, baseTime),
 	}
-	if len(cs.Unchanged) != 0 || len(cs.Changed) != 0 {
-		t.Errorf("an absolute row and its relative walk entry are not the same "+
-			"file to the differ; got Unchanged=%d Changed=%d",
-			len(cs.Unchanged), len(cs.Changed))
+
+	cs := scan.Diff(walked, dbFiles)
+
+	if len(cs.Unchanged) != 1 || cs.Unchanged[0].ID != "id-relative" {
+		t.Fatalf("Unchanged = %+v, want the live relative row", cs.Unchanged)
+	}
+	if len(cs.Missing) != 1 || cs.Missing[0].ID != "id-absolute" {
+		t.Fatalf("Missing = %+v, want the absolute duplicate", cs.Missing)
 	}
 }
 

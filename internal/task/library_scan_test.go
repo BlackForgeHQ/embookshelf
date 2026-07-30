@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
@@ -229,22 +230,21 @@ func TestLibraryScanWalksALocalLibraryWhoseRootIsSpelledNonCanonically(t *testin
 	}
 }
 
-// Where the rescue for an absolute-location row ends.
+// An absolute-location row survives a scan whether or not it carries a
+// content hash.
 //
-// Rows holding an absolute location exist, from one producer:
-// migrator.seedFilesFromBooks writes books.path verbatim when the
-// library root was unknown at seed time. The walk yields
-// library-relative locations, the differ compares by exact string, so
-// such a row reads Missing while the very bytes it describes read New —
-// the consequence ADR-0030 names and declines to migrate.
+// It used to depend on the hash entirely: the row read Missing, the
+// walked file read New, and relocate-by-hash was the only thing that
+// could put the two together — which it can only do for a row that
+// carries a hash. The differ now recognises the row by the key the walk
+// carries, so both halves of this test come out the same, and the hash
+// is back to meaning what it means everywhere else: rename detection,
+// not survival.
 //
-// Relocate-by-hash is the only thing standing between that row and the
-// purge sweeper, and it can only reach a row that carries a content
-// hash. The seeded rows carry none (seedFilesFromBooks inserts location,
-// size 0 and mtime, and no hash), so for exactly the rows this shape
-// comes from, Missing is the final answer. Pinned in one test because
-// the difference between the two halves is invisible in the code.
-func TestLibraryScanRescuesAnAbsoluteRowOnlyWhenItCarriesAHash(t *testing.T) {
+// Neither row's location is rewritten. ADR-0030 §1 declines to migrate
+// absolute rows — UNIQUE (library_id, location) makes rewriting one a
+// collision risk — and the key shim reads them correctly as they stand.
+func TestLibraryScanKeepsAnAbsoluteRowWithOrWithoutAHash(t *testing.T) {
 	deps, lib, root, _ := scanFixture(t, false)
 	ctx := context.Background()
 
@@ -274,22 +274,91 @@ func TestLibraryScanRescuesAnAbsoluteRowOnlyWhenItCarriesAHash(t *testing.T) {
 		t.Fatalf("LibraryScan: %v", err)
 	}
 
-	moved, err := deps.Files.GetByLocation(ctx, lib.ID, hashed)
-	if err != nil {
-		t.Fatalf("the hashed absolute row was not relocated to its relative location: %v", err)
+	for _, abs := range []string{absHashed, absHashless} {
+		row, err := deps.Files.GetByLocation(ctx, lib.ID, abs)
+		if err != nil {
+			t.Fatalf("the row at %q is gone: %v", abs, err)
+		}
+		if row.MissingSince != nil {
+			t.Errorf("the row at %q was flagged missing while its file is on disk", abs)
+		}
 	}
-	if moved.MissingSince != nil {
-		t.Error("a relocated row was also flagged missing")
+}
+
+// The row shape the storage-v2 migration actually produced, driven
+// through a whole scan of a Library whose files are all present.
+//
+// migrator.seedFilesFromBooks inserts location, size 0 and mtime, and no
+// content hash — writing books.path verbatim when the library root was
+// unknown at seed time, so the location is absolute. The walk yields
+// library-relative locations, so every scan since has read that row as
+// Missing while the very bytes it describes read New, and after 24h the
+// purge sweeper deleted it: the book survives with no files row pointing
+// at a file that is right there on disk.
+//
+// The row starts out already flagged, backdated past MissingTTL, because
+// that is the state a live install is in — every scan since the
+// migration flagged it. Surviving means the scan clears the stale flag
+// too, not merely that it declines to set a new one.
+//
+// The second row is the control the fix must not cost: a location with
+// no file behind it is still flagged, and still purged once the TTL has
+// passed (ADR-0018 — scan is drift detection, and a real drift still has
+// to be detected).
+func TestLibraryScanKeepsAHashlessSeededRowWhoseFileIsOnDisk(t *testing.T) {
+	deps, lib, root, _ := scanFixture(t, false)
+	ctx := context.Background()
+
+	const rel = "Ursula Le Guin/The Dispossessed/dispossessed.epub"
+	writeBook(t, root, rel, "dispossessed bytes")
+	abs := filepath.Join(root, filepath.FromSlash(rel))
+
+	seeded, err := deps.Files.Insert(ctx, model.File{
+		LibraryID: lib.ID, Location: abs, Format: "EPUB",
+	})
+	if err != nil {
+		t.Fatalf("seed migrated row: %v", err)
+	}
+	gone, err := deps.Files.Insert(ctx, model.File{
+		LibraryID: lib.ID, Location: "Gone/Away/gone.epub", Format: "EPUB",
+	})
+	if err != nil {
+		t.Fatalf("seed genuinely missing row: %v", err)
+	}
+	stale := time.Now().Add(-2 * task.MissingTTL)
+	for _, id := range []string{seeded.ID, gone.ID} {
+		if err := deps.Files.MarkMissing(ctx, id, stale); err != nil {
+			t.Fatalf("MarkMissing: %v", err)
+		}
 	}
 
-	stranded, err := deps.Files.GetByLocation(ctx, lib.ID, absHashless)
-	if err != nil {
-		t.Fatalf("GetByLocation: %v", err)
+	if err := task.LibraryScan(ctx, jobs.LibraryScanArgs{LibraryID: lib.ID}, deps); err != nil {
+		t.Fatalf("LibraryScan: %v", err)
 	}
-	if stranded.MissingSince == nil {
-		t.Error("a hashless absolute row survived the scan unflagged — if that " +
-			"is now true, the absolute-location consequence in ADR-0030 has " +
-			"been addressed somewhere and this test should say where")
+
+	after, err := deps.Files.GetByLocation(ctx, lib.ID, abs)
+	if err != nil {
+		t.Fatalf("the migrated row is gone from the library: %v", err)
+	}
+	if after.MissingSince != nil {
+		t.Errorf("a row whose file is on disk is still flagged missing — "+
+			"the differ read %q and the walk read %q as two different files",
+			abs, rel)
+	}
+
+	purged, err := task.RunMissingPurge(ctx, deps.Files)
+	if err != nil {
+		t.Fatalf("RunMissingPurge: %v", err)
+	}
+	if _, err := deps.Files.GetByLocation(ctx, lib.ID, abs); err != nil {
+		t.Fatalf("the purge sweeper deleted a row whose file is on disk: %v", err)
+	}
+	if purged != 1 {
+		t.Errorf("purged %d rows, want 1 — the genuinely missing file must "+
+			"still be flagged and still purged after the TTL", purged)
+	}
+	if _, err := deps.Files.GetByLocation(ctx, lib.ID, "Gone/Away/gone.epub"); err == nil {
+		t.Error("a row with no file behind it survived the purge sweeper")
 	}
 }
 

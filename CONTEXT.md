@@ -287,13 +287,15 @@ The walk workers actually use is `service.LibraryHandle.Walk`, which answers the
 
 `internal/scan.Diff`; pure function classifying walk × DB rows into `Changeset{Unchanged, Changed, New, Missing}`.
 
+A row is matched in **either vocabulary `files.location` is written in**: the library-relative form the walk reports as `Location`, and failing that the backend key it reports as `Key`. The second exists because a location seeded by `migrator.seedFilesFromBooks` is absolute, which on a `/`-rooted local Backend *is* the key — the same equivalence `LibraryHandle.StorageKey`'s absolute branch rests on. Only the leading slash is normalised (`storagetest.KeyShapesNameTheSameObject`); nothing else is cleaned, because a wrong match here reattaches a [[Book]] to someone else's bytes. Where both forms exist as two rows — the `UNIQUE (library_id, location)` collision ADR-0030 anticipates — the relative row takes the match and the absolute duplicate reads Missing, which is the resolution that ADR already agreed to.
+
 ### Relocate by hash
 
 `scan.RelocateByHash`; for a New walk entry, hashes the bytes and queries `Files.GetByContentHash` in the same library. On hit, updates the existing `files.location` to the new path — the rename safety net under ADR-0018. On miss, returns without side effect; scan is never an ingest path.
 
 Returns `scan.Relocated`, the set of row ids it moved, because the Missing pass has to skip them: the location a relocated row used to live at also comes back Missing in the same scan, and flagging it would undo the relocate one line later. That coupling is why this lived inline in `task.LibraryScan` for as long as this entry claimed otherwise.
 
-Its reach ends at rows that carry a `content_hash`. The absolute-location rows ADR-0030 declines to migrate come from `migrator.seedFilesFromBooks`, which writes none — so for exactly those rows, Missing is the final answer and the purge sweeper acts on it (`TestLibraryScanRescuesAnAbsoluteRowOnlyWhenItCarriesAHash`).
+Its reach ends at rows that carry a `content_hash`, and that is now only a limit on *rename* detection. It used to be a limit on survival: the absolute-location rows ADR-0030 declines to migrate come from `migrator.seedFilesFromBooks`, which writes no hash, so they read Missing on every scan and the purge sweeper deleted them — a [[Book]] left with no [[Files row]] pointing at bytes still on disk. The differ now matches those rows by key, so they never reach this path at all (#264, `TestLibraryScanKeepsAHashlessSeededRowWhoseFileIsOnDisk`). Backfilling the hash instead was rejected: `task.RunFilesBackfill` already hashes exactly those rows and the bug survived it, because it is a best-effort background pass with no ordering against the scan queue and nothing clears `missing_since` once a scan has won that race.
 
 ### Audio format
 
