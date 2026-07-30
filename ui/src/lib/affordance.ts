@@ -100,9 +100,24 @@ export type Affordance =
  *
  * The sentences live here too, so the server's message and the client's
  * explanation cannot drift into saying different things about the same
- * refusal.
+ * refusal — except where the client cannot know which thing to say, and
+ * that is what `cause` is for.
+ *
+ * `cause` is the server's own message for this refusal, when there is
+ * one. A code stands for an obstacle, not for a reason: one code can
+ * cover several causes that a client would clear the same way, and where
+ * it does, the *what* is the server's to state and only the *where* is
+ * this module's. Deciding both is how `AUDIOBOOKS_DISABLED` came to tell
+ * an admin who had switched narration off that no engine was configured
+ * — a sentence the server could contradict, pointing at the wrong fix
+ * (#271). Codes are what a client branches on; messages are for display
+ * and free to change (CONTEXT §Error envelope).
  */
-export function affordanceFor(code: ApiErrorCode, viewer: Viewer): Affordance {
+export function affordanceFor(
+  code: ApiErrorCode,
+  viewer: Viewer,
+  cause = "",
+): Affordance {
   switch (code) {
     case "FORMAT_NOT_SUPPORTED":
       return {
@@ -139,12 +154,19 @@ export function affordanceFor(code: ApiErrorCode, viewer: Viewer): Affordance {
         label: "Configure reading guides",
       })
 
+    // One branch, two causes: the admin has generation switched off, and
+    // the instance has no engine wired at all. Both are "narration is
+    // unavailable here", both are the admin's to clear, and both are
+    // cleared in the same panel — so they are one code and one
+    // affordance, and what differs is only the sentence. The server is
+    // the one that knows which, so it supplies it; the fallback holds
+    // for a caller that builds this refusal from the code alone, and is
+    // true of either cause.
     case "AUDIOBOOKS_DISABLED":
       return instanceWide(viewer, {
         panel: "audiobooks",
-        adminReason:
-          "No text-to-speech engine is configured. Set one up to enable narration.",
-        label: "Configure narration",
+        adminReason: `${asSentence(cause) || "Narration is unavailable on this instance."} See narration settings.`,
+        label: "Open narration settings",
       })
 
     // Outcomes of an action the admin just took, not preconditions on a
@@ -169,6 +191,21 @@ export function affordanceFor(code: ApiErrorCode, viewer: Viewer): Affordance {
   }
 }
 
+/**
+ * The server's message as a sentence a toast can start with.
+ *
+ * Server messages are Go error strings — lowercase, unpunctuated by
+ * convention — and this module's own copy is prose. Where the two are
+ * joined the seam should not show. Empty in, empty out, so a caller can
+ * test it for "was there anything to say".
+ */
+function asSentence(message: string): string {
+  const text = message.trim()
+  if (!text) return ""
+  const capitalized = text.charAt(0).toUpperCase() + text.slice(1)
+  return /[.!?]$/.test(capitalized) ? capitalized : `${capitalized}.`
+}
+
 function instanceWide(
   viewer: Viewer,
   spec: { panel: SettingsSectionKey; adminReason: string; label: string },
@@ -190,6 +227,10 @@ function instanceWide(
  * contribute is what it says. Falls back to the server's own message —
  * for an unknown code that is all there is, and for a known one it is
  * still the more specific text where this module has none.
+ *
+ * The message also goes *in*, as the cause: a request that failed is the
+ * one place the server's account of why is available, and a branch that
+ * covers more than one cause needs it to say which.
  */
 export function messageForCode(
   code: ApiErrorCode | undefined,
@@ -197,7 +238,7 @@ export function messageForCode(
   viewer: Viewer,
 ): string {
   if (!code) return serverMessage
-  const affordance = affordanceFor(code, viewer)
+  const affordance = affordanceFor(code, viewer, serverMessage)
   if (affordance.kind === "hidden") return serverMessage
   return affordance.reason || serverMessage
 }

@@ -9,7 +9,7 @@ import type { AuthUser } from "@/api/auth"
 import { meQueryKey } from "@/api/auth"
 import type { ApiErrorCode } from "@/api/client"
 import type { Viewer } from "@/lib/affordance"
-import { ALL_ERROR_CODES, affordanceFor, useViewer } from "@/lib/affordance"
+import { ALL_ERROR_CODES, affordanceFor, messageForCode, useViewer } from "@/lib/affordance"
 
 afterEach(() => {
   cleanup()
@@ -124,6 +124,81 @@ describe("affordanceFor", () => {
     const got = affordanceFor("SOMETHING_NEW" as ApiErrorCode, reader)
 
     expect(got.kind).toBe("report")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// What the sentence says
+// ---------------------------------------------------------------------------
+//
+// One code can stand for more than one cause. `AUDIOBOOKS_DISABLED` is
+// both "the admin turned generation off" and "this instance has no
+// engine wired": one obstacle with one fix, so one branch — but two
+// different things to say, and only the server knows which happened.
+
+describe("messageForCode", () => {
+  it("tells an admin who turned narration off that it is off", () => {
+    const said = messageForCode(
+      "AUDIOBOOKS_DISABLED",
+      "audiobook generation is not enabled",
+      admin,
+    )
+
+    expect(said).toMatch(/not enabled/i)
+    // The bug (#271): the client's own sentence claimed no engine was
+    // configured, which on an instance with a working engine that an
+    // admin had merely switched off was false, and sent the reader to
+    // the wrong fix.
+    expect(said).not.toMatch(/engine/i)
+  })
+
+  it("still tells an instance with nothing set up that it is not configured", () => {
+    const said = messageForCode(
+      "AUDIOBOOKS_DISABLED",
+      "audiobook generation is not configured",
+      admin,
+    )
+
+    expect(said).toMatch(/not configured/i)
+  })
+
+  // Both sentences have to carry the fix as well as the cause, which is
+  // the half a toast can hold: `errorToast` is `(err) => string`, so the
+  // label and the route of a navigate affordance never render.
+  it("points the admin at the panel whichever cause the server named", () => {
+    for (const cause of [
+      "audiobook generation is not enabled",
+      "audiobook generation is not configured",
+    ]) {
+      expect(messageForCode("AUDIOBOOKS_DISABLED", cause, admin)).toMatch(
+        /narration settings/i,
+      )
+    }
+  })
+
+  // A reader can clear none of this, so they are told what happened and
+  // not sent anywhere. The affordance is hidden, and the server's own
+  // sentence is what is left.
+  it("gives a reader the server's account and no fix to chase", () => {
+    const said = messageForCode(
+      "AUDIOBOOKS_DISABLED",
+      "audiobook generation is not enabled",
+      reader,
+    )
+
+    expect(said).toBe("audiobook generation is not enabled")
+  })
+
+  // Built from the code alone — a control gated before any request has
+  // failed — there is no cause to quote, so the sentence has to be one
+  // that holds however narration came to be unavailable.
+  it("claims no particular cause when the server has not named one", () => {
+    const got = affordanceFor("AUDIOBOOKS_DISABLED", admin)
+
+    expect(got.kind).toBe("navigate")
+    if (got.kind !== "navigate") throw new Error("unreachable")
+    expect(got.reason).not.toMatch(/engine|enabled/i)
+    expect(got.reason.length).toBeGreaterThan(0)
   })
 })
 
