@@ -659,3 +659,58 @@ func TestTransitionReportsWhetherTheRowMoved(t *testing.T) {
 		t.Errorf("moved = (%v, %v), want (true, false) so the UI is told once", first, second)
 	}
 }
+
+// The point of #233. The guard a Transition carries has two renderings —
+// `state = ANY($6::text[])` in the locked write above, and
+// model.Transition.Admits, which the service's test double asks so its
+// tests can tell a refused transition from one that happened. Nothing in
+// Go makes a SQL predicate agree with a Go method, so this asserts they
+// answer the same for every state the model declares, against a real
+// Postgres. A future divergence — a `state <> ALL`, an IN list that
+// drops a state, a guard that starts case-folding — fails the build here
+// rather than being discovered when a cancelled run is billed as ready.
+//
+// Quantified over AllAudiobookStates rather than a list written out
+// here, so a sixth state is covered the moment it is declared.
+func TestTransitionGuardAgreesWithTheModel(t *testing.T) {
+	d := repotest.New(t)
+	bookID, audiobooks := audiobookFixture(t, d, 1)
+	ctx := context.Background()
+
+	guards := []model.Transition{
+		// The empty guard admits nothing, which is what the SQL's
+		// ANY('{}') says too — and is the case a hand-written IN list
+		// would render as invalid SQL rather than as a refusal.
+		{To: model.AudiobookFailed},
+		{To: model.AudiobookCanceled, From: model.LiveStates()},
+		{To: model.AudiobookFailed, From: model.AllAudiobookStates()},
+	}
+	for _, s := range model.AllAudiobookStates() {
+		guards = append(guards, model.Transition{
+			To: model.AudiobookFailed, From: []model.AudiobookState{s},
+		})
+	}
+
+	for _, guard := range guards {
+		for _, current := range model.AllAudiobookStates() {
+			// Set the column directly: the only other way in is the very
+			// write under test, which would make the setup depend on the
+			// answer being checked.
+			if _, err := d.SQL.ExecContext(ctx,
+				`UPDATE book_audiobooks SET state = $2 WHERE book_id = $1`,
+				bookID, string(current)); err != nil {
+				t.Fatalf("force state %q: %v", current, err)
+			}
+
+			moved, err := audiobooks.Transition(ctx, bookID, guard)
+			if err != nil {
+				t.Fatalf("Transition from %q with guard %v: %v", current, guard.From, err)
+			}
+			if want := guard.Admits(current); moved != want {
+				t.Errorf("guard %v against a run in %q: SQL moved = %v, model Admits = %v — "+
+					"the two renderings of the same guard disagree",
+					guard.From, current, moved, want)
+			}
+		}
+	}
+}

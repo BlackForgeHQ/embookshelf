@@ -24,6 +24,17 @@ const (
 	AudiobookCanceled AudiobookState = "canceled"
 )
 
+// AllAudiobookStates is every state a run can be in. Exists so a rule
+// quantified over the states — the transition guard's parity test — can
+// be written against the model's own list rather than a copy of it that
+// a sixth state would not reach.
+func AllAudiobookStates() []AudiobookState {
+	return []AudiobookState{
+		AudiobookPending, AudiobookRunning, AudiobookReady,
+		AudiobookFailed, AudiobookCanceled,
+	}
+}
+
 // Terminal reports whether no further work will happen without a new
 // user action.
 func (s AudiobookState) Terminal() bool {
@@ -146,7 +157,29 @@ type Transition struct {
 	DurationMS *int64
 }
 
-// FromStrings renders From for the SQL guard.
+// Admits reports whether a run in this state may take the transition —
+// the guard itself, answered where From is declared.
+//
+// The rule is stated once here and rendered wherever it is needed, the
+// move the column projection made for column order. It used to be
+// reimplemented: as a Go loop inside the service's test double, so tests
+// could tell a refused transition from one that happened, while the repo
+// spelled the same membership test as a SQL predicate. Nothing forced
+// the two to agree, and every transition test asserted against the
+// double's copy (#233).
+func (t Transition) Admits(state AudiobookState) bool {
+	for _, from := range t.From {
+		if from == state {
+			return true
+		}
+	}
+	return false
+}
+
+// FromStrings renders From as the argument to the SQL guard's array
+// membership, which is Admits expressed in the one language that can ask
+// the question inside the locked write. `repo` tests the two agree for
+// every state.
 func (t Transition) FromStrings() []string {
 	out := make([]string, 0, len(t.From))
 	for _, s := range t.From {

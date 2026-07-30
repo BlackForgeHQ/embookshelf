@@ -4,6 +4,40 @@ package model
 
 import "testing"
 
+// Admits is the transition guard, stated where the transition declares
+// what it moves from. It is quantified over every state the model knows
+// rather than a hand-listed few, because the states it must *refuse* are
+// the interesting half and a literal list here would go stale the day a
+// sixth state is added.
+func TestTransitionAdmitsExactlyTheStatesItDeclares(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		tr   Transition
+	}{
+		{"live states", Transition{To: AudiobookCanceled, From: LiveStates()}},
+		{"a single state", Transition{To: AudiobookRunning, From: []AudiobookState{AudiobookPending}}},
+		{"every state", Transition{To: AudiobookFailed, From: AllAudiobookStates()}},
+		// No "any" value exists, and an empty From is the degenerate case
+		// of that: it admits nothing, exactly as `state = ANY('{}')` does.
+		{"nothing", Transition{To: AudiobookReady}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			declared := make(map[AudiobookState]bool, len(tc.tr.From))
+			for _, s := range tc.tr.From {
+				declared[s] = true
+			}
+			for _, state := range AllAudiobookStates() {
+				if got := tc.tr.Admits(state); got != declared[state] {
+					t.Errorf("Admits(%q) = %v, want %v — the guard disagrees with From %v",
+						state, got, declared[state], tc.tr.From)
+				}
+			}
+		})
+	}
+}
+
 // NextForRun is the whole subsystem's rule — CONTEXT calls Coverage the
 // run's authority on its own lifecycle — and until now every cell of it
 // was reached only through the service's fakes, so the matrix was

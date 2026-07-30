@@ -76,6 +76,12 @@ func (f *fakeAudiobookStore) GetByBookID(context.Context, string) (model.Audiobo
 // of the states the caller expects, and the caller is told whether it
 // moved. Without the guard here a test could not tell a transition that
 // was refused from one that happened (#210).
+//
+// The guard is asked, not reimplemented. This used to be a Go loop over
+// tr.From standing in for a SQL predicate nothing held it to, so every
+// transition test in this file asserted against the double's copy of the
+// rule; repo's parity test now holds the predicate to the same
+// model.Transition.Admits called here (#233).
 func (f *fakeAudiobookStore) Transition(
 	_ context.Context, _ string, tr model.Transition,
 ) (bool, error) {
@@ -83,14 +89,7 @@ func (f *fakeAudiobookStore) Transition(
 	if current == "" {
 		current = f.run.State
 	}
-	allowed := false
-	for _, from := range tr.From {
-		if from == current {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
+	if !tr.Admits(current) {
 		return false, nil
 	}
 	f.state, f.stateMsg = tr.To, tr.Error

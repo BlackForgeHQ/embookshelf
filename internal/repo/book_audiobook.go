@@ -321,6 +321,13 @@ func scanCoverage(ctx context.Context, q rowQuerier, bookID string) (model.Audio
 //
 // The moved flag is the other half: it is how the SSE publish fires
 // exactly once when two segments settle a run at the same instant.
+//
+// The guard itself is not stated here. `state = ANY($6::text[])` is
+// array membership over model.Transition.FromStrings — the SQL rendering
+// of model.Transition.Admits, which is the same question the service's
+// test double asks. TestTransitionGuardAgreesWithTheModel holds this
+// predicate to that method for every declared state, so the two cannot
+// drift apart unnoticed (#233).
 func (r *BookAudiobookRepo) Transition(
 	ctx context.Context, bookID string, t model.Transition,
 ) (bool, error) {
