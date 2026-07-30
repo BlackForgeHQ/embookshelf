@@ -426,3 +426,124 @@ func TestLibraryHandle_SidecarKey(t *testing.T) {
 		}
 	}
 }
+
+// libListFunc is the whole of the library listing the sandbox roots
+// need: every registered library, so each can offer its local root.
+type libListFunc func(context.Context) ([]model.Library, error)
+
+func (f libListFunc) List(ctx context.Context) ([]model.Library, error) { return f(ctx) }
+
+func libsOf(libs ...model.Library) libListFunc {
+	return func(context.Context) ([]model.Library, error) { return libs, nil }
+}
+
+func ptr(s string) *string { return &s }
+
+// The fail-closed case, which is the whole reason the roots are a named
+// thing rather than an inline loop: an install with no BookDrop and no
+// library that lives on a filesystem hands the sandbox nothing, and
+// nothing must admit nothing. A roots collector that quietly returned
+// "/" — or that a caller defaulted past — turns the gate into a pass.
+func TestBookFileRootsAdmitNothingWhenNoneAreConfigured(t *testing.T) {
+	t.Parallel()
+
+	// Two libraries that exist but own no filesystem: the s3 shape, where
+	// path and root are both empty because the backend encodes the prefix.
+	libs := libsOf(
+		model.Library{ID: "s3-a"},
+		model.Library{ID: "s3-b", Root: ptr("")},
+	)
+
+	roots := service.BookFileRoots(context.Background(), "", libs)
+	if len(roots) != 0 {
+		t.Fatalf("libraries with no local root contributed %v, want none", roots)
+	}
+
+	if _, err := service.SandboxPath(filepath.Join(t.TempDir(), "book.epub"), roots); !errors.Is(
+		err, service.ErrPathOutsideRoots,
+	) {
+		t.Fatalf("no configured roots admitted a path (err %v), want ErrPathOutsideRoots", err)
+	}
+}
+
+// The roots are only half the gate; pinning them against SandboxPath is
+// what says the pair still refuses an escape. A books.path that climbs
+// out of the library it claims to belong to is the shape that matters —
+// the row is attacker-influenced on the delete side, where the sandbox
+// is all that stands between a malformed path and an unlink.
+func TestBookFileRootsRefuseATraversalOutOfALibraryRoot(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	libRoot := filepath.Join(base, "library")
+	roots := service.BookFileRoots(
+		context.Background(), "", libsOf(model.Library{ID: "lib", Path: libRoot}),
+	)
+
+	escape := filepath.Join(libRoot, "..", "elsewhere", "book.epub")
+	if _, err := service.SandboxPath(escape, roots); !errors.Is(err, service.ErrPathOutsideRoots) {
+		t.Fatalf("traversal out of the library root returned %v, want ErrPathOutsideRoots", err)
+	}
+
+	// A prefix sibling is the same refusal by a different route: the
+	// library root must not vouch for a directory that merely starts
+	// with its name.
+	sibling := filepath.Join(base, "library-backup", "book.epub")
+	if _, err := service.SandboxPath(sibling, roots); !errors.Is(err, service.ErrPathOutsideRoots) {
+		t.Fatalf("prefix-sibling directory returned %v, want ErrPathOutsideRoots", err)
+	}
+
+	inside := filepath.Join(libRoot, "Author", "Title", "book.epub")
+	if _, err := service.SandboxPath(inside, roots); err != nil {
+		t.Fatalf("a file inside the library root was refused: %v", err)
+	}
+}
+
+// Both sources have to survive the consolidation, and the library half
+// has to read the column that is actually populated: storage-v2 rows
+// answer with root, pre-storage-v2 rows with path, and a roots collector
+// that only ever read path would leave a migrated library unservable.
+func TestBookFileRootsCoverBookDropAndEveryLocalLibrary(t *testing.T) {
+	t.Parallel()
+
+	drop := t.TempDir()
+	legacy := t.TempDir()
+	migrated := t.TempDir()
+
+	roots := service.BookFileRoots(context.Background(), drop, libsOf(
+		model.Library{ID: "legacy", Path: legacy},
+		model.Library{ID: "migrated", Root: ptr(migrated)},
+		model.Library{ID: "s3"},
+	))
+
+	for _, root := range []string{drop, legacy, migrated} {
+		if _, err := service.SandboxPath(filepath.Join(root, "book.epub"), roots); err != nil {
+			t.Errorf("a file under %q was refused: %v", root, err)
+		}
+	}
+	if len(roots) != 3 {
+		t.Errorf("roots = %v, want exactly the three configured ones", roots)
+	}
+}
+
+// A catalog that will not answer must not widen the gate. The sandbox
+// degrades to the roots it does have, which on the delete side means a
+// skipped unlink rather than an unlink aimed anywhere.
+func TestBookFileRootsDegradeToBookDropWhenTheCatalogFails(t *testing.T) {
+	t.Parallel()
+
+	drop := t.TempDir()
+	failing := libListFunc(func(context.Context) ([]model.Library, error) {
+		return nil, errors.New("catalog unavailable")
+	})
+
+	roots := service.BookFileRoots(context.Background(), drop, failing)
+	if len(roots) != 1 || roots[0] != drop {
+		t.Fatalf("roots = %v, want only the BookDrop staging area", roots)
+	}
+	if _, err := service.SandboxPath(
+		filepath.Join(t.TempDir(), "book.epub"), roots,
+	); !errors.Is(err, service.ErrPathOutsideRoots) {
+		t.Fatalf("a failed listing admitted an unrelated path (err %v)", err)
+	}
+}

@@ -364,7 +364,7 @@ func (s *LibraryService) deleteLegacyFile(ctx context.Context, book model.Book) 
 	if book.Path == "" {
 		return nil
 	}
-	abs, err := SandboxPath(book.Path, s.bookFileRoots(ctx))
+	abs, err := SandboxPath(book.Path, BookFileRoots(ctx, s.deps.BookDropPath, s.repo))
 	if err != nil {
 		return err
 	}
@@ -372,27 +372,4 @@ func (s *LibraryService) deleteLegacyFile(ctx context.Context, book model.Book) 
 		return err
 	}
 	return nil
-}
-
-// bookFileRoots is the allow-list of directories a book file may be
-// deleted from: the BookDrop staging area plus every registered library
-// root. A library with no local path (backend-backed) contributes
-// nothing. A failed library listing yields the roots we do have — the
-// sandbox fails closed, so the worst case is a skipped unlink.
-func (s *LibraryService) bookFileRoots(ctx context.Context) []string {
-	roots := make([]string, 0, 4)
-	if s.deps.BookDropPath != "" {
-		roots = append(roots, s.deps.BookDropPath)
-	}
-	libs, err := s.repo.List(ctx)
-	if err != nil {
-		slog.Warn("book delete: list libraries for sandbox roots", "err", err)
-		return roots
-	}
-	for _, l := range libs {
-		if l.Path != "" {
-			roots = append(roots, l.Path)
-		}
-	}
-	return roots
 }

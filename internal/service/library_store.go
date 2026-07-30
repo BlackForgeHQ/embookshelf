@@ -145,10 +145,73 @@ func (h *LibraryHandle) keyRoot() (string, bool) {
 // localRoot is the library's on-disk root, preferring the storage-v2
 // Root column and falling back to the legacy Path.
 func (h *LibraryHandle) localRoot() string {
-	if h.Library.Root != nil && *h.Library.Root != "" {
-		return *h.Library.Root
+	return libraryLocalRoot(h.Library)
+}
+
+// libraryLocalRoot is the one reading of "where does this library live on
+// disk". Two columns say it — storage-v2's root and the legacy path — and
+// which one is populated depends on how old the row is, so the preference
+// order is a fact about the schema rather than about any one caller. Empty
+// means the library has no filesystem of its own: an s3 library, whose
+// prefix the backend encodes and whose root column is deliberately blank
+// (repo.LibraryRepo.CreateLibrary).
+//
+// A free function and not only a handle method because the sandbox roots
+// ask it of every library in a listing, where building a handle apiece
+// would resolve N backends to read two columns.
+func libraryLocalRoot(lib model.Library) string {
+	if lib.Root != nil && *lib.Root != "" {
+		return *lib.Root
 	}
-	return h.Library.Path
+	return lib.Path
+}
+
+// LibraryLister is the slice of the library catalog the sandbox roots
+// need. Narrow so the roots are testable without a database, and so both
+// tiers can pass what they already hold — the service its LibraryRepo,
+// the HTTP layer its LibraryService.
+type LibraryLister interface {
+	List(ctx context.Context) ([]model.Library, error)
+}
+
+// BookFileRoots is the allow-list half of the Book file sandbox: the
+// directories a book file may be read from or deleted under. Two sources,
+// and only two — the BookDrop staging area, and every library that lives
+// on a filesystem. A library with no local root (s3-backed) contributes
+// nothing, which is how an object-store install ends up with a sandbox
+// that admits only BookDrop.
+//
+// The counterpart to SandboxPath, and here for the same reason: serving
+// and deleting have to be gated by the same allow-list or a change to one
+// tier silently loosens the other. It was written twice — once here in
+// the service tier, once character-for-character in the HTTP layer — and
+// a third time in the comic reader before CBZ moved onto the storage
+// seam. One implementation is the property the sandbox is named for.
+//
+// Degrades rather than fails: a listing error yields the roots we do
+// have. The sandbox fails closed, so the worst case is a refused read or
+// a skipped unlink, never a widened gate. A nil lister is the same case —
+// an install with no library catalog wired keeps BookDrop and nothing
+// else.
+func BookFileRoots(ctx context.Context, bookDropPath string, libs LibraryLister) []string {
+	roots := make([]string, 0, 4)
+	if bookDropPath != "" {
+		roots = append(roots, bookDropPath)
+	}
+	if libs == nil {
+		return roots
+	}
+	list, err := libs.List(ctx)
+	if err != nil {
+		slog.Warn("book file sandbox: list libraries for roots", "err", err)
+		return roots
+	}
+	for _, lib := range list {
+		if root := libraryLocalRoot(lib); root != "" {
+			roots = append(roots, root)
+		}
+	}
+	return roots
 }
 
 // LocalPath resolves a library-relative location to an absolute path on

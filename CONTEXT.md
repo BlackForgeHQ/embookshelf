@@ -421,7 +421,9 @@ Callers hand it a book id and whatever their write returned, and it writes the r
 
 ### Book file sandbox
 
-`service.SandboxPath`; the allow-list gate every filesystem read or delete of a book file passes through. Roots are `BOOKDROP_PATH` plus every Library with a local path; a path must resolve inside one of them after cleaning. Fails closed — no configured roots admits nothing. Serving (`handler.sandboxPath`) and deleting (`LibraryService.DeleteBook`) share the one implementation so a change to the rule cannot apply to one and miss the other — the reason it lives in `service` rather than in the HTTP layer with its other caller.
+`service.SandboxPath`; the allow-list gate every filesystem read or delete of a book file passes through. A path must resolve inside one of the roots after cleaning. Fails closed — no configured roots admits nothing. Serving (`handler.sandboxPath`) and deleting (`LibraryService.DeleteBook`) share the one implementation so a change to the rule cannot apply to one and miss the other — the reason it lives in `service` rather than in the HTTP layer with its other caller.
+
+The roots are `service.BookFileRoots`: `BOOKDROP_PATH` plus every Library that lives on a filesystem, where "lives on a filesystem" is the same `root`-then-`path` reading [[LibraryStore]] does for keys. Both halves of the gate are single implementations for the same reason — the roots were written twice character-for-character (service tier and HTTP layer) and a third time in the comic reader, and an allow-list computed separately per tier is one edit away from the serve side and the delete side disagreeing. A listing failure degrades to the roots already in hand rather than widening.
 
 ### Placer
 

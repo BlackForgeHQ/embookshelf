@@ -19,24 +19,22 @@ func sandboxPath(path string, roots []string) (string, error) {
 }
 
 // bookFileRoots is the allow-list of directories the app may read book
-// bytes from or delete them under: the BookDrop staging area plus every
-// registered library root. A library with no local path (S3-backed)
-// contributes nothing.
+// bytes from. Collected by service.BookFileRoots, not here: this tier
+// carried a character-for-character copy of that loop, and a third
+// hand-rolled variant lived in the comic reader until CBZ moved onto the
+// storage seam. An allow-list the serve side and the delete side compute
+// separately is one edit away from disagreeing, which is the failure the
+// sandbox exists to make impossible.
+//
+// h.lib is a required dependency, but the nil check survives the move:
+// the interface would otherwise hold a typed nil pointer and the listing
+// would panic instead of degrading to BookDrop alone.
 func (h *Handler) bookFileRoots(ctx context.Context) []string {
-	roots := make([]string, 0, 4)
-	if h.cfg.BookDropPath != "" {
-		roots = append(roots, h.cfg.BookDropPath)
-	}
+	var libs service.LibraryLister
 	if h.lib != nil {
-		if libs, err := h.lib.List(ctx); err == nil {
-			for _, l := range libs {
-				if l.Path != "" {
-					roots = append(roots, l.Path)
-				}
-			}
-		}
+		libs = h.lib
 	}
-	return roots
+	return service.BookFileRoots(ctx, h.cfg.BookDropPath, libs)
 }
 
 // sandboxedBookPath is the gate every handler read of a file named by a
