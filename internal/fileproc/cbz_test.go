@@ -10,6 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/blackforge/embookshelf/internal/storage"
+	"github.com/blackforge/embookshelf/internal/storage/local"
 )
 
 func TestNaturalLess(t *testing.T) {
@@ -170,14 +173,165 @@ func TestCBZExtract_NoImagesFails(t *testing.T) {
 	}
 }
 
+// An object store is the one place a CBZ could live that the page reader
+// could not reach: CBZPages and CBZPage took a filesystem path, so comic
+// pagination on an S3-backed library had no call that could even be
+// written — the same shape as the library scan that skipped every
+// object-store library while reporting success.
+//
+// The counting store answers the second question at the same time. A page
+// read is random access into a zip: the reader wants the central
+// directory at the tail and one entry's bytes, and pulling the whole
+// archive for each page is a different thing that happens to return the
+// same image. The assertion below is what separates them.
+func TestCBZPagesAndPageOverAnObjectStore(t *testing.T) {
+	store := &countingObjectStore{objects: map[string][]byte{}}
+	const key = "Brian K. Vaughan/Saga 1/saga-01.cbz"
+	store.objects[key] = incompressibleCBZ(t, []string{"03.png", "01.png", "02.png"}, 128<<10)
+	archiveSize := int64(len(store.objects[key]))
+
+	src, err := store.Open(context.Background(), key)
+	if err != nil {
+		t.Fatalf("open object: %v", err)
+	}
+	defer func() { _ = src.Close() }()
+
+	pages, err := CBZPages(src)
+	if err != nil {
+		t.Fatalf("CBZPages: %v", err)
+	}
+	if len(pages) != 3 {
+		t.Fatalf("len(pages) = %d, want 3", len(pages))
+	}
+	if pages[0] != "01.png" || pages[1] != "02.png" || pages[2] != "03.png" {
+		t.Errorf("page order wrong: %v", pages)
+	}
+
+	var buf bytes.Buffer
+	mime, err := CBZPage(src, 1, &buf)
+	if err != nil {
+		t.Fatalf("CBZPage(1): %v", err)
+	}
+	if mime != "image/png" {
+		t.Errorf("mime = %q, want image/png", mime)
+	}
+	if got := buf.Bytes(); !bytes.Equal(got, pageFiller("02.png", 128<<10)) {
+		t.Errorf("page 1 body is not the bytes of 02.png (%d bytes read)", len(got))
+	}
+
+	if _, err := CBZPage(src, 99, io.Discard); err == nil {
+		t.Error("expected an error for an out-of-range page")
+	}
+
+	// One page out of three, plus two directory reads — a third of the
+	// archive and change. A reader that downloads the object to serve a
+	// page would be at or above the whole archive here, and one that
+	// downloads it per call would be at three times it.
+	if store.read > archiveSize/2 {
+		t.Errorf("listing + one page pulled %d bytes of a %d-byte archive — "+
+			"the reader is downloading the whole object per page",
+			store.read, archiveSize)
+	}
+}
+
+// countingObjectStore is a storage.Storage that reports itself an object
+// store and records every byte its Sources hand back, so a test can hold
+// the reader to range reads rather than a download.
+type countingObjectStore struct {
+	storage.Storage
+	objects map[string][]byte
+	read    int64
+}
+
+func (s *countingObjectStore) Capabilities() storage.Capability {
+	return storage.CapObjectStore | storage.CapRange
+}
+
+func (s *countingObjectStore) Open(_ context.Context, key string) (storage.Source, error) {
+	b, ok := s.objects[key]
+	if !ok {
+		return nil, storage.ErrNotFound
+	}
+	return &countingSource{Reader: bytes.NewReader(b), size: int64(len(b)), store: s}, nil
+}
+
+type countingSource struct {
+	*bytes.Reader
+	size  int64
+	store *countingObjectStore
+}
+
+func (c *countingSource) Size() int64  { return c.size }
+func (c *countingSource) Close() error { return nil }
+
+func (c *countingSource) ReadAt(p []byte, off int64) (int, error) {
+	n, err := c.Reader.ReadAt(p, off)
+	c.store.read += int64(n)
+	return n, err
+}
+
+// pageFiller is deterministic per-name filler that does not compress, so
+// the archive built from it is as large as its pages and a full download
+// is measurably different from a range read.
+func pageFiller(name string, size int) []byte {
+	out := make([]byte, size)
+	// xorshift seeded from the name: no dependency on the global rand,
+	// and every page differs from every other.
+	var state uint32 = 2166136261
+	for i := 0; i < len(name); i++ {
+		state = (state ^ uint32(name[i])) * 16777619
+	}
+	for i := range out {
+		state ^= state << 13
+		state ^= state >> 17
+		state ^= state << 5
+		out[i] = byte(state)
+	}
+	return out
+}
+
+// incompressibleCBZ builds a CBZ whose entries are stored uncompressed,
+// each `size` bytes of filler.
+func incompressibleCBZ(t *testing.T, names []string, size int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, name := range names {
+		w, err := zw.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Store})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(pageFiller(name, size)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// The local library, through the same reader and the backend a local
+// install actually boots. Unchanged behaviour is the point: one page
+// listing, one page's bytes, one out-of-range error.
 func TestCBZPagesAndPage(t *testing.T) {
 	dir := t.TempDir()
-	cbz := writeCBZ(t, dir, map[string][]byte{
+	writeCBZ(t, dir, map[string][]byte{
 		"03.png": []byte("three"),
 		"01.png": []byte("one"),
 		"02.png": []byte("two"),
 	})
-	pages, err := CBZPages(cbz)
+	fs, err := local.New(dir)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	src, err := fs.Open(context.Background(), "test.cbz")
+	if err != nil {
+		t.Fatalf("open cbz: %v", err)
+	}
+	defer func() { _ = src.Close() }()
+
+	pages, err := CBZPages(src)
 	if err != nil {
 		t.Fatalf("CBZPages: %v", err)
 	}
@@ -189,7 +343,7 @@ func TestCBZPagesAndPage(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	mime, err := CBZPage(cbz, 1, &buf)
+	mime, err := CBZPage(src, 1, &buf)
 	if err != nil {
 		t.Fatalf("CBZPage(1): %v", err)
 	}
@@ -200,7 +354,7 @@ func TestCBZPagesAndPage(t *testing.T) {
 		t.Errorf("page 1 body = %q, want 'two'", buf.String())
 	}
 
-	if _, err := CBZPage(cbz, 99, io.Discard); err == nil {
+	if _, err := CBZPage(src, 99, io.Discard); err == nil {
 		t.Error("expected error for out-of-range page")
 	}
 }

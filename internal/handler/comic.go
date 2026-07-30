@@ -3,15 +3,20 @@
 package handler
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
-	"path/filepath"
+	"os"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
+	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // ComicPagesIndex returns the page count for a CBZ book. The reader uses
@@ -24,15 +29,14 @@ func (h *Handler) ComicPagesIndex(c *gin.Context, s bookScope) {
 		writeError(c, http.StatusUnsupportedMediaType, "not a comic book")
 		return
 	}
-	if book.Path == "" {
-		writeError(c, http.StatusNotFound, "no file on disk for this book")
+	src, err := h.openComicSource(c, book)
+	if err != nil {
+		writeComicSourceError(c, err)
 		return
 	}
-	if err := h.assertPathAllowed(c, book.Path); err != nil {
-		writeError(c, http.StatusForbidden, err.Error())
-		return
-	}
-	pages, err := fileproc.CBZPages(book.Path)
+	defer func() { _ = src.Close() }()
+
+	pages, err := fileproc.CBZPages(src)
 	if err != nil {
 		writeServerError(c, "list comic pages", err)
 		return
@@ -55,23 +59,23 @@ func (h *Handler) ComicPage(c *gin.Context, s bookScope) {
 		writeError(c, http.StatusUnsupportedMediaType, "not a comic book")
 		return
 	}
-	if book.Path == "" {
-		writeError(c, http.StatusNotFound, "no file on disk for this book")
+	src, err := h.openComicSource(c, book)
+	if err != nil {
+		writeComicSourceError(c, err)
 		return
 	}
-	if err := h.assertPathAllowed(c, book.Path); err != nil {
-		writeError(c, http.StatusForbidden, err.Error())
-		return
-	}
+	defer func() { _ = src.Close() }()
 
 	// Long cache: page bytes within an archive are immutable for the
 	// life of the underlying file. ETag would be more correct but the
 	// content rarely changes — a 1-day private cache is plenty.
 	c.Header("Cache-Control", "private, max-age=86400, immutable")
 
-	// We can't know the MIME type without opening the archive once.
-	// CBZPage handles that and writes directly into the response body.
-	mime, err := fileproc.CBZPage(book.Path, n, c.Writer)
+	// We can't know the MIME type without reading the archive's directory.
+	// CBZPage does that and writes the entry straight into the response
+	// body — one entry, not the whole archive, so an object-store-backed
+	// comic costs a range read per page rather than a download.
+	mime, err := fileproc.CBZPage(src, n, c.Writer)
 	if err != nil {
 		// Headers may already be on the wire if the archive opened but
 		// the entry was bad mid-stream. We do our best to surface a
@@ -90,40 +94,100 @@ func (h *Handler) ComicPage(c *gin.Context, s bookScope) {
 	}
 }
 
-// assertPathAllowed runs the same sandbox check serveBookFile uses, but
-// without writing to the response. Returns nil when path is rooted under
-// BOOKDROP_PATH or any registered library_path.
-func (h *Handler) assertPathAllowed(c *gin.Context, p string) error {
-	absPath, err := filepath.Abs(p)
-	if err != nil {
-		return errors.New("bad path")
-	}
-	roots := []string{}
-	if h.cfg.BookDropPath != "" {
-		if r, err := filepath.Abs(h.cfg.BookDropPath); err == nil {
-			roots = append(roots, r)
-		}
-	}
-	if h.lib != nil {
-		if libs, err := h.lib.List(c.Request.Context()); err == nil {
-			for _, l := range libs {
-				if l.Path == "" {
-					continue
-				}
-				if r, err := filepath.Abs(l.Path); err == nil {
-					roots = append(roots, r)
-				}
+// openComicSource hands back the comic's bytes as a random-access Source,
+// wherever the book's library keeps them.
+//
+// It goes through LibraryHandle.OpenBookSource — the byte-access seam
+// every other in-process reader uses — rather than opening books.path
+// itself. That is not a style preference: the two previous callers that
+// reached around this seam with a direct file open are the two known
+// object-store outages, device push (CONTEXT, "OpenBook") and the library
+// scan. Comic pagination was the third, and it never worked on an
+// object-store library at all (#240).
+//
+// BookSource is deliberately not what is called here. It answers "what do
+// I tell the browser" — a presigned URL is a fine answer to that and a
+// useless one to a reader that has to seek into a zip.
+//
+// The fallback is the one handler.Options documents: an install with no
+// LibraryStore wired has no seam to route through, so the bytes come off
+// disk through the shared sandbox gate, exactly as serveBookFile
+// degrades. It is the same rule, not a second copy of it — the hand-rolled
+// third copy this handler used to carry is gone.
+func (h *Handler) openComicSource(c *gin.Context, book model.Book) (storage.Source, error) {
+	ctx := c.Request.Context()
+	if h.libStore != nil {
+		if handle, err := h.libStore.For(ctx, book.LibraryID); err == nil {
+			src, oerr := handle.OpenBookSource(ctx, book)
+			if oerr != nil {
+				return nil, notePlacedFile(ctx, handle, book, oerr)
 			}
+			return src, nil
 		}
 	}
-	if len(roots) == 0 {
-		return errors.New("no allowed roots configured")
+	return h.openSandboxedSource(c, book.Path)
+}
+
+// notePlacedFile separates "this book was never placed" from "its bytes
+// would not open", which the seam reports as one error and which are
+// different answers to a reader: 404 for a row with no file, 500 for a
+// backend that would not answer.
+//
+// Asked only when an open has already failed, so the extra lookup is off
+// the success path entirely.
+func notePlacedFile(
+	ctx context.Context, handle *service.LibraryHandle, book model.Book, err error,
+) error {
+	if book.Path != "" {
+		return err
 	}
-	sep := string(filepath.Separator)
-	for _, root := range roots {
-		if absPath == root || strings.HasPrefix(absPath, root+sep) {
-			return nil
-		}
+	if keys, kerr := handle.BookFileLocations(ctx, book.ID); kerr == nil && len(keys) == 0 {
+		return fmt.Errorf("book has no stored file: %w", os.ErrNotExist)
 	}
-	return errors.New("path outside allowed roots")
+	return err
+}
+
+// openSandboxedSource opens a book file named by a books.path value,
+// through the sandbox every handler-side filesystem read passes.
+func (h *Handler) openSandboxedSource(c *gin.Context, path string) (storage.Source, error) {
+	if path == "" {
+		return nil, fmt.Errorf("book has no stored file: %w", os.ErrNotExist)
+	}
+	abs, err := h.sandboxedBookPath(c, path)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(abs)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return fileSource{File: f, size: info.Size()}, nil
+}
+
+// fileSource is an open file as a storage.Source. *os.File is already a
+// ReaderAt and a Closer; only the size is missing.
+type fileSource struct {
+	*os.File
+	size int64
+}
+
+func (f fileSource) Size() int64 { return f.size }
+
+// writeComicSourceError renders a failure to get at the archive's bytes.
+// "The book has no file" and "the backend is unreachable" are different
+// answers and the reader UI treats them differently.
+func writeComicSourceError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrPathOutsideRoots):
+		writeError(c, http.StatusForbidden, err.Error())
+	case errors.Is(err, storage.ErrNotFound), errors.Is(err, os.ErrNotExist):
+		writeError(c, http.StatusNotFound, "no file stored for this book")
+	default:
+		writeServerError(c, "open comic archive", err)
+	}
 }

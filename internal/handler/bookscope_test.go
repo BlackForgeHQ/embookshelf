@@ -199,6 +199,10 @@ func TestComicPagesIndexRejectsANonComic(t *testing.T) {
 
 // The same body's second gate: a CBZ row whose file was never placed.
 // Also previously unreachable — reaching it meant creating a real book.
+//
+// "Stored", not "on disk": since #240 the comic reader gets its bytes
+// through the storage seam, so a book with no file may be missing from an
+// object store rather than from a filesystem.
 func TestComicPagesIndexRejectsAComicWithNoFile(t *testing.T) {
 	h := &Handler{books: &fakeBookStore{
 		book: model.Book{ID: "book-1", Format: "CBZ"},
@@ -209,7 +213,7 @@ func TestComicPagesIndexRejectsAComicWithNoFile(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "no file on disk") {
+	if !strings.Contains(rec.Body.String(), "no file stored") {
 		t.Errorf("body = %s, want the missing-file message", rec.Body.String())
 	}
 }

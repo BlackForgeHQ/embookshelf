@@ -215,31 +215,42 @@ func stripLeadingZeros(s string) string {
 	return s
 }
 
-// CBZPages opens the archive at filePath and returns the page entry names
-// in natural sort order. Used by the page-streaming handler so the reader
-// can resolve "page n" to a real archive entry without re-listing on every
-// request (callers are expected to cache the slice).
-func CBZPages(filePath string) ([]string, error) {
-	zr, err := zip.OpenReader(filePath)
+// CBZPages returns the archive's page entry names in natural sort order.
+// Used by the page-streaming handler so the reader can resolve "page n"
+// to a real archive entry without re-listing on every request (callers
+// are expected to cache the slice).
+//
+// Takes a storage.Source, like every other reader in this package, so a
+// comic is readable wherever its bytes live. It used to take a filesystem
+// path, which meant pagination could not be attempted at all on an
+// object-store-backed library and nothing said so (#240).
+//
+// A Source is a ReaderAt, which is what a zip actually needs: the central
+// directory sits at the tail, so listing costs a read of the tail rather
+// than of the object. The caller owns the Source and may reuse one across
+// a list and several page reads.
+func CBZPages(src storage.Source) ([]string, error) {
+	zr, err := zip.NewReader(src, src.Size())
 	if err != nil {
 		return nil, fmt.Errorf("open cbz: %w", err)
 	}
-	defer func() { _ = zr.Close() }()
-	return comicPages(&zr.Reader), nil
+	return comicPages(zr), nil
 }
 
-// CBZPage opens the archive at filePath and copies the n-th page (0-indexed,
-// natural sort order) into w. Returns the resolved MIME type so the caller
-// can set the response Content-Type. Returns os.ErrNotExist (wrapped) when
-// n is out of range.
-func CBZPage(filePath string, n int, w io.Writer) (mime string, err error) {
-	zr, err := zip.OpenReader(filePath)
+// CBZPage copies the n-th page (0-indexed, natural sort order) into w.
+// Returns the resolved MIME type so the caller can set the response
+// Content-Type. Errors when n is out of range.
+//
+// Reads one entry, not the archive: over an object store this is a range
+// read of that page's bytes plus the directory, so serving page 400 of a
+// 600 MB archive does not cost 600 MB.
+func CBZPage(src storage.Source, n int, w io.Writer) (mime string, err error) {
+	zr, err := zip.NewReader(src, src.Size())
 	if err != nil {
 		return "", fmt.Errorf("open cbz: %w", err)
 	}
-	defer func() { _ = zr.Close() }()
 
-	pages := comicPages(&zr.Reader)
+	pages := comicPages(zr)
 	if n < 0 || n >= len(pages) {
 		return "", fmt.Errorf("page %d out of range (0..%d)", n, len(pages)-1)
 	}
