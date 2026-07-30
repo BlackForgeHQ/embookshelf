@@ -69,13 +69,22 @@ type oidcProvider struct {
 // Google, GitHub, and a custom OIDC provider each have their own
 // settings row and can be enabled in parallel.
 // The narrow interfaces below are the slices of each repo this service
-// uses. Declared so the login flow's own logic — state handling, claim
-// mapping, provider gating — can be tested without a database, the same
-// way Provisioner's three seams made its policy testable.
+// uses. They are what the constructor takes, so the login flow's own
+// logic — state handling, intent dispatch, the foreign-identity check,
+// the provisioning-status switch — is testable without a database, the
+// same way Provisioner's three seams made its policy testable.
+//
+// Each one covers what the *flow* calls, which includes what it calls
+// through the Provisioner it builds: Exchange's login arm is Provision
+// plus a session, so the Provisioner's own seams are embedded here
+// rather than asking the composition root to build it separately.
 
 // oidcSettingsStore is the settings surface: the three provider config
-// rows plus the force-only toggle.
+// rows, the force-only toggle, and (via the Provisioner) the
+// auto-provisioning policy row.
 type oidcSettingsStore interface {
+	provisionerSettings
+
 	GetGoogle(ctx context.Context) (repo.OAuthPresetConfig, error)
 	GetGitHub(ctx context.Context) (repo.OAuthPresetConfig, error)
 	GetGenericOIDC(ctx context.Context) (repo.GenericOIDCConfig, error)
@@ -83,22 +92,26 @@ type oidcSettingsStore interface {
 }
 
 // oidcUserProfileStore is the one user-facing write the callback makes
-// beyond provisioning: refreshing name/avatar from the IdP's claims.
+// beyond provisioning — refreshing name/avatar from the IdP's claims —
+// plus the user surface the Provisioner needs to resolve or create the
+// account being logged in.
 type oidcUserProfileStore interface {
+	provisionerUsers
+
 	SyncOIDCProfile(ctx context.Context, userID, name, avatarURL string) error
 }
 
 // oidcSessionStore mints the browser session after a successful login.
+// Implemented by *repo.SessionRepo.
 type oidcSessionStore interface {
 	Create(ctx context.Context, userID, userAgent string, ttl time.Duration) (model.Session, error)
 }
 
-// oidcIdentityStore is the user_identities surface used by the link
-// flow; provisioning has its own narrower view of the same table.
+// oidcIdentityStore is the user_identities surface: the link flow's own
+// three calls — GetByIssuerSubject, Insert, TouchLastLogin — plus the
+// rest of the table the Provisioner touches on the login arm.
 type oidcIdentityStore interface {
-	GetByIssuerSubject(ctx context.Context, issuer, subject string) (model.Identity, error)
-	Insert(ctx context.Context, userID, provider, issuer, subject, email string) (model.Identity, error)
-	TouchLastLogin(ctx context.Context, id string) error
+	provisionerIdentities
 }
 
 type OIDCService struct {
@@ -129,10 +142,11 @@ type cachedDiscovery struct {
 	verifier *oidc.IDTokenVerifier
 }
 
-// NewOIDCService keeps the concrete repo types in its signature because
-// Provisioner needs its own view of the same stores; the service body
-// works through the narrow interfaces above.
-func NewOIDCService(settings *repo.AppSettingsRepo, users *repo.UserRepo, sessions *repo.SessionRepo, identities *repo.IdentityRepo, appURL string) *OIDCService {
+// NewOIDCService takes the narrow stores above; *repo.AppSettingsRepo,
+// *repo.UserRepo, *repo.SessionRepo and *repo.IdentityRepo satisfy them
+// at the composition root. The Provisioner is built here from the same
+// three values, so the whole callback path can run against fakes.
+func NewOIDCService(settings oidcSettingsStore, users oidcUserProfileStore, sessions oidcSessionStore, identities oidcIdentityStore, appURL string) *OIDCService {
 	svc := &OIDCService{
 		appURL:     strings.TrimRight(appURL, "/"),
 		settings:   settings,

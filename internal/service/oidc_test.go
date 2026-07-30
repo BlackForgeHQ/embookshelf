@@ -6,7 +6,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
@@ -304,10 +307,11 @@ func TestGoogleOIDCConfigUsesGoogleIssuer(t *testing.T) {
 
 // fakeOIDCSettings serves provider config without a database.
 type fakeOIDCSettings struct {
-	google  repo.OAuthPresetConfig
-	github  repo.OAuthPresetConfig
-	generic repo.GenericOIDCConfig
-	force   bool
+	google    repo.OAuthPresetConfig
+	github    repo.OAuthPresetConfig
+	generic   repo.GenericOIDCConfig
+	force     bool
+	provision repo.OIDCAutoProvisionDetails
 }
 
 func (f *fakeOIDCSettings) GetGoogle(context.Context) (repo.OAuthPresetConfig, error) {
@@ -320,6 +324,13 @@ func (f *fakeOIDCSettings) GetGenericOIDC(context.Context) (repo.GenericOIDCConf
 	return f.generic, nil
 }
 func (f *fakeOIDCSettings) GetBool(context.Context, string) (bool, error) { return f.force, nil }
+
+// GetOIDCAutoProvision is the Provisioner's slice of the same settings
+// row; the login arm of Exchange reads it through the Provisioner the
+// service builds.
+func (f *fakeOIDCSettings) GetOIDCAutoProvision(context.Context) (repo.OIDCAutoProvisionDetails, error) {
+	return f.provision, nil
+}
 
 // oidcForTest builds a service with fake settings. GitHub is the only
 // provider whose authorize URL is hand-built rather than derived from a
@@ -438,5 +449,139 @@ func TestAuthURLRefusesDisabledProvider(t *testing.T) {
 	_, err := svc.AuthURL(context.Background(), repo.ProviderSlugGitHub, "https://books.example")
 	if !errors.Is(err, ErrOIDCDisabled) {
 		t.Errorf("err = %v, want ErrOIDCDisabled", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics — the admin panel's "test this connection"
+// ---------------------------------------------------------------------------
+//
+// The diagnostic deliberately fetches the discovery document itself
+// rather than going through getDiscovery, so it can be driven against a
+// stub issuer with no cache and no live IdP.
+
+// A well-formed issuer passes every check and reports success.
+func TestDiagnosticsPassAgainstAConformingIssuer(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                           srv.URL,
+			"authorization_endpoint":           srv.URL + "/authorize",
+			"token_endpoint":                   srv.URL + "/token",
+			"jwks_uri":                         srv.URL + "/jwks",
+			"scopes_supported":                 []string{"openid", "profile", "email"},
+			"response_types_supported":         []string{"code"},
+			"code_challenge_methods_supported": []string{"S256"},
+		})
+	})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"keys":[{"kty":"RSA","kid":"k1"}]}`))
+	})
+
+	svc := oidcForTest(t, &fakeOIDCSettings{})
+	res := svc.TestGeneric(context.Background(), repo.GenericOIDCConfig{IssuerURI: srv.URL, ClientID: "cid"})
+
+	if !res.Success {
+		t.Fatalf("a conforming issuer failed: %+v", res.Checks)
+	}
+	want := map[string]CheckStatus{
+		"Discovery":              CheckPass,
+		"authorization_endpoint": CheckPass,
+		"token_endpoint":         CheckPass,
+		"jwks_uri":               CheckPass,
+		"scope: openid":          CheckPass,
+		"response_type: code":    CheckPass,
+		"PKCE S256":              CheckPass,
+		"JWKS fetch":             CheckPass,
+	}
+	got := map[string]CheckStatus{}
+	for _, c := range res.Checks {
+		got[c.Name] = c.Status
+	}
+	for name, status := range want {
+		if got[name] != status {
+			t.Errorf("check %q = %q, want %q", name, got[name], status)
+		}
+	}
+}
+
+// An issuer that advertises neither the code flow nor the email scope is
+// a real misconfiguration: the missing response type fails the run, the
+// missing optional scope only warns.
+func TestDiagnosticsGradeMissingCapabilities(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"authorization_endpoint":   "https://idp.test/authorize",
+			"token_endpoint":           "https://idp.test/token",
+			"scopes_supported":         []string{"openid"},
+			"response_types_supported": []string{"token"},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := oidcForTest(t, &fakeOIDCSettings{})
+	res := svc.TestGeneric(context.Background(), repo.GenericOIDCConfig{IssuerURI: srv.URL, ClientID: "cid"})
+
+	if res.Success {
+		t.Fatal("an issuer without the authorization-code flow was reported as usable")
+	}
+	got := map[string]CheckStatus{}
+	for _, c := range res.Checks {
+		got[c.Name] = c.Status
+	}
+	if got["response_type: code"] != CheckFail {
+		t.Errorf("response_type: code = %q, want FAIL", got["response_type: code"])
+	}
+	if got["scope: email"] != CheckWarn {
+		t.Errorf("scope: email = %q, want WARN — an unadvertised optional scope is not fatal", got["scope: email"])
+	}
+	if got["jwks_uri"] != CheckFail {
+		t.Errorf("jwks_uri = %q, want FAIL", got["jwks_uri"])
+	}
+}
+
+// An unreachable issuer reports the fetch failure rather than hanging or
+// panicking on a nil response.
+func TestDiagnosticsReportUnreachableIssuer(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close() // nothing is listening now
+
+	svc := oidcForTest(t, &fakeOIDCSettings{})
+	res := svc.TestGeneric(context.Background(), repo.GenericOIDCConfig{IssuerURI: url, ClientID: "cid"})
+
+	if res.Success || len(res.Checks) != 1 || res.Checks[0].Status != CheckFail {
+		t.Fatalf("checks = %+v, want a single FAIL on discovery", res.Checks)
+	}
+}
+
+// The two empty-input guards short-circuit before any network call, so a
+// half-filled settings form gives an instant answer.
+func TestDiagnosticsRefuseEmptyConfig(t *testing.T) {
+	t.Parallel()
+
+	svc := oidcForTest(t, &fakeOIDCSettings{})
+
+	if res := svc.TestGeneric(context.Background(), repo.GenericOIDCConfig{ClientID: "cid"}); res.Success ||
+		len(res.Checks) != 1 || res.Checks[0].Name != "Issuer URI" {
+		t.Errorf("empty issuer: checks = %+v, want a single Issuer URI failure", res.Checks)
+	}
+	if res := svc.TestGeneric(context.Background(), repo.GenericOIDCConfig{IssuerURI: "https://idp.test"}); res.Success ||
+		len(res.Checks) != 1 || res.Checks[0].Name != "Client ID" {
+		t.Errorf("empty client id: checks = %+v, want a single Client ID failure", res.Checks)
+	}
+	// GitHub has no discovery document, so its guard is its own.
+	if res := svc.TestGitHub(context.Background(), repo.OAuthPresetConfig{}); res.Success ||
+		len(res.Checks) != 1 || res.Checks[0].Name != "Client ID" {
+		t.Errorf("github: checks = %+v, want a single Client ID failure", res.Checks)
 	}
 }
