@@ -152,6 +152,17 @@ func runMigratorCmd(d *db.DB, cmd string, args []string, out io.Writer) error {
 		if err := fs.Parse(args); err != nil {
 			return err
 		}
+		// Nothing applied means nothing to revert, and it has to be
+		// asked before stepping: Steps(-1) below version 1 fails looking
+		// for a migration file that cannot exist, where Down() returns
+		// the no-change sentinel. Reporting that as an error is what
+		// broke the sanity job's loop.
+		if _, _, err := m.Version(); errors.Is(err, migrate.ErrNilVersion) {
+			_, _ = fmt.Fprintln(out, "no migration to revert")
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("down: read version: %w", err)
+		}
 		step := func() error { return m.Steps(-1) }
 		if all {
 			step = m.Down

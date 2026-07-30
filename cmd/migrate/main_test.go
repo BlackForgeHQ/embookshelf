@@ -128,6 +128,20 @@ func TestRun_downRevertsOneMigrationUnlessAskedForAll(t *testing.T) {
 		t.Fatalf("down went all the way to zero from %q; it should revert one migration", top)
 	}
 
+	// Reverting past the first migration is the case that broke CI:
+	// Steps(-1) below version 1 goes looking for a migration file that
+	// cannot exist and fails, where the old Down() returned a no-change
+	// sentinel the loop tolerated. A database with nothing applied is the
+	// smallest way to reach it.
+	fresh := "sqlite:" + filepath.Join(t.TempDir(), "empty.db")
+	out, err := runWithin(t, 60*time.Second, fresh, "down", nil)
+	if err != nil {
+		t.Fatalf("down on a database with nothing applied: %v (output %q)", err, out)
+	}
+	if !strings.Contains(out, "no migration") {
+		t.Fatalf("down on an empty database printed %q, want it to say there was nothing to revert", out)
+	}
+
 	// -all is deliberately not exercised here. It is the destructive
 	// path, so it needs a database it can take to zero, and SQLite's own
 	// down chain is broken at 000025 (#275) so it cannot reach zero
