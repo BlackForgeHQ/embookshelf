@@ -37,7 +37,12 @@ export function ShelfDraftProvider({ children }: { children: ReactNode }) {
   // hook subscribes to the cached result without an extra request.
   const shelves = useApiQuery(shelvesQuery)
 
+  // Inline: a refused name is read in the dialog the user is still
+  // standing in, under the field that caused it. The dialog stays open on
+  // failure, so a toast would say the same sentence a second time and
+  // then take it away.
   const createShelfMut = useApiMutation(createShelf, {
+    reportErrors: "inline",
     onSuccess: () => setOpen(false),
   })
 

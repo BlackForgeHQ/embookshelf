@@ -122,7 +122,12 @@ function MetadataEditor() {
     },
   })
 
+  // Inline: a refused save is reported in the footer beside the button
+  // that refused, which turns into "Retry save". The user is still in the
+  // form with the edit in hand; a toast would repeat that sentence and
+  // then take it away before they had fixed anything.
   const saveMut = useApiMutation(patchBook, {
+    reportErrors: "inline",
     onSuccess: (updated) => {
       queryClient.setQueryData(bookQueryKey(id), updated)
       baselineRef.current = bookToForm(updated)

@@ -61,10 +61,15 @@ export function AppSidebar() {
 
   // Smart shelves keep using the RuleEditor, extended with the
   // same accent picker so both shelf types share one design language.
+  // Inline, both: the rule editor renders whichever of the two refused
+  // (`smartMutError` below) and stays open on failure, so the failed rule
+  // is read next to the rule that caused it.
   const createSmartMut = useApiMutation(createSmartShelf, {
+    reportErrors: "inline",
     onSuccess: () => setSmartDraft(null),
   })
   const updateSmartMut = useApiMutation(updateShelf, {
+    reportErrors: "inline",
     onSuccess: () => setSmartDraft(null),
   })
   const deleteShelfMut = useApiMutation(deleteShelf)
