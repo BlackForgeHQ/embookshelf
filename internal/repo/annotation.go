@@ -20,26 +20,47 @@ func NewAnnotationRepo(db *db.DB) *AnnotationRepo {
 	return &AnnotationRepo{db: db}
 }
 
-const annotationCols = `
-    a.id, a.user_id, a.book_id, a.locator,
-    a.selected_text, a.note, a.color,
-    a.created_at, a.updated_at
-`
+// annotationProjection is the annotations row, declared once. The
+// aliased SELECT list, the RETURNING clause and the Scan destinations
+// all render from here.
+//
+// The table carries the sharpest instance of the Column-order coupling
+// hazard: selected_text, note and color are three adjacent TEXT columns,
+// so swapping two of them in any one of the three hand-kept lists
+// compiled, ran, and crossed every annotation's text with its colour.
+// Stating a column's position and its destination in a single value
+// makes that swap unrepresentable.
+//
+// No entry carries an `arg`: Update patches an optional subset of three
+// fields rather than writing the whole row, so it names its columns
+// inline instead of walking updateSet.
+var annotationProjection = projection[model.Annotation]{
+	{name: "id", dest: func(a *model.Annotation) any { return &a.ID }},
+	{name: "user_id", dest: func(a *model.Annotation) any { return &a.UserID }},
+	{name: "book_id", dest: func(a *model.Annotation) any { return &a.BookID }},
+	{name: "locator", dest: func(a *model.Annotation) any { return &a.Locator }},
+	{name: "selected_text", dest: func(a *model.Annotation) any { return &a.SelectedText }},
+	{name: "note", dest: func(a *model.Annotation) any { return &a.Note }},
+	{name: "color", dest: func(a *model.Annotation) any { return &a.Color }},
+	{name: "created_at", dest: func(a *model.Annotation) any { return &a.CreatedAt }},
+	{name: "updated_at", dest: func(a *model.Annotation) any { return &a.UpdatedAt }},
+}
 
-// annotationReturning is annotationCols stripped of the `a.` alias —
-// used by INSERT ... RETURNING and UPDATE ... RETURNING where there's
-// no FROM clause to alias the table.
-const annotationReturning = `
-    id, user_id, book_id, locator,
-    selected_text, note, color,
-    created_at, updated_at
-`
+var (
+	// annotationCols is the projection rendered for the read queries,
+	// which alias the table as `a`.
+	annotationCols = annotationProjection.selectList("a")
+	// annotationReturning is the same projection with no alias in
+	// scope — INSERT ... RETURNING and UPDATE ... RETURNING have no
+	// FROM clause to alias the table.
+	annotationReturning = annotationProjection.returningList("annotations")
+)
 
 // ListForBook returns every annotation the user has on a single book,
 // ordered by creation time ascending so the client list reads like a
 // chronological reading log.
 func (r *AnnotationRepo) ListForBook(ctx context.Context, userID, bookID string) ([]model.Annotation, error) {
-	const q = `
+	q := `
         SELECT ` + annotationCols + `
         FROM annotations a
         WHERE a.user_id = $1 AND a.book_id = $2
@@ -58,7 +79,7 @@ func (r *AnnotationRepo) ListRecent(ctx context.Context, userID string, limit in
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
-	const q = `
+	q := `
         SELECT ` + annotationCols + `
         FROM annotations a
         WHERE a.user_id = $1
@@ -76,7 +97,7 @@ func (r *AnnotationRepo) ListRecent(ctx context.Context, userID string, limit in
 // expected to pass the session user's id so a user can't PATCH/DELETE
 // another user's row even if they guess the uuid.
 func (r *AnnotationRepo) Get(ctx context.Context, userID, id string) (model.Annotation, error) {
-	const q = `
+	q := `
         SELECT ` + annotationCols + `
         FROM annotations a
         WHERE a.user_id = $1 AND a.id = $2
@@ -93,7 +114,10 @@ func (r *AnnotationRepo) Create(ctx context.Context, a model.Annotation) (model.
 		a.Color = "accent"
 	}
 	id := db.NewID()
-	const q = `
+	// The INSERT's own column list stays outside the projection: it
+	// names the insertable subset, which is a different membership
+	// question. Create's round-trip test guards it.
+	q := `
         INSERT INTO annotations (id, user_id, book_id, locator, selected_text, note, color)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING ` + annotationReturning
@@ -152,14 +176,11 @@ func (r *AnnotationRepo) Delete(ctx context.Context, userID, id string) error {
 }
 
 // scanAnnotation hydrates a sql row into the model shape. Mirrors the
-// scanBook / scanShelf pattern.
+// scanBook / scanShelf pattern: the destinations come from the
+// projection, in the order it declares.
 func (r *AnnotationRepo) scanAnnotation(s scanner) (model.Annotation, error) {
 	var a model.Annotation
-	err := s.Scan(
-		&a.ID, &a.UserID, &a.BookID, &a.Locator,
-		&a.SelectedText, &a.Note, &a.Color,
-		&a.CreatedAt, &a.UpdatedAt,
-	)
+	err := annotationProjection.scan(s, &a)
 	if dberr.IsNotFound(err) {
 		return model.Annotation{}, ErrNotFound
 	}
