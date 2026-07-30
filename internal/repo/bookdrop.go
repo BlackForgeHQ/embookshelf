@@ -21,10 +21,55 @@ func NewBookDropRepo(d *db.DB) *BookDropRepo {
 	return &BookDropRepo{db: d}
 }
 
-const bdCols = `id, path, file_size, format, state, progress, error_msg,
-                title, author, description, language, isbn, has_cover, cover_mime, book_id,
-                discovered_at, updated_at, content_hash,
-                duration_seconds, narrator, chapters`
+// bookDropProjection is the bookdrop_items row, declared once. The
+// SELECT lists, Insert's RETURNING clause and the Scan destinations all
+// render from here.
+//
+// The table carried the Column-order coupling hazard at its widest:
+// twenty-one columns stated twice, with six adjacent TEXT columns in the
+// middle — error_msg, title, author, description, language, isbn — so
+// swapping any two of them compiled, ran, and crossed those fields on
+// every row. discovered_at/updated_at is a second such pair, invisible
+// on a freshly inserted row where the two are equal.
+//
+// Three columns used to be patched up after the Scan. All three are now
+// destinations like any other: state scans straight into the named
+// string type, duration_seconds into the *int the model already
+// declares, and chapters through the same chaptersJSON adapter the books
+// projection reads it with. A post-scan fixup is a second positional
+// list by another name.
+//
+// No entry carries an `arg`: every write here patches a named subset
+// (state+progress+error_msg, the metadata block, the audio block) rather
+// than the whole row, so each names its columns inline.
+var bookDropProjection = projection[model.BookDropItem]{
+	{name: "id", dest: func(i *model.BookDropItem) any { return &i.ID }},
+	{name: "path", dest: func(i *model.BookDropItem) any { return &i.Path }},
+	{name: "file_size", dest: func(i *model.BookDropItem) any { return &i.FileSize }},
+	{name: "format", dest: func(i *model.BookDropItem) any { return &i.Format }},
+	{name: "state", dest: func(i *model.BookDropItem) any { return &i.State }},
+	{name: "progress", dest: func(i *model.BookDropItem) any { return &i.Progress }},
+	{name: "error_msg", dest: func(i *model.BookDropItem) any { return &i.ErrorMsg }},
+	{name: "title", dest: func(i *model.BookDropItem) any { return &i.Title }},
+	{name: "author", dest: func(i *model.BookDropItem) any { return &i.Author }},
+	{name: "description", dest: func(i *model.BookDropItem) any { return &i.Description }},
+	{name: "language", dest: func(i *model.BookDropItem) any { return &i.Language }},
+	{name: "isbn", dest: func(i *model.BookDropItem) any { return &i.ISBN }},
+	{name: "has_cover", dest: func(i *model.BookDropItem) any { return &i.HasCover }},
+	{name: "cover_mime", dest: func(i *model.BookDropItem) any { return &i.CoverMime }},
+	{name: "book_id", dest: func(i *model.BookDropItem) any { return &i.BookID }},
+	{name: "discovered_at", dest: func(i *model.BookDropItem) any { return &i.DiscoveredAt }},
+	{name: "updated_at", dest: func(i *model.BookDropItem) any { return &i.UpdatedAt }},
+	{name: "content_hash", dest: func(i *model.BookDropItem) any { return &i.ContentHash }},
+	{name: "duration_seconds", dest: func(i *model.BookDropItem) any { return &i.DurationSeconds }},
+	{name: "narrator", dest: func(i *model.BookDropItem) any { return &i.Narrator }},
+	{name: "chapters", dest: func(i *model.BookDropItem) any { return chaptersJSON{Dst: &i.Chapters} }},
+}
+
+// bdCols is the projection rendered bare. Every bookdrop query either
+// selects without aliasing the table or returns from an INSERT, and
+// neither has an alias in scope.
+var bdCols = bookDropProjection.returningList("bookdrop_items")
 
 // Insert records a newly-discovered file. Returns the inserted row; if a row
 // already exists for that path, returns (existing, ErrAlreadyExists).
@@ -32,7 +77,10 @@ var ErrAlreadyExists = errors.New("already exists")
 
 func (r *BookDropRepo) Insert(ctx context.Context, path, format string, size int64) (model.BookDropItem, error) {
 	id := db.NewID()
-	const q = `
+	// The INSERT's own column list stays outside the projection: it
+	// names the insertable subset, which is a different membership
+	// question, and the round-trip test guards it.
+	q := `
 		INSERT INTO bookdrop_items (id, path, file_size, format)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (path) DO NOTHING
@@ -51,13 +99,13 @@ func (r *BookDropRepo) Insert(ctx context.Context, path, format string, size int
 }
 
 func (r *BookDropRepo) GetByID(ctx context.Context, id string) (model.BookDropItem, error) {
-	const q = `SELECT ` + bdCols + ` FROM bookdrop_items WHERE id = $1`
+	q := `SELECT ` + bdCols + ` FROM bookdrop_items WHERE id = $1`
 	row := r.db.SQL.QueryRowContext(ctx, q, id)
 	return r.scanBookDrop(row)
 }
 
 func (r *BookDropRepo) GetByPath(ctx context.Context, path string) (model.BookDropItem, error) {
-	const q = `SELECT ` + bdCols + ` FROM bookdrop_items WHERE path = $1`
+	q := `SELECT ` + bdCols + ` FROM bookdrop_items WHERE path = $1`
 	row := r.db.SQL.QueryRowContext(ctx, q, path)
 	return r.scanBookDrop(row)
 }
@@ -198,45 +246,16 @@ func (r *BookDropRepo) MarkImported(ctx context.Context, id, bookID string) erro
 	return err
 }
 
+// scanBookDrop hydrates a sql row into the model shape. The
+// destinations come from the projection, in the order it declares, and
+// nothing happens after the Scan.
 func (r *BookDropRepo) scanBookDrop(s scanner) (model.BookDropItem, error) {
-	var (
-		item        model.BookDropItem
-		state       string
-		durationAny any
-		chaptersAny any
-	)
-	err := s.Scan(
-		&item.ID, &item.Path, &item.FileSize, &item.Format, &state, &item.Progress, &item.ErrorMsg,
-		&item.Title, &item.Author, &item.Description, &item.Language, &item.ISBN, &item.HasCover, &item.CoverMime, &item.BookID,
-		&item.DiscoveredAt, &item.UpdatedAt, &item.ContentHash,
-		&durationAny, &item.Narrator, &chaptersAny,
-	)
-	if err != nil {
+	var item model.BookDropItem
+	if err := bookDropProjection.scan(s, &item); err != nil {
 		if dberr.IsNotFound(err) {
 			return item, ErrNotFound
 		}
 		return item, err
-	}
-	item.State = model.BookDropState(state)
-	if v, ok := durationAny.(int64); ok {
-		n := int(v)
-		item.DurationSeconds = &n
-	}
-	// chapters: JSONB. NULL → nil slice.
-	if chaptersAny != nil {
-		var raw []byte
-		switch v := chaptersAny.(type) {
-		case []byte:
-			raw = v
-		case string:
-			raw = []byte(v)
-		}
-		if len(raw) > 0 {
-			var ch []model.Chapter
-			if err := json.Unmarshal(raw, &ch); err == nil && len(ch) > 0 {
-				item.Chapters = ch
-			}
-		}
 	}
 	return item, nil
 }
