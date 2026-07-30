@@ -4,9 +4,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/repo"
 )
 
 // advanceHarness wires the write side against in-process collaborators.
@@ -66,6 +68,47 @@ func TestAdvanceAfterSegmentAppliesWhatTheWriteDecided(t *testing.T) {
 	// lock, and a second read could see a different one.
 	if h.store.gets != 0 {
 		t.Errorf("read the run %d times after a write that already decided", h.store.gets)
+	}
+}
+
+// replannedStore is a store whose segment write refuses everything: the
+// repo's answer for a seq that is not in the run's current plan. Only
+// RecordSegment differs from the fake the other tests use, so a test can
+// assert what the advancer does with the refusal and nothing else.
+type replannedStore struct {
+	*fakeAudiobookStore
+}
+
+func (s *replannedStore) RecordSegment(
+	context.Context, string, int, model.SegmentResult,
+) (model.AudiobookOutcome, error) {
+	return model.AudiobookOutcome{}, repo.ErrNotFound
+}
+
+// A refused segment write is permanent and decides nothing. The outcome
+// it comes back with is the zero one, and advancing on that would read
+// "0 of 0 segments" as a finished run and dispatch finalize for a book
+// with no audio — so the refusal has to stop the advance outright, with
+// the sentinel intact for a caller that has to classify it (#220).
+func TestAdvanceAfterSegmentDerivesNothingFromARefusedWrite(t *testing.T) {
+	t.Parallel()
+
+	h := newAdvanceHarness(t, running("b1"), model.AudiobookCoverage{})
+	h.svc.d.Store = &replannedStore{fakeAudiobookStore: h.store}
+
+	err := h.svc.AdvanceAfterSegment(context.Background(), "b1", 9,
+		model.SegmentResult{State: model.SegmentDone, StagedPath: "/tmp/seg-9.mp3", DurationMS: 1000})
+	if !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound to survive to the caller", err)
+	}
+	if got := h.enq.finalizes(); len(got) != 0 {
+		t.Errorf("finalizes = %v, want none — the write decided nothing", got)
+	}
+	if h.store.state != "" {
+		t.Errorf("run moved to %q, want it left where it was", h.store.state)
+	}
+	if len(h.published) != 0 {
+		t.Errorf("published %d times, want none", len(h.published))
 	}
 }
 

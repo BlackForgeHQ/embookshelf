@@ -5,6 +5,7 @@ package repo_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -125,6 +126,37 @@ func TestRecordSegmentPersistsTheSegmentItReportedOn(t *testing.T) {
 	}
 	if seg.DurationMS != 91_500 {
 		t.Errorf("duration = %d, want 91500", seg.DurationMS)
+	}
+}
+
+// A job from a run that has since been replanned carries a seq the
+// current plan does not have. Its write matches no row, so there is no
+// segment whose landing could have moved the run — and a verdict derived
+// from coverage this result never entered would be a transition for a
+// plan it never wrote to. The call is refused with the same sentinel a
+// missing run row gets (#220).
+func TestRecordSegmentRefusesASeqThatIsNotInThePlan(t *testing.T) {
+	bookID, audiobooks := audiobookFixture(t, repotest.New(t), 2)
+	ctx := context.Background()
+
+	if _, err := audiobooks.RecordSegment(ctx, bookID, 9, doneResult(1)); !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound for a seq the plan does not have", err)
+	}
+
+	run, err := audiobooks.GetByBookID(ctx, bookID)
+	if err != nil {
+		t.Fatalf("GetByBookID: %v", err)
+	}
+	if run.State != model.AudiobookRunning {
+		t.Errorf("run state = %q, want running — a refused write leaves the run where it was", run.State)
+	}
+
+	cov, err := audiobooks.Coverage(ctx, bookID)
+	if err != nil {
+		t.Fatalf("Coverage: %v", err)
+	}
+	if cov != (model.AudiobookCoverage{Total: 2}) {
+		t.Errorf("coverage = %+v, want 0 of 2 — nothing was written", cov)
 	}
 }
 

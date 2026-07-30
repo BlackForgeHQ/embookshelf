@@ -196,6 +196,10 @@ func (r *BookAudiobookRepo) MarkSegmentRunning(ctx context.Context, bookID strin
 // the other's uncommitted write, both conclude the run is unfinished,
 // and neither dispatches finalize — the same strand reached by a
 // different route.
+//
+// Returns ErrNotFound when there is no run for the book, and when the
+// seq is not in the run's plan: a write that moved nothing has no
+// landing to derive a transition from.
 func (r *BookAudiobookRepo) RecordSegment(
 	ctx context.Context,
 	bookID string,
@@ -229,9 +233,23 @@ func (r *BookAudiobookRepo) RecordSegment(
 		SET state = $3, staged_path = $4, duration_ms = $5, error = $6, updated_at = now()
 		WHERE book_id = $1 AND seq = $2
 	`
-	if _, err := tx.ExecContext(ctx, writeSeg, bookID, seq,
-		string(res.State), res.StagedPath, res.DurationMS, res.Error); err != nil {
+	written, err := tx.ExecContext(ctx, writeSeg, bookID, seq,
+		string(res.State), res.StagedPath, res.DurationMS, res.Error)
+	if err != nil {
 		return zero, fmt.Errorf("record segment %d: %w", seq, err)
+	}
+	// A write that matched no row is a seq this run's plan does not have —
+	// a job left over from the run a regeneration replaced. Committing it
+	// would report a transition derived from coverage the result never
+	// entered, for a plan it never wrote to, so the call is refused with
+	// the sentinel a missing run row already gets. The rollback in the
+	// defer releases the lock (#220).
+	n, err := written.RowsAffected()
+	if err != nil {
+		return zero, fmt.Errorf("record segment %d: %w", seq, err)
+	}
+	if n == 0 {
+		return zero, ErrNotFound
 	}
 
 	cov, err := scanCoverage(ctx, tx, bookID)
