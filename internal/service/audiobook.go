@@ -140,10 +140,15 @@ type AudiobookDeps struct {
 	// reach (#191). Absent, a narration is never reported stale — the
 	// honest answer when the comparison never happened.
 	ContentHash func(context.Context, model.Book) []byte
-	// Artifacts removes what finalize wrote outside the run's own table.
+	// Artifacts removes the rows finalize wrote outside the run's own
+	// table.
 	Artifacts narrationArtifacts
-	// SweepNarration removes a finished narration's bytes.
-	SweepNarration func(ctx context.Context, book model.Book, run model.Audiobook) error
+	// NarrationBytes removes a finished narration's audio, taking the
+	// delete of the files row that names it as its middle step. Injected
+	// for the reason ContentHash is: the location lives on that row,
+	// behind a library handle this service deliberately cannot reach
+	// (#191).
+	NarrationBytes narrationBytes
 }
 
 // noNarrationArtifacts stands in for a service constructed without them:
@@ -182,8 +187,12 @@ func NewAudiobookService(d AudiobookDeps) *AudiobookService {
 	if d.Artifacts == nil {
 		d.Artifacts = noNarrationArtifacts{}
 	}
-	if d.SweepNarration == nil {
-		d.SweepNarration = func(context.Context, model.Book, model.Audiobook) error { return nil }
+	if d.NarrationBytes == nil {
+		// No library store to reach the bytes through. The files row still
+		// goes — the adapter takes the row delete either way — and the
+		// unreachable bytes are reported rather than passed off as a clean
+		// cleanup.
+		d.NarrationBytes = NewLibraryNarrationBytes(nil)
 	}
 	return &AudiobookService{d: d}
 }

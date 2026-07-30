@@ -455,20 +455,14 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 
 		Artifacts: service.RepoNarrationArtifacts{Files: fileRepo, Books: bookRepo},
 
-		SweepNarration: func(ctx context.Context, book model.Book, run model.Audiobook) error {
-			if run.FileID == nil {
-				return nil
-			}
-			handle, err := libStore.For(ctx, book.LibraryID)
-			if err != nil {
-				return err
-			}
-			f, ok := handle.BookFile(ctx, book.ID, *run.FileID)
-			if !ok {
-				return nil
-			}
-			return handle.DeleteBookBytes(ctx, book.ID, []string{f.Location})
-		},
+		// The row delete and the byte delete are one operation, so there is
+		// nothing left here to sequence — only the library handle to resolve,
+		// which is all this adapter does. The closure that used to stand here
+		// composed the order itself and got it wrong: it asked the handle for
+		// the book's file after Artifacts had deleted that row, was told "not
+		// found", and returned nil, so every deleted narration kept its bytes
+		// (#267).
+		NarrationBytes: service.NewLibraryNarrationBytes(libStore),
 	}
 	if hub != nil {
 		audiobookDeps.Publish = func(bookID string) {

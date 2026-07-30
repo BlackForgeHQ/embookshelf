@@ -193,53 +193,182 @@ func TestReportDoesNotGuessStalenessWithoutBothHashes(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Delete — the ordering invariant, owned where the delete is
+// Delete — the ordering invariant, owned by the operation
 // ---------------------------------------------------------------------------
 
-// Resolve the key before the row goes: deleting the run is what makes
-// the location unknowable, exactly as DeleteBook has it.
-func TestDeleteNarrationResolvesTheLocationBeforeTheRowGoes(t *testing.T) {
+// narrationFiles is the files table as the delete path meets it: the
+// narration's row is readable until the delete removes it, and gone
+// afterwards, which is what makes a location resolved too late resolve to
+// nothing.
+//
+// One double for both halves — the lister a LibraryHandle reads and the
+// artifacts the service deletes through — because in production they are
+// one table. A pair of doubles that could not disagree with each other is
+// what let this ship: the byte sweep was stubbed out wholesale, so nothing
+// ever asked it to find a row that had just been deleted (#267).
+type narrationFiles struct {
+	rows         []model.File
+	deletedFiles []string
+	clearedAudio []string
+	order        *[]string
+}
+
+func (f *narrationFiles) ListByBook(context.Context, string) ([]model.File, error) {
+	return f.rows, nil
+}
+
+func (f *narrationFiles) DeleteFile(_ context.Context, fileID string) error {
+	kept := make([]model.File, 0, len(f.rows))
+	for _, row := range f.rows {
+		if row.ID != fileID {
+			kept = append(kept, row)
+		}
+	}
+	f.rows = kept
+	f.deletedFiles = append(f.deletedFiles, fileID)
+	f.note("file")
+	return nil
+}
+
+func (f *narrationFiles) ClearBookAudio(_ context.Context, bookID string) error {
+	f.clearedAudio = append(f.clearedAudio, bookID)
+	f.note("audio")
+	return nil
+}
+
+func (f *narrationFiles) has(fileID string) bool {
+	for _, row := range f.rows {
+		if row.ID == fileID {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *narrationFiles) note(step string) {
+	if f.order != nil {
+		*f.order = append(*f.order, step)
+	}
+}
+
+// The book, its text, and the narration made from it. The narration sits
+// at the key NarrationKey derives for this book, because that is where
+// finalize put it and where a regeneration will put the next one.
+const narrationKey = "An Author/A Book/A Book.mp3"
+
+func narrationRows() (string, *narrationFiles) {
+	const fileID = "file-mp3"
+	return fileID, &narrationFiles{rows: []model.File{
+		{ID: "file-epub", Location: "An Author/A Book/book.epub", Format: "EPUB"},
+		{ID: fileID, Location: narrationKey, Format: "MP3"},
+	}}
+}
+
+func readyRun(fileID string) *fakeAudiobookStore {
+	return &fakeAudiobookStore{run: model.Audiobook{
+		BookID: "b1", State: model.AudiobookReady, FileID: &fileID,
+	}}
+}
+
+// narratedLibrary is a library holding that book, on the backend kind the
+// caller names.
+func narratedLibrary(files *narrationFiles, objectStore bool) (*LibraryHandle, *deleteRecordingStorage, *recordingOrphans) {
+	store := &deleteRecordingStorage{objectStore: objectStore}
+	orphans := &recordingOrphans{}
+	return &LibraryHandle{
+		Library: model.Library{ID: "lib1"},
+		Storage: store,
+		files:   files,
+		orphans: orphans,
+	}, store, orphans
+}
+
+func deletingService(files *narrationFiles, run *fakeAudiobookStore, libs LibraryStore) *AudiobookService {
+	return NewAudiobookService(AudiobookDeps{
+		Store:          run,
+		Enqueue:        &recordingEnqueuer{},
+		Artifacts:      files,
+		NarrationBytes: NewLibraryNarrationBytes(libs),
+	})
+}
+
+// An object-store library defers its deletes to the orphan sweeper
+// (ADR-0005), so "the bytes are gone" means the key was queued for it. A
+// narration that is never queued is half a gigabyte billed monthly for
+// something nobody can play (ADR-0025 §6).
+func TestDeleteNarrationRemovesTheAudioFromAnObjectStoreLibrary(t *testing.T) {
 	t.Parallel()
 
-	var order []string
-	store := &fakeAudiobookStore{run: model.Audiobook{BookID: "b1", State: model.AudiobookReady}}
-	store.onDelete = func() { order = append(order, "row") }
-	svc := NewAudiobookService(AudiobookDeps{
-		Store: store, Enqueue: &recordingEnqueuer{},
-		SweepNarration: func(context.Context, model.Book, model.Audiobook) error {
-			order = append(order, "bytes")
-			return nil
-		},
-	})
+	fileID, files := narrationRows()
+	handle, store, orphans := narratedLibrary(files, true)
 
+	svc := deletingService(files, readyRun(fileID), &fakeLibStore{handle: handle})
 	if err := svc.DeleteNarration(context.Background(), narratableBook()); err != nil {
 		t.Fatalf("DeleteNarration: %v", err)
 	}
 
-	if strings.Join(order, ",") != "row,bytes" {
-		t.Errorf("order = %v, want the row deleted first and the bytes after", order)
+	if len(orphans.rows) != 1 {
+		t.Fatalf("queued %d keys for the sweeper, want the narration's own — its bytes outlive the row otherwise",
+			len(orphans.rows))
+	}
+	if orphans.rows[0].Key != narrationKey {
+		t.Errorf("queued %q, want %q", orphans.rows[0].Key, narrationKey)
+	}
+	if orphans.rows[0].LibraryID != "lib1" {
+		t.Errorf("queued against library %q, want lib1", orphans.rows[0].LibraryID)
+	}
+	if len(store.deleted) != 0 {
+		t.Errorf("removed %v inline; the grace window exists so an in-flight presigned play finishes", store.deleted)
 	}
 }
 
-// A byte cleanup that fails leaves an orphaned object, which the
-// orphaned-key sweeper is for. Failing the call would leave the user
-// with a narration they cannot remove.
-func TestDeleteNarrationSurvivesAByteCleanupFailure(t *testing.T) {
+// A local library owns its bytes outright, so the file goes now. The
+// storage double is asked, at the moment of the delete, whether the files
+// row is already gone — an ordering assertion about when the bytes went,
+// not about a call log the doubles agreed on between themselves.
+func TestDeleteNarrationRemovesTheAudioFromALocalLibrary(t *testing.T) {
 	t.Parallel()
 
-	store := &fakeAudiobookStore{run: model.Audiobook{BookID: "b1", State: model.AudiobookReady}}
-	svc := NewAudiobookService(AudiobookDeps{
-		Store: store, Enqueue: &recordingEnqueuer{},
-		SweepNarration: func(context.Context, model.Book, model.Audiobook) error {
-			return errors.New("backend refused")
-		},
-	})
+	fileID, files := narrationRows()
+	handle, store, _ := narratedLibrary(files, false)
+	store.rowGone = func() bool { return !files.has(fileID) }
 
+	svc := deletingService(files, readyRun(fileID), &fakeLibStore{handle: handle})
 	if err := svc.DeleteNarration(context.Background(), narratableBook()); err != nil {
-		t.Errorf("DeleteNarration = %v, want nil — the row is gone and the bytes are the sweeper's", err)
+		t.Fatalf("DeleteNarration: %v", err)
 	}
-	if !store.deleted {
-		t.Error("the run row was not deleted")
+
+	if len(store.deleted) != 1 || store.deleted[0] != narrationKey {
+		t.Fatalf("deleted %v, want just %q — anything else is a file the next scan re-indexes",
+			store.deleted, narrationKey)
+	}
+	if len(store.sawRowGone) != 1 || !store.sawRowGone[0] {
+		t.Errorf("the bytes went while the files row still pointed at them (%v)", store.sawRowGone)
+	}
+}
+
+// The book outlives its narration: deleting the audio must not touch the
+// text it was read from. This is why the narration delete is its own
+// operation rather than a call to DeleteBookAndBytes, which snapshots
+// every location the book owns.
+func TestDeleteNarrationLeavesTheBooksOwnFileAlone(t *testing.T) {
+	t.Parallel()
+
+	fileID, files := narrationRows()
+	handle, store, _ := narratedLibrary(files, false)
+
+	svc := deletingService(files, readyRun(fileID), &fakeLibStore{handle: handle})
+	if err := svc.DeleteNarration(context.Background(), narratableBook()); err != nil {
+		t.Fatalf("DeleteNarration: %v", err)
+	}
+
+	for _, key := range store.deleted {
+		if strings.HasSuffix(key, ".epub") {
+			t.Errorf("deleted %q — the book is still readable as text", key)
+		}
+	}
+	if len(files.rows) != 1 || files.rows[0].Format != "EPUB" {
+		t.Errorf("files rows left = %v, want the EPUB row untouched", files.rows)
 	}
 }
 
@@ -261,67 +390,90 @@ func TestDeleteNarrationReportsAMissingRun(t *testing.T) {
 	}
 }
 
-// recordingArtifacts captures what the delete undid outside the run's
-// own table.
-type recordingArtifacts struct {
-	deletedFiles []string
-	clearedAudio []string
-	order        *[]string
-}
-
-func (r *recordingArtifacts) DeleteFile(_ context.Context, fileID string) error {
-	r.deletedFiles = append(r.deletedFiles, fileID)
-	*r.order = append(*r.order, "file")
-	return nil
-}
-
-func (r *recordingArtifacts) ClearBookAudio(_ context.Context, bookID string) error {
-	r.clearedAudio = append(r.clearedAudio, bookID)
-	*r.order = append(*r.order, "audio")
-	return nil
-}
-
-// Finalize writes four things: the files row for the generated audio,
-// the book's duration and chapter list, the run, and each segment's
-// offset. Deleting the run took two of them — the segments cascade — so
-// the files row survived pointing at bytes that were about to go, and
-// the reader kept finding a chapter list for a narration that no longer
-// existed (#208).
+// Finalize writes four things: the files row for the generated audio, the
+// book's duration and chapter list, the run, and each segment's offset.
+// Deleting the run took two of them — the segments cascade — so the files
+// row survived pointing at bytes that were about to go, and the reader
+// kept finding a chapter list for a narration that no longer existed
+// (#208).
 func TestDeleteNarrationUndoesEverythingFinalizeWrote(t *testing.T) {
 	t.Parallel()
 
-	fileID := "file-1"
 	var order []string
-	store := &fakeAudiobookStore{run: model.Audiobook{
-		BookID: "b1", State: model.AudiobookReady, FileID: &fileID,
-	}}
-	store.onDelete = func() { order = append(order, "row") }
-	artifacts := &recordingArtifacts{order: &order}
+	fileID, files := narrationRows()
+	files.order = &order
+	handle, store, _ := narratedLibrary(files, false)
+	store.rowGone = func() bool { order = append(order, "bytes"); return true }
 
-	svc := NewAudiobookService(AudiobookDeps{
-		Store: store, Enqueue: &recordingEnqueuer{},
-		Artifacts: artifacts,
-		SweepNarration: func(context.Context, model.Book, model.Audiobook) error {
-			order = append(order, "bytes")
-			return nil
-		},
-	})
+	run := readyRun(fileID)
+	run.onDelete = func() { order = append(order, "row") }
 
+	svc := deletingService(files, run, &fakeLibStore{handle: handle})
 	if err := svc.DeleteNarration(context.Background(), narratableBook()); err != nil {
 		t.Fatalf("DeleteNarration: %v", err)
 	}
 
-	if len(artifacts.deletedFiles) != 1 || artifacts.deletedFiles[0] != fileID {
-		t.Errorf("deleted files rows %v, want the one the run pointed at", artifacts.deletedFiles)
+	if len(files.deletedFiles) != 1 || files.deletedFiles[0] != fileID {
+		t.Errorf("deleted files rows %v, want the one the run pointed at", files.deletedFiles)
 	}
-	if len(artifacts.clearedAudio) != 1 {
+	if len(files.clearedAudio) != 1 {
 		t.Errorf("cleared audio for %v, want the book — the reader still finds chapters otherwise",
-			artifacts.clearedAudio)
+			files.clearedAudio)
 	}
-	// The ordering invariant survives: the run row goes first, because it
-	// is what names the location everything after resolves.
-	if strings.Join(order, ",") != "row,file,audio,bytes" {
-		t.Errorf("order = %v, want the row first and the bytes last", order)
+	// The files row and the bytes are adjacent because they are one
+	// operation; the run row goes first because it is what names the file.
+	if strings.Join(order, ",") != "row,file,bytes,audio" {
+		t.Errorf("order = %v, want the run row first and the bytes straight after the row that named them", order)
+	}
+}
+
+// A byte cleanup that fails leaves an orphaned object, which the
+// orphaned-key sweeper is for. Failing the call would leave the user with
+// a narration they cannot remove — and the rows are already gone by then.
+func TestDeleteNarrationSurvivesAByteCleanupFailure(t *testing.T) {
+	t.Parallel()
+
+	fileID, files := narrationRows()
+	handle, store, _ := narratedLibrary(files, false)
+	store.failKey, store.failWith = narrationKey, errors.New("permission denied")
+
+	run := readyRun(fileID)
+	svc := deletingService(files, run, &fakeLibStore{handle: handle})
+
+	if err := svc.DeleteNarration(context.Background(), narratableBook()); err != nil {
+		t.Errorf("DeleteNarration = %v, want nil — the rows are gone and the bytes are the sweeper's", err)
+	}
+	if !run.deleted {
+		t.Error("the run row was not deleted")
+	}
+	if files.has(fileID) {
+		t.Error("the files row survived a failed byte delete, so the reader still offers audio that is going")
+	}
+}
+
+// unreachableLibrary is a library whose backend will not resolve — down,
+// or misconfigured.
+type unreachableLibrary struct{}
+
+func (unreachableLibrary) For(context.Context, string) (*LibraryHandle, error) {
+	return nil, errors.New("backend unreachable")
+}
+
+// A library we cannot reach is a degraded cleanup, never a blocked delete:
+// the rows still go, and the bytes wait for an operator. Same reading
+// DeleteBook takes of an unresolvable handle.
+func TestDeleteNarrationStillRemovesTheRowsWhenTheLibraryIsUnreachable(t *testing.T) {
+	t.Parallel()
+
+	fileID, files := narrationRows()
+	run := readyRun(fileID)
+	svc := deletingService(files, run, unreachableLibrary{})
+
+	if err := svc.DeleteNarration(context.Background(), narratableBook()); err != nil {
+		t.Errorf("DeleteNarration = %v, want nil — an unreachable backend must not pin a narration", err)
+	}
+	if !run.deleted || files.has(fileID) {
+		t.Error("the rows survived a library we could not resolve")
 	}
 }
 
@@ -330,22 +482,60 @@ func TestDeleteNarrationUndoesEverythingFinalizeWrote(t *testing.T) {
 func TestDeleteNarrationSkipsTheFilesRowWhenTheRunNeverProducedOne(t *testing.T) {
 	t.Parallel()
 
-	var order []string
-	store := &fakeAudiobookStore{run: model.Audiobook{BookID: "b1", State: model.AudiobookFailed}}
-	artifacts := &recordingArtifacts{order: &order}
+	_, files := narrationRows()
+	handle, store, _ := narratedLibrary(files, false)
+	run := &fakeAudiobookStore{run: model.Audiobook{BookID: "b1", State: model.AudiobookFailed}}
 
-	svc := NewAudiobookService(AudiobookDeps{
-		Store: store, Enqueue: &recordingEnqueuer{}, Artifacts: artifacts,
-	})
-
+	svc := deletingService(files, run, &fakeLibStore{handle: handle})
 	if err := svc.DeleteNarration(context.Background(), narratableBook()); err != nil {
 		t.Fatalf("DeleteNarration: %v", err)
 	}
 
-	if len(artifacts.deletedFiles) != 0 {
-		t.Errorf("deleted %v, want none — the run never produced a files row", artifacts.deletedFiles)
+	if len(files.deletedFiles) != 0 {
+		t.Errorf("deleted %v, want none — the run never produced a files row", files.deletedFiles)
 	}
-	if len(artifacts.clearedAudio) != 1 {
+	if len(store.deleted) != 0 {
+		t.Errorf("deleted %v, want none — a failed run left no audio to remove", store.deleted)
+	}
+	if len(files.clearedAudio) != 1 {
 		t.Error("the book's audio fields were left set")
+	}
+}
+
+// Delete is not the end of the story: the usual reason to remove a
+// narration is to make a better one. The delete has to leave the book
+// narratable — its text row intact, no run in the way — and it has to
+// vacate the very key the next run will write, since regeneration lands on
+// the same one by design (ADR-0025 §4).
+func TestANarrationCanBeRegeneratedAfterItIsDeleted(t *testing.T) {
+	t.Parallel()
+
+	fileID, files := narrationRows()
+	handle, store, _ := narratedLibrary(files, false)
+	run := readyRun(fileID)
+
+	svc := NewAudiobookService(AudiobookDeps{
+		Store:          run,
+		Enqueue:        &recordingEnqueuer{},
+		Books:          &epubOpener{src: buildTestEPUB(t, "text")},
+		Settings:       func(context.Context) (repo.AudiobookConfig, error) { return enabledSettings(), nil },
+		Artifacts:      files,
+		NarrationBytes: NewLibraryNarrationBytes(&fakeLibStore{handle: handle}),
+	})
+
+	book := narratableBook()
+	if err := svc.DeleteNarration(context.Background(), book); err != nil {
+		t.Fatalf("DeleteNarration: %v", err)
+	}
+
+	// What the freed key was, and where the next run will write.
+	if len(store.deleted) != 1 || store.deleted[0] != handle.NarrationKey(book) {
+		t.Fatalf("deleted %v, want the key regeneration reuses (%q)", store.deleted, handle.NarrationKey(book))
+	}
+	if err := svc.Generate(context.Background(), book, GenerateOverride{}); err != nil {
+		t.Fatalf("Generate after delete: %v", err)
+	}
+	if !run.started {
+		t.Error("no new run was planned, so the narration cannot be remade")
 	}
 }
