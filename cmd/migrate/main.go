@@ -99,7 +99,7 @@ func run(ctx context.Context, dsn, cmd string, args []string, out io.Writer) err
 				return fmt.Errorf("storage_v2 backfill: %w", err)
 			}
 		}
-		fmt.Fprintln(out, "ok")
+		_, _ = fmt.Fprintln(out, "ok")
 		return nil
 
 	case "down", "force", "version":
@@ -141,7 +141,7 @@ func runMigratorCmd(d *db.DB, cmd string, args []string, out io.Writer) error {
 		if err := m.Down(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 			return fmt.Errorf("down: %w", err)
 		}
-		fmt.Fprintln(out, "ok")
+		_, _ = fmt.Fprintln(out, "ok")
 		return nil
 
 	case "force":
@@ -155,19 +155,19 @@ func runMigratorCmd(d *db.DB, cmd string, args []string, out io.Writer) error {
 		if err := m.Force(v); err != nil {
 			return fmt.Errorf("force: %w", err)
 		}
-		fmt.Fprintf(out, "forced version %d\n", v)
+		_, _ = fmt.Fprintf(out, "forced version %d\n", v)
 		return nil
 
 	default: // "version"
 		v, dirty, err := m.Version()
 		if errors.Is(err, migrate.ErrNilVersion) {
-			fmt.Fprintln(out, "none")
+			_, _ = fmt.Fprintln(out, "none")
 			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("version: %w", err)
 		}
-		fmt.Fprintf(out, "%d (dirty=%t)\n", v, dirty)
+		_, _ = fmt.Fprintf(out, "%d (dirty=%t)\n", v, dirty)
 		return nil
 	}
 }
