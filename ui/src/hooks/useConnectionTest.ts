@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react"
-import { useMutation } from "@tanstack/react-query"
 
 import type { ApiError } from "@/api/client"
+import { useApiMutation } from "@/api/mutation"
 
 // A connection test produces a result to display, not an error to throw.
 //
@@ -18,6 +18,14 @@ import type { ApiError } from "@/api/client"
 // ApiError. To the admin those are the same event: the test ran, here is
 // what it found. This module collapses them into one outcome, so a panel
 // renders one thing and never has to write a catch.
+//
+// That collapse is why the module still exists on top of `useApiMutation`
+// rather than being replaced by it: half of what it reports — the refusal
+// that arrives as a 200 — never passes through a mutation's error path at
+// all, so no reporting choice made there could reach it. What is no
+// longer this module's business is *where* a failure is said. That is one
+// decision the shared hook owns for every mutation in the app, and this
+// one takes it explicitly, below, as `reportErrors: "inline"`.
 
 export type ConnectionTestOutcome<TResult> = {
   ok: boolean
@@ -53,6 +61,8 @@ export type ConnectionTestOptions<TVars, TResult> = {
   unreachable?: (err: ApiError, vars: TVars) => string
 }
 
+const NOTHING = [] as const
+
 export function useConnectionTest<TVars, TResult>(
   opts: ConnectionTestOptions<TVars, TResult>
 ): ConnectionTest<TVars, TResult> {
@@ -67,24 +77,29 @@ export function useConnectionTest<TVars, TResult>(
   const unreachableRef = useRef(opts.unreachable)
   unreachableRef.current = opts.unreachable
 
-  const mut = useMutation<TResult, ApiError, TVars>({
-    mutationFn: opts.test.fn,
-    onSuccess: (result, vars) => {
-      setOutcome({ ...readRef.current(result, vars), data: result })
-    },
-    onError: (err, vars) => {
-      // Deliberately not a toast. A toast is gone in four seconds and the
-      // admin is mid-form; the point of pressing Test is to read the
-      // answer next to the field that caused it.
-      setOutcome({
-        ok: false,
-        message:
-          unreachableRef.current?.(err, vars) ||
-          err.message ||
-          "The request never reached the server.",
-      })
-    },
-  })
+  const mut = useApiMutation<TVars, TResult>(
+    // A test has nothing to invalidate: it reads an endpoint, it does not
+    // change one.
+    { fn: opts.test.fn, invalidates: NOTHING },
+    {
+      // A toast is gone in four seconds and the admin is mid-form; the
+      // point of pressing Test is to read the answer next to the field
+      // that caused it. The outcome below is that answer.
+      reportErrors: "inline",
+      onSuccess: (result, vars) => {
+        setOutcome({ ...readRef.current(result, vars), data: result })
+      },
+      onError: (err, vars) => {
+        setOutcome({
+          ok: false,
+          message:
+            unreachableRef.current?.(err, vars) ||
+            err.message ||
+            "The request never reached the server.",
+        })
+      },
+    }
+  )
 
   const run = useCallback(
     (vars: TVars) => {

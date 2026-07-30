@@ -58,13 +58,16 @@ function BookDrop() {
     queueMicrotask(() => setSelectedId(current.id))
   }
 
+  // Both report inline: the detail pane below renders `error` in the
+  // place the reviewer is already looking, above the row that refused.
   const approveMut = useApiMutation(approveBookDrop, {
+    reportErrors: "inline",
     onSuccess: (book) => {
       void navigate({ to: "/book/$id", params: { id: book.id } })
     },
   })
 
-  const rejectMut = useApiMutation(rejectBookDrop)
+  const rejectMut = useApiMutation(rejectBookDrop, { reportErrors: "inline" })
 
   const error = approveMut.error ?? rejectMut.error
 

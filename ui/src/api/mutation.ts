@@ -25,17 +25,41 @@ export function defineMutation<TVars, TResult>(
   return spec
 }
 
+// Where a failure gets reported. A failure is reported once, and this is
+// where the call site says where.
+//
+// "toast" is the default, and right for a mutation fired from a control
+// that is about to go away — a row action, a menu item, a dialog that
+// closes on success. "inline" is for a call site that renders `mut.error`
+// itself, next to the control that failed: a form the user is still
+// standing in, a detail pane whose error belongs to the thing on screen.
+// Choosing "inline" means the hook keeps quiet and the error reaches the
+// caller only through the returned `error`.
+//
+// The two are exclusive by construction: an inline reporter has no toast
+// to word, so `errorToast` is not offered on that branch.
+export type ErrorReporting<TVars> =
+  | {
+      reportErrors?: "toast"
+      errorToast?: string | ((err: ApiError, vars: TVars) => string)
+    }
+  | { reportErrors: "inline"; errorToast?: never }
+
 export type UseApiMutationOpts<TVars, TResult> = {
   successToast?: string | ((result: TResult, vars: TVars) => string)
-  errorToast?: string | ((err: ApiError, vars: TVars) => string)
   onSuccess?: (result: TResult, vars: TVars) => void
-}
+  // Runs after the failure has been reported (or deliberately not). For a
+  // caller that has somewhere to put the error beyond rendering `error`
+  // — `useConnectionTest` folds it into the outcome it displays.
+  onError?: (err: ApiError, vars: TVars) => void
+} & ErrorReporting<TVars>
 
 // useApiMutation wraps useMutation with the project's standard onSuccess
 // (invalidate registered keys + optional toast + caller hook) and
-// onError (toast the ApiError message). Optimistic updates are not
-// supported — there are zero callsites today; add an `onMutate` escape
-// hatch when one materialises.
+// onError (report the ApiError message where the caller asked for it,
+// a toast unless told otherwise). Optimistic updates are not supported —
+// there are zero callsites today; add an `onMutate` escape hatch when one
+// materialises.
 export function useApiMutation<TVars, TResult>(
   mutation: ApiMutation<TVars, TResult>,
   opts: UseApiMutationOpts<TVars, TResult> = {}
@@ -61,11 +85,16 @@ export function useApiMutation<TVars, TResult>(
       opts.onSuccess?.(result, vars)
     },
     onError: (err, vars) => {
-      const msg =
-        typeof opts.errorToast === "function"
-          ? opts.errorToast(err, vars)
-          : (opts.errorToast ?? err.message)
-      toast.error(msg)
+      // Inline callers read `error` off the returned mutation; saying it
+      // again here is the same sentence twice.
+      if (opts.reportErrors !== "inline") {
+        const msg =
+          typeof opts.errorToast === "function"
+            ? opts.errorToast(err, vars)
+            : (opts.errorToast ?? err.message)
+        toast.error(msg)
+      }
+      opts.onError?.(err, vars)
     },
   })
 }

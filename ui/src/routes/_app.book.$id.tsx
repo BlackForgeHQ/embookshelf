@@ -82,7 +82,10 @@ function BookDetail() {
   const me = useApiQuery(meQuery)
   const viewer = viewerOf(me.data)
 
+  // Inline: a refused delete is read next to the button that refused,
+  // inside the danger zone the reader deliberately opened.
   const deleteMut = useApiMutation(deleteBook, {
+    reportErrors: "inline",
     onSuccess: () => {
       queryClient.removeQueries({ queryKey: bookQueryKey(id) })
       queryClient.invalidateQueries({ queryKey: shelvesQueryKey })
@@ -866,8 +869,14 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
 function NotesPanel({ bookId }: { bookId: string }) {
   const annotations = useApiQuery(bookAnnotationsQuery(bookId))
 
-  const createMut = useApiMutation(createAnnotation)
-  const deleteMut = useApiMutation(deleteAnnotation)
+  // Inline: the panel renders `error` under the compose box, so a note
+  // that would not save says so where the note still is.
+  const createMut = useApiMutation(createAnnotation, {
+    reportErrors: "inline",
+  })
+  const deleteMut = useApiMutation(deleteAnnotation, {
+    reportErrors: "inline",
+  })
 
   const [draft, setDraft] = useState("")
   const rows = annotations.data ?? []

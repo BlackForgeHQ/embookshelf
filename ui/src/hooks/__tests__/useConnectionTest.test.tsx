@@ -2,11 +2,16 @@
 import type { ReactNode } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, renderHook, waitFor } from "@testing-library/react"
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { ApiError } from "@/api/client"
 import type { ApiMutation } from "@/api/mutation"
 import { useConnectionTest } from "../useConnectionTest"
+
+const toastError = vi.fn()
+vi.mock("sonner", () => ({
+  toast: { error: (msg: string) => toastError(msg), success: vi.fn() },
+}))
 
 // The shape every test endpoint in this codebase answers with: 200, plus
 // its own verdict. A refused credential is a successful request.
@@ -44,6 +49,7 @@ function setup() {
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
   respond = () => Promise.resolve({ ok: true, reply: "hi" })
+  toastError.mockClear()
 })
 
 describe("useConnectionTest", () => {
@@ -99,6 +105,10 @@ describe("useConnectionTest", () => {
     })
     // No payload came back, so there is none to show.
     expect(result.current.outcome?.data).toBeUndefined()
+    // And it is said once, in the outcome. The hook takes the shared
+    // mutation's inline reporting; a toast would fade while the admin is
+    // still reading the field that caused it.
+    expect(toastError).not.toHaveBeenCalled()
   })
 
   it("falls back to a sentence when the failure carries no message", async () => {
