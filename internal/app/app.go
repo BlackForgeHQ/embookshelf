@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -115,6 +116,47 @@ type App struct {
 
 	handler *handler.Handler
 	engine  *gin.Engine
+
+	// The background work Start launches and Close waits for. Not a
+	// Build seam and deliberately not a pointer: there is nothing to
+	// cancel or wait for until Start runs, so its zero value is the
+	// correct state for a built-but-unstarted App.
+	bg background
+}
+
+// background is the registry Close consults. Holding a context in a
+// struct is the exception this file makes on purpose: it is the
+// application's own lifetime, one value that every registered task must
+// share, and threading it through goBackground's callers instead would
+// let one of them pass a different one.
+//
+// cancel is nil until Start derives the context — Close on an App that
+// was never started has nothing to stop, and must not panic saying so.
+type background struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+}
+
+// goBackground starts fn as a named background task and records it, so
+// Close knows what it is waiting for.
+//
+// Every loop Start launches goes through here. A goroutine started with
+// a bare `go` is one Close cannot see: it keeps running past the pool
+// close, and the next query it makes fails on a pool that is already
+// gone — the shutdown race the two backfills used to lose by detaching
+// onto context.Background() (#224). The name reaches the log line below,
+// which is what identifies a task that outstayed the shutdown budget.
+//
+// Start-only. It reads the context Start derived, so a call made before
+// Start would hand fn a nil one.
+func (a *App) goBackground(name string, fn func(context.Context)) {
+	a.bg.wg.Add(1)
+	go func() {
+		defer a.bg.wg.Done()
+		fn(a.bg.ctx)
+		slog.Debug("background task returned", "task", name)
+	}()
 }
 
 // Build wires the process and returns it unstarted.
@@ -537,6 +579,12 @@ func (a *App) Engine() *gin.Engine { return a.engine }
 // that cannot be seeded leaves the feature at its defaults, which is the
 // same state a fresh install has.
 func (a *App) Start(ctx context.Context) error {
+	// The context every background task runs under. Derived from the
+	// caller's so a cancelled signal context still stops them, but owned
+	// here so Close can cancel it itself: "Close is the single shutdown
+	// path" has to hold for a caller that only calls Close.
+	a.bg.ctx, a.bg.cancel = context.WithCancel(ctx)
+
 	// Seed provider_settings on first boot using catalog defaults.
 	// ON CONFLICT DO NOTHING means subsequent restarts leave admin
 	// toggles alone — the DB is authoritative after the initial seed.
@@ -594,7 +642,9 @@ func (a *App) Start(ctx context.Context) error {
 	// Staging for abandoned failed or cancelled runs is dead weight after
 	// a week. Hourly loop, same shape as the missing-file and
 	// orphaned-key sweepers.
-	go task.LoopAudiobookStagingSweep(ctx, a.audiobookRepo, a.cfg.DataPath)
+	a.goBackground("audiobook staging sweep", func(ctx context.Context) {
+		task.LoopAudiobookStagingSweep(ctx, a.audiobookRepo, a.cfg.DataPath)
+	})
 
 	// Requeue anything still mid-flight from a previous process.
 	ingest.DiscoverOnStartup(ctx, a.bdropRepo, a.queue)
@@ -602,9 +652,12 @@ func (a *App) Start(ctx context.Context) error {
 	// Boot-time files backfill: hash any files rows that are still missing a
 	// content_hash. Runs in the background so it doesn't block startup.
 	// 1-hour timeout is generous; real deployments have hundreds of files at most.
-	go func() {
+	a.goBackground("files backfill", func(ctx context.Context) {
 		slog.Info("files backfill starting")
-		backfillCtx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
+		// The ceiling derives from the application context rather than
+		// replacing it: it bounds a pathological library, it is not a
+		// second lifetime that outlives shutdown.
+		backfillCtx, cancel := context.WithTimeout(ctx, 1*time.Hour)
 		defer cancel()
 		if err := task.RunFilesBackfill(backfillCtx, task.FilesBackfillDeps{
 			Files:    a.fileRepo,
@@ -612,13 +665,13 @@ func (a *App) Start(ctx context.Context) error {
 		}); err != nil {
 			slog.Warn("files backfill", "err", err)
 		}
-	}()
+	})
 
 	// Boot-time covers backfill: migrate legacy book-id-keyed covers to the
 	// hash-keyed path (covers/<hash[0:2]>/<hash>.<ext>). Idempotent and
 	// best-effort — errors per-book are logged and retried on next boot.
-	go func() {
-		backfillCoversCtx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
+	a.goBackground("covers backfill", func(ctx context.Context) {
+		backfillCoversCtx, cancel := context.WithTimeout(ctx, 1*time.Hour)
 		defer cancel()
 		if err := task.RunCoversBackfill(backfillCoversCtx, task.CoversBackfillDeps{
 			Books:  a.bookRepo,
@@ -626,24 +679,28 @@ func (a *App) Start(ctx context.Context) error {
 		}); err != nil {
 			slog.Warn("covers backfill", "err", err)
 		}
-	}()
+	})
 
 	// Missing-files purge sweeper: deletes files rows whose missing_since
 	// is older than 24h. Runs hourly until the application shuts down.
-	go task.LoopMissingPurge(ctx, a.fileRepo, time.Hour)
+	a.goBackground("missing purge", func(ctx context.Context) {
+		task.LoopMissingPurge(ctx, a.fileRepo, time.Hour)
+	})
 
 	// Orphaned-keys sweeper: drains pending_orphans rows whose grace
 	// window has passed, deleting the underlying storage keys. Sources:
 	// post-rename old keys (full RenameGrace) and rollback half-rename
 	// new keys (RenameRollbackGrace). ADR-0005.
-	go task.LoopOrphanedKeys(ctx, task.OrphanedKeysDeps{
-		Orphans:  a.pendingOrphansRepo,
-		Libs:     a.libRepo,
-		Resolver: a.storageResolver,
-	}, time.Hour)
+	a.goBackground("orphaned keys", func(ctx context.Context) {
+		task.LoopOrphanedKeys(ctx, task.OrphanedKeysDeps{
+			Orphans:  a.pendingOrphansRepo,
+			Libs:     a.libRepo,
+			Resolver: a.storageResolver,
+		}, time.Hour)
+	})
 
 	// File watcher goroutine.
-	go a.watcher.Run(ctx)
+	a.goBackground("bookdrop watcher", a.watcher.Run)
 
 	return nil
 }
@@ -665,11 +722,47 @@ func (a *App) startQueue(ctx context.Context) error {
 	return nil
 }
 
-// Close is the single shutdown path: drain the queue, then close the
-// database. Errors are joined rather than returned at the first failure —
-// a queue that refuses to drain must not leave the pool open.
+// backgroundStopTimeout bounds how long Close waits for the tasks
+// goBackground registered.
+//
+// Every one of them is a cooperative loop that checks the context
+// between items, so a healthy shutdown finishes in milliseconds and
+// never spends this. The bound exists for the task that is wedged in a
+// syscall — a storage backend that stopped answering — where the cost
+// must be a slow shutdown rather than one that never completes. 5s is
+// generous for cooperative work and keeps Close's worst case at 20s,
+// this plus the 15s drain below, inside the grace period an orchestrator
+// allows before it sends SIGKILL.
+const backgroundStopTimeout = 5 * time.Second
+
+// Close is the single shutdown path: stop the background tasks, drain
+// the queue, then close the database. Errors are joined rather than
+// returned at the first failure — a queue that refuses to drain must not
+// leave the pool open.
 func (a *App) Close(ctx context.Context) error {
 	var errs []error
+
+	// Background work goes first because all of it holds repos backed by
+	// the pool closed at the bottom of this function. Close cancels the
+	// context itself rather than trusting the caller to have cancelled
+	// the one it passed Start: that is what makes this the single
+	// shutdown path rather than the second half of one.
+	//
+	// A nil cancel means Build ran but Start did not, so there is
+	// nothing registered and nothing to wait for.
+	if a.bg.cancel != nil {
+		a.bg.cancel()
+	}
+	stopped := make(chan struct{})
+	go func() {
+		a.bg.wg.Wait()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(backgroundStopTimeout):
+		errs = append(errs, fmt.Errorf("background tasks still running after %s", backgroundStopTimeout))
+	}
 
 	// The 15s budget is detached from ctx because ctx is normally the
 	// signal context, already cancelled by the time we get here — a

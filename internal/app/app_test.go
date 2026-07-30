@@ -105,6 +105,54 @@ func TestBuildLeavesTheQueueUnstarted(t *testing.T) {
 	}
 }
 
+// TestCloseWaitsForRegisteredBackgroundWork pins the promise Close's doc
+// comment makes: it is the single shutdown path. A registered loop that
+// is still running when Close is called must be told to stop and must
+// have stopped by the time Close returns — otherwise the pool goes away
+// under a live query, which is exactly what the two backfills used to do
+// by detaching onto context.Background() (#224).
+//
+// The `default` arm below is the whole assertion: reading the
+// observation without blocking only succeeds if the task was already
+// finished when Close returned.
+func TestCloseWaitsForRegisteredBackgroundWork(t *testing.T) {
+	a := buildForTest(t)
+
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	started := make(chan struct{})
+	observed := make(chan error, 1)
+	a.goBackground("test probe", func(taskCtx context.Context) {
+		close(started)
+		<-taskCtx.Done()
+		observed <- taskCtx.Err()
+	})
+	<-started
+
+	returned := make(chan error, 1)
+	go func() { returned <- a.Close(context.Background()) }()
+
+	select {
+	case err := <-returned:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("Close did not return while a registered task was in flight")
+	}
+
+	select {
+	case err := <-observed:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("registered task saw %v, want context.Canceled", err)
+		}
+	default:
+		t.Fatal("Close returned before the registered task observed cancellation")
+	}
+}
+
 // isNilValue reports whether a field holds nothing. Reflection rather
 // than a hand-written list so a seam added to App or Handler is covered
 // the moment it is declared; IsNil is legal on unexported fields, unlike
