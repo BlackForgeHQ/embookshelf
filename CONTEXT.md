@@ -24,11 +24,21 @@ This importer is the only reason two SQLite artifacts survive: the `modernc.org/
 
 ### Setting
 
-`repo.Setting[T]`; one typed `app_settings` row. `Get` / `Set` / `SeedIfAbsent` are implemented once; a domain declares only what differs — its key, defaults, and optionally Normalize, Validate, and Secrets. Four declarations today: EMAIL, FORWARD_AUTH, the three OIDC provider rows, and the auto-provision row. A missing row is never an error: `Get` returns the declared default, and a stored row is unmarshaled *onto* that default so partial JSON keeps its defaults.
+`repo.Setting[T]`; one typed `app_settings` row. `Get` / `Set` / `SeedIfAbsent` are implemented once; a domain declares only what differs — its key, defaults, and optionally Normalize, Validate, and Secrets. Nine declarations today: EMAIL, FORWARD_AUTH, READING_GUIDE, AUDIOBOOK, the three OIDC provider rows, the auto-provision row and the OIDC force-only flag. A missing row is never an error: `Get` returns the declared default, and a stored row is unmarshaled *onto* that default so partial JSON keeps its defaults.
 
 Declaring `Secrets` is how a row opts into at-rest encryption — it returns pointers to the secret fields, which the implementation runs through the [[Slot transformer]] on every write and reverses on every read. Callers only ever see plaintext. `AppSettingsRepo` holds the Cipher rather than taking it per call, so a new accessor cannot silently store a secret in plaintext (the gap that left OIDC client secrets unencrypted until the mechanism was unified).
 
 **Distinct** from `provider_settings` — a separate table whose secret keys are declared at runtime by each metadata provider, not by struct fields. It shares the Slot transformer and the same placement of the obligation (`ProviderSettingsRepo` holds the Cipher too), but not `Setting[T]`.
+
+### Settings registry
+
+`repo.settingsRegistry`; the single list of `Setting[T]` rows that get seeded at boot, and the reason a new settings domain cannot forget to seed. `SeedAll` runs every entry and joins the failures rather than stopping at the first, so one broken domain does not cost the others their row.
+
+Exists because seeding was five hand-written calls in `app.Start` against seven bespoke `Seed*IfAbsent` wrappers, and nothing forced the sixth. The failure was silent: an unseeded row reads back as its declared default, so the admin panel simply renders nothing new. Same shape as [[Job registry]] and [[Event catalog]] — settings had the deep mechanism and no registry.
+
+Guarded by a parity test that parses the package's own sources (package-level vars cannot be reflected over) and asserts every declared row appears in the list. It fatals if either parse finds nothing, so it cannot pass vacuously — verified by adding an unregistered row and watching it name both the row and the count mismatch.
+
+`METADATA_AUTO_ENRICH` is deliberately outside it: a bare `GetBool`/`SetBool` flag with no `Setting[T]`, unseeded, reading false when absent.
 
 ---
 
@@ -174,7 +184,7 @@ Library deletion: `?purge=true` query param deletes the on-disk folder (local) o
 
 ### LibraryStore
 
-`service.LibraryStore`; the deep seam that turns a `libraryID` into a `LibraryHandle{Library, Storage, Placer}` plus delivery glue (`BookSource`, `Open`, `Relativize`). Composes `LibraryRepo` + `Resolver` + `PlacerBuilder` behind one `For(ctx, libraryID)` method. Stateless — each call does a fresh PK lookup. Used by `BookDropService.Approve`, the file-serve handler, library scan, and files backfill. Replaces the scattered `lib, _ := libs.GetByID(); resolver.Resolve(*lib.BackendID); ...` chain that appeared at every callsite. (Bookdrop ingest still calls `Resolver` directly because it has no library_id at ingest time.)
+`service.LibraryStore`; the deep seam that turns a `libraryID` into a `LibraryHandle{Library, Storage, Placer}` plus delivery glue (`BookSource`, `Open`) and the operations that answer for the library's own rooting — `Walk`, `PlaceAt`, `StorageKey`. Those three share one private `keyRoot()`: an object store from the top of its own prefix, a local library from its root under the `/`-rooted backend, with the unconfigured-local case named per caller (`ErrNoWalkRoot`, `ErrNoPlaceRoot`) so it can never read as an empty result. `Relativize` is gone — it matched the library root as a spelled string while the backend cleans its prefix before listing, so a root with one redundant separator made a scan flag every row missing. Composes `LibraryRepo` + `Resolver` + `PlacerBuilder` behind one `For(ctx, libraryID)` method. Stateless — each call does a fresh PK lookup. Used by `BookDropService.Approve`, the file-serve handler, library scan, and files backfill. Replaces the scattered `lib, _ := libs.GetByID(); resolver.Resolve(*lib.BackendID); ...` chain that appeared at every callsite. (Bookdrop ingest still calls `Resolver` directly because it has no library_id at ingest time.)
 
 ### Book patch
 
@@ -416,6 +426,10 @@ Callers hand it a book id and whatever their write returned, and it writes the r
 ### Placer
 
 `service.Placer`; the seam Approve uses to materialize a bookdrop file at its final library location. Two adapters: `LocalPlacer` (filesystem rename + collision-suffix under the library root) and `BackendPlacer` (stream-upload to a `Storage` then drop the local source). Returns `PlaceResult{Location, Size, Mtime}` — the values the `files` row needs. The `PlacerBuilder` factory injected at boot picks the adapter from `Library.BackendID`. Approve never branches on local-vs-S3.
+
+Scope is **naming** a destination for a new arrival: the author/title folder, the collision suffix, the source basename. Placing bytes at a location that is already decided — a generated narration overwriting its own key — is `LibraryHandle.PlaceAt` instead, not a mode on this seam, because a flag switching the naming off would leave an adapter whose two modes share no decision.
+
+Reading the adapter choice off `Library.BackendID` is a known defect (#265), not a rule: the storage-v2 migration gives local libraries a backend row too, so a migrated local library gets `BackendPlacer` over a `/`-rooted backend and a library-relative key lands at the filesystem root. `IsObjectStore` exists because that column means "a backend row exists", which is the same confusion #202 was about.
 
 ### MetadataWriter
 
