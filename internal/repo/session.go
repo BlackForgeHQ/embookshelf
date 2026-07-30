@@ -43,16 +43,28 @@ var sessionProjection = projection[model.Session]{
 // FROM to alias the table.
 var sessionReturning = sessionProjection.returningList("sessions")
 
+// The two queries are rendered once. GetActive runs on every
+// authenticated request, so building its SQL per call was an allocation
+// bought for nothing.
+var (
+	sessionInsertQ = `
+		INSERT INTO sessions (user_id, expires_at, user_agent)
+		VALUES ($1, now() + $2::interval, $3)
+		RETURNING ` + sessionReturning
+
+	sessionSlideQ = `
+		UPDATE sessions
+		SET last_used_at = now()
+		WHERE id = $1 AND expires_at > now()
+		RETURNING ` + sessionReturning
+)
+
 func (r *SessionRepo) Create(ctx context.Context, userID, userAgent string, ttl time.Duration) (model.Session, error) {
 	// The INSERT's own column list stays outside the projection: it
 	// names the insertable subset (the three defaulted columns are not
 	// in it), which is a different membership question. Create's
 	// round-trip test guards it.
-	q := `
-		INSERT INTO sessions (user_id, expires_at, user_agent)
-		VALUES ($1, now() + $2::interval, $3)
-		RETURNING ` + sessionReturning
-	row := r.db.SQL.QueryRowContext(ctx, q, userID, ttl.String(), userAgent)
+	row := r.db.SQL.QueryRowContext(ctx, sessionInsertQ, userID, ttl.String(), userAgent)
 	return scanSession(row)
 }
 
@@ -60,13 +72,7 @@ func (r *SessionRepo) Create(ctx context.Context, userID, userAgent string, ttl 
 // not expired, and updates last_used_at to slide the session forward. Expired
 // or missing rows return ErrNotFound.
 func (r *SessionRepo) GetActive(ctx context.Context, id string) (model.Session, model.User, error) {
-	q := `
-		UPDATE sessions
-		SET last_used_at = now()
-		WHERE id = $1 AND expires_at > now()
-		RETURNING ` + sessionReturning
-
-	row := r.db.SQL.QueryRowContext(ctx, q, id)
+	row := r.db.SQL.QueryRowContext(ctx, sessionSlideQ, id)
 	s, err := scanSession(row)
 	if err != nil {
 		if dberr.IsNotFound(err) {

@@ -121,17 +121,6 @@ const BOOKDROP_STATE_FACTS: Record<BookDropState, StateFacts> = {
   },
 }
 
-/**
- * What a queue row's state is called in the interface.
- *
- * Kept as a map of its own because a few callers hold a bare state and
- * no row, but it is a column of the table above rather than a second
- * copy of the vocabulary.
- */
-export const BOOKDROP_STATE_LABEL = Object.fromEntries(
-  Object.entries(BOOKDROP_STATE_FACTS).map(([state, f]) => [state, f.label])
-) as Record<BookDropState, string>
-
 export function bookdropView(item: BookDropItem): BookDropView {
   const facts = BOOKDROP_STATE_FACTS[item.state]
   return {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { BookDropState } from "@/api/bookdrop"
-import { BOOKDROP_STATE_LABEL, isTerminalState } from "@/api/bookdrop"
+import { bookdropView, isTerminalState } from "@/api/bookdrop"
 
 const ALL: Array<BookDropState> = [
   "discovered",
@@ -12,10 +12,10 @@ const ALL: Array<BookDropState> = [
   "rejected",
 ]
 
-describe("BOOKDROP_STATE_LABEL", () => {
+describe("the label a state carries", () => {
   it("labels every state", () => {
     for (const state of ALL) {
-      expect(BOOKDROP_STATE_LABEL[state]).toBeTruthy()
+      expect(bookdropView({ state } as never).label).toBeTruthy()
     }
   })
 
@@ -23,8 +23,8 @@ describe("BOOKDROP_STATE_LABEL", () => {
   // describes what the scanner did rather than what the user is waiting
   // for.
   it("shows queue words, not scanner words", () => {
-    expect(BOOKDROP_STATE_LABEL.discovered).toBe("queued")
-    expect(BOOKDROP_STATE_LABEL.rejected).toBe("discarded")
+    expect(bookdropView({ state: "discovered" } as never).label).toBe("queued")
+    expect(bookdropView({ state: "rejected" } as never).label).toBe("discarded")
   })
 })
 
