@@ -95,17 +95,16 @@ drop and recreate this one, then re-run.
 }
 
 // openMigratedPostgres opens the DATABASE_URL target and brings it up to
-// the current schema. Refuses a SQLite DSN — importing SQLite into
-// SQLite is not the point.
+// the current schema. No AllowSQLite: the target takes the shared
+// refusal, because importing SQLite into SQLite is not the point.
 func openMigratedPostgres(ctx context.Context, cfg config.Config) (*db.DB, error) {
 	target, err := db.Open(ctx, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("open target database: %w", err)
-	}
-	if target.Dialect != db.DialectPostgres {
-		_ = target.Close()
+	if errors.Is(err, db.ErrSQLiteUnsupported) {
 		return nil, errors.New(
 			"DATABASE_URL must point at Postgres for an import — set it to your postgres:// DSN")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open target database: %w", err)
 	}
 	if err := app.RunMigrations(target); err != nil {
 		_ = target.Close()
@@ -118,8 +117,11 @@ func openMigratedPostgres(ctx context.Context, cfg config.Config) (*db.DB, error
 // Migrating the source sounds odd but is deliberate: an install that has
 // been sitting on an older release needs its schema brought forward
 // before its rows can map onto the current Postgres schema.
+//
+// This is the reason db.AllowSQLite exists (ADR-0023) — the one read of a
+// SQLite library the product still performs.
 func openMigratedSQLite(ctx context.Context, path string) (*db.DB, error) {
-	source, err := db.Open(ctx, config.Config{DatabaseURL: "sqlite:" + path})
+	source, err := db.Open(ctx, config.Config{DatabaseURL: "sqlite:" + path}, db.AllowSQLite())
 	if err != nil {
 		return nil, fmt.Errorf("open source database: %w", err)
 	}

@@ -95,13 +95,16 @@ Usage:
 		slog.Info("OpenTelemetry enabled", "endpoint", cfg.OTELEndpoint, "protocol", cfg.OTELProtocol, "service", cfg.OTELServiceName)
 	}
 
-	// Refuse a SQLite DSN before opening it (ADR-0023). Detecting from the
-	// string rather than the handle avoids creating an empty database file
-	// on the way to rejecting it — which is also why this stays ahead of
-	// app.Build rather than moving inside it.
-	if dialect, derr := db.DetectDialect(cfg.DatabaseURL); derr == nil && dialect == db.DialectSQLite {
-		slog.Error("SQLite is no longer supported — embookshelf requires Postgres")
-		fmt.Fprintf(os.Stderr, `
+	a, err := app.Build(ctx, cfg, version, commit)
+	if err != nil {
+		// The ADR-0023 refusal itself lives in db.Open, which every entry
+		// point shares and which rejects the DSN before opening it — so no
+		// empty database file is created on the way here. What is left for
+		// this binary is turning that refusal into the instructions an
+		// operator of the *server* needs.
+		if errors.Is(err, db.ErrSQLiteUnsupported) {
+			slog.Error("SQLite is no longer supported — embookshelf requires Postgres")
+			fmt.Fprintf(os.Stderr, `
 DATABASE_URL points at SQLite, which this version cannot serve (ADR-0023).
 
 Migrate the library into Postgres with:
@@ -112,11 +115,8 @@ Migrate the library into Postgres with:
 Then set DATABASE_URL to that Postgres DSN and start again. The target
 database must be empty; migrations are applied to it automatically.
 `)
-		os.Exit(1)
-	}
-
-	a, err := app.Build(ctx, cfg, version, commit)
-	if err != nil {
+			os.Exit(1)
+		}
 		slog.Error("build", "err", err)
 		os.Exit(1)
 	}

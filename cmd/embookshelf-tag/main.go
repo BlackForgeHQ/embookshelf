@@ -26,6 +26,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/storage"
 	s3backend "github.com/blackforge/embookshelf/internal/storage/s3"
 	"github.com/blackforge/embookshelf/internal/storageloader"
 	"github.com/blackforge/embookshelf/internal/tagging"
@@ -48,6 +49,9 @@ func main() {
 		fail("config", err)
 	}
 
+	// No AllowSQLite: this reads a live library, so it is covered by the
+	// ADR-0023 refusal db.Open applies to every caller that does not name
+	// the opt-in.
 	dbh, err := db.Open(ctx, cfg)
 	if err != nil {
 		fail("db", err)
@@ -59,7 +63,7 @@ func main() {
 	fileRepo := repo.NewFileRepo(dbh)
 	progressRepo := repo.NewProgressRepo(dbh)
 
-	resolver, err := storageloader.LoadStorageBackends(ctx, backendRepo)
+	resolver, err := bootStorage(ctx, backendRepo, cfg.SharedS3)
 	if err != nil {
 		fail("storage", err)
 	}
@@ -147,6 +151,28 @@ func main() {
 		"libraries", len(libs),
 		"dry_run", dryRun,
 	)
+}
+
+// bootStorage brings the storage_backends rows in line with the
+// EMBOOKSHELF_S3_* environment and only then builds the resolver from
+// them — the same order app.Build uses, and for the same reason.
+//
+// The order is the point, not a nicety. A kind=s3 row records the bucket,
+// endpoint and credentials it was created with; when the deployment's env
+// moves on, the row is stale until something reconciles it. This binary
+// used to load the rows as written, so a run after a bucket or key
+// rotation built its S3 clients from the old values and wrote tier tags
+// against the wrong bucket (or failed to authenticate at all) — exactly
+// the staleness ReconcileSharedS3 exists to prevent.
+func bootStorage(ctx context.Context, backendRepo *repo.StorageBackendRepo, shared config.SharedS3Config) (storage.Resolver, error) {
+	n, err := storageloader.ReconcileSharedS3(ctx, backendRepo, shared)
+	if err != nil {
+		return nil, fmt.Errorf("reconcile shared s3 backends: %w", err)
+	}
+	if n > 0 {
+		slog.Info("storage backends reconciled from env", "updated", n)
+	}
+	return storageloader.LoadStorageBackends(ctx, backendRepo)
 }
 
 func fail(stage string, err error) {

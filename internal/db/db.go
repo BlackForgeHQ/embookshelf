@@ -5,12 +5,14 @@
 // repo queries plus a `pgxpool.Pool` for the queue's River driver.
 //
 // Postgres is the only backend the server runs on (ADR-0023). SQLite is
-// still recognized and openable, but for one caller only: `embookshelf
-// import-sqlite`, which reads an old library and writes it into Postgres.
-// `cmd/embookshelf` refuses a sqlite:// DSN before opening it, so nothing
-// that serves requests reaches the SQLite path. Retire `openSQLite`,
-// `sqliteDSN`, and the driver registration in sqlite_driver.go together
-// with the importer.
+// still recognized and openable, but for the importer path only:
+// `embookshelf import-sqlite`, which reads an old library and writes it
+// into Postgres. Open refuses a SQLite DSN unless the caller passes
+// AllowSQLite, so an entry point reaches the SQLite path only by naming
+// the opt-in — the invariant lives here rather than in one binary's main,
+// where three other entry points could and did miss it. Retire
+// `openSQLite`, `sqliteDSN`, AllowSQLite, and the driver registration in
+// sqlite_driver.go together with the importer.
 package db
 
 import (
@@ -45,6 +47,11 @@ type DB struct {
 	dsn     string        // SQLite only; the resolved file path passed to sql.Open("sqlite", …)
 }
 
+// ErrSQLiteUnsupported is the refusal every caller that opens a database
+// gets when the DSN names SQLite and it has not asked for AllowSQLite.
+var ErrSQLiteUnsupported = errors.New(
+	"SQLite is not a supported database for this process — embookshelf requires Postgres (ADR-0023)")
+
 // DetectDialect parses a DSN-or-path string and returns the dialect it
 // describes. Schemes are matched case-insensitively. Bare paths (no
 // scheme) are treated as SQLite filenames.
@@ -78,10 +85,39 @@ func DetectDialect(url string) (Dialect, error) {
 	}
 }
 
-// Open builds a *DB from configuration. Postgres is the server's only
-// backend (ADR-0023); the SQLite branch serves `import-sqlite` alone and
-// `cmd/embookshelf` refuses a sqlite:// DSN before reaching it.
-func Open(ctx context.Context, cfg config.Config) (*DB, error) {
+// Option adjusts how Open treats a DSN. There is one today; it exists as
+// an option rather than a second Open function so the refusal below has a
+// single implementation that every caller shares.
+type Option func(*openOptions)
+
+type openOptions struct {
+	allowSQLite bool
+}
+
+// AllowSQLite opts a caller out of the ADR-0023 refusal. Reserved for the
+// importer path: `embookshelf import-sqlite` (which reads an old library),
+// `cmd/migrate` (which brings such a source forward before the importer
+// reads it, and is what the migrations-sanity-sqlite-importer CI job
+// exercises), and the repotest helper that builds importer fixtures.
+// Nothing that serves requests may name it — that is the whole invariant.
+func AllowSQLite() Option {
+	return func(o *openOptions) { o.allowSQLite = true }
+}
+
+// Open builds a *DB from configuration. Postgres is the only backend a
+// serving process may run on (ADR-0023), so a SQLite DSN is refused here
+// unless the caller passes AllowSQLite.
+//
+// The refusal reads the DSN rather than the opened handle: sql.Open on a
+// SQLite path creates an empty database file, so checking afterwards
+// would leave one behind on the way to rejecting it. This is also why the
+// check lives in this function and not further down in openSQLite.
+func Open(ctx context.Context, cfg config.Config, opts ...Option) (*DB, error) {
+	var o openOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	d, err := DetectDialect(cfg.DatabaseURL)
 	if err != nil {
 		return nil, err
@@ -90,6 +126,9 @@ func Open(ctx context.Context, cfg config.Config) (*DB, error) {
 	case DialectPostgres:
 		return openPostgres(ctx, cfg)
 	case DialectSQLite:
+		if !o.allowSQLite {
+			return nil, ErrSQLiteUnsupported
+		}
 		return openSQLite(ctx, cfg)
 	default:
 		return nil, fmt.Errorf("unknown dialect: %q", d)

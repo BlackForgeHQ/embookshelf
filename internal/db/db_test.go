@@ -4,7 +4,10 @@ package db
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -86,6 +89,30 @@ func TestSQLiteDSN_unsetDataRoot_noResolution(t *testing.T) {
 	}
 }
 
+// TestOpen_refusesSQLiteWithoutOptIn pins the ADR-0023 invariant where it
+// belongs: in the module that owns opening, not in one binary's main. A
+// caller that has not named the opt-in gets a refusal, and — because the
+// refusal reads the DSN rather than the handle — no database file is
+// created on the way to it.
+func TestOpen_refusesSQLiteWithoutOptIn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "refused.db")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	d, err := Open(ctx, config.Config{DatabaseURL: "sqlite:" + path})
+	if err == nil {
+		_ = d.Close()
+		t.Fatal("Open accepted a SQLite DSN without AllowSQLite")
+	}
+	if !errors.Is(err, ErrSQLiteUnsupported) {
+		t.Fatalf("err = %v, want ErrSQLiteUnsupported", err)
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("refusal created %s (stat err = %v); it must reject before opening", path, statErr)
+	}
+}
+
 func TestOpenPostgres_live(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -125,7 +152,7 @@ func TestOpenSQLite_live(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	d, err := Open(ctx, cfg)
+	d, err := Open(ctx, cfg, AllowSQLite())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

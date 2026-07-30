@@ -56,7 +56,9 @@ func newSQLite(t *testing.T) *db.DB {
 	cfg := config.Config{DatabaseURL: "sqlite:" + path}
 
 	ctx := context.Background()
-	d, err := db.Open(ctx, cfg)
+	// Names the ADR-0023 opt-in like the importer it builds fixtures for;
+	// db.Open refuses SQLite to everyone else.
+	d, err := db.Open(ctx, cfg, db.AllowSQLite())
 	if err != nil {
 		t.Fatalf("repotest sqlite open: %v", err)
 	}
