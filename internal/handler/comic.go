@@ -117,13 +117,19 @@ func (h *Handler) ComicPage(c *gin.Context, s bookScope) {
 func (h *Handler) openComicSource(c *gin.Context, book model.Book) (storage.Source, error) {
 	ctx := c.Request.Context()
 	if h.libStore != nil {
-		if handle, err := h.libStore.For(ctx, book.LibraryID); err == nil {
-			src, oerr := handle.OpenBookSource(ctx, book)
-			if oerr != nil {
-				return nil, notePlacedFile(ctx, handle, book, oerr)
-			}
-			return src, nil
+		handle, err := h.libStore.For(ctx, book.LibraryID)
+		if err != nil {
+			// Not the documented fallback. That one is "no LibraryStore
+			// wired", which is the nil check above; a resolve that broke
+			// is a failure, and falling through would read this machine's
+			// disk for a library whose bytes may not be on it.
+			return nil, fmt.Errorf("resolve library: %w", err)
 		}
+		src, oerr := handle.OpenBookSource(ctx, book)
+		if oerr != nil {
+			return nil, notePlacedFile(ctx, handle, book, oerr)
+		}
+		return src, nil
 	}
 	return h.openSandboxedSource(c, book.Path)
 }

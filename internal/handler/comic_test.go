@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -284,5 +285,31 @@ func TestComicPageOutOfRange(t *testing.T) {
 	rec := comicRequest(t, f, f.h.ComicPage, "/api/v1/books/x/comic/pages/99", "99")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// failingLibStore resolves nothing. It stands for a transient failure —
+// the catalog row is there, the lookup broke — which is a different
+// thing from the documented no-LibraryStore degrade.
+type failingLibStore struct{ err error }
+
+func (f failingLibStore) For(context.Context, string) (*service.LibraryHandle, error) {
+	return nil, f.err
+}
+
+// A library that cannot be resolved must not fall through to reading the
+// book's legacy path off local disk. handler.Options documents one
+// fallback — no LibraryStore wired — and a resolve error is not it: on an
+// object-store library the bytes are not on this machine at all, and
+// silently answering from disk is how a stale local copy gets served in
+// place of the real file.
+func TestComicResolveFailureDoesNotFallBackToDisk(t *testing.T) {
+	f := newComicFixture(t, &objectStore{objects: map[string][]byte{}}, "")
+	f.h.libStore = failingLibStore{err: errors.New("resolve: connection reset")}
+
+	rec := comicRequest(t, f, f.h.ComicPagesIndex, "/api/v1/books/x/comic/pages", "")
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 — a broken resolve was reported as something else (body %s)",
+			rec.Code, rec.Body.String())
 	}
 }

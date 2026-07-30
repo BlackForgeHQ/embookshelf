@@ -181,6 +181,8 @@ func TestProjections_HaveOneDistinctDestinationPerColumn(t *testing.T) {
 	checkProjection(t, "files", fileProjection, &model.File{})
 	checkProjection(t, "annotations", annotationProjection, &model.Annotation{})
 	checkProjection(t, "bookdrop_items", bookDropProjection, &model.BookDropItem{})
+	checkProjection(t, "sessions", sessionProjection, &model.Session{})
+	checkProjection(t, "user_invites", userInviteProjection, &UserInvite{})
 }
 
 func checkProjection[T any](t *testing.T, table string, p projection[T], zero *T) {

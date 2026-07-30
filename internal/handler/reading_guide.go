@@ -76,11 +76,11 @@ func (h *Handler) BookGuideGenerate(c *gin.Context, s bookScope) {
 			"reading guides are not configured by the admin")
 		return
 	}
-	if h.queue == nil {
-		writeServerError(c, "guide generate", errors.New("no worker pool configured"))
+	q, ok := h.requireQueue(c)
+	if !ok {
 		return
 	}
-	if err := h.queue.Enqueue(ctx, jobs.ReadingGuideArgs{BookID: s.Book.ID}); err != nil {
+	if err := q.Enqueue(ctx, jobs.ReadingGuideArgs{BookID: s.Book.ID}); err != nil {
 		writeServerError(c, "queue guide generation", err)
 		return
 	}
