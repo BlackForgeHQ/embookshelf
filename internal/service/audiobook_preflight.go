@@ -16,9 +16,22 @@ import (
 // ErrAudiobooksNotConfigured is returned when the service has no settings
 // reader wired at all — a deployment without the feature, distinct from
 // one that has it and has turned it off.
+//
+// The handler answers it 503 with CodeAudiobooksDisabled.
 var ErrAudiobooksNotConfigured = errors.New("audiobook generation is not configured")
 
 // ErrAudiobooksDisabled is returned when the admin has the feature off.
+//
+// The handler answers it 503 with CodeAudiobooksDisabled, the same pair
+// as the not-configured case above: the two are different causes with
+// one consequence and one fix, and the client has a single branch for
+// "narration is unavailable here". It reached the client as a bare 409
+// with no code until #221, so the UI showed a generic conflict toast
+// instead of the disabled affordance.
+//
+// **Distinct** from task.ErrEngineDisabledForJob, which shares neither
+// this identity nor its purpose: that one is a retry verdict for River.
+// The two carried the same name and were never related by errors.Is.
 var ErrAudiobooksDisabled = errors.New("audiobook generation is not enabled")
 
 // GenerateOverride is what the generate dialog may change about a run.

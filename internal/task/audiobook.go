@@ -20,11 +20,23 @@ import (
 	"github.com/blackforge/embookshelf/internal/tts"
 )
 
-// ErrAudiobooksDisabled is returned when the feature is off. Permanent —
-// a disabled feature will still be disabled in thirty seconds — and it
-// wraps jobs.ErrDoNotRetry, which is what actually stops River rather
-// than a comment asserting it does (#185).
-var ErrAudiobooksDisabled = fmt.Errorf("audiobook generation is not enabled: %w", jobs.ErrDoNotRetry)
+// ErrEngineDisabledForJob ends a segment job because the feature is off.
+// Permanent — a disabled feature will still be disabled in thirty
+// seconds — and it wraps jobs.ErrDoNotRetry, which is what actually
+// stops River rather than a comment asserting it does (#185).
+//
+// Named for the job rather than for the feature because it used to be
+// called ErrAudiobooksDisabled, the same name service.ErrAudiobooksDisabled
+// carries, and the two were unrelated by errors.Is — one reader in three
+// assumed a handler mapping the service sentinel would also catch this
+// one. Renamed rather than related: they answer different questions.
+// The service's is a refusal a user is owed an explanation for, and the
+// handler turns it into a 503 with a code; this one is a retry verdict
+// addressed to River, which has no user and no status code. Wiring them
+// together with errors.Is would let a future mapper case catch a queue
+// error, and would make a do-not-retry marker leak into the HTTP tier's
+// vocabulary (#221).
+var ErrEngineDisabledForJob = fmt.Errorf("audiobook generation is not enabled: %w", jobs.ErrDoNotRetry)
 
 // errCanceled unwinds a segment whose run was cancelled mid-flight. Never
 // recorded as a failure: the run is already in its final state and
@@ -134,7 +146,7 @@ func AudiobookSegment(ctx context.Context, a jobs.AudiobookSegmentArgs, deps Seg
 		return fmt.Errorf("read audiobook settings: %w", err)
 	}
 	if !cfg.Enabled {
-		return ErrAudiobooksDisabled
+		return ErrEngineDisabledForJob
 	}
 	// Before the engine call, deliberately. By the time staging is
 	// written the audio has been bought, so a job that cannot stage must

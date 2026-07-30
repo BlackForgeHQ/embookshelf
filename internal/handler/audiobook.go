@@ -61,6 +61,15 @@ type audiobookGenerateRequest struct {
 	Model string `json:"model"`
 }
 
+// The audiobooks seam is a positional argument to NewDiscoveryDeps and
+// app.go is its only caller, so none of the handlers below guard it for
+// nil. Six of them used to, answering three different ways — a 404, a
+// 503 carrying CodeAudiobooksDisabled, and a 503 with the same message
+// hand-typed — for a state the type system already rules out. The real
+// "narration is unavailable here" answers come from the service's own
+// sentinels through writeAudiobookError, which is the one place that
+// decision is made (#221).
+
 // BookAudiobookGet returns the narration status for one book. 404 when
 // none has ever been started, which the client reads as "offer Generate".
 //
@@ -71,10 +80,6 @@ type audiobookGenerateRequest struct {
 // handed the DTO a zero-value Book — so a book we could not load was
 // reported as never stale rather than as missing.
 func (h *Handler) BookAudiobookGet(c *gin.Context, s bookScope) {
-	if h.audiobooks == nil {
-		writeError(c, http.StatusNotFound, "this book has no generated narration")
-		return
-	}
 	// Report rather than a repo read: it reconciles the run with its
 	// segments before answering, so this poll is also where a run that
 	// lost its finalize job gets it back, and it derives staleness where
@@ -95,12 +100,6 @@ func (h *Handler) BookAudiobookGet(c *gin.Context, s bookScope) {
 // one. Admin-only like generation itself: the number is the guardrail,
 // and it is only useful to whoever can act on it.
 func (h *Handler) BookAudiobookEstimate(c *gin.Context, s bookScope) {
-	if h.audiobooks == nil {
-		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled,
-			service.ErrAudiobooksNotConfigured.Error())
-		return
-	}
-
 	est, err := h.audiobooks.EstimateRun(c.Request.Context(), s.Book, service.GenerateOverride{})
 	if err != nil {
 		h.writeAudiobookError(c, err)
@@ -123,12 +122,6 @@ func (h *Handler) BookAudiobookEstimate(c *gin.Context, s bookScope) {
 // overwrites an existing narration. The type-to-confirm lives in the UI,
 // where the user can see what they are replacing.
 func (h *Handler) BookAudiobookGenerate(c *gin.Context, s bookScope) {
-	if h.audiobooks == nil {
-		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled,
-			service.ErrAudiobooksNotConfigured.Error())
-		return
-	}
-
 	var req audiobookGenerateRequest
 	// A body is optional: generating with the instance defaults is the
 	// common case and should not require one.
@@ -146,11 +139,6 @@ func (h *Handler) BookAudiobookGenerate(c *gin.Context, s bookScope) {
 // that may cost a hundred dollars, so it is deliberately available for
 // as long as the run is not terminal.
 func (h *Handler) BookAudiobookCancel(c *gin.Context, s bookScope) {
-	if h.audiobooks == nil {
-		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled,
-			"audiobook generation is not configured")
-		return
-	}
 	id := s.Book.ID
 	// No publish here: Cancel makes the transition and the module that
 	// makes a transition emits it. This handler used to remember to, and
@@ -165,11 +153,6 @@ func (h *Handler) BookAudiobookCancel(c *gin.Context, s bookScope) {
 // BookAudiobookRetry re-enqueues the segments that never finished, and
 // only those — the completed ones are already paid for.
 func (h *Handler) BookAudiobookRetry(c *gin.Context, s bookScope) {
-	if h.audiobooks == nil {
-		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled,
-			"audiobook generation is not configured")
-		return
-	}
 	if err := h.audiobooks.Retry(c.Request.Context(), s.Book.ID); err != nil {
 		h.writeAudiobookError(c, err)
 		return
@@ -181,10 +164,6 @@ func (h *Handler) BookAudiobookRetry(c *gin.Context, s bookScope) {
 // row, the book's chapter list and duration, and the bytes. The book
 // keeps its EPUB.
 func (h *Handler) BookAudiobookDelete(c *gin.Context, s bookScope) {
-	if h.audiobooks == nil {
-		writeError(c, http.StatusNotFound, "this book has no generated narration")
-		return
-	}
 	// One call: the ordering invariant — resolve the location while the
 	// row that names it still exists, delete the bytes only once the row
 	// is gone — belongs with the delete, the way DeleteBook has it (#191).
@@ -247,6 +226,24 @@ func (h *Handler) publishAudiobookUpdated(bookID string) {
 // writeAudiobookError maps the service's errors onto the envelope.
 func (h *Handler) writeAudiobookError(c *gin.Context, err error) {
 	switch {
+	// The admin has the feature off. 503 with the code the UI's affordance
+	// module branches on, the same answer the not-configured case gives:
+	// to a client, a feature that is off and a feature that was never set
+	// up are one obstacle with one fix, and the admin is sent to the same
+	// panel to clear it. Without this case it fell through to the default
+	// below and reached the client as a bare 409 with no code (#221).
+	case errors.Is(err, service.ErrAudiobooksDisabled):
+		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled,
+			service.ErrAudiobooksDisabled.Error())
+	// No settings reader is wired at all — a deployment without the
+	// feature. Same status and same code: the client has one branch for
+	// "narration is unavailable here", and splitting it would only ask the
+	// UI to say the same sentence twice. The sentinel's own message rather
+	// than err.Error(), because Preflight wraps it in "read audiobook
+	// settings: ...", which is phrasing for a log and not for a toast.
+	case errors.Is(err, service.ErrAudiobooksNotConfigured):
+		writeErrorCode(c, http.StatusServiceUnavailable, CodeAudiobooksDisabled,
+			service.ErrAudiobooksNotConfigured.Error())
 	case errors.Is(err, service.ErrNotNarratable):
 		writeErrorCode(c, http.StatusUnsupportedMediaType, CodeFormatNotNarratable,
 			service.ErrNotNarratable.Error())

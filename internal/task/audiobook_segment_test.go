@@ -192,8 +192,8 @@ func TestSegmentRefusesWhenTheFeatureIsDisabled(t *testing.T) {
 
 	err := h.run(t, 0)
 
-	if !errors.Is(err, task.ErrAudiobooksDisabled) {
-		t.Fatalf("err = %v, want ErrAudiobooksDisabled", err)
+	if !errors.Is(err, task.ErrEngineDisabledForJob) {
+		t.Fatalf("err = %v, want ErrEngineDisabledForJob", err)
 	}
 	if h.engine.calls != 0 {
 		t.Errorf("engine called %d times with the feature off", h.engine.calls)
