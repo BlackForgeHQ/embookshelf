@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -15,6 +16,8 @@ import (
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/repo/repotest"
+	"github.com/blackforge/embookshelf/internal/storage"
+	"github.com/blackforge/embookshelf/internal/storage/local"
 )
 
 // --- fakes -------------------------------------------------------------
@@ -217,5 +220,105 @@ func TestApproveWithoutAnEnrichDispatcherStillImports(t *testing.T) {
 	}
 	if got := h.dispatch.seen(); len(got) != 0 {
 		t.Fatalf("dispatched %v, want none", got)
+	}
+}
+
+// Approve is the caller that places bytes, so the misplacement is stated
+// end-to-end too: a real LibraryStore over a real DefaultPlacerBuilder,
+// and a libraries row in the shape the storage-v2 backfill leaves — a
+// filesystem library that also carries a kind=local backend row.
+//
+// The whole install's local backend is rooted at "/"
+// (storageloader.buildBackend), so a library-relative key written
+// through it lands outside the library; instanceRoot stands in for that
+// "/" so the assertion doesn't need the machine's filesystem root (#265).
+func TestApprovePlacesInsideAMigratedLocalLibrary(t *testing.T) {
+	ctx := t.Context()
+	d := repotest.New(t)
+
+	instanceRoot := t.TempDir()
+	libRoot := filepath.Join(instanceRoot, "srv", "books")
+	if err := os.MkdirAll(libRoot, 0o755); err != nil {
+		t.Fatalf("mkdir library root: %v", err)
+	}
+
+	libRepo := repo.NewLibraryRepo(d)
+	lib, err := libRepo.CreateLibrary(ctx, "Migrated", "migrated", libRoot, nil)
+	if err != nil {
+		t.Fatalf("CreateLibrary: %v", err)
+	}
+	// migrator.seedStorageBackends + wireLibraries: one kind=local backend
+	// per distinct path, backend_id wired, root copied from path.
+	backend, err := repo.NewStorageBackendRepo(d).Create(ctx, "local",
+		map[string]any{"root": libRoot})
+	if err != nil {
+		t.Fatalf("Create backend: %v", err)
+	}
+	if _, err := d.SQL.ExecContext(ctx,
+		`UPDATE libraries SET backend_id = $1, root = path WHERE id = $2`,
+		backend.ID, lib.ID,
+	); err != nil {
+		t.Fatalf("wire library to backend: %v", err)
+	}
+
+	// The install's LocalFS: one backend for the whole filesystem.
+	fs, err := local.New(instanceRoot)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	resolver := &storage.MapResolver{
+		Default:  fs,
+		Backends: map[string]storage.Storage{backend.ID: fs},
+	}
+
+	staging := t.TempDir()
+	srcPath := filepath.Join(staging, "dune.epub")
+	if err := os.WriteFile(srcPath, []byte("epub bytes"), 0o644); err != nil {
+		t.Fatalf("write staged file: %v", err)
+	}
+
+	bdropRepo := repo.NewBookDropRepo(d)
+	item, err := bdropRepo.Insert(ctx, srcPath, "EPUB", int64(len("epub bytes")))
+	if err != nil {
+		t.Fatalf("Insert bookdrop item: %v", err)
+	}
+	if err := bdropRepo.SetMetadata(ctx, item.ID,
+		"Dune", "Frank Herbert", "", "en", "", false, ""); err != nil {
+		t.Fatalf("SetMetadata: %v", err)
+	}
+
+	fileRepo := repo.NewFileRepo(d)
+	svc := NewBookDropService(bdropRepo, libRepo, repo.NewBookRepo(d), nil, nil,
+		fileRepo, &fakeEnrichDispatcher{}).
+		WithLibraryStore(NewLibraryStore(LibraryStoreDeps{
+			Libs:      libRepo,
+			Resolver:  resolver,
+			NewPlacer: DefaultPlacerBuilder(resolver),
+			Files:     fileRepo,
+		}))
+
+	book, err := svc.Approve(ctx, item.ID, lib.ID)
+	if err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	wantLocation := filepath.Join("Frank Herbert", "Dune", "dune.epub")
+	if book.Path != wantLocation {
+		t.Errorf("book.Path=%q want the library-relative %q", book.Path, wantLocation)
+	}
+	if _, err := os.Stat(filepath.Join(libRoot, wantLocation)); err != nil {
+		t.Errorf("approved bytes are not inside the library: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(instanceRoot, wantLocation)); err == nil {
+		t.Errorf("approved bytes landed at %q — the instance root, not the library",
+			filepath.Join(instanceRoot, wantLocation))
+	}
+
+	files, err := fileRepo.ListByBook(ctx, book.ID)
+	if err != nil {
+		t.Fatalf("ListByBook: %v", err)
+	}
+	if len(files) != 1 || files[0].Location != wantLocation {
+		t.Errorf("files rows = %+v, want one at %q", files, wantLocation)
 	}
 }

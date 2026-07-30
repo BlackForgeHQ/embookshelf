@@ -74,8 +74,26 @@ type PlaceResult struct {
 // is already available.
 type PlacerBuilder func(model.Library) (Placer, error)
 
-// DefaultPlacerBuilder dispatches by Library.BackendID. nil resolver
-// is allowed — the local branch ignores it.
+// DefaultPlacerBuilder picks the adapter by asking the resolved backend
+// whether it is an object store. nil resolver is allowed — the local
+// branch ignores it.
+//
+// It used to dispatch on Library.BackendID, and that column is not the
+// question. It says a backend row exists, not that the library is
+// something other than local — the same confusion #202 was about. The
+// storage-v2 backfill seeds one kind=local backend row per distinct
+// libraries.path and wires every pre-existing library to it
+// (migrator.wireLibraries), and every local backend is constructed
+// rooted at "/" for the whole instance (storageloader.buildBackend), so
+// a migrated local library got BackendPlacer over a "/"-rooted LocalFS
+// and its library-relative key put the book's file at the filesystem
+// root while the files row recorded it as inside the library (#265).
+//
+// So the builder asks LibraryHandle.IsObjectStore, of the adapter and
+// through the handle's own method rather than a second reading of the
+// capability bit: this is the same question keyRoot asks on the walk,
+// resolve and write paths, and one answer is the property those paths
+// are named for.
 func DefaultPlacerBuilder(resolver storage.Resolver) PlacerBuilder {
 	return func(lib model.Library) (Placer, error) {
 		if lib.BackendID != nil && resolver != nil {
@@ -83,11 +101,16 @@ func DefaultPlacerBuilder(resolver storage.Resolver) PlacerBuilder {
 			if err != nil {
 				return nil, fmt.Errorf("resolve backend: %w", err)
 			}
-			return BackendPlacer{Store: store}, nil
+			if (&LibraryHandle{Library: lib, Storage: store}).IsObjectStore() {
+				return BackendPlacer{Store: store}, nil
+			}
 		}
-		root := strings.TrimRight(lib.Path, "/")
+		// Local, whether or not a backend row exists. libraryLocalRoot is
+		// the one reading of where the library lives on disk — storage-v2's
+		// root column, falling back to the legacy path.
+		root := strings.TrimRight(libraryLocalRoot(lib), "/")
 		if root == "" {
-			return nil, errors.New("library has no path and no backend")
+			return nil, ErrNoPlaceRoot
 		}
 		return LocalPlacer{Root: root}, nil
 	}
