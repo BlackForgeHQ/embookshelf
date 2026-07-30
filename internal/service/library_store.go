@@ -8,11 +8,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/scan"
 	"github.com/blackforge/embookshelf/internal/sidecar"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
@@ -318,18 +321,117 @@ func (h *LibraryHandle) SidecarKey(bookLocation string) string {
 	return sidecar.KeyFor(bookLocation)
 }
 
-// Relativize strips the library root from abs. Returns abs unchanged
-// when it doesn't sit under the root — defensive fallback for callers
-// that pass an already-relative location.
-func (h *LibraryHandle) Relativize(abs string) string {
-	// localRoot, not a fourth inline copy of it: this used to re-derive
-	// the Root-then-Path rule eight lines from the method that owns it
-	// (#201).
-	root := h.localRoot()
-	if root == "" {
-		return abs
+// Relativize is gone with its only caller. The scan worker walked from
+// the library root and un-absolutized each entry against it; Walk below
+// does the rooting itself, from the prefix it listed under rather than
+// from the root as spelled, and nothing else ever asked. ADR-0030's
+// Consequences names Relativize and relativeToRoot as the two live
+// producers of absolute locations, "the very rows a migration would have
+// had to clean up" — this is one of the two, retired rather than
+// reimplemented.
+
+// ErrNoWalkRoot says a local library has no root configured, so there
+// is nothing for Walk to start from.
+//
+// A named error rather than an empty result because those two are not
+// the same answer anywhere it matters: an empty walk means every file
+// in the library is gone, and the scan worker acts on that by
+// soft-flagging every row for the purge sweeper. "Unconfigured" is a
+// state to report to an admin, and it has to be impossible to mistake
+// for "the library is empty".
+var ErrNoWalkRoot = errors.New("library has no local root to walk")
+
+// Walk lists everything in the library, as entries whose Location is
+// library-relative — the vocabulary files.location is stored in
+// (CONTEXT, "Files row") — and whose Key is what this library's Storage
+// answers to for those bytes.
+//
+// The rooting question is answered here, once, for both kinds of
+// backend. An object store owns its own per-library prefix, so the walk
+// starts at the top of it and its keys are already library-relative. A
+// local backend is rooted at "/" for the whole instance (ADR-0030 §1),
+// so the walk starts at the library's own root and every key comes back
+// as a whole filesystem path with the leading slash off — which is what
+// a "/"-rooted backend reports even though it also answers to the
+// absolute form (storagetest, KeyShapesNameTheSameObject).
+//
+// Callers used to make that choice for themselves, and the scan worker
+// made it wrong in the one direction that is silent: an S3 library has
+// no root by design, that read as "not configured", and library scan
+// skipped every one of them while reporting success (#203).
+//
+// The relative form is derived by stripping the prefix the walk
+// actually listed under, not by matching the library root as an admin
+// happened to spell it. The backend cleans the prefix before listing,
+// so a root that is spelled with a redundant separator does not match
+// what comes back, and the old string-prefix rule fell through to
+// emitting the absolute path — at which point every entry reads New,
+// every row reads Missing, and the whole library is flagged for the
+// purge sweeper. A walk that promises library-relative locations has to
+// promise it for every spelling of the root.
+//
+// The listing is materialised: its one consumer diffs it against the
+// whole files table, so streaming buys nothing. A walk that fails
+// partway returns what it collected *and* the error — a caller that
+// treats a half-finished listing as the truth marks the rest of the
+// library missing, so it needs to see both.
+func (h *LibraryHandle) Walk(ctx context.Context) ([]scan.WalkEntry, error) {
+	if h.Storage == nil {
+		return nil, errors.New("library handle: no storage")
 	}
-	return relativeToRoot(abs, root)
+	prefix := ""
+	if !h.IsObjectStore() {
+		prefix = h.localRoot()
+		if prefix == "" {
+			return nil, ErrNoWalkRoot
+		}
+	}
+	base := walkBase(prefix)
+
+	var walked []scan.WalkEntry
+	entries, errc := scan.Walk(ctx, h.Storage, prefix)
+	for e := range entries {
+		e.Location = trimWalkBase(e.Location, base)
+		walked = append(walked, e)
+	}
+	return walked, <-errc
+}
+
+// walkBase is the prefix in the shape the backend reports keys under it:
+// cleaned, slash-separated, leading slash off, because a listing key is
+// relative to the backend's own root.
+func walkBase(prefix string) string {
+	if prefix == "" {
+		return ""
+	}
+	return strings.TrimPrefix(filepath.ToSlash(filepath.Clean(prefix)), "/")
+}
+
+// trimWalkBase turns a key the backend reported into a location relative
+// to the walked prefix.
+//
+// It compares with the leading slash off both sides for the same reason
+// the conformance suite does (storagetest.rebased.in): a "/"-rooted
+// backend answers to "/a/b" but reports "a/b". A key that does not sit
+// under the prefix at all comes back untouched — the backend only lists
+// what is under the prefix it was given, so there is no case for this to
+// paper over, and silently rewriting one would hide a backend that broke
+// that contract.
+func trimWalkBase(key, base string) string {
+	if base == "" {
+		return key
+	}
+	k := strings.TrimPrefix(key, "/")
+	switch {
+	case k == base:
+		// The library root is itself a file. Degenerate, but it must
+		// still name something.
+		return path.Base(k)
+	case strings.HasPrefix(k, base+"/"):
+		return k[len(base)+1:]
+	default:
+		return key
+	}
 }
 
 // Open opens a Source against the library's storage at the given

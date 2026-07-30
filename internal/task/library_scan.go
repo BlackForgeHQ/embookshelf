@@ -8,8 +8,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/blackforge/embookshelf/internal/fileproc"
-	"github.com/blackforge/embookshelf/internal/hashing"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/scan"
@@ -58,48 +56,28 @@ func LibraryScan(ctx context.Context, args jobs.LibraryScanArgs, deps LibrarySca
 	}
 	store := handle.Storage
 
-	// Where the walk starts, and it differs by Backend kind.
-	//
-	// An object store owns its own per-library prefix, so the walk starts
-	// at the top of it and the keys come back already library-relative. A
-	// local Backend is rooted at "/" for the whole instance (ADR-0030
-	// §1), so the walk starts at the Library's own root and every entry
-	// has to be relativized against it.
-	//
-	// The previous guard could not tell those apart: an S3 Library has no
-	// root by design, that read as "not configured", and Library scan
-	// silently skipped every one of them while reporting success (#203).
-	prefix := ""
-	if !handle.IsObjectStore() {
-		prefix = lib.Path
-		if lib.Root != nil && *lib.Root != "" {
-			prefix = *lib.Root
-		}
-		if prefix == "" {
-			slog.Warn("library scan: local library has no root configured, skipping",
-				"library_id", lib.ID)
-			return nil
-		}
-	}
-
 	dbFiles, err := deps.Files.ListByLibrary(ctx, lib.ID)
 	if err != nil {
 		return errors.New("list db files: " + err.Error())
 	}
 
-	var walked []scan.WalkEntry
-	entries, errc := scan.Walk(ctx, store, prefix)
-	for e := range entries {
-		if !handle.IsObjectStore() {
-			// A "/"-rooted local Backend lists absolute paths with the
-			// leading slash stripped; the DB stores library-relative
-			// locations. An object store already lists them relative to
-			// its own prefix, so there is nothing to strip.
-			e.Location = handle.Relativize("/" + e.Location)
-		}
-		walked = append(walked, e)
-	}
-	if walkErr := <-errc; walkErr != nil && !errors.Is(walkErr, context.Canceled) {
+	// The handle walks. Where the walk starts and whether its results
+	// need relativizing are questions about the Library's Backend, and
+	// they are answered once, there — this worker used to answer them
+	// itself and got it wrong for every S3 Library (#203). What comes
+	// back is library-relative, the same shape the files rows below are
+	// stored in, so the differ is comparing like with like.
+	walked, walkErr := handle.Walk(ctx)
+	switch {
+	case errors.Is(walkErr, service.ErrNoWalkRoot):
+		// An unconfigured local Library, which is a state to report and
+		// not a job to retry twenty-five times. Distinctly not the same
+		// as an empty walk: falling through with nothing walked would
+		// flag every row in the Library missing.
+		slog.Warn("library scan: local library has no root configured, skipping",
+			"library_id", lib.ID)
+		return nil
+	case walkErr != nil && !errors.Is(walkErr, context.Canceled):
 		slog.Warn("library scan: walk error", "library_id", lib.ID, "err", walkErr)
 	}
 
@@ -114,40 +92,13 @@ func LibraryScan(ctx context.Context, args jobs.LibraryScanArgs, deps LibrarySca
 		}
 	}
 
-	// New: hash + relocate-by-hash. A same-library hash hit means the
-	// file was renamed externally — point the existing row at the new
+	// New: relocate by hash. A same-library content hit means the file
+	// was renamed externally — point the existing row at the new
 	// location. No book is materialised; under ADR-0018 scan never
-	// ingests. Track relocated row IDs so the Missing pass below skips
-	// them (the old location they used to live at also shows up as
-	// Missing in this scan).
-	relocated := make(map[string]struct{})
-	for _, w := range cs.New {
-		key := handle.StorageKey(w.Location)
-		if !fileproc.IsSupported(key) {
-			continue
-		}
-		hash, _, herr := hashing.HashFile(ctx, store, key)
-		if herr != nil {
-			slog.Warn("library scan: hash new entry", "loc", w.Location, "err", herr)
-			continue
-		}
-		matches, mErr := deps.Files.GetByContentHash(ctx, hash)
-		if mErr != nil {
-			slog.Warn("library scan: lookup by hash", "loc", w.Location, "err", mErr)
-			continue
-		}
-		for _, m := range matches {
-			if m.LibraryID != lib.ID {
-				continue
-			}
-			if err := deps.Files.UpdateLocation(ctx, m.ID, w.Location); err != nil {
-				slog.Warn("library scan: relocate by hash", "id", m.ID, "loc", w.Location, "err", err)
-				break
-			}
-			relocated[m.ID] = struct{}{}
-			break
-		}
-	}
+	// ingests. The row ids it moved are what the Missing pass below has
+	// to skip: the location they used to live at also shows up as
+	// Missing in this same scan.
+	relocated := scan.RelocateByHash(ctx, store, deps.Files, lib.ID, cs.New)
 
 	// Changed: no-op. Under ADR-0018 in-app edits are the only supported
 	// edit path; an external rewrite is out-of-scope and won't be merged
@@ -159,7 +110,7 @@ func LibraryScan(ctx context.Context, args jobs.LibraryScanArgs, deps LibrarySca
 	// Missing: soft-flag for the 24h purge sweeper. Skip rows that were
 	// just relocated above.
 	for _, f := range cs.Missing {
-		if _, ok := relocated[f.ID]; ok {
+		if relocated.Has(f.ID) {
 			continue
 		}
 		if f.MissingSince != nil {
@@ -174,7 +125,7 @@ func LibraryScan(ctx context.Context, args jobs.LibraryScanArgs, deps LibrarySca
 		slog.Warn("library scan: touch", "id", lib.ID, "err", err)
 	}
 	slog.Info("library scan done",
-		"library", lib.ID, "prefix", prefix, "object_store", handle.IsObjectStore(),
+		"library", lib.ID,
 		"files", len(walked),
 		"relocated", len(relocated),
 		"missing", len(cs.Missing),

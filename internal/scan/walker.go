@@ -18,10 +18,22 @@ import (
 // WalkEntry is one observation from a storage backend during the
 // cheap walk phase. Hashes are NOT computed here.
 type WalkEntry struct {
+	// Location is what the files table stores: a location relative to
+	// the library root (CONTEXT, "Files row"). Walk itself has no
+	// library to be relative to, so it reports the listing key here and
+	// leaves the rooting to whoever knows it —
+	// service.LibraryHandle.Walk, which rewrites this field and is the
+	// only walk the scan worker uses.
 	Location string
-	Size     int64
-	Mtime    time.Time
-	ETag     string
+	// Key is what the backend answers to for these bytes: the key it
+	// listed the object under, carried through untouched. A caller that
+	// needs to read an entry uses this rather than re-deriving a key
+	// from Location, which on a "/"-rooted local backend means a round
+	// trip back through the key shim on every single entry (ADR-0030 §2).
+	Key   string
+	Size  int64
+	Mtime time.Time
+	ETag  string
 }
 
 // Walk lists every object under root in store and forwards each as a
@@ -50,6 +62,7 @@ func Walk(ctx context.Context, store storage.Storage, root string) (<-chan WalkE
 			}
 			entry := WalkEntry{
 				Location: obj.Key,
+				Key:      obj.Key,
 				Size:     obj.Size,
 				Mtime:    obj.ModTime,
 				ETag:     obj.ETag,

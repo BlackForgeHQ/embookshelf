@@ -31,6 +31,14 @@ func (objectStoreFS) Capabilities() storage.Capability { return storage.CapObjec
 // Storage of the caller's choosing.
 func scanFixture(t *testing.T, objectStore bool) (task.LibraryScanDeps, model.Library, string, *repo.LibraryRepo) {
 	t.Helper()
+	return scanFixtureRooted(t, objectStore, nil)
+}
+
+// scanFixtureRooted is scanFixture with control over how the Library's
+// root is spelled in the row, which is not always how the filesystem
+// spells it back.
+func scanFixtureRooted(t *testing.T, objectStore bool, spell func(root string) string) (task.LibraryScanDeps, model.Library, string, *repo.LibraryRepo) {
+	t.Helper()
 	d := repotest.New(t)
 	root := t.TempDir()
 
@@ -55,6 +63,8 @@ func scanFixture(t *testing.T, objectStore bool) (task.LibraryScanDeps, model.Li
 	libPath := root
 	if objectStore {
 		libPath = ""
+	} else if spell != nil {
+		libPath = spell(root)
 	}
 	lib, err := lr.CreateLibrary(context.Background(), "Scanned", "scanned", libPath, nil)
 	if err != nil {
@@ -178,6 +188,108 @@ func TestLibraryScanWalksALocalLibrary(t *testing.T) {
 	}
 	if gone.MissingSince == nil {
 		t.Error("a row whose file no longer walks was not flagged missing")
+	}
+}
+
+// The root as an admin spelled it is not the root the filesystem spells
+// back. The Backend cleans the prefix before listing, so a redundant
+// separator in the row is enough for a string-prefix strip to match
+// nothing — and the old one fell through to emitting the absolute path.
+// Every walked entry then read New and every row read Missing, so a
+// scan of a perfectly healthy Library soft-flagged the whole of it for
+// the 24h purge sweeper.
+//
+// The walk now promises library-relative locations for every spelling of
+// the root, which is the only reason the differ can be trusted to
+// compare like with like.
+func TestLibraryScanWalksALocalLibraryWhoseRootIsSpelledNonCanonically(t *testing.T) {
+	deps, lib, root, _ := scanFixtureRooted(t, false,
+		func(r string) string { return r + "//" })
+	ctx := context.Background()
+
+	const loc = "Kobo Abe/Woman in the Dunes/dunes.epub"
+	writeBook(t, root, loc, "dunes")
+	if _, err := deps.Files.Insert(ctx, model.File{
+		LibraryID: lib.ID, Location: loc, Format: "EPUB",
+	}); err != nil {
+		t.Fatalf("seed row: %v", err)
+	}
+
+	if err := task.LibraryScan(ctx, jobs.LibraryScanArgs{LibraryID: lib.ID}, deps); err != nil {
+		t.Fatalf("LibraryScan: %v", err)
+	}
+
+	present, err := deps.Files.GetByLocation(ctx, lib.ID, loc)
+	if err != nil {
+		t.Fatalf("GetByLocation: %v", err)
+	}
+	if present.MissingSince != nil {
+		t.Error("a file that is right there was flagged missing — the walk " +
+			"emitted absolute locations, so nothing matched the rows")
+	}
+}
+
+// Where the rescue for an absolute-location row ends.
+//
+// Rows holding an absolute location exist, from one producer:
+// migrator.seedFilesFromBooks writes books.path verbatim when the
+// library root was unknown at seed time. The walk yields
+// library-relative locations, the differ compares by exact string, so
+// such a row reads Missing while the very bytes it describes read New —
+// the consequence ADR-0030 names and declines to migrate.
+//
+// Relocate-by-hash is the only thing standing between that row and the
+// purge sweeper, and it can only reach a row that carries a content
+// hash. The seeded rows carry none (seedFilesFromBooks inserts location,
+// size 0 and mtime, and no hash), so for exactly the rows this shape
+// comes from, Missing is the final answer. Pinned in one test because
+// the difference between the two halves is invisible in the code.
+func TestLibraryScanRescuesAnAbsoluteRowOnlyWhenItCarriesAHash(t *testing.T) {
+	deps, lib, root, _ := scanFixture(t, false)
+	ctx := context.Background()
+
+	const (
+		hashed   = "Kobo Abe/Woman in the Dunes/dunes.epub"
+		hashless = "Ursula Le Guin/The Dispossessed/dispossessed.epub"
+	)
+	writeBook(t, root, hashed, "dunes bytes")
+	writeBook(t, root, hashless, "dispossessed bytes")
+
+	// Both rows hold the absolute path the backfill would have written.
+	absHashed := filepath.Join(root, filepath.FromSlash(hashed))
+	absHashless := filepath.Join(root, filepath.FromSlash(hashless))
+	if _, err := deps.Files.Insert(ctx, model.File{
+		LibraryID: lib.ID, Location: absHashed, Format: "EPUB",
+		ContentHash: sha256Sum("dunes bytes"),
+	}); err != nil {
+		t.Fatalf("seed hashed row: %v", err)
+	}
+	if _, err := deps.Files.Insert(ctx, model.File{
+		LibraryID: lib.ID, Location: absHashless, Format: "EPUB",
+	}); err != nil {
+		t.Fatalf("seed hashless row: %v", err)
+	}
+
+	if err := task.LibraryScan(ctx, jobs.LibraryScanArgs{LibraryID: lib.ID}, deps); err != nil {
+		t.Fatalf("LibraryScan: %v", err)
+	}
+
+	moved, err := deps.Files.GetByLocation(ctx, lib.ID, hashed)
+	if err != nil {
+		t.Fatalf("the hashed absolute row was not relocated to its relative location: %v", err)
+	}
+	if moved.MissingSince != nil {
+		t.Error("a relocated row was also flagged missing")
+	}
+
+	stranded, err := deps.Files.GetByLocation(ctx, lib.ID, absHashless)
+	if err != nil {
+		t.Fatalf("GetByLocation: %v", err)
+	}
+	if stranded.MissingSince == nil {
+		t.Error("a hashless absolute row survived the scan unflagged — if that " +
+			"is now true, the absolute-location consequence in ADR-0030 has " +
+			"been addressed somewhere and this test should say where")
 	}
 }
 
