@@ -911,7 +911,7 @@ network dependency on first paint.
 |--------|--------|-------|
 | EPUB | **Built** | [`EpubReader`](../ui/src/components/EpubReader.tsx) wraps epub.js with an imperative handle (`next` / `prev` / `goTo`). Paginated flow, `book.locations.generate(1024)` powers the percentage scrubber, `relocated` event reports `{percent, cfi}`. Typography overrides via `rendition.themes.default` so font/size changes survive chapter transitions. TOC tree flattened for the Contents panel. |
 | PDF | **Built** | [`PdfReader`](../ui/src/components/PdfReader.tsx) uses pdfjs-dist 5. Worker URL resolved via `new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url)` so Vite emits a hashed worker. Scroll container with one `<canvas>` per page; only current ± 1 page are rasterized (others cleared) to keep memory flat on large PDFs. |
-| Comic / CBZ | **Built** | [`ComicReader`](../ui/src/components/ComicReader.tsx) reads per-page images from `/api/v1/books/:id/pages/:n` (server expands the archive once, caches page bytes). Keyboard nav + double-page spread + manga mode. CBR + cb7 deferred. |
+| Comic / CBZ | **Built** | [`ComicReader`](../ui/src/components/ComicReader.tsx) reads per-page images from `/api/v1/books/:id/pages/:n` (server reads the one page it was asked for, ranged, straight out of the archive — nothing is expanded or cached). Keyboard nav + double-page spread + manga mode. CBR + cb7 deferred. |
 | Audiobook (MP3/M4B) | **Built** | [`AudioReader`](../ui/src/components/AudioReader.tsx) over the native `<audio>` element. Server delivers bytes via the same `/files` path (range requests). Duration + narrator pulled by `dhowden/tag` at ingest. Chapter markers from M4B containers TBD. |
 
 #### 5.6.1 Progress tokens
