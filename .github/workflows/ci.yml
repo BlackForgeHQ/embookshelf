@@ -79,6 +79,13 @@ jobs:
           --health-retries 20
     env:
       TEST_DATABASE_URL: postgres://embookshelf:embookshelf@localhost:5432/embookshelf?sslmode=disable
+      # The S3 arm of the storage conformance suite reads this and skips
+      # when it is unset — which is how it went unrun for its whole life
+      # (#227). Set here, it runs as part of `go test ./...`.
+      TEST_S3_ENDPOINT: http://localhost:9000
+      TEST_S3_BUCKET: embookshelf-test
+      TEST_S3_AK: embookshelf
+      TEST_S3_SK: embookshelf
     steps:
       - uses: actions/checkout@v7
 
@@ -86,6 +93,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # Not a `services:` entry like postgres above, because GitHub's
+      # service containers cannot supply a command and `minio` without
+      # its `server` subcommand prints help and exits. Starting the
+      # compose service instead also means CI and `make test-s3` run
+      # against one definition rather than two that drift.
+      - name: Start object store
+        run: docker compose -f compose.dev.yml up -d --wait --wait-timeout 120 minio
 
       - run: go test -race -coverprofile=coverage.out ./...
 

@@ -31,6 +31,14 @@ db-up: ## Start Postgres via compose
 db-down: ## Stop Postgres
 	docker compose -f compose.dev.yml down
 
+.PHONY: s3-up
+s3-up: ## Start the dev MinIO (S3 API :9000, console :9001) and wait for it
+	docker compose -f compose.dev.yml up -d --wait minio
+
+.PHONY: s3-down
+s3-down: ## Stop the dev MinIO
+	docker compose -f compose.dev.yml stop minio
+
 .PHONY: obs-up
 obs-up: ## Start grafana/otel-lgtm (OTLP :4317/:4318, Grafana UI :3001)
 	docker compose -f compose.dev.yml up -d otel-lgtm
@@ -186,6 +194,24 @@ TEST_PG_DSN ?= postgres://embookshelf:embookshelf@localhost:5432/embookshelf?ssl
 .PHONY: test
 test: test-db ## Run Go tests (starts the dev Postgres if needed)
 	TEST_DATABASE_URL='$(TEST_PG_DSN)' go test ./...
+
+# The S3 arm of the storage conformance suite (ADR-0030 §3). `make test`
+# leaves TEST_S3_ENDPOINT unset, so the arm skips there and a developer
+# with no object store is never hard-failed; this target starts one and
+# sets the variable, which is exactly what CI does. Point it elsewhere
+# with `make test-s3 TEST_S3_ENDPOINT=… TEST_S3_AK=… TEST_S3_SK=…`.
+TEST_S3_ENDPOINT ?= http://localhost:9000
+TEST_S3_BUCKET   ?= embookshelf-test
+TEST_S3_AK       ?= embookshelf
+TEST_S3_SK       ?= embookshelf
+
+.PHONY: test-s3
+test-s3: s3-up ## Run the storage conformance suite against S3 (starts the dev MinIO)
+	TEST_S3_ENDPOINT='$(TEST_S3_ENDPOINT)' \
+	TEST_S3_BUCKET='$(TEST_S3_BUCKET)' \
+	TEST_S3_AK='$(TEST_S3_AK)' \
+	TEST_S3_SK='$(TEST_S3_SK)' \
+	go test -race -count=1 -v -run TestS3Backend_Contract ./internal/storage/s3/
 
 # Repo tests need a real Postgres — they refuse to skip, because a
 # skipped integration test is an unrun one (ADR-0023).
