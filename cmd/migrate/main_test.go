@@ -142,9 +142,19 @@ func TestRun_downRevertsOneMigrationUnlessAskedForAll(t *testing.T) {
 		t.Fatalf("down on an empty database printed %q, want it to say there was nothing to revert", out)
 	}
 
-	// -all is deliberately not exercised here. It is the destructive
-	// path, so it needs a database it can take to zero, and SQLite's own
-	// down chain is broken at 000025 (#275) so it cannot reach zero
-	// anyway. What matters for the bug this fixes is that the *default*
-	// is one step, which is what the assertions above pin.
+	// -all takes it the rest of the way. This is also the only test that
+	// drives the SQLite down chain end to end, which is why it is worth
+	// its cost: it could not reach zero at all until #275.
+	if _, err := runWithin(t, 120*time.Second, dsn, "down", []string{"-all"}); err != nil {
+		t.Fatalf("down -all: %v", err)
+	}
+	if got := at(); !strings.HasPrefix(got, "none") {
+		t.Fatalf("down -all left the schema at %q, want no version", got)
+	}
+
+	// And it re-applies: a down chain that cannot be followed by an up is
+	// reversibility on paper only.
+	if _, err := runWithin(t, 120*time.Second, dsn, "up", nil); err != nil {
+		t.Fatalf("up after down -all: %v", err)
+	}
 }
