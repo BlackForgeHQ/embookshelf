@@ -4,6 +4,10 @@ package repo
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/mail"
+	"net/url"
 	"strings"
 )
 
@@ -36,7 +40,7 @@ type EmailSMTPConfig struct {
 }
 
 // EmailFromConfig is the visible sender. Address is RFC 5322
-// validated at handler save time; Name is free text shown in the
+// validated by the row on save; Name is free text shown in the
 // recipient's inbox.
 type EmailFromConfig struct {
 	Address string `json:"address"`
@@ -56,6 +60,12 @@ func DefaultEmailConfig() EmailConfig {
 	}
 }
 
+// ErrEmailInvalid marks a config the EMAIL row refuses. Every
+// validation failure wraps it and carries its own message, so a handler
+// can answer 400 with that message while a cipher or database failure
+// under SetEmail still surfaces as the 500 it is. Never returned bare.
+var ErrEmailInvalid = errors.New("email")
+
 // emailSetting declares the EMAIL row. SMTP.Password is the one secret;
 // host, username, and From stay plaintext so the row reads cleanly in
 // psql.
@@ -72,6 +82,42 @@ var emailSetting = Setting[EmailConfig]{
 			cfg.SMTP.TLS = "starttls"
 		}
 		return cfg
+	},
+	Validate: func(cfg EmailConfig) error {
+		// Completeness only on enable: an admin fills the form in stages,
+		// and refusing a half-filled disabled row makes the panel
+		// unusable. Enabling one that cannot dial, though, arms password
+		// resets and share mails that fail on every send.
+		if !cfg.Enabled {
+			return nil
+		}
+		if cfg.SMTP.Host == "" {
+			return fmt.Errorf("%w: smtp host is required", ErrEmailInvalid)
+		}
+		if cfg.SMTP.Port <= 0 || cfg.SMTP.Port > 65535 {
+			return fmt.Errorf("%w: smtp port must be 1..65535", ErrEmailInvalid)
+		}
+		// Normalize has already turned an empty mode into starttls, so
+		// only a value the sender cannot interpret reaches this switch.
+		switch cfg.SMTP.TLS {
+		case "none", "starttls", "tls":
+		default:
+			return fmt.Errorf("%w: smtp tls must be one of: none, starttls, tls", ErrEmailInvalid)
+		}
+		if cfg.From.Address == "" {
+			return fmt.Errorf("%w: from address is required", ErrEmailInvalid)
+		}
+		if _, err := mail.ParseAddress(cfg.From.Address); err != nil {
+			return fmt.Errorf("%w: from address is not a valid mailbox", ErrEmailInvalid)
+		}
+		if cfg.PublicURL == "" {
+			return fmt.Errorf("%w: public url is required when email is enabled", ErrEmailInvalid)
+		}
+		u, err := url.Parse(cfg.PublicURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("%w: public url must be an absolute http(s) URL", ErrEmailInvalid)
+		}
+		return nil
 	},
 	Secrets: func(cfg *EmailConfig) []*string { return []*string{&cfg.SMTP.Password} },
 }

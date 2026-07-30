@@ -161,6 +161,9 @@ func TestEmailSecretEncryptedAtRest(t *testing.T) {
 	cfg.SMTP.Username = "postmaster"
 	cfg.SMTP.Password = "smtp-hunter2"
 	cfg.From.Address = "books@example.com"
+	// An enabled row now has to be a complete one — the row validates
+	// what only the HTTP handler used to.
+	cfg.PublicURL = "https://books.example.com"
 	if err := r.SetEmail(ctx, cfg); err != nil {
 		t.Fatalf("SetEmail: %v", err)
 	}

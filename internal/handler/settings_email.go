@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/mail"
-	"net/url"
 	"strings"
 	"time"
 
@@ -74,26 +73,15 @@ func (h *Handler) SettingsEmailGet(c *gin.Context) {
 	c.JSON(http.StatusOK, toEmailSettingsDTO(cfg))
 }
 
-// SettingsEmailUpdate validates and persists the EMAIL row. An empty
-// password in the request means "keep the existing one" so admins
-// can edit other fields without retyping the secret.
+// SettingsEmailUpdate persists the EMAIL row. Trimming and validation
+// belong to the row, so a CLI or an importer is held to the same rules
+// as this endpoint. An empty password in the request means "keep the
+// existing one" so admins can edit other fields without retyping the
+// secret.
 func (h *Handler) SettingsEmailUpdate(c *gin.Context) {
 	var body emailSettingsDTO
 	if !bindJSON(c, &body) {
 		return
-	}
-
-	body.SMTP.Host = strings.TrimSpace(body.SMTP.Host)
-	body.SMTP.Username = strings.TrimSpace(body.SMTP.Username)
-	body.From.Address = strings.TrimSpace(body.From.Address)
-	body.From.Name = strings.TrimSpace(body.From.Name)
-	body.PublicURL = strings.TrimRight(strings.TrimSpace(body.PublicURL), "/")
-
-	if body.Enabled {
-		if err := validateEmailSettings(body); err != nil {
-			writeError(c, http.StatusBadRequest, err.Error())
-			return
-		}
 	}
 
 	current, err := h.appSettings.GetEmail(c.Request.Context())
@@ -118,6 +106,13 @@ func (h *Handler) SettingsEmailUpdate(c *gin.Context) {
 	}
 	cfg.SMTP.Password = resolveSecret(body.SMTP.Password, body.PasswordSet, current.SMTP.Password)
 	if err := h.appSettings.SetEmail(c.Request.Context(), cfg); err != nil {
+		// The row trims and validates; a refusal is the admin's mistake
+		// to see, and it carries its own message. Anything else — a
+		// cipher or a database failure — is ours.
+		if errors.Is(err, repo.ErrEmailInvalid) {
+			writeError(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeServerError(c, "email settings save", err)
 		return
 	}
@@ -196,32 +191,4 @@ func (h *Handler) SettingsEmailTest(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
-}
-
-func validateEmailSettings(body emailSettingsDTO) error {
-	if body.SMTP.Host == "" {
-		return errors.New("smtp host is required")
-	}
-	if body.SMTP.Port <= 0 || body.SMTP.Port > 65535 {
-		return errors.New("smtp port must be 1..65535")
-	}
-	switch body.SMTP.TLS {
-	case "", "starttls", "tls", "none":
-	default:
-		return errors.New("smtp tls must be one of: none, starttls, tls")
-	}
-	if body.From.Address == "" {
-		return errors.New("from address is required")
-	}
-	if _, err := mail.ParseAddress(body.From.Address); err != nil {
-		return errors.New("from address is not a valid mailbox")
-	}
-	if body.PublicURL == "" {
-		return errors.New("public url is required when email is enabled")
-	}
-	u, err := url.Parse(body.PublicURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return errors.New("public url must be an absolute http(s) URL")
-	}
-	return nil
 }
