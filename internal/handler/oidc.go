@@ -5,7 +5,6 @@ package handler
 import (
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -120,35 +119,6 @@ func (h *Handler) OIDCCallback(c *gin.Context) {
 	}
 	auth.SetSessionCookie(c, out.Session.ID, service.SessionTTL, h.Secure())
 	c.Redirect(http.StatusFound, "/")
-}
-
-// requestOrigin returns "scheme://host" inferred from the incoming
-// request. Honors X-Forwarded-Proto and X-Forwarded-Host so reverse-
-// proxy deployments that forgot to set APP_URL still get a usable
-// redirect_uri. Used as a fallback when cfg.AppURL is empty.
-func requestOrigin(c *gin.Context) string {
-	scheme := "http"
-	if c.Request.TLS != nil {
-		scheme = "https"
-	}
-	if xf := c.GetHeader("X-Forwarded-Proto"); xf != "" {
-		// Proto header can be comma-separated; first hop wins.
-		if i := strings.IndexByte(xf, ','); i >= 0 {
-			xf = xf[:i]
-		}
-		scheme = strings.TrimSpace(xf)
-	}
-	host := c.Request.Host
-	if xh := c.GetHeader("X-Forwarded-Host"); xh != "" {
-		if i := strings.IndexByte(xh, ','); i >= 0 {
-			xh = xh[:i]
-		}
-		host = strings.TrimSpace(xh)
-	}
-	if host == "" {
-		return ""
-	}
-	return scheme + "://" + host
 }
 
 func oidcErrorCode(err error) string {

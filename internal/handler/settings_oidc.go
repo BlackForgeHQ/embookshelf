@@ -83,7 +83,7 @@ func (h *Handler) SettingsOIDCGet(c *gin.Context) {
 		Google:        presetToDTO(google),
 		GitHub:        presetToDTO(github),
 		Generic:       genericToDTO(generic),
-		RedirectURI:   buildRedirectURI(c),
+		RedirectURI:   h.buildRedirectURI(c),
 	})
 }
 
@@ -274,15 +274,19 @@ func genericToDTO(c repo.GenericOIDCConfig) genericOIDCDTO {
 	}
 }
 
-// buildRedirectURI derives the OIDC redirect URI from the current
-// request when APP_URL is not configured. Browsers compare this exact
-// string against the provider's registered list, so both ends must
-// agree on scheme/host.
-func buildRedirectURI(c *gin.Context) string {
-	scheme := "http"
-	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
-		scheme = "https"
+// buildRedirectURI derives the OIDC redirect URI the admin has to
+// register at the provider. Providers compare this exact string against
+// their registered list, so what the panel shows has to be what the
+// login flow sends — it mirrors service.resolveRedirectURL: APP_URL
+// when configured, the shared requestOrigin otherwise. Reading the
+// proxy headers a second time here is what made the two disagree.
+func (h *Handler) buildRedirectURI(c *gin.Context) string {
+	base := strings.TrimRight(h.cfg.AppURL, "/")
+	if base == "" {
+		base = requestOrigin(c)
 	}
-	host := c.Request.Host
-	return scheme + "://" + host + "/api/v1/auth/oidc/callback"
+	if base == "" {
+		return ""
+	}
+	return base + "/api/v1/auth/oidc/callback"
 }

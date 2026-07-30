@@ -345,13 +345,11 @@ func writeFeed(c *gin.Context, feed opds.Feed, mime string) {
 }
 
 // opdsBase reconstructs the request origin (scheme + host) — OPDS clients
-// want absolute URLs in the feed.
+// want absolute URLs in the feed. An e-reader resolves those against the
+// proxy it can reach, not the internal Host, so this is the same origin
+// question the OIDC surfaces ask.
 func opdsBase(c *gin.Context) string {
-	scheme := "http"
-	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
-		scheme = "https"
-	}
-	return scheme + "://" + c.Request.Host
+	return requestOrigin(c)
 }
 
 // opdsUserID returns the authenticated user id from the Basic Auth
