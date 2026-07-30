@@ -255,16 +255,16 @@ func TestSeedIsIdempotentAndPreservesEdits(t *testing.T) {
 	ctx := context.Background()
 	r := newSettingsRepo(t)
 
-	if err := r.SeedEmailIfAbsent(ctx); err != nil {
-		t.Fatalf("SeedEmailIfAbsent: %v", err)
+	if err := r.SeedAll(ctx); err != nil {
+		t.Fatalf("SeedAll: %v", err)
 	}
 	cfg := repo.DefaultEmailConfig()
 	cfg.SMTP.Host = "edited.example.com"
 	if err := r.SetEmail(ctx, cfg); err != nil {
 		t.Fatalf("SetEmail: %v", err)
 	}
-	if err := r.SeedEmailIfAbsent(ctx); err != nil {
-		t.Fatalf("second SeedEmailIfAbsent: %v", err)
+	if err := r.SeedAll(ctx); err != nil {
+		t.Fatalf("second SeedAll: %v", err)
 	}
 
 	got, err := r.GetEmail(ctx)

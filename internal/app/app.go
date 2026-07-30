@@ -622,14 +622,14 @@ func (a *App) Start(ctx context.Context) error {
 		slog.Warn("load provider configs", "err", err)
 	}
 
-	// Settings rows seeded so the admin UI has something to render on
-	// first boot. Each seeds a documented default: OIDC empty,
-	// forward-auth and reading guides disabled.
-	if err := a.appSettingsRepo.SeedOIDCIfAbsent(ctx); err != nil {
-		slog.Warn("seed oidc settings", "err", err)
-	}
-	if err := a.appSettingsRepo.SeedForwardAuthIfAbsent(ctx); err != nil {
-		slog.Warn("seed forward_auth settings", "err", err)
+	// Every app_settings row the registry declares, seeded so the admin
+	// UI has something to render on first boot: OIDC empty, forward-auth,
+	// reading guides and audiobooks disabled. One call, because boot is
+	// the wrong place to keep a list of domains — a new one that forgot
+	// to be added here cost nothing at runtime and an empty settings
+	// panel to notice (#237).
+	if err := a.appSettingsRepo.SeedAll(ctx); err != nil {
+		slog.Warn("seed settings", "err", err)
 	}
 
 	if n, err := a.authSvc.PurgeExpiredSessions(ctx); err != nil {
@@ -638,15 +638,6 @@ func (a *App) Start(ctx context.Context) error {
 		slog.Info("purged expired sessions", "count", n)
 	}
 
-	if err := a.appSettingsRepo.SeedReadingGuideIfAbsent(ctx); err != nil {
-		slog.Warn("seed reading guide settings", "err", err)
-	}
-	if err := a.appSettingsRepo.SeedAudiobookIfAbsent(ctx); err != nil {
-		slog.Warn("seed audiobook settings", "err", err)
-	}
-	if err := a.appSettingsRepo.SeedEmailIfAbsent(ctx); err != nil {
-		slog.Warn("seed email settings", "err", err)
-	}
 	// Reload after the seed so the notifier picks up the persisted EMAIL
 	// row rather than the state it was constructed with. ADR-0020.
 	if err := a.notifier.Reload(ctx); err != nil {

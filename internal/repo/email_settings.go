@@ -136,9 +136,3 @@ func (r *AppSettingsRepo) GetEmail(ctx context.Context) (EmailConfig, error) {
 func (r *AppSettingsRepo) SetEmail(ctx context.Context, cfg EmailConfig) error {
 	return emailSetting.Set(ctx, r, cfg)
 }
-
-// SeedEmailIfAbsent writes a default empty/disabled EMAIL row when
-// none exists, so first boot has a row to edit in the settings UI.
-func (r *AppSettingsRepo) SeedEmailIfAbsent(ctx context.Context) error {
-	return emailSetting.SeedIfAbsent(ctx, r)
-}

@@ -119,3 +119,19 @@ func (s Setting[T]) SeedIfAbsent(ctx context.Context, r *AppSettingsRepo) error 
 	}
 	return s.Set(ctx, r, s.Default())
 }
+
+// settingSeeder is one row's boot-time seed, with Setting[T]'s type
+// parameter erased so rows of different value types share one list.
+type settingSeeder struct {
+	key  string
+	seed func(context.Context) error
+}
+
+// seedRow builds a registry entry from a declaration. The key travels
+// with the seed step, so an entry cannot name one row and seed another.
+func seedRow[T any](r *AppSettingsRepo, s Setting[T]) settingSeeder {
+	return settingSeeder{
+		key:  s.Key,
+		seed: func(ctx context.Context) error { return s.SeedIfAbsent(ctx, r) },
+	}
+}

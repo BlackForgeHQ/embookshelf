@@ -111,8 +111,8 @@ func TestEmailValidateRequiresAnAbsolutePublicURL(t *testing.T) {
 	}
 }
 
-// An admin fills the form in stages, and SeedEmailIfAbsent writes a
-// blank row on first boot — refusing either would leave no row to edit.
+// An admin fills the form in stages, and the boot seed writes a blank
+// row on first boot — refusing either would leave no row to edit.
 // Nothing sends mail while Enabled is false, so nothing is at risk.
 func TestEmailValidateOnlyBindsWhenEnabled(t *testing.T) {
 	t.Parallel()

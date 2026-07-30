@@ -107,9 +107,3 @@ func (r *AppSettingsRepo) GetReadingGuide(ctx context.Context) (ReadingGuideConf
 func (r *AppSettingsRepo) SetReadingGuide(ctx context.Context, cfg ReadingGuideConfig) error {
 	return readingGuideSetting.Set(ctx, r, cfg)
 }
-
-// SeedReadingGuideIfAbsent writes a disabled default row so the settings
-// panel has something to edit on first boot.
-func (r *AppSettingsRepo) SeedReadingGuideIfAbsent(ctx context.Context) error {
-	return readingGuideSetting.SeedIfAbsent(ctx, r)
-}

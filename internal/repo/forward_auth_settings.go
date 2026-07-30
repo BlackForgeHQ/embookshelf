@@ -104,12 +104,6 @@ func (r *AppSettingsRepo) SetForwardAuth(ctx context.Context, cfg ForwardAuthCon
 	return forwardAuthSetting.Set(ctx, r, cfg)
 }
 
-// SeedForwardAuthIfAbsent writes the default disabled row when none
-// exists, so the admin settings UI has a row to render on first boot.
-func (r *AppSettingsRepo) SeedForwardAuthIfAbsent(ctx context.Context) error {
-	return forwardAuthSetting.SeedIfAbsent(ctx, r)
-}
-
 // ValidateForwardAuth runs the same checks SetForwardAuth applies
 // internally. Exported so cmd/embookshelf can refuse startup before
 // any HTTP traffic is served.

@@ -276,6 +276,15 @@ var (
 			return ap
 		},
 	}
+
+	// forceOnlyModeSetting is the one OIDC row whose value is a bare
+	// bool. Declared rather than hand-marshaled so it seeds and prepares
+	// through the same mechanism as its four neighbours; GetBool /
+	// SetBool remain the read path for callers that only want the flag.
+	forceOnlyModeSetting = Setting[bool]{
+		Key:     SettingOIDCForceOnlyMode,
+		Default: func() bool { return false },
+	}
 )
 
 func (r *AppSettingsRepo) GetGenericOIDC(ctx context.Context) (GenericOIDCConfig, error) {
@@ -346,34 +355,57 @@ func (r *AppSettingsRepo) PrepareOIDCSettingRows(in OIDCRows) ([]SettingRow, err
 	if err != nil {
 		return nil, err
 	}
-	force, err := json.Marshal(in.ForceOnly)
+	force, err := forceOnlyModeSetting.Prepare(r, in.ForceOnly)
 	if err != nil {
 		return nil, err
 	}
-	rows = append(rows, google, github, generic, auto,
-		SettingRow{Name: SettingOIDCForceOnlyMode, Value: force})
+	rows = append(rows, google, github, generic, auto, force)
 	return rows, nil
 }
 
-// SeedOIDCIfAbsent writes defaults for any OIDC setting still missing
-// so the admin settings UI has sensible rows to render on first boot.
-func (r *AppSettingsRepo) SeedOIDCIfAbsent(ctx context.Context) error {
-	if err := genericOIDCSetting.SeedIfAbsent(ctx, r); err != nil {
-		return err
+// settingsRegistry is the single list of app_settings rows this binary
+// seeds on boot. Adding a settings domain means adding one line here —
+// and the parity test in setting_test.go fails until it is added, which
+// is the point: an unseeded row reads back as its default, so forgetting
+// used to cost nothing at runtime and an empty panel in the admin UI.
+//
+// Shaped like the job registry: an unexported registration built from
+// the declaration it names, taking the one dependency the work needs.
+func settingsRegistry(r *AppSettingsRepo) []settingSeeder {
+	return []settingSeeder{
+		seedRow(r, genericOIDCSetting),
+		seedRow(r, googleSetting),
+		seedRow(r, githubSetting),
+		seedRow(r, autoProvisionSetting),
+		seedRow(r, forceOnlyModeSetting),
+		seedRow(r, forwardAuthSetting),
+		seedRow(r, readingGuideSetting),
+		seedRow(r, audiobookSetting),
+		seedRow(r, emailSetting),
 	}
-	if err := googleSetting.SeedIfAbsent(ctx, r); err != nil {
-		return err
+}
+
+// SeedAll writes the default row for every registered setting that has
+// none, so the admin settings UI has something to render on first boot.
+// Existing rows — including admin-edited ones — are left alone, so this
+// is safe to run on every restart.
+//
+// Every row is attempted even when one fails, and the failures are
+// joined: they are independent rows, and a domain whose seed errored is
+// no reason to leave the rest of the instance unconfigured. A returned
+// error is not fatal at boot — an unseeded feature runs on its declared
+// defaults, the state a fresh install is in anyway.
+func (r *AppSettingsRepo) SeedAll(ctx context.Context) error {
+	return seedRows(ctx, settingsRegistry(r))
+}
+
+// seedRows runs every seed step, keeping going past a failure.
+func seedRows(ctx context.Context, rows []settingSeeder) error {
+	var errs []error
+	for _, row := range rows {
+		if err := row.seed(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("seed %s setting: %w", row.key, err))
+		}
 	}
-	if err := githubSetting.SeedIfAbsent(ctx, r); err != nil {
-		return err
-	}
-	if err := autoProvisionSetting.SeedIfAbsent(ctx, r); err != nil {
-		return err
-	}
-	if _, err := r.GetRaw(ctx, SettingOIDCForceOnlyMode); errors.Is(err, ErrNotFound) {
-		return r.SetBool(ctx, SettingOIDCForceOnlyMode, false)
-	} else if err != nil {
-		return err
-	}
-	return nil
+	return errors.Join(errs...)
 }

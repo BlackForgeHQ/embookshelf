@@ -194,9 +194,3 @@ func (r *AppSettingsRepo) GetAudiobook(ctx context.Context) (AudiobookConfig, er
 func (r *AppSettingsRepo) SetAudiobook(ctx context.Context, cfg AudiobookConfig) error {
 	return audiobookSetting.Set(ctx, r, cfg)
 }
-
-// SeedAudiobookIfAbsent writes a disabled default row so the settings
-// panel has something to edit on first boot.
-func (r *AppSettingsRepo) SeedAudiobookIfAbsent(ctx context.Context) error {
-	return audiobookSetting.SeedIfAbsent(ctx, r)
-}
