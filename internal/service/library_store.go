@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -83,8 +84,10 @@ type bookFileLister interface {
 // IsObjectStore reports whether this library's bytes live in a remote
 // object store rather than on the local filesystem. Names the question
 // once: the in-file metadata embed (ADR-0001), the folder-rename
-// strategy (ADR-0005), narration placement and the key rule all branch
-// on it.
+// strategy (ADR-0005) and byte deletion (whether the orphan queue is
+// involved at all) branch on it. Every question about *keys* — walking,
+// resolving a location, writing one — goes through keyRoot instead,
+// which asks this once on their behalf.
 //
 // Asked of the adapter, not of libraries.backend_id. That column was
 // the previous answer and it was wrong for exactly one install shape:
@@ -104,6 +107,53 @@ func (h *LibraryHandle) IsObjectStore() bool {
 		return false
 	}
 	return h.Storage.Capabilities()&storage.CapObjectStore != 0
+}
+
+// keyRoot is the prefix this library's own keys hang off, and whether it
+// has one at all.
+//
+// The single place the handle asks IsObjectStore to answer a question
+// about *keys*. An object store owns its own per-library prefix, so a
+// stored location is already the key it answers to and an empty root is
+// the correct answer. The local backend is rooted at "/" for the whole
+// instance (ADR-0030 §1), so a location means nothing until it is joined
+// onto the library's own root.
+//
+// Telling those two empties apart is why there is a second return value,
+// and it is not a formality: for an object store an empty root is by
+// design, while for a local library it means unconfigured, and every
+// caller that took the location as a key anyway did real damage — a walk
+// that did reported the whole library empty and flagged every row for
+// the purge sweeper (#203), and a write that did puts a book's file at
+// the filesystem root. Callers name that case in their own vocabulary
+// (ErrNoWalkRoot, ErrNoPlaceRoot) because what it costs differs.
+func (h *LibraryHandle) keyRoot() (string, bool) {
+	if h.IsObjectStore() {
+		return "", true
+	}
+	root := h.localRoot()
+	return root, root != ""
+}
+
+// localRoot is the library's on-disk root, preferring the storage-v2
+// Root column and falling back to the legacy Path.
+func (h *LibraryHandle) localRoot() string {
+	if h.Library.Root != nil && *h.Library.Root != "" {
+		return *h.Library.Root
+	}
+	return h.Library.Path
+}
+
+// LocalPath resolves a library-relative location to an absolute path on
+// a local library. Empty for object-store-backed libraries, which have
+// no filesystem to resolve against, and for a local library with no root
+// configured, which has nothing to resolve against yet.
+func (h *LibraryHandle) LocalPath(location string) string {
+	root, ok := h.keyRoot()
+	if !ok || root == "" {
+		return ""
+	}
+	return filepath.Join(root, filepath.FromSlash(location))
 }
 
 // StorageKey turns a files.location into the key this library's Storage
@@ -129,11 +179,10 @@ func (h *LibraryHandle) IsObjectStore() bool {
 // for formats with no extractable text.
 //
 // Backend-backed libraries are untouched: their keys are already the
-// object keys, and the backend encodes its own prefix.
+// object keys, and the backend encodes its own prefix — which is what
+// LocalPath returning "" for them means here, rather than a second
+// reading of the same capability bit.
 func (h *LibraryHandle) StorageKey(location string) string {
-	if h.IsObjectStore() {
-		return location
-	}
 	// Already absolute: a legacy row. books.path predates storage-v2, and
 	// the storage-v2 backfill wrote files.location verbatim whenever the
 	// library root was unknown at seed time (migrator.seedFilesFromBooks,
@@ -218,6 +267,38 @@ func (h *LibraryHandle) BookFileLocations(ctx context.Context, bookID string) ([
 		}
 	}
 	return out, nil
+}
+
+// BookFile returns one of a book's files rows by id. Used by callers
+// that hold a pointer to a specific rendition rather than a format.
+func (h *LibraryHandle) BookFile(ctx context.Context, bookID, fileID string) (model.File, bool) {
+	if h.files == nil || fileID == "" {
+		return model.File{}, false
+	}
+	list, err := h.files.ListByBook(ctx, bookID)
+	if err != nil {
+		return model.File{}, false
+	}
+	for _, f := range list {
+		if f.ID == fileID {
+			return f, true
+		}
+	}
+	return model.File{}, false
+}
+
+// PrimaryContentHash is the hash of the book's own file — the one whose
+// format matches books.format, i.e. the thing a narration is made from
+// rather than the narration itself.
+func (h *LibraryHandle) PrimaryContentHash(ctx context.Context, book model.Book) []byte {
+	if h.files == nil {
+		return nil
+	}
+	f, err := primaryFile(ctx, h.files, book)
+	if err != nil {
+		return nil
+	}
+	return f.ContentHash
 }
 
 // DeleteBookBytes removes the objects a book owned, given the keys
@@ -379,12 +460,9 @@ func (h *LibraryHandle) Walk(ctx context.Context) ([]scan.WalkEntry, error) {
 	if h.Storage == nil {
 		return nil, errors.New("library handle: no storage")
 	}
-	prefix := ""
-	if !h.IsObjectStore() {
-		prefix = h.localRoot()
-		if prefix == "" {
-			return nil, ErrNoWalkRoot
-		}
+	prefix, ok := h.keyRoot()
+	if !ok {
+		return nil, ErrNoWalkRoot
 	}
 	base := walkBase(prefix)
 
@@ -442,6 +520,100 @@ func (h *LibraryHandle) Open(ctx context.Context, location string) (storage.Sour
 		return nil, errors.New("library handle: no storage")
 	}
 	return h.Storage.Open(ctx, location)
+}
+
+// ErrNoPlaceRoot says a local library has no root configured, so there
+// is nowhere for PlaceAt to write.
+//
+// Named, and checked before a byte moves, because the alternative is
+// silent and destructive: the local backend is rooted at "/", so a
+// placement that let an unrooted location through would write a book's
+// file to the filesystem root and record a files row pointing at it.
+var ErrNoPlaceRoot = errors.New("library has no local root to place into")
+
+// PlaceAt writes a local file to a location this library already has a
+// name for, and consumes the source.
+//
+// This is placement for a book that exists. Placer is placement for a
+// book that does not, and the difference is not a mode — it is which
+// question is being answered. Placer *names* the destination: it derives
+// {Author}/{Title}/ from the source's metadata, walks a " (2)" suffix
+// until it finds a folder nobody owns, and keeps the source's basename.
+// PlaceAt is handed the name and only has to write it. Pointed at an
+// existing book, every one of Placer's naming decisions is wrong: the
+// collision suffix drops the file into a sibling "Title (2)" folder that
+// a later Library scan reads as a second book — the exact outcome
+// ADR-0025 exists to prevent — and the basename would be the temp file's,
+// embookshelf-audiobook-1234567.mp3.
+//
+// So the collision suffix is deliberately out of scope here rather than
+// switched off by a flag. Landing on the same key twice is the point:
+// regeneration is destructive by design (ADR-0025 §4), and a second run
+// that suffixed instead would accumulate half-gigabyte renditions.
+//
+// Nor does it route through the Placer seam to reuse the adapter bodies,
+// which is the tempting version of this. PlacerBuilder still picks its
+// adapter from libraries.backend_id — the column IsObjectStore exists
+// because it answers "a backend row exists", not "is not local" (#202) —
+// so a migrated local library gets a BackendPlacer over a "/"-rooted
+// LocalFS, and a library-relative key would land at the filesystem root.
+// Approve lives with that; a write path being built today should not
+// inherit it. The mechanics are not duplicated either way: an object
+// store and a local library differ only in what their keys are rooted at,
+// which keyRoot already answers, and both write through the one Put.
+//
+// Going through the backend rather than moving the file by hand is also
+// what makes the failure clean. Both adapters write all-or-nothing —
+// LocalFS through a temp file in the destination directory that it
+// removes on any failure, S3 in a single PutObject — so a placement that
+// fails leaves no partial artifact at the book's own key and no stray
+// temp beside it. The source is left alone on failure: it is the
+// caller's, to retry with or to reap.
+//
+// Destructive on srcPath on success, like Placer.Place: after it returns
+// the caller must treat srcPath as gone. Size and Mtime are the source's,
+// captured before the bytes move out of reach, so the caller does not
+// re-stat. On a local library that used to be exact — a rename carries
+// the source's mtime across and a write does not — so the recorded mtime
+// is now approximate there too, as it has always been for an upload. The
+// cost is bounded and self-correcting: scan/differ compares size plus
+// mtime-to-the-second and falls back to hashing, so at worst the next
+// scan reads the file once and settles the row.
+func (h *LibraryHandle) PlaceAt(ctx context.Context, location, srcPath, format string) (PlaceResult, error) {
+	if h.Storage == nil {
+		return PlaceResult{}, errors.New("library handle: no storage")
+	}
+	if _, ok := h.keyRoot(); !ok {
+		return PlaceResult{}, ErrNoPlaceRoot
+	}
+	info, err := os.Stat(srcPath)
+	if err != nil {
+		return PlaceResult{}, fmt.Errorf("stat source: %w", err)
+	}
+	f, err := os.Open(srcPath)
+	if err != nil {
+		return PlaceResult{}, fmt.Errorf("open source: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	opts := []storage.PutOption{}
+	if mime := storageMIMEForFormat(format); mime != "" {
+		opts = append(opts, storage.WithContentType(mime))
+	}
+	if _, err := h.Storage.Put(ctx, h.StorageKey(location), f, opts...); err != nil {
+		return PlaceResult{}, fmt.Errorf("put %s: %w", location, err)
+	}
+
+	_ = f.Close()
+	if err := os.Remove(srcPath); err != nil {
+		slog.Warn("place: remove source after write", "path", srcPath, "err", err)
+	}
+	return PlaceResult{
+		Location:   location,
+		FolderPath: path.Dir(location),
+		Size:       info.Size(),
+		Mtime:      info.ModTime(),
+	}, nil
 }
 
 // BookSource returns the delivery decision for serving a book through

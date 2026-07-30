@@ -11,7 +11,20 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/storage"
+	"github.com/blackforge/embookshelf/internal/storage/local"
 )
+
+// slashRootedFS is the local backend every install boots with: one
+// LocalFS rooted at "/" for the whole instance, per ADR-0030 §1. A local
+// library is its root plus this, and placement needs both.
+func slashRootedFS(t *testing.T) storage.Storage {
+	t.Helper()
+	fs, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	return fs
+}
 
 // putRecordingStorage captures what a backend placement wrote where.
 type putRecordingStorage struct {
@@ -75,7 +88,7 @@ func TestPlaceNarrationWritesIntoTheBooksOwnFolder(t *testing.T) {
 		t.Fatalf("write epub: %v", err)
 	}
 
-	handle := &LibraryHandle{Library: model.Library{ID: "lib1", Root: &root}}
+	handle := &LibraryHandle{Library: model.Library{ID: "lib1", Root: &root}, Storage: slashRootedFS(t)}
 	got, err := handle.PlaceNarration(context.Background(), narratedBook(folder), tempMP3(t, "mp3-bytes"))
 	if err != nil {
 		t.Fatalf("PlaceNarration: %v", err)
@@ -118,7 +131,7 @@ func TestPlaceNarrationOverwritesAPreviousRendition(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	handle := &LibraryHandle{Library: model.Library{ID: "lib1", Root: &root}}
+	handle := &LibraryHandle{Library: model.Library{ID: "lib1", Root: &root}, Storage: slashRootedFS(t)}
 	got, err := handle.PlaceNarration(context.Background(), narratedBook(folder), tempMP3(t, "new-narration"))
 	if err != nil {
 		t.Fatalf("PlaceNarration: %v", err)
@@ -141,7 +154,7 @@ func TestPlaceNarrationFallsBackToAuthorTitleWithoutAFolderPath(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	handle := &LibraryHandle{Library: model.Library{ID: "lib1", Root: &root}}
+	handle := &LibraryHandle{Library: model.Library{ID: "lib1", Root: &root}, Storage: slashRootedFS(t)}
 
 	got, err := handle.PlaceNarration(context.Background(), narratedBook(""), tempMP3(t, "mp3"))
 	if err != nil {

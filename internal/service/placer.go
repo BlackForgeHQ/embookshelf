@@ -34,6 +34,13 @@ import (
 // the caller MUST treat src.Path as gone. Adapters capture size/mtime
 // before bytes move out of reach and surface them in PlaceResult so
 // callers do not need to re-stat.
+//
+// Scope: this seam names the destination as well as writing it — the
+// {Author}/{Title}/ folder, the collision suffix, the source's basename.
+// That is only right for a book that does not exist yet. Writing into a
+// book that already does is LibraryHandle.PlaceAt, which is handed the
+// location and overwrites it; it is a different question, not a mode
+// here, and PlaceAt is where the argument is written down.
 type Placer interface {
 	Place(ctx context.Context, src PlaceSource) (PlaceResult, error)
 }
@@ -51,9 +58,10 @@ type PlaceSource struct {
 
 // PlaceResult is what the files row needs after a successful Place.
 // Location is library-relative (LocalPlacer strips the library root,
-// BackendPlacer returns the backend key directly). FolderPath is the
-// library-relative directory containing the file — what books.folder_path
-// stores per ADR-0003.
+// BackendPlacer returns the backend key directly, LibraryHandle.PlaceAt
+// returns the location it was given). FolderPath is the library-relative
+// directory containing the file — what books.folder_path stores per
+// ADR-0003.
 type PlaceResult struct {
 	Location   string
 	FolderPath string

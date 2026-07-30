@@ -205,6 +205,208 @@ func TestWalkRefusesALocalLibraryWithNoRoot(t *testing.T) {
 	}
 }
 
+// tempSource is a file in the shape placement is always handed one: a
+// temp file somewhere outside the library, named by whoever produced the
+// bytes rather than by where they are going.
+func tempSource(t *testing.T, body string) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "embookshelf-audiobook-*.mp3")
+	if err != nil {
+		t.Fatalf("temp: %v", err)
+	}
+	if _, err := f.WriteString(body); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	return f.Name()
+}
+
+// Placing into a book that already exists is not placing a new book. The
+// destination is a location the library already has a name for, and the
+// operation's whole job is to write it there and nowhere else — no
+// collision suffix, no basename inherited from a temp file. Whether that
+// write is a put to a bucket or a file on disk is the handle's business,
+// which is the same rooting question Walk answers for listing.
+func TestPlaceAtWritesToTheLibrarysOwnKey(t *testing.T) {
+	t.Parallel()
+
+	const (
+		location = "Kobo Abe/Woman in the Dunes/Woman in the Dunes.mp3"
+		folder   = "Kobo Abe/Woman in the Dunes"
+		body     = "narration-bytes"
+	)
+
+	t.Run("ObjectStoreBackedLibrary", func(t *testing.T) {
+		t.Parallel()
+
+		// An object store owns its own per-library prefix, so a stored
+		// location is already the key it answers to. Backed by a real
+		// filesystem rather than a map so the put actually streams.
+		bucket := t.TempDir()
+		fs, err := local.New(bucket)
+		if err != nil {
+			t.Fatalf("local.New: %v", err)
+		}
+		h := &service.LibraryHandle{
+			Library: model.Library{ID: "lib1"},
+			Storage: objectStoreFS{fs},
+		}
+
+		src := tempSource(t, body)
+		got, err := h.PlaceAt(context.Background(), location, src, "MP3")
+		if err != nil {
+			t.Fatalf("PlaceAt: %v", err)
+		}
+
+		if got.Location != location {
+			t.Errorf("Location = %q, want %q", got.Location, location)
+		}
+		if got.FolderPath != folder {
+			t.Errorf("FolderPath = %q, want %q", got.FolderPath, folder)
+		}
+		if got.Size != int64(len(body)) {
+			t.Errorf("Size = %d, want %d", got.Size, len(body))
+		}
+		b, err := os.ReadFile(filepath.Join(bucket, filepath.FromSlash(location)))
+		if err != nil {
+			t.Fatalf("object not at the library's own key: %v", err)
+		}
+		if string(b) != body {
+			t.Errorf("object = %q, want %q", b, body)
+		}
+		// The bytes are durable in the backend; keeping the temp copy
+		// fills the data volume one half-gigabyte narration at a time.
+		if _, err := os.Stat(src); !os.IsNotExist(err) {
+			t.Errorf("the temp source survived the put: %v", err)
+		}
+	})
+
+	t.Run("LocalLibraryOnASlashRootedBackend", func(t *testing.T) {
+		t.Parallel()
+
+		// The local backend is rooted at "/" for the whole instance
+		// (ADR-0030 §1), so the same location has to be resolved against
+		// the library root before it names anything.
+		root := t.TempDir()
+		rootedAtSlash, err := local.New("/")
+		if err != nil {
+			t.Fatalf("local.New: %v", err)
+		}
+		h := &service.LibraryHandle{
+			Library: model.Library{ID: "lib1", Root: &root},
+			Storage: rootedAtSlash,
+		}
+		// The book's folder already exists holding its EPUB — the exact
+		// condition under which the bookdrop placer picks a "Title (2)"
+		// sibling, which a later scan reads as a second book.
+		writeFile(t, root, folder+"/dunes.epub", "epub")
+
+		src := tempSource(t, body)
+		got, err := h.PlaceAt(context.Background(), location, src, "MP3")
+		if err != nil {
+			t.Fatalf("PlaceAt: %v", err)
+		}
+
+		// Library-relative, both of them: what the files row stores.
+		if got.Location != location {
+			t.Errorf("Location = %q, want %q", got.Location, location)
+		}
+		if got.FolderPath != folder {
+			t.Errorf("FolderPath = %q, want %q", got.FolderPath, folder)
+		}
+		b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(location)))
+		if err != nil {
+			t.Fatalf("file not under the library root: %v", err)
+		}
+		if string(b) != body {
+			t.Errorf("file = %q, want %q", b, body)
+		}
+		// One folder, both files. Nothing may have appeared beside it.
+		entries, err := os.ReadDir(filepath.Join(root, "Kobo Abe"))
+		if err != nil {
+			t.Fatalf("readdir: %v", err)
+		}
+		if len(entries) != 1 || entries[0].Name() != "Woman in the Dunes" {
+			t.Errorf("author folder holds %d entries, want exactly the book's own folder", len(entries))
+		}
+		if _, err := os.Stat(src); !os.IsNotExist(err) {
+			t.Errorf("the temp source survived the write: %v", err)
+		}
+	})
+}
+
+// A local library with no root has nowhere to write, and the one thing
+// that must not happen is for the location to be taken as a key in its
+// own right: the backend is rooted at "/", so an unrooted placement puts
+// a book's file at the filesystem root. Same distinction Walk draws, for
+// the same reason — "unconfigured" is a state to report, not a default.
+func TestPlaceAtRefusesALocalLibraryWithNoRoot(t *testing.T) {
+	t.Parallel()
+
+	rootedAtSlash, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	h := &service.LibraryHandle{Library: model.Library{ID: "lib1"}, Storage: rootedAtSlash}
+
+	src := tempSource(t, "narration")
+	_, err = h.PlaceAt(context.Background(), "Kobo Abe/Woman in the Dunes/x.mp3", src, "MP3")
+	if !errors.Is(err, service.ErrNoPlaceRoot) {
+		t.Fatalf("PlaceAt on a rootless local library = %v, want ErrNoPlaceRoot", err)
+	}
+	if _, err := os.Stat(src); err != nil {
+		t.Errorf("a refused placement consumed the source: %v", err)
+	}
+}
+
+// A placement that fails must leave the library exactly as it found it.
+// The destination here is a directory, so the write gets as far as the
+// backend's temp file and then cannot land it — the case that a
+// hand-rolled copy-then-rename leaves a truncated .mp3 or a stray .tmp
+// at the book's own key, where the next scan indexes it as the
+// narration.
+func TestPlaceAtLeavesNothingBehindWhenTheWriteFails(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	rootedAtSlash, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	h := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", Root: &root},
+		Storage: rootedAtSlash,
+	}
+	const location = "Kobo Abe/Woman in the Dunes/Woman in the Dunes.mp3"
+	blocked := filepath.Join(root, filepath.FromSlash(location))
+	if err := os.MkdirAll(blocked, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	src := tempSource(t, "narration-bytes")
+	if _, err := h.PlaceAt(context.Background(), location, src, "MP3"); err == nil {
+		t.Fatal("PlaceAt reported success writing over a directory")
+	}
+	// The source is still the caller's to retry with or reap.
+	if _, err := os.Stat(src); err != nil {
+		t.Errorf("a failed placement consumed the source: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(blocked))
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	if len(entries) != 1 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("book folder holds %v, want only the blocked destination — "+
+			"a failed placement left a partial artifact behind", names)
+	}
+}
+
 func TestLibraryHandle_SidecarKey(t *testing.T) {
 	// Per ADR-0003 §8 sidecar lives at LeafBook folder root as
 	// `metadata.embookshelf.json`, one per Book.
