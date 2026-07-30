@@ -88,15 +88,44 @@ func buildPendingOrphanInsert(rows []PendingOrphanInsert) (string, []any) {
 	return q, args
 }
 
+// DuePendingOrphan is a due row plus the one fact about it the row
+// cannot carry: whether anything still points at the key.
+//
+// A pending_orphans row records that a key *was* orphaned at some past
+// moment. That is not the same claim as "the key is orphaned now", and
+// the difference is the whole reason the flag exists — keys in this
+// system are deterministic, so a later write can land on a key already
+// queued for deletion (#273).
+type DuePendingOrphan struct {
+	model.PendingOrphan
+	// Referenced reports that a live files row in the same library names
+	// this key. The sweeper must not delete such a key: whatever was
+	// abandoned here has since been written over by something a reader
+	// can reach.
+	Referenced bool
+}
+
 // SelectDue returns up to limit rows whose EligibleAt has passed,
 // ordered by EligibleAt ASC. Used by the sweeper to pull a batch
 // of work each tick.
-func (r *PendingOrphanRepo) SelectDue(ctx context.Context, now time.Time, limit int) ([]model.PendingOrphan, error) {
+//
+// The files lookup rides along in the same query rather than being a
+// second call per row: the answer has to be as of the moment the batch
+// is read, and 500 round-trips per tick to learn it would be a poor
+// trade for a fact one EXISTS already knows. Matching is on
+// (library_id, location) because on a backend-backed library — the only
+// kind that enqueues here — files.location *is* the storage key, which
+// is what DeleteBookBytes relies on when it queues locations verbatim.
+func (r *PendingOrphanRepo) SelectDue(ctx context.Context, now time.Time, limit int) ([]DuePendingOrphan, error) {
 	const q = `
-		SELECT id, library_id, key, eligible_at, reason, book_id, created_at
-		FROM pending_orphans
-		WHERE eligible_at <= $1
-		ORDER BY eligible_at ASC
+		SELECT po.id, po.library_id, po.key, po.eligible_at, po.reason, po.book_id, po.created_at,
+		       EXISTS (
+		           SELECT 1 FROM files f
+		           WHERE f.library_id = po.library_id AND f.location = po.key
+		       ) AS referenced
+		FROM pending_orphans po
+		WHERE po.eligible_at <= $1
+		ORDER BY po.eligible_at ASC
 		LIMIT $2
 	`
 	rows, err := r.db.SQL.QueryContext(ctx,
@@ -106,9 +135,10 @@ func (r *PendingOrphanRepo) SelectDue(ctx context.Context, now time.Time, limit 
 	if err != nil {
 		return nil, err
 	}
-	return collect(rows, nil, func(s scanner) (model.PendingOrphan, error) {
-		var po model.PendingOrphan
-		err := s.Scan(&po.ID, &po.LibraryID, &po.Key, &po.EligibleAt, &po.Reason, &po.BookID, &po.CreatedAt)
+	return collect(rows, nil, func(s scanner) (DuePendingOrphan, error) {
+		var po DuePendingOrphan
+		err := s.Scan(&po.ID, &po.LibraryID, &po.Key, &po.EligibleAt, &po.Reason, &po.BookID,
+			&po.CreatedAt, &po.Referenced)
 		return po, err
 	})
 }
