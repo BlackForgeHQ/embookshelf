@@ -18,6 +18,11 @@ const config = defineConfig({
     tailwindcss(),
     tanstackStart({
       spa: { enabled: true },
+      // A test for a route belongs beside the route, but the router
+      // scans this directory for anything exporting a Route and warns
+      // about every file that does not. Tests never will, so exclude
+      // them rather than teaching each one to look like a non-route.
+      router: { routeFileIgnorePattern: "__tests__" },
     }),
     viteReact(),
   ],
