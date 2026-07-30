@@ -1,6 +1,7 @@
 import { instanceInfoQuery } from "@/api/settings"
 import { useApiQuery } from "@/api/query"
-import { Card, DefRow } from "@/components/SettingsShared"
+import { DefRow } from "@/components/DefRow"
+import { Card } from "@/components/SettingsShared"
 
 export function AboutPanel() {
   const info = useApiQuery(instanceInfoQuery)

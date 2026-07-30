@@ -23,8 +23,10 @@ import { renderPdfPageOneJpeg } from "@/lib/pdfCover"
 import { librariesQuery } from "@/api/books"
 import { useApiQuery } from "@/api/query"
 import { Icon } from "@/components/Icon"
+import { Notice } from "@/components/Notice"
 import { TopBar } from "@/components/TopBar"
 import { ProgressBar } from "@/components/ProgressBar"
+import { formatBytes } from "@/lib/format"
 import { Button } from "@/components/ui/button"
 import {
   Select,
@@ -125,9 +127,9 @@ function BookDrop() {
             <RailSectionHeader label="In queue" count={active.length} />
             {queue.isLoading && <RailEmpty>Loading queue…</RailEmpty>}
             {queue.isError && (
-              <div className="mx-5 my-2 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-[12.5px] text-(--color-accent-ink)">
+              <Notice className="mx-5 my-2">
                 Failed to load the ingest queue.
-              </div>
+              </Notice>
             )}
             {active.length === 0 && !queue.isLoading && !queue.isError && (
               <RailEmpty>
@@ -299,14 +301,7 @@ function DropZone({ onUploaded }: { onUploaded: () => void }) {
         />
       </div>
 
-      {err && (
-        <div
-          className="mt-2.5 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-[12.5px] text-(--color-accent-ink)"
-          role="alert"
-        >
-          {err}
-        </div>
-      )}
+      {err && <Notice className="mt-2.5">{err}</Notice>}
 
       {results && (
         <div className="mt-2.5 rounded-[3px] border border-(--color-rule-soft) bg-(--color-paper-0) px-3 py-2 text-[12.5px]">
@@ -410,14 +405,7 @@ function DetailPane({
 
   return (
     <div className="bdrop-detail-inner">
-      {error && (
-        <div
-          role="alert"
-          className="mb-6 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-[13px] text-(--color-accent-ink)"
-        >
-          {error.message}
-        </div>
-      )}
+      {error && <Notice className="mb-6">{error.message}</Notice>}
 
       <div className="bdrop-detail-head">
         <div className="min-w-0">
@@ -644,16 +632,4 @@ function MetaCell({
       </dd>
     </div>
   )
-}
-
-function formatBytes(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return "—"
-  const units = ["B", "KB", "MB", "GB"]
-  let value = n
-  let u = 0
-  while (value >= 1024 && u < units.length - 1) {
-    value /= 1024
-    u++
-  }
-  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[u]}`
 }

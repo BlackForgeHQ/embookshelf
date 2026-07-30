@@ -7,6 +7,7 @@ import { meQuery, oidcConfigQuery, signupStatusQuery } from "@/api/auth"
 import { apiQueryOptions, useApiQuery } from "@/api/query"
 import { useLogin } from "@/hooks/useLogin"
 import { useSignup } from "@/hooks/useSignup"
+import { Notice } from "@/components/Notice"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -201,38 +202,10 @@ function LoginPage() {
           </p>
 
           {oidcErrorMessage && (
-            <div
-              className="flash error"
-              style={{
-                padding: "10px 14px",
-                border: "1px solid var(--color-accent-soft)",
-                background: "var(--color-accent-soft)",
-                color: "var(--color-accent-ink)",
-                borderRadius: 2,
-                fontSize: 13,
-                marginBottom: 16,
-              }}
-            >
-              {oidcErrorMessage}
-            </div>
+            <Notice className="mb-4">{oidcErrorMessage}</Notice>
           )}
 
-          {error && (
-            <div
-              className="flash error"
-              style={{
-                padding: "10px 14px",
-                border: "1px solid var(--color-accent-soft)",
-                background: "var(--color-accent-soft)",
-                color: "var(--color-accent-ink)",
-                borderRadius: 2,
-                fontSize: 13,
-                marginBottom: 16,
-              }}
-            >
-              {error.message}
-            </div>
-          )}
+          {error && <Notice className="mb-4">{error.message}</Notice>}
 
           {fwdAuthHidesLocal && (
             <div

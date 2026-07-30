@@ -3,6 +3,7 @@ import { useEffect, useState } from "react"
 import { AccentPicker } from "./AccentPicker"
 import { ShelfIconPicker } from "./ShelfIconPicker"
 import type { ShelfAccent } from "./AccentPicker"
+import { Notice } from "@/components/Notice"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -83,7 +84,12 @@ export function ShelfCreatorDialog({
               autoFocus
             />
             {trimmed !== "" && collision && (
-              <div className="t-small text-(--color-accent-ink)">
+              // Field validation under the input it is about, not a
+              // Notice: no box, and it answers a keystroke rather than
+              // reporting a request that failed. The role matches the
+              // edit form's field errors, which is the one thing the two
+              // did not already agree on.
+              <div className="t-small text-(--color-accent-ink)" role="alert">
                 A shelf with that name already exists.
               </div>
             )}
@@ -99,11 +105,7 @@ export function ShelfCreatorDialog({
             <ShelfIconPicker value={icon} onChange={setIcon} />
           </div>
 
-          {error && (
-            <div className="t-small rounded-sm border border-(--color-accent-soft) bg-(--color-accent-soft) px-3 py-2 text-(--color-accent-ink)">
-              {error}
-            </div>
-          )}
+          {error && <Notice>{error}</Notice>}
         </div>
 
         <DialogFooter>

@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import type { ReactNode } from "react"
 
 import type { ApiError, ApiErrorCode } from "@/api/client"
 import type { BookDetail as BookDetailPayload } from "@/api/books"
@@ -37,7 +36,9 @@ import { useApiQuery } from "@/api/query"
 import { locatorLabel } from "@/lib/locator"
 import { ConfirmPhraseDialog } from "@/components/ConfirmPhraseDialog"
 import { Cover, StarRating } from "@/components/Cover"
+import { DefRow } from "@/components/DefRow"
 import { Icon } from "@/components/Icon"
+import { Notice } from "@/components/Notice"
 import { ProgressBar } from "@/components/ProgressBar"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -315,27 +316,42 @@ function BookDetail() {
 
             <TabsContent value="overview">
               <div style={{ maxWidth: 640 }}>
-                <Meta label="Title">{b.title}</Meta>
-                <Meta label="Author">{b.author}</Meta>
+                <DefRow label="Title" value={b.title} {...META_ROW} />
+                <DefRow label="Author" value={b.author} {...META_ROW} />
                 {b.series && (
-                  <Meta label="Series">
-                    {b.series}
-                    {b.seriesNum ? `, Book ${b.seriesNum}` : ""}
-                  </Meta>
+                  <DefRow
+                    label="Series"
+                    value={`${b.series}${
+                      b.seriesNum ? `, Book ${b.seriesNum}` : ""
+                    }`}
+                    {...META_ROW}
+                  />
                 )}
-                <Meta label="Published">{b.year}</Meta>
-                <Meta label="Format">{b.format}</Meta>
-                {b.publisher && <Meta label="Publisher">{b.publisher}</Meta>}
-                <Meta label="Categories">{b.tags.join(" · ") || "—"}</Meta>
-                <Meta label="Added">
-                  {new Date(b.addedAt).toLocaleDateString()}
-                </Meta>
+                <DefRow label="Published" value={b.year} {...META_ROW} />
+                <DefRow label="Format" value={b.format} {...META_ROW} />
+                {b.publisher && (
+                  <DefRow label="Publisher" value={b.publisher} {...META_ROW} />
+                )}
+                <DefRow
+                  label="Categories"
+                  value={b.tags.join(" · ") || "—"}
+                  {...META_ROW}
+                />
+                <DefRow
+                  label="Added"
+                  value={new Date(b.addedAt).toLocaleDateString()}
+                  {...META_ROW}
+                />
                 {b.isbn && (
-                  <Meta label="ISBN">
-                    <span className="mono" style={{ fontSize: 11.5 }}>
-                      {b.isbn}
-                    </span>
-                  </Meta>
+                  <DefRow
+                    label="ISBN"
+                    value={
+                      <span className="mono" style={{ fontSize: 11.5 }}>
+                        {b.isbn}
+                      </span>
+                    }
+                    {...META_ROW}
+                  />
                 )}
               </div>
             </TabsContent>
@@ -417,17 +433,7 @@ function BookDetail() {
                       placements for it. This cannot be undone.
                     </p>
                     {deleteError && (
-                      <div
-                        style={{
-                          padding: "8px 12px",
-                          marginBottom: 10,
-                          border: "1px solid var(--color-destructive)",
-                          color: "var(--color-destructive)",
-                          fontSize: 13,
-                        }}
-                      >
-                        {deleteError.message}
-                      </div>
+                      <Notice className="mb-2.5">{deleteError.message}</Notice>
                     )}
                     <Button
                       type="button"
@@ -468,25 +474,9 @@ function BookDetail() {
   )
 }
 
-function Meta({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        gap: 14,
-        padding: "7px 0",
-        borderBottom: "1px dashed var(--color-rule-soft)",
-      }}
-    >
-      <div className="t-label" style={{ width: 96, flexShrink: 0 }}>
-        {label}
-      </div>
-      <div style={{ fontSize: 13.5, color: "var(--color-ink-1)" }}>
-        {children}
-      </div>
-    </div>
-  )
-}
+// The overview's bibliographic rows: a narrower label column than the
+// settings Cards use, and ruled, because the block reads as a ledger.
+const META_ROW = { labelWidth: 96, rule: true } as const
 
 // ShelfCard renders the book's current shelf memberships and exposes an
 // inline searchable picker. Manual shelves toggle in-place; smart shelves
@@ -928,20 +918,7 @@ function NotesPanel({ bookId }: { bookId: string }) {
         </div>
       </form>
 
-      {error && (
-        <div
-          style={{
-            padding: "10px 14px",
-            border: "1px solid var(--color-accent-soft)",
-            background: "var(--color-accent-soft)",
-            color: "var(--color-accent-ink)",
-            borderRadius: 2,
-            fontSize: 13,
-          }}
-        >
-          {error.message}
-        </div>
-      )}
+      {error && <Notice>{error.message}</Notice>}
 
       {annotations.isLoading && (
         <div className="t-small" style={{ fontStyle: "italic" }}>

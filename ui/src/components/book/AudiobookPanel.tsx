@@ -19,24 +19,9 @@ import { ProgressBar } from "@/components/ProgressBar"
 import type { Viewer } from "@/lib/affordance"
 import { affordanceFor, messageForCode, useViewer } from "@/lib/affordance"
 import { isNarratableFormat, narratableFormatList } from "@/lib/formats"
+import { formatCost, formatDuration } from "@/lib/format"
 import { runView } from "@/lib/audiobookRun"
 import type { RunView } from "@/lib/audiobookRun"
-
-
-function formatDuration(seconds: number): string {
-  if (seconds <= 0) return "—"
-  const h = Math.floor(seconds / 3600)
-  const m = Math.round((seconds % 3600) / 60)
-  return h > 0 ? `${h}h ${m}m` : `${m}m`
-}
-
-// Money is shown to two decimals until it rounds to nothing, because
-// "$0.00" for a run that costs three cents reads as free.
-function formatCost(usd: number): string {
-  if (usd === 0) return "free"
-  if (usd < 0.01) return "<$0.01"
-  return `$${usd.toFixed(2)}`
-}
 
 export function AudiobookPanel({
   bookId,

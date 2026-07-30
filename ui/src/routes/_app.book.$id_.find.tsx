@@ -9,6 +9,7 @@ import { bookQuery } from "@/api/books"
 import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
 import { Icon } from "@/components/Icon"
+import { Notice } from "@/components/Notice"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -262,9 +263,13 @@ function FindMetadata() {
               {errored.length > 0 && (
                 <div className="mb-4 flex flex-wrap gap-2">
                   {errored.map((p) => (
-                    <span
+                    // One Notice per provider that refused, not one for
+                    // the row: each carries its own retry, and a
+                    // provider that fails while the others stream is
+                    // worth announcing on its own.
+                    <Notice
                       key={p.id}
-                      className="inline-flex items-center gap-2 rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-2 py-1 text-[12px] text-(--color-accent-ink)"
+                      className="inline-flex items-center gap-2"
                     >
                       {p.id}: {p.error}
                       <button
@@ -275,7 +280,7 @@ function FindMetadata() {
                       >
                         retry
                       </button>
-                    </span>
+                    </Notice>
                   ))}
                 </div>
               )}

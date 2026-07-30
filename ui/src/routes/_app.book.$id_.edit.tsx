@@ -22,6 +22,7 @@ import {
 } from "@/lib/book-form"
 import { validateField } from "@/lib/metadata-validators"
 import { Icon } from "@/components/Icon"
+import { Notice } from "@/components/Notice"
 import { ChipEditor } from "@/components/metadata/ChipEditor"
 import { CoverPanel } from "@/components/metadata/CoverPanel"
 import { FieldLockButton } from "@/components/metadata/FieldLockButton"
@@ -594,14 +595,7 @@ function MetadataEditor() {
                 : "No changes"}
             </span>
           </div>
-          {error && (
-            <span
-              className="t-small rounded-[3px] border border-(--color-accent-soft) bg-(--color-accent-soft) px-2 py-1 text-(--color-accent-ink)"
-              role="alert"
-            >
-              {error.message}
-            </span>
-          )}
+          {error && <Notice>{error.message}</Notice>}
           <div className="grow" />
           <Button
             variant="ghost"

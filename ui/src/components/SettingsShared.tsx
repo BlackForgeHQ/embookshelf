@@ -164,14 +164,8 @@ export function ConnectionTestReport({
   )
 }
 
-export function DefRow({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="flex items-baseline gap-3 py-1.5">
-      <div className="t-label w-40 shrink-0">{label}</div>
-      <div className="min-w-0 flex-1 text-[13.5px] break-words">{value}</div>
-    </div>
-  )
-}
+// DefRow moved to components/DefRow.tsx — the book overview spells the
+// same row, so it is no longer a settings primitive.
 
 export function Avatar({
   initials,

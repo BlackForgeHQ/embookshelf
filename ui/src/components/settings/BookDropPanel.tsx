@@ -13,12 +13,8 @@ import {
 import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
 import { ConfirmPhraseDialog } from "@/components/ConfirmPhraseDialog"
-import {
-  Card,
-  DefRow,
-  InboxMark,
-  NotebookEmpty,
-} from "@/components/SettingsShared"
+import { DefRow } from "@/components/DefRow"
+import { Card, InboxMark, NotebookEmpty } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -28,6 +24,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { formatBytes } from "@/lib/format"
 
 export function BookDropPanel() {
   const queue = useApiQuery(bookdropQuery)
@@ -319,16 +316,4 @@ function WipeFilesDialog({
       onConfirm={onConfirm}
     />
   )
-}
-
-function formatBytes(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return "0 B"
-  const units = ["B", "KB", "MB", "GB"]
-  let value = n
-  let u = 0
-  while (value >= 1024 && u < units.length - 1) {
-    value /= 1024
-    u++
-  }
-  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[u]}`
 }

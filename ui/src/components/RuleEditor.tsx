@@ -2,6 +2,7 @@ import { useState } from "react"
 
 import { AccentPicker } from "./AccentPicker"
 import { Icon } from "./Icon"
+import { Notice } from "./Notice"
 import { ShelfIconPicker } from "./ShelfIconPicker"
 import type { ShelfAccent } from "./AccentPicker"
 import type {
@@ -302,20 +303,7 @@ export function RuleEditor({
           <Icon name="plus" size={12} /> Add condition
         </Button>
 
-        {error && (
-          <div
-            style={{
-              padding: "10px 14px",
-              border: "1px solid var(--color-accent-soft)",
-              background: "var(--color-accent-soft)",
-              color: "var(--color-accent-ink)",
-              borderRadius: 2,
-              fontSize: 13,
-            }}
-          >
-            {error}
-          </div>
-        )}
+        {error && <Notice>{error}</Notice>}
 
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onCancel} disabled={busy}>
