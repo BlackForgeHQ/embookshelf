@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.6.3](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.2...v0.6.3) (2026-07-30)
+
+
+### Features
+
+* **handler:** an appSettingsStore seam, and tests for the rules that had none ([f2a5aad](https://github.com/BlackForgeHQ/embookshelf/commit/f2a5aad9dfc57e4e17a3ccc295cb8c3b6889cfab)), closes [#226](https://github.com/BlackForgeHQ/embookshelf/issues/226)
+* **recovery:** a subcommand finds and repairs books written outside their library ([8f4b694](https://github.com/BlackForgeHQ/embookshelf/commit/8f4b6941af08a2d7e7185afb30697ce5d8efff63)), closes [#272](https://github.com/BlackForgeHQ/embookshelf/issues/272)
+* **ui:** a stored secret can be removed ([e3da33e](https://github.com/BlackForgeHQ/embookshelf/commit/e3da33ea89d6a502177407105ac36658cabbe2fb)), closes [#268](https://github.com/BlackForgeHQ/embookshelf/issues/268)
+
+
+### Bug Fixes
+
+* **app:** every background loop takes ctx, and Close waits for it ([2dfb805](https://github.com/BlackForgeHQ/embookshelf/commit/2dfb80573678c3fb1d0352b862fa9ddcd2aa74ed)), closes [#224](https://github.com/BlackForgeHQ/embookshelf/issues/224)
+* **audiobook:** a mis-named engine refuses with a code, not a bare 409 ([cf473c3](https://github.com/BlackForgeHQ/embookshelf/commit/cf473c323d12aba177a97205524cae762a72ef44)), closes [#274](https://github.com/BlackForgeHQ/embookshelf/issues/274)
+* **audiobook:** a run carries a generation, so a superseded job is a no-op ([c3fb386](https://github.com/BlackForgeHQ/embookshelf/commit/c3fb386769e17b650cd090eb8bb7d988a34fbc04)), closes [#253](https://github.com/BlackForgeHQ/embookshelf/issues/253)
+* **audiobook:** a segment awaiting a retry is not a failed segment ([1702f72](https://github.com/BlackForgeHQ/embookshelf/commit/1702f722fc9cc6af1f2420de773e336090ae4362)), closes [#263](https://github.com/BlackForgeHQ/embookshelf/issues/263)
+* **audiobook:** a zero-row segment write stops counting as success ([444411a](https://github.com/BlackForgeHQ/embookshelf/commit/444411a9672970f67d5040feb6b7b3318c2481f4)), closes [#220](https://github.com/BlackForgeHQ/embookshelf/issues/220)
+* **audiobook:** an admin turning generation off reaches the client as a code ([835ffa6](https://github.com/BlackForgeHQ/embookshelf/commit/835ffa60d7ea28740f9e80f5b081e61a07cf501d)), closes [#221](https://github.com/BlackForgeHQ/embookshelf/issues/221)
+* **audiobook:** deleting a narration removes its bytes ([617750e](https://github.com/BlackForgeHQ/embookshelf/commit/617750e8199b4d6d2201b3135e3bdd9d30e8c9bf)), closes [#267](https://github.com/BlackForgeHQ/embookshelf/issues/267)
+* **boot:** the sibling binaries stop being partial composition roots ([e346336](https://github.com/BlackForgeHQ/embookshelf/commit/e346336802f9dd74d9a3b1a0cbe3703329e0462e)), closes [#238](https://github.com/BlackForgeHQ/embookshelf/issues/238)
+* **fileproc:** CBZ reads through the storage seam like its siblings ([446284b](https://github.com/BlackForgeHQ/embookshelf/commit/446284ba180f2ae0b570ff54221a094f29152f09)), closes [#240](https://github.com/BlackForgeHQ/embookshelf/issues/240)
+* **handler:** one module answers what the public origin is ([9d28c8b](https://github.com/BlackForgeHQ/embookshelf/commit/9d28c8b23dfd8d03774ac563848a58c3a0c16487)), closes [#222](https://github.com/BlackForgeHQ/embookshelf/issues/222)
+* **handler:** the Send-to-Kindle enqueue guards its optional seam ([1b98314](https://github.com/BlackForgeHQ/embookshelf/commit/1b9831462bf904e5d64abccc4e3164d625ce7879)), closes [#223](https://github.com/BlackForgeHQ/embookshelf/issues/223)
+* **migrate:** down reverts one migration, not every one ([88827d1](https://github.com/BlackForgeHQ/embookshelf/commit/88827d15e89bd3b88dcaf39f22c06e77eacc4af5))
+* **migrate:** reverting past the first migration is not an error ([c32e9ef](https://github.com/BlackForgeHQ/embookshelf/commit/c32e9ef502d51e4205f7c8d2e15752a2c835fb07))
+* **migrate:** the status writes name their ignored error ([fc68976](https://github.com/BlackForgeHQ/embookshelf/commit/fc689764cda7dfe52d12a12270c770e32d2f1b27))
+* **migrator:** the SQLite down chain reverses again ([ed34361](https://github.com/BlackForgeHQ/embookshelf/commit/ed34361390e4e08588f0e44de42f0ed8ec32d523)), closes [#275](https://github.com/BlackForgeHQ/embookshelf/issues/275)
+* **oidc:** the refusal contract stops lying in four places ([233fd3d](https://github.com/BlackForgeHQ/embookshelf/commit/233fd3d92ff47d565ef4d333220d76c19c176ab6)), closes [#261](https://github.com/BlackForgeHQ/embookshelf/issues/261)
+* **repotest:** create pgcrypto once, under a lock ([fd9ab6e](https://github.com/BlackForgeHQ/embookshelf/commit/fd9ab6ec8eb5fcc53ae78b17a3e3157f5767e9ea))
+* **review:** a broken resolve stops reading local disk, and three gaps close ([37a4119](https://github.com/BlackForgeHQ/embookshelf/commit/37a4119ad53e0768ce383c62405e3d6d6395a453))
+* **review:** restore the sandbox gate, refuse a forged scheme ([feee059](https://github.com/BlackForgeHQ/embookshelf/commit/feee0598fffb1cb58baa93202621e2f35ae0fb28))
+* **review:** the session queries render once, and a dead export goes ([4c4af59](https://github.com/BlackForgeHQ/embookshelf/commit/4c4af59e2dd8333bde14c7abf3b8dd4a68893547))
+* **scan:** a hashless seeded row stops being flagged missing, then purged ([cdf3ebc](https://github.com/BlackForgeHQ/embookshelf/commit/cdf3ebc04e33e5b3dd77d03eb873bfc30acfed84)), closes [#264](https://github.com/BlackForgeHQ/embookshelf/issues/264)
+* **service:** approve stops placing outside a migrated local library ([65e2dde](https://github.com/BlackForgeHQ/embookshelf/commit/65e2ddee750ffd263bee2338750bed1fef2b58b3)), closes [#265](https://github.com/BlackForgeHQ/embookshelf/issues/265)
+* **settings:** an empty key clears an LLM or TTS key, as it already does for SMTP ([bb277d2](https://github.com/BlackForgeHQ/embookshelf/commit/bb277d25849d4accbbad19b66044ed1ad31cc08e)), closes [#218](https://github.com/BlackForgeHQ/embookshelf/issues/218)
+* **settings:** EMAIL validation moves onto the row, so every caller gets it ([f029ed6](https://github.com/BlackForgeHQ/embookshelf/commit/f029ed6976f61318279db9dc8b40faed609357a6)), closes [#219](https://github.com/BlackForgeHQ/embookshelf/issues/219)
+* **storage:** the library handle walks, yielding library-relative locations ([514a0f4](https://github.com/BlackForgeHQ/embookshelf/commit/514a0f459a9462d8752deb8cee7f11712499d84f)), closes [#255](https://github.com/BlackForgeHQ/embookshelf/issues/255)
+* **storage:** the orphan sweeper stops deleting keys something points at ([60947b2](https://github.com/BlackForgeHQ/embookshelf/commit/60947b20dfe209c0bccd0c4d777146c9bb78a306)), closes [#273](https://github.com/BlackForgeHQ/embookshelf/issues/273)
+* **test,ci:** read architecture.md by its real name; unquote the lint flag ([419968d](https://github.com/BlackForgeHQ/embookshelf/commit/419968d66a1e50da780ba644a3f82776f3a1874e))
+* **ui:** bulk approve says how many rows it could not approve ([e6b1f0f](https://github.com/BlackForgeHQ/embookshelf/commit/e6b1f0f06a90a97d7ac458a8ef57ded04af5ed16)), closes [#269](https://github.com/BlackForgeHQ/embookshelf/issues/269)
+* **ui:** the last three mutation failures stop being reported twice ([12dce7f](https://github.com/BlackForgeHQ/embookshelf/commit/12dce7f0d0e3f5e610f559ac20c7a85feb72d25a)), closes [#262](https://github.com/BlackForgeHQ/embookshelf/issues/262)
+* **ui:** the login page names a missing email claim ([20d78e5](https://github.com/BlackForgeHQ/embookshelf/commit/20d78e56b6ba46d8c01069a4278938ae64d53b36)), closes [#261](https://github.com/BlackForgeHQ/embookshelf/issues/261)
+* **ui:** the narration obstacle says which cause the server named ([a5699c1](https://github.com/BlackForgeHQ/embookshelf/commit/a5699c12716f861ed436a698c01fc5dd44abb8b3)), closes [#271](https://github.com/BlackForgeHQ/embookshelf/issues/271)
+
+
+### Performance
+
+* **storage:** the S3 adapter streams a put instead of buffering it ([338f641](https://github.com/BlackForgeHQ/embookshelf/commit/338f64165b75c074fafd736a13eb01909239698c)), closes [#266](https://github.com/BlackForgeHQ/embookshelf/issues/266)
+
+
+### Documentation
+
+* **adr:** ADR-0030 records that the absolute-row hazard is closed ([31a5dca](https://github.com/BlackForgeHQ/embookshelf/commit/31a5dca667d4cc6bbc9608dcccf88a53a2af7bba))
+* **architecture:** the comic reader never cached anything ([49bd3c3](https://github.com/BlackForgeHQ/embookshelf/commit/49bd3c30695d1b8d4600aff6bd39eaaed7df97c0))
+* **context:** the glossary catches up with today's seams ([c40260f](https://github.com/BlackForgeHQ/embookshelf/commit/c40260fdd9515bf8145fae2557717933f0672bea))
+* **service:** the write pipeline's comments say what its code does ([cf3c12a](https://github.com/BlackForgeHQ/embookshelf/commit/cf3c12a6e9501b4c8e940c1b56274a7d8f701ec6)), closes [#225](https://github.com/BlackForgeHQ/embookshelf/issues/225)
+
 ## [0.6.2](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.1...v0.6.2) (2026-07-29)
 
 
