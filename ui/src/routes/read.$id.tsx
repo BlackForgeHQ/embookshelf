@@ -38,6 +38,7 @@ import {
   ReaderHeader,
 } from "@/components/reader/Chrome"
 import { decodeLocator, encodeLocator, formatHMS } from "@/lib/locator"
+import { resumeCfi, resumePage, resumeSeconds } from "@/lib/resume"
 import { NotesPanel, TypePanel } from "@/components/reader/Panels"
 import {
   bookAnnotationsQuery,
@@ -224,15 +225,11 @@ function RenditionSwitch({
 // What is EPUB-only and therefore lives here: the table of contents, the
 // selection toolbar, the highlight overlay, and a position named by CFI.
 function TextReaderShell({ book }: { book: BookDetail }) {
-  // A resume token of another kind means "start from the beginning"
-  // rather than a coerced position.
-  //
-  // Decoded inline rather than memoized, and deliberately: what leaves
-  // here is a string. EpubReader's boot effect has deps
-  // `[url, initialCfi]`, so handing it the decoded `Locator` instead
-  // would re-boot epub.js on every render.
-  const resume = decodeLocator(book.resumeCfi)
-  const resumeCfi = resume?.kind === "cfi" ? resume.cfi : undefined
+  // Read through `lib/resume`, which owns both stored positions and
+  // hands back a string: EpubReader's boot effect has deps
+  // `[url, initialCfi]`, so a decoded `Locator` would re-boot epub.js on
+  // every render.
+  const initialCfi = resumeCfi(book)
 
   const [chromeVisible, setChromeVisible] = useState(true)
   const [tocOpen, setTocOpen] = useState(false)
@@ -243,7 +240,7 @@ function TextReaderShell({ book }: { book: BookDetail }) {
   // Progress state mirrors what the reader reports. Used for the bottom
   // scrubber and to compose the token we persist on unmount.
   const [percent, setPercent] = useState(0)
-  const [cfiState, setCfiState] = useState<string>(resumeCfi ?? "")
+  const [cfiState, setCfiState] = useState<string>(initialCfi ?? "")
 
   // Pending selection — set by rendition.on('selected'), cleared when
   // the user saves or dismisses it. Absence hides the selection toolbar,
@@ -466,7 +463,7 @@ function TextReaderShell({ book }: { book: BookDetail }) {
           <EpubReader
             ref={epubRef}
             url={`/api/v1/books/${book.id}/file`}
-            initialCfi={resumeCfi}
+            initialCfi={initialCfi}
             highlights={epubHighlights}
             onReady={({ toc: t }) => setToc(t.flatMap(flatten))}
             onProgress={onEpubProgress}
@@ -601,12 +598,10 @@ function TextReaderShell({ book }: { book: BookDetail }) {
 // a percentage, and a notes panel whose new note attaches to the page on
 // screen because there is no text selection to attach it to.
 function PdfReaderShell({ book }: { book: BookDetail }) {
-  // A resume token of another kind means "start from the beginning"
-  // rather than a coerced position. Yields a primitive for the same
-  // reason the text shell does: `initialPage` is a renderer prop, and a
-  // decoded `Locator` would be a fresh object on every render.
-  const resume = decodeLocator(book.resumeCfi)
-  const resumePage = resume?.kind === "page" ? resume.page : undefined
+  // The human page number, which is what PdfReader's 1-based
+  // `initialPage` wants. Undefined when the text position is a CFI, and
+  // PdfReader then starts at p.1 (`lib/resume`).
+  const initialPage = resumePage(book)
 
   const [chromeVisible, setChromeVisible] = useState(true)
   const [notesOpen, setNotesOpen] = useState(false)
@@ -754,9 +749,9 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
           <PdfReader
             ref={pdfRef}
             url={`/api/v1/books/${book.id}/file`}
-            initialPage={resumePage}
+            initialPage={initialPage}
             onReady={({ totalPages }) =>
-              setPageState({ current: resumePage ?? 1, total: totalPages })
+              setPageState({ current: initialPage ?? 1, total: totalPages })
             }
             onProgress={onPdfProgress}
           />
@@ -849,14 +844,14 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
 // significantly harder to read. The two shells report their position
 // through the same module but otherwise stand alone.
 function ComicReaderShell({ book }: { book: BookDetail }) {
-  // ComicReader counts pages from 0; a page token carries the human page
-  // number. The shell converts at its own boundary — the alternative,
-  // storing this reader's indexing in the token, is what made `page:7`
-  // mean p.8 in the reader chrome and p.7 in the notebook.
-  const initialPage = useMemo(() => {
-    const resume = decodeLocator(book.resumeCfi)
-    return resume?.kind === "page" ? Math.max(0, resume.page - 1) : 0
-  }, [book.resumeCfi])
+  // ComicReader counts pages from 0; `lib/resume` hands back the human
+  // page number, as every other consumer of the token wants it. The -1
+  // is this reader's indexing and so converts at this reader's boundary
+  // — the alternative, storing the indexing in the token or in the
+  // resume module, is what made `page:7` mean p.8 in the reader chrome
+  // and p.7 in the notebook.
+  const humanPage = resumePage(book)
+  const initialPage = humanPage === undefined ? 0 : Math.max(0, humanPage - 1)
 
   const [chromeVisible, setChromeVisible] = useState(true)
   const [fitMode, setFitMode] = useState<ComicFitMode>("page")
@@ -1017,15 +1012,12 @@ function AudioReaderShell({
   // itself an audiobook.
   audioUrl?: string
 }) {
-  const initialSeconds = useMemo(() => {
-    // resumeAudio, not resumeCfi: this book's two Renditions keep two
-    // positions, because a CFI and a timestamp are different currencies
-    // until the alignment map bridges them. Reading the shared field is
-    // what lost the listener's place on every Read → Listen → Read
-    // round trip (#200).
-    const resume = decodeLocator(book.resumeAudio)
-    return resume?.kind === "time" ? Math.max(0, resume.seconds) : 0
-  }, [book.resumeAudio])
+  // The narration's own position, not the text one: this book's two
+  // Renditions keep two, because a CFI and a timestamp are different
+  // currencies until the alignment map bridges them. Reading the shared
+  // field is what lost the listener's place on every Read → Listen →
+  // Read round trip (#200); `lib/resume` is where that split lives now.
+  const initialSeconds = resumeSeconds(book) ?? 0
 
   const [seconds, setSeconds] = useState(initialSeconds)
   const [duration, setDuration] = useState(book.durationSeconds ?? 0)
