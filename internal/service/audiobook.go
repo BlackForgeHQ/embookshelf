@@ -36,14 +36,18 @@ const charsPerMinuteOfSpeech = 900
 // audiobookStore is the slice of BookAudiobookRepo this service needs.
 // Narrow so the lifecycle is exercisable without a database.
 type audiobookStore interface {
-	Start(ctx context.Context, ab model.Audiobook, segments []model.AudiobookSegment) error
+	// Start installs a fresh plan and reports the generation it assigned,
+	// which every segment job this service dispatches then carries. It
+	// refuses over a run that has not concluded (repo.ErrRunInProgress).
+	Start(ctx context.Context, ab model.Audiobook, segments []model.AudiobookSegment) (int, error)
 	// RecordSegment writes one segment's result and returns what the run
 	// does next, both under the run row's lock. The narrow declarations
 	// the segment worker and the finalize worker each kept over the same
 	// repo collapsed into this one (#190).
-	RecordSegment(ctx context.Context, bookID string, seq int, res model.SegmentResult) (model.AudiobookOutcome, error)
+	RecordSegment(ctx context.Context, bookID string, seq, generation int, res model.SegmentResult) (model.AudiobookOutcome, error)
 	GetByBookID(ctx context.Context, bookID string) (model.Audiobook, error)
-	// Transition is the one write to the run's state. It reports whether
+	// Transition is the one write that moves a run's state — Start
+	// establishes one, and is guarded in its own way. It reports whether
 	// the row moved, which is what keeps the publish that tells the UI to
 	// stop polling to exactly one (#210).
 	Transition(ctx context.Context, bookID string, t model.Transition) (bool, error)
@@ -300,6 +304,11 @@ func (s *AudiobookService) Estimate(ctx context.Context, book model.Book, opts A
 // row exists has nothing to claim, and River would retry it 25 times
 // before anyone noticed. The reverse ordering leaves rows briefly
 // pending with no job, which the failure path below cleans up.
+//
+// Refuses over a run that has not concluded, with repo.ErrRunInProgress —
+// the first already-running refusal on the Generate path, and the reason
+// is money: what a second start would wipe is a live plan whose completed
+// segments are audio already bought (ADR-0031).
 func (s *AudiobookService) Start(ctx context.Context, book model.Book, opts AudiobookOptions) error {
 	segments, err := s.plan(ctx, book, opts)
 	if err != nil {
@@ -320,7 +329,14 @@ func (s *AudiobookService) Start(ctx context.Context, book model.Book, opts Audi
 		SourceContentHash: opts.SourceContentHash,
 		TotalChars:        chars,
 	}
-	if err := s.d.Store.Start(ctx, run, segments); err != nil {
+	generation, err := s.d.Store.Start(ctx, run, segments)
+	if err != nil {
+		// The refusal travels unwrapped. It is a sentence written for the
+		// user — the handler puts err.Error() in a 409 body — and "persist
+		// audiobook plan: ..." is phrasing for a log.
+		if errors.Is(err, repo.ErrRunInProgress) {
+			return err
+		}
 		return fmt.Errorf("persist audiobook plan: %w", err)
 	}
 
@@ -333,15 +349,22 @@ func (s *AudiobookService) Start(ctx context.Context, book model.Book, opts Audi
 		To:   model.AudiobookRunning,
 		From: []model.AudiobookState{model.AudiobookPending},
 	})
-	return s.dispatchAll(ctx, book.ID, segments)
+	return s.dispatchAll(ctx, book.ID, generation, segments)
 }
 
 // dispatchAll enqueues every segment, failing the run if the queue is
 // unavailable. A run left at pending with no jobs is invisible: it shows
 // 0% forever and no error explains why.
-func (s *AudiobookService) dispatchAll(ctx context.Context, bookID string, segments []model.AudiobookSegment) error {
+//
+// The generation is the run's, not the current row's read afresh: these
+// jobs belong to the plan the caller has in hand, and a job that outlives
+// it must say so rather than inherit whatever replaced it.
+func (s *AudiobookService) dispatchAll(
+	ctx context.Context, bookID string, generation int, segments []model.AudiobookSegment,
+) error {
 	for _, seg := range segments {
-		if err := s.d.Enqueue.Enqueue(ctx, jobs.AudiobookSegmentArgs{BookID: bookID, Seq: seg.Seq}); err != nil {
+		args := jobs.AudiobookSegmentArgs{BookID: bookID, Seq: seg.Seq, Generation: generation}
+		if err := s.d.Enqueue.Enqueue(ctx, args); err != nil {
 			// %w rather than %v: jobs.ErrNoQueue now actually flows through
 			// here, and wrapping it lets a caller tell "queue is down" apart
 			// from "engine rejected the text" with errors.Is. Same text
@@ -461,5 +484,8 @@ func (s *AudiobookService) Retry(ctx context.Context, bookID string) error {
 		To:   model.AudiobookRunning,
 		From: []model.AudiobookState{model.AudiobookPending, model.AudiobookFailed},
 	})
-	return s.dispatchAll(ctx, bookID, outstanding)
+	// The run's own generation, not a new one: a retry re-enters the plan
+	// that is already there rather than replacing it, which is the whole
+	// reason it is cheap (ADR-0028 §6).
+	return s.dispatchAll(ctx, bookID, run.Generation, outstanding)
 }

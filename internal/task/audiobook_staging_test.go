@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/config"
@@ -35,7 +36,7 @@ func TestStagingRefusesEveryOperationWhenNoDataRootIsConfigured(t *testing.T) {
 	if _, err := staging.Dir("b1"); !errors.Is(err, config.ErrDataRootUnset) {
 		t.Errorf("Dir err = %v, want ErrDataRootUnset", err)
 	}
-	if _, err := staging.SegmentPath("b1", 0); !errors.Is(err, config.ErrDataRootUnset) {
+	if _, err := staging.SegmentPath("b1", 1, 0); !errors.Is(err, config.ErrDataRootUnset) {
 		t.Errorf("SegmentPath err = %v, want ErrDataRootUnset", err)
 	}
 
@@ -43,7 +44,7 @@ func TestStagingRefusesEveryOperationWhenNoDataRootIsConfigured(t *testing.T) {
 	// empty root joined to audiobooks/{book_id} is a *relative* path, so
 	// the segment worker created it under the process working directory
 	// and wrote hundreds of megabytes into it (#207).
-	if _, err := staging.WriteSegment("b1", 0, []byte("frames")); !errors.Is(err, config.ErrDataRootUnset) {
+	if _, err := staging.WriteSegment("b1", 1, 0, []byte("frames")); !errors.Is(err, config.ErrDataRootUnset) {
 		t.Errorf("WriteSegment err = %v, want ErrDataRootUnset", err)
 	}
 	if _, err := os.Stat(filepath.Join("audiobooks", "b1")); err == nil {
@@ -63,6 +64,55 @@ func TestStagingRefusesEveryOperationWhenNoDataRootIsConfigured(t *testing.T) {
 	}
 	if n != 0 {
 		t.Errorf("Sweep reclaimed %d run(s) with no staging area configured", n)
+	}
+}
+
+// One run's segments cannot land on another's, because the generation is
+// a directory level in the path.
+//
+// Two things make this more than tidiness. WriteSegment is os.WriteFile,
+// which is not atomic, so a superseded worker writing over a live
+// segment can leave a truncated file that finalize concatenates without
+// complaint. And the two plans can genuinely differ — a regeneration may
+// pick a different voice, engine or segmentation cap — so the same seq of
+// two generations is not the same audio, and generation-1 bytes at
+// generation-2's path would ship the wrong voice silently (ADR-0031).
+//
+// What must keep working is the book directory: Clean and Sweep operate
+// on the whole of it, and the segment rows carry their own staged_path,
+// so finalize never derives a path at all.
+func TestStagingKeepsEachGenerationsSegmentsApart(t *testing.T) {
+	staging := tempStaging(t)
+
+	first, err := staging.WriteSegment("b1", 1, 7, []byte("older"))
+	if err != nil {
+		t.Fatalf("WriteSegment gen 1: %v", err)
+	}
+	second, err := staging.WriteSegment("b1", 2, 7, []byte("newer"))
+	if err != nil {
+		t.Fatalf("WriteSegment gen 2: %v", err)
+	}
+	if first == second {
+		t.Fatalf("both generations staged seq 7 at %s — a superseded worker can overwrite live audio", first)
+	}
+	if got, err := os.ReadFile(first); err != nil || string(got) != "older" {
+		t.Errorf("generation 1's segment = %q/%v, want it untouched by generation 2", got, err)
+	}
+
+	// Both live under the book's own directory, which is what the per-run
+	// clean and the hourly sweep take.
+	dir, err := staging.Dir("b1")
+	if err != nil {
+		t.Fatalf("Dir: %v", err)
+	}
+	for _, path := range []string{first, second} {
+		if !strings.HasPrefix(path, dir+string(filepath.Separator)) {
+			t.Errorf("%s is outside the book's staging directory %s; Clean and Sweep would miss it", path, dir)
+		}
+	}
+	staging.Clean("b1")
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("the book's staging directory survived Clean: %v", err)
 	}
 }
 

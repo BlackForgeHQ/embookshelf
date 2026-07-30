@@ -58,23 +58,36 @@ func (s Staging) Dir(bookID string) (string, error) {
 	return s.root.AudiobookStaging(bookID)
 }
 
-// SegmentPath is where one segment of one book lands. The filename
-// convention lives here and nowhere else: finalize reads segments back by
-// the path recorded on the row, but a test or a future reader asking
-// "what is a staged segment called" has one answer to find.
-func (s Staging) SegmentPath(bookID string, seq int) (string, error) {
+// SegmentPath is where one segment of one generation of one book lands.
+// The filename convention lives here and nowhere else: finalize reads
+// segments back by the path recorded on the row, but a test or a future
+// reader asking "what is a staged segment called" has one answer to find.
+//
+// The generation is a directory level rather than part of the filename,
+// so a run's bytes are one subtree and Clean and Sweep — which take the
+// whole book directory — go on working unchanged.
+//
+// It is in the path at all because a superseded worker must be unable to
+// touch the live run's bytes, and two things make that more than tidiness
+// (ADR-0031). WriteSegment below is os.WriteFile, which is not atomic, so
+// a stale write over a live segment can leave a truncated file that
+// finalize will happily concatenate. And the plan itself can differ
+// between generations — a different voice, engine or segmentation cap —
+// so generation-1 bytes landing at generation-2's path would ship the
+// wrong voice with nothing to say so.
+func (s Staging) SegmentPath(bookID string, generation, seq int) (string, error) {
 	dir, err := s.Dir(bookID)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "seg-"+strconv.Itoa(seq)+".mp3"), nil
+	return filepath.Join(dir, strconv.Itoa(generation), "seg-"+strconv.Itoa(seq)+".mp3"), nil
 }
 
 // WriteSegment stages one segment's frames and returns where they landed.
 // Creates the run's directory on the way, so a caller never has to know
 // whether this is the first segment of the run.
-func (s Staging) WriteSegment(bookID string, seq int, frames []byte) (string, error) {
-	path, err := s.SegmentPath(bookID, seq)
+func (s Staging) WriteSegment(bookID string, generation, seq int, frames []byte) (string, error) {
+	path, err := s.SegmentPath(bookID, generation, seq)
 	if err != nil {
 		return "", err
 	}

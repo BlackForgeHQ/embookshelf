@@ -1,0 +1,25 @@
+-- Which run of this book's narration is the current one. See ADR-0031.
+--
+-- A narration run had no identity. Starting one wiped the segment plan
+-- and installed another, while River still held in-flight segment jobs
+-- for the plan that just went; their args address a segment by
+-- (book, seq), which names sequence 12 of the old run and sequence 12 of
+-- the new one identically. A job that claimed its segment before an
+-- engine call taking minutes could therefore finish after a regeneration
+-- and write its audio into the live plan's row — the wrong voice, or a
+-- coverage read for a plan the result never entered, both silent.
+--
+-- A counter on the run rather than a run-identity row: one row per book
+-- is what this table means, and the alternative bought a run history
+-- nothing asks for. The segments carry no copy of it — they are wiped and
+-- re-planned on every start, so a segment can never disagree with its
+-- run, and a column here would be a second place to be wrong.
+--
+-- The default is deliberate and load-bearing at deploy time. A segment
+-- job enqueued before this column existed has no generation in its args,
+-- so Go decodes the zero value — which matches a row still at 0, and a
+-- row is only still at 0 if nothing has restarted it since the deploy, so
+-- that job genuinely is current. The first start after the deploy bumps
+-- to 1 and every stale job goes quiet.
+ALTER TABLE book_audiobooks
+    ADD COLUMN generation INTEGER NOT NULL DEFAULT 0;

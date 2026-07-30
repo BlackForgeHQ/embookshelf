@@ -665,7 +665,7 @@ Deliberately **not** a `provider_settings`-shaped table: that machinery exists f
 
 An admin-triggered generation of one Book's narration. Admin-only at the router and **per book — there is no bulk run** (ADR-0028 §1). A reading-guide [[Guide run]] over a thousand books costs about ten dollars; the same shape here costs eight thousand to a hundred and seventy thousand, so the surface is not built rather than gated.
 
-One audiobook per Book (`book_audiobooks.book_id` is the PK, mirroring `book_reading_guides`). Regenerate is a destructive overwrite behind a type-to-confirm. Cancel is a state the workers check before each engine call — the only stop-loss on a run in progress — and sweeps [[Staging area]] immediately; failure retains it, because a retry is likely.
+One audiobook per Book (`book_audiobooks.book_id` is the PK, mirroring `book_reading_guides`). Regenerate is a destructive overwrite behind a type-to-confirm, but only of a run that has **concluded**: a start over a `pending` or `running` one is refused with `repo.ErrRunInProgress` (409 through the error mapper's default arm, no code), because the segments it would delete are audio already bought — see [[Run generation]]. Cancel is a state the workers check before each engine call — the only stop-loss on a run in progress, and now also the way through to a regeneration — and sweeps [[Staging area]] immediately; failure retains it, because a retry is likely.
 
 State lives in `book_audiobooks` (state, engine, voice, model, `segment_chars`, `source_content_hash`, `file_id`, error). Engine, voice, model and `segment_chars` are the run's **pins**: whatever it started with wins over the current settings row for its whole life, so an admin editing settings mid-run cannot produce a book narrated half in one voice — or, in the case of the cap, split two different ways. Provenance is the `file_id` pointer, not a flag on `files`. Staleness is `source_content_hash` against the book's current EPUB hash — surfaced as "generated from an older copy", never auto-invalidated.
 
@@ -673,9 +673,19 @@ The `state` column is a **summary, not the fact**. [[Coverage]] over the Segment
 
 Generation is **not** one of `MetadataWriter`'s triggers: no Sidecar, no in-file embed, no folder rename. In particular `books.narrator` is never written — that column means "what this file's tags said"; the synthesized voice lives on `book_audiobooks.voice`.
 
+### Run generation
+
+`book_audiobooks.generation`; which run of a book's narration a row is, bumped on every `Start` and carried in every [[Segment]]'s job args (ADR-0031). It is the run's identity, and it exists because `(book_id, seq)` is not one: a regeneration wipes the plan and installs another, so sequence 12 of each is a single address, and a job still in flight for the old plan could commit its result into the new one.
+
+Both writes that touch a segment refuse a mismatch — `MarkSegmentRunning` and `RecordSegment`, each joining the parent row so the check is inside the same locked statement. **Both**, not just the claim: the claim is taken *before* synthesis and synthesis runs for minutes, so the window that matters is the whole engine call, by the end of which the audio exists. A superseded job is therefore a no-op by construction, and the worker turns a refused claim into `return nil`.
+
+Deliberately a counter on the run rather than a run-identity row: one row per book is what the table means, and a history of runs is not wanted. Deliberately **not** copied onto the segment rows either — they are wiped and re-planned on every start, so they cannot disagree with their run, and a column there would be a second place to be wrong.
+
+The `DEFAULT 0` is load-bearing and not incidental: a job enqueued before the column existed decodes to generation 0, which matches a row nothing has restarted since the deploy — a run that job genuinely belongs to. Two tests pin it, because it reads as an oversight otherwise.
+
 ### Segment
 
-One unit of synthesis: a row in `book_audiobook_segments` (sequence, chapter title, character range, staged path, duration, start offset, state, error) and one River job on the dedicated `audiobook` queue.
+One unit of synthesis: a row in `book_audiobook_segments` (sequence, chapter title, character range, staged path, duration, start offset, state, error) and one River job on the dedicated `audiobook` queue, addressed by `(book_id, seq, generation)` — the pair the plan is keyed on plus the [[Run generation]] that says *which* plan.
 
 Boundaries come from EPUB spine items, titles from a `toc.ncx` / EPUB3 `nav` parser mapping TOC hrefs back to spine items; non-prose front matter (cover, nav, copyright) is skipped. A cap of ~40,000 characters splits an oversized chapter into several segments sharing one title, and is also the fallback when an EPUB has no usable structure. Splits land on sentence boundaries — a mid-sentence split is audible at every one of ~180 seams.
 
@@ -701,7 +711,9 @@ Persisted from the first version even though cross-rendition sync itself is defe
 
 ### Staging area
 
-`${DATA_PATH}/audiobooks/{book_id}/`; where per-Segment MP3s live until finalize concatenates them. Local filesystem, outside `storage.Storage`, following the `coverstore` precedent for derived bytes — the output is not a library artifact until it is finished.
+`${DATA_PATH}/audiobooks/{book_id}/{generation}/`; where per-Segment MP3s live until finalize concatenates them. Local filesystem, outside `storage.Storage`, following the `coverstore` precedent for derived bytes — the output is not a library artifact until it is finished.
+
+Scoped by [[Run generation]] so a superseded worker physically cannot touch the live run's bytes: `WriteSegment` is `os.WriteFile`, which is not atomic, and the two plans can differ in voice, engine or cap, so the same `seq` of two runs is not the same audio. Clean and the sweep still take the whole book directory, and finalize reads each segment back by the `staged_path` on its row rather than deriving one.
 
 Finalize joins the frames byte-wise (same engine, voice and settings across a run, so no transcode and no muxer), writes ID3v2 `CTOC`/`CHAP` chapter frames plus standard tags and cover art, hands the single file to `Placer`, and clears staging.
 

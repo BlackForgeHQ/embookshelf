@@ -31,6 +31,9 @@ type fakeAudiobookStore struct {
 	startErr   error
 	unfinished []model.AudiobookSegment
 	coverage   model.AudiobookCoverage
+	// generation is the run identity Start hands out, mirroring the
+	// counter the repo's upsert bumps.
+	generation int
 	// gets counts run reads, so a test can prove the advancer trusts the
 	// outcome a locked write handed it instead of re-reading.
 	gets int
@@ -48,20 +51,26 @@ type fakeAudiobookStore struct {
 }
 
 func (f *fakeAudiobookStore) RecordSegment(
-	_ context.Context, _ string, _ int, res model.SegmentResult,
+	_ context.Context, _ string, _, _ int, res model.SegmentResult,
 ) (model.AudiobookOutcome, error) {
 	f.recorded = append(f.recorded, res)
 	return f.outcome, nil
 }
 
-func (f *fakeAudiobookStore) Start(_ context.Context, ab model.Audiobook, segs []model.AudiobookSegment) error {
+// Start bumps the generation as the repo's upsert does, so a test can
+// tell the jobs of one plan from the jobs of the plan that replaced it.
+func (f *fakeAudiobookStore) Start(
+	_ context.Context, ab model.Audiobook, segs []model.AudiobookSegment,
+) (int, error) {
 	if f.startErr != nil {
-		return f.startErr
+		return 0, f.startErr
 	}
 	f.started = true
 	f.run = ab
+	f.run.Generation = f.generation + 1
+	f.generation++
 	f.segments = segs
-	return nil
+	return f.generation, nil
 }
 
 func (f *fakeAudiobookStore) GetByBookID(context.Context, string) (model.Audiobook, error) {

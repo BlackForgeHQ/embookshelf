@@ -41,7 +41,7 @@ func stagedRun(t *testing.T, d *db.DB, staging task.Staging, segments int) (stri
 			BookID: b.ID, Seq: i, ChapterIndex: i, ChapterTitle: "Chapter", State: model.SegmentPending,
 		})
 	}
-	if err := audiobooks.Start(ctx, model.Audiobook{
+	if _, err := audiobooks.Start(ctx, model.Audiobook{
 		BookID: b.ID, Engine: "openai", Voice: "alloy",
 	}, plan); err != nil {
 		t.Fatalf("start run: %v", err)
@@ -117,7 +117,7 @@ func TestStagingSweepReclaimsAStrandedRun(t *testing.T) {
 	ctx := context.Background()
 
 	// One segment landed, one never did: nothing here is one finalize away.
-	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, model.SegmentResult{
+	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, 1, model.SegmentResult{
 		State: model.SegmentDone, StagedPath: "seg-0.mp3", DurationMS: 1000,
 	}); err != nil {
 		t.Fatalf("RecordSegment: %v", err)
@@ -146,12 +146,12 @@ func TestStagingSweepRetainsAFreshlyFailedRun(t *testing.T) {
 	bookID, audiobooks := stagedRun(t, d, staging, 2)
 	ctx := context.Background()
 
-	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, model.SegmentResult{
+	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, 1, model.SegmentResult{
 		State: model.SegmentDone, StagedPath: "seg-0.mp3", DurationMS: 1000,
 	}); err != nil {
 		t.Fatalf("RecordSegment 0: %v", err)
 	}
-	out, err := audiobooks.RecordSegment(ctx, bookID, 1, model.SegmentResult{
+	out, err := audiobooks.RecordSegment(ctx, bookID, 1, 1, model.SegmentResult{
 		State: model.SegmentFailed, Error: "engine returned 500",
 	})
 	if err != nil {

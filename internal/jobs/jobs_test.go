@@ -29,7 +29,11 @@ func TestJobKindsAndPayloadsAreTheStoredOnes(t *testing.T) {
 		{jobs.LibraryScanArgs{LibraryID: "l1"}, "library.scan", `{"library_id":"l1"}`},
 		{jobs.SendToKindleArgs{BookID: "b1", UserID: "u1"}, "kindle.send", `{"book_id":"b1","user_id":"u1"}`},
 		{jobs.ReadingGuideArgs{BookID: "b1"}, "guide.generate", `{"book_id":"b1"}`},
-		{jobs.AudiobookSegmentArgs{BookID: "b1", Seq: 7}, "audiobook.segment", `{"book_id":"b1","seq":7}`},
+		{
+			jobs.AudiobookSegmentArgs{BookID: "b1", Seq: 7, Generation: 2},
+			"audiobook.segment",
+			`{"book_id":"b1","seq":7,"generation":2}`,
+		},
 		{jobs.AudiobookFinalizeArgs{BookID: "b1"}, "audiobook.finalize", `{"book_id":"b1"}`},
 	}
 
@@ -46,6 +50,35 @@ func TestJobKindsAndPayloadsAreTheStoredOnes(t *testing.T) {
 				t.Errorf("payload = %s, want %s — this orphans in-flight jobs", b, tc.json)
 			}
 		})
+	}
+}
+
+// A segment job enqueued before generations existed still decodes, and
+// decodes to generation 0.
+//
+// This is the deploy story and it rests entirely on a zero value, which
+// is exactly the kind of thing that looks accidental to the next reader
+// and gets "tidied" into a pointer or a required field. The rows are
+// real: a deployment upgraded mid-run has river_job rows whose args JSON
+// has no generation key at all. Zero is what they must decode to, because
+// zero is also what the run row's column defaults to — so such a job
+// matches a run nothing has restarted since the deploy, which is a run it
+// genuinely belongs to. The other half, that it then claims its segment,
+// is TestAJobEnqueuedBeforeGenerationsExistedStillClaimsItsSegment in
+// internal/task.
+func TestAudiobookSegmentArgsFromBeforeGenerationsDecodeToZero(t *testing.T) {
+	const stored = `{"book_id":"b1","seq":7}`
+
+	var args jobs.AudiobookSegmentArgs
+	if err := json.Unmarshal([]byte(stored), &args); err != nil {
+		t.Fatalf("decode a job enqueued before the field existed: %v", err)
+	}
+	if args.BookID != "b1" || args.Seq != 7 {
+		t.Errorf("args = %+v, want the book and seq the row stored", args)
+	}
+	if args.Generation != 0 {
+		t.Errorf("Generation = %d, want 0 — the run rows such a job addresses are still at the column default",
+			args.Generation)
 	}
 }
 

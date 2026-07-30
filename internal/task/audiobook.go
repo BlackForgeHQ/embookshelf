@@ -57,7 +57,7 @@ func canceled(ctx context.Context, bookID string, deps SegmentDeps) bool {
 type segmentStore interface {
 	GetByBookID(ctx context.Context, bookID string) (model.Audiobook, error)
 	GetSegment(ctx context.Context, bookID string, seq int) (model.AudiobookSegment, error)
-	MarkSegmentRunning(ctx context.Context, bookID string, seq int) (bool, error)
+	MarkSegmentRunning(ctx context.Context, bookID string, seq, generation int) (bool, error)
 }
 
 // runAdvancer records a segment's result and carries out whatever the run
@@ -68,7 +68,7 @@ type segmentStore interface {
 // it, is AudiobookService's job now — this worker's job is the engine
 // call and the bytes (#190).
 type runAdvancer interface {
-	AdvanceAfterSegment(ctx context.Context, bookID string, seq int, res model.SegmentResult) error
+	AdvanceAfterSegment(ctx context.Context, bookID string, seq, generation int, res model.SegmentResult) error
 }
 
 // bookReader is the one book-row read every generation job makes.
@@ -146,12 +146,18 @@ func AudiobookSegment(ctx context.Context, a jobs.AudiobookSegmentArgs, deps Seg
 		return nil
 	}
 
-	claimed, err := deps.Runs.MarkSegmentRunning(ctx, a.BookID, a.Seq)
+	claimed, err := deps.Runs.MarkSegmentRunning(ctx, a.BookID, a.Seq, a.Generation)
 	if err != nil {
 		return fmt.Errorf("claim segment %d: %w", a.Seq, err)
 	}
 	if !claimed {
-		// Already done. Re-synthesizing would buy the same audio twice.
+		// Either the segment is already done — re-synthesizing would buy
+		// the same audio twice — or this job belongs to a plan a
+		// regeneration has replaced, and its work is not wanted at all.
+		// Both are permanent and neither is an error: there is nothing for
+		// River to retry and nothing for a user to be told (ADR-0031).
+		slog.Debug("audiobook segment claim refused",
+			"book", a.BookID, "seq", a.Seq, "generation", a.Generation)
 		return nil
 	}
 
@@ -183,7 +189,7 @@ func AudiobookSegment(ctx context.Context, a jobs.AudiobookSegmentArgs, deps Seg
 		deps.publish(a.BookID)
 		return nil
 	}
-	path, err := deps.Staging.WriteSegment(a.BookID, a.Seq, frames)
+	path, err := deps.Staging.WriteSegment(a.BookID, a.Generation, a.Seq, frames)
 	if err != nil {
 		return fmt.Errorf("stage segment %d: %w", a.Seq, err)
 	}
@@ -203,7 +209,7 @@ func AudiobookSegment(ctx context.Context, a jobs.AudiobookSegmentArgs, deps Seg
 // and nothing more: returning it would hand River a segment to retry
 // whose audio is already staged and already paid for.
 func recordSegment(ctx context.Context, deps SegmentDeps, a jobs.AudiobookSegmentArgs, res model.SegmentResult) {
-	if err := deps.Advance.AdvanceAfterSegment(ctx, a.BookID, a.Seq, res); err != nil {
+	if err := deps.Advance.AdvanceAfterSegment(ctx, a.BookID, a.Seq, a.Generation, res); err != nil {
 		slog.Warn("audiobook: advance run", "book", a.BookID, "seq", a.Seq, "err", err)
 	}
 }

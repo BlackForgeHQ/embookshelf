@@ -54,7 +54,7 @@ func TestAdvanceAfterSegmentAppliesWhatTheWriteDecided(t *testing.T) {
 	}
 
 	res := model.SegmentResult{State: model.SegmentDone, StagedPath: "/tmp/seg-1.mp3", DurationMS: 1000}
-	if err := h.svc.AdvanceAfterSegment(context.Background(), "b1", 1, res); err != nil {
+	if err := h.svc.AdvanceAfterSegment(context.Background(), "b1", 1, 1, res); err != nil {
 		t.Fatalf("AdvanceAfterSegment: %v", err)
 	}
 
@@ -72,15 +72,17 @@ func TestAdvanceAfterSegmentAppliesWhatTheWriteDecided(t *testing.T) {
 }
 
 // replannedStore is a store whose segment write refuses everything: the
-// repo's answer for a seq that is not in the run's current plan. Only
-// RecordSegment differs from the fake the other tests use, so a test can
-// assert what the advancer does with the refusal and nothing else.
+// repo's answer for a result addressed to a plan that is not the one that
+// exists — a seq the run does not have, or a generation a regeneration
+// has moved past. Only RecordSegment differs from the fake the other
+// tests use, so a test can assert what the advancer does with the refusal
+// and nothing else.
 type replannedStore struct {
 	*fakeAudiobookStore
 }
 
 func (s *replannedStore) RecordSegment(
-	context.Context, string, int, model.SegmentResult,
+	context.Context, string, int, int, model.SegmentResult,
 ) (model.AudiobookOutcome, error) {
 	return model.AudiobookOutcome{}, repo.ErrNotFound
 }
@@ -96,7 +98,7 @@ func TestAdvanceAfterSegmentDerivesNothingFromARefusedWrite(t *testing.T) {
 	h := newAdvanceHarness(t, running("b1"), model.AudiobookCoverage{})
 	h.svc.d.Store = &replannedStore{fakeAudiobookStore: h.store}
 
-	err := h.svc.AdvanceAfterSegment(context.Background(), "b1", 9,
+	err := h.svc.AdvanceAfterSegment(context.Background(), "b1", 9, 1,
 		model.SegmentResult{State: model.SegmentDone, StagedPath: "/tmp/seg-9.mp3", DurationMS: 1000})
 	if !errors.Is(err, repo.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound to survive to the caller", err)
@@ -121,7 +123,7 @@ func TestAdvanceAfterSegmentFailsThroughTheSameWriter(t *testing.T) {
 	h := newAdvanceHarness(t, running("b1"), model.AudiobookCoverage{})
 	h.store.outcome = model.AudiobookOutcome{Coverage: cov, Next: model.AudiobookNextFail}
 
-	err := h.svc.AdvanceAfterSegment(context.Background(), "b1", 1,
+	err := h.svc.AdvanceAfterSegment(context.Background(), "b1", 1, 1,
 		model.SegmentResult{State: model.SegmentFailed, Error: "engine refused"})
 	if err != nil {
 		t.Fatalf("AdvanceAfterSegment: %v", err)

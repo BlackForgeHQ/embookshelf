@@ -82,6 +82,10 @@ Chunk splits land on sentence boundaries, never mid-sentence. A mid-sentence spl
 
 Following `llm.Client`'s deliberate omission, there is no HTTP-level retry decorator. Retry belongs to the queue, at segment granularity, where its cost is visible.
 
+## Consequences
+
+- **Amended by ADR-0031.** A run now carries a **generation**, bumped on every start and carried in the segment job args, because `(book, seq)` addresses the plan a regeneration deleted and the plan that replaced it identically. Both writes that touch a segment refuse a mismatch, staging is scoped by generation, and — new here — a start over a run that has not concluded is refused rather than clobbering it, which makes cancel the way through and §6's stop-loss the only route past a live run.
+
 ## Open questions
 
 - Whether a bulk run ever arrives, and if so what would make an eight-thousand-dollar estimate safe — a spend ceiling, a dry run, a required local engine.
@@ -97,3 +101,4 @@ Following `llm.Client`'s deliberate omission, there is no HTTP-level retry decor
 - ADR-0027 — the concatenation and tagging performed at finalize.
 - ADR-0021 — `Eligible format`, the three-point gating pattern §4 copies and the term it deliberately does not reuse.
 - ADR-0024 — the cost-follows-action principle §1 inherits and the bulk-run pattern §1 declines.
+- ADR-0031 — the run generation, and the start-over-a-live-run refusal.

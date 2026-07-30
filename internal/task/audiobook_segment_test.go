@@ -45,6 +45,13 @@ type fakeSegmentRuns struct {
 	claims     int
 	recorded   []model.SegmentResult
 	advanceErr error
+	// claimedGens and advancedGens are the generations the worker put on
+	// the two writes that touch a segment. Recorded because forwarding
+	// the job's own generation to both is what makes a superseded job a
+	// no-op; a worker that reached for the run's current one instead
+	// would defeat the guard while still compiling (ADR-0031).
+	claimedGens  []int
+	advancedGens []int
 }
 
 func (f *fakeSegmentRuns) GetByBookID(context.Context, string) (model.Audiobook, error) {
@@ -69,14 +76,16 @@ func (f *fakeSegmentRuns) GetSegment(_ context.Context, _ string, seq int) (mode
 // over a result and the module decides what the run does next, so what a
 // test asserts here is what was handed over (#190).
 func (f *fakeSegmentRuns) AdvanceAfterSegment(
-	_ context.Context, _ string, _ int, res model.SegmentResult,
+	_ context.Context, _ string, _, generation int, res model.SegmentResult,
 ) error {
 	f.recorded = append(f.recorded, res)
+	f.advancedGens = append(f.advancedGens, generation)
 	return f.advanceErr
 }
 
-func (f *fakeSegmentRuns) MarkSegmentRunning(context.Context, string, int) (bool, error) {
+func (f *fakeSegmentRuns) MarkSegmentRunning(_ context.Context, _ string, _, generation int) (bool, error) {
 	f.claims++
+	f.claimedGens = append(f.claimedGens, generation)
 	return f.claim, f.claimErr
 }
 
@@ -166,13 +175,19 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 	return h
 }
 
+// harnessGeneration is the run identity the harness's jobs carry.
+// Deliberately not 0: a worker that dropped the field would still pass a
+// test written at the zero value.
+const harnessGeneration = 3
+
 func (h *segmentHarness) run(t *testing.T, seq int) error {
 	t.Helper()
-	return task.AudiobookSegment(context.Background(), jobs.AudiobookSegmentArgs{BookID: "b1", Seq: seq}, h.deps)
+	return task.AudiobookSegment(context.Background(),
+		jobs.AudiobookSegmentArgs{BookID: "b1", Seq: seq, Generation: harnessGeneration}, h.deps)
 }
 
 func (h *segmentHarness) staged(seq int) bool {
-	path, err := h.staging.SegmentPath("b1", seq)
+	path, err := h.staging.SegmentPath("b1", harnessGeneration, seq)
 	if err != nil {
 		return false
 	}
@@ -253,9 +268,11 @@ func TestSegmentSkipsARunThatIsAlreadyReady(t *testing.T) {
 	}
 }
 
-// A segment that lost the claim is a segment somebody else finished.
-// Re-synthesizing would buy the same audio twice — the whole reason
-// segments are rows rather than a counter (ADR-0028 §6).
+// A segment that lost the claim is a segment somebody else finished, or
+// one whose run has been replaced. Re-synthesizing the first would buy
+// the same audio twice — the whole reason segments are rows rather than a
+// counter (ADR-0028 §6) — and the second is work nobody wants at all.
+// Neither is an error: there is nothing for River to retry.
 func TestSegmentDoesNotResynthesizeWhatItCouldNotClaim(t *testing.T) {
 	h := newSegmentHarness(t)
 	h.runs.claim = false
@@ -265,6 +282,48 @@ func TestSegmentDoesNotResynthesizeWhatItCouldNotClaim(t *testing.T) {
 	}
 	if h.engine.calls != 0 {
 		t.Errorf("engine called %d times for an unclaimed segment", h.engine.calls)
+	}
+	if len(h.runs.recorded) != 0 {
+		t.Errorf("recorded %+v for a segment it never claimed", h.runs.recorded)
+	}
+}
+
+// The job's own generation reaches both writes that touch a segment, and
+// the staging path it writes to.
+//
+// This is what makes the guard reachable at all. Both refusals live in
+// the repo, so a worker that dropped the field, or reached for the run
+// row's current generation instead of the job's, would compile, pass
+// every repo test, and quietly restore the bug: a superseded job would
+// address itself as current. The run this harness loads carries no
+// generation of its own, so a worker taking it from there would send 0
+// where 3 is expected (ADR-0031).
+func TestSegmentCarriesItsOwnGenerationToEveryWrite(t *testing.T) {
+	h := newSegmentHarness(t)
+
+	if err := h.run(t, 0); err != nil {
+		t.Fatalf("AudiobookSegment: %v", err)
+	}
+
+	want := []int{harnessGeneration}
+	if got := h.runs.claimedGens; len(got) != 1 || got[0] != harnessGeneration {
+		t.Errorf("claimed with generations %v, want %v — the claim would address the wrong run", got, want)
+	}
+	if got := h.runs.advancedGens; len(got) != 1 || got[0] != harnessGeneration {
+		t.Errorf("advanced with generations %v, want %v — the result would land in the wrong plan", got, want)
+	}
+	if len(h.runs.recorded) != 1 || h.runs.recorded[0].State != model.SegmentDone {
+		t.Fatalf("recorded %+v, want one done result", h.runs.recorded)
+	}
+	// And the bytes went to this generation's directory, which is what
+	// keeps a superseded worker from overwriting live audio.
+	staged := h.runs.recorded[0].StagedPath
+	want0, err := h.staging.SegmentPath("b1", harnessGeneration, 0)
+	if err != nil {
+		t.Fatalf("SegmentPath: %v", err)
+	}
+	if staged != want0 {
+		t.Errorf("staged at %s, want %s", staged, want0)
 	}
 }
 

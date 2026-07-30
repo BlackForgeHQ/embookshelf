@@ -21,6 +21,13 @@ import (
 	"github.com/blackforge/embookshelf/internal/repo/repotest"
 )
 
+// runGeneration is the generation audiobookFixture's run carries: a
+// book's first run is generation 1, and every call below addresses its
+// segments with it. Stated once so a test that means "the current run"
+// and a test that means "a superseded one" cannot be told apart by a
+// bare literal.
+const runGeneration = 1
+
 // audiobookFixture creates a library, a book, and a started run with n
 // pending segments — the state a worker picks a job up in.
 func audiobookFixture(t *testing.T, d *db.DB, segments int) (string, *repo.BookAudiobookRepo) {
@@ -46,10 +53,14 @@ func audiobookFixture(t *testing.T, d *db.DB, segments int) (string, *repo.BookA
 			CharStart: i * 100, CharEnd: (i + 1) * 100,
 		})
 	}
-	if err := audiobooks.Start(ctx, model.Audiobook{
+	gen, err := audiobooks.Start(ctx, model.Audiobook{
 		BookID: b.ID, Engine: "openai", Voice: "alloy", Model: "tts-1", TotalChars: segments * 100,
-	}, plan); err != nil {
+	}, plan)
+	if err != nil {
 		t.Fatalf("start run: %v", err)
+	}
+	if gen != runGeneration {
+		t.Fatalf("Start assigned generation %d to a book's first run, want %d", gen, runGeneration)
 	}
 	if _, err := audiobooks.Transition(ctx, b.ID, model.Transition{
 		To: model.AudiobookRunning, From: []model.AudiobookState{model.AudiobookPending, model.AudiobookRunning},
@@ -77,7 +88,7 @@ func TestRecordSegmentAsksForFinalizeWhenTheLastSegmentLands(t *testing.T) {
 	ctx := context.Background()
 
 	for seq := range 2 {
-		out, err := audiobooks.RecordSegment(ctx, bookID, seq, doneResult(seq))
+		out, err := audiobooks.RecordSegment(ctx, bookID, seq, runGeneration, doneResult(seq))
 		if err != nil {
 			t.Fatalf("RecordSegment %d: %v", seq, err)
 		}
@@ -89,7 +100,7 @@ func TestRecordSegmentAsksForFinalizeWhenTheLastSegmentLands(t *testing.T) {
 		}
 	}
 
-	out, err := audiobooks.RecordSegment(ctx, bookID, 2, doneResult(2))
+	out, err := audiobooks.RecordSegment(ctx, bookID, 2, runGeneration, doneResult(2))
 	if err != nil {
 		t.Fatalf("RecordSegment 2: %v", err)
 	}
@@ -108,7 +119,7 @@ func TestRecordSegmentPersistsTheSegmentItReportedOn(t *testing.T) {
 	bookID, audiobooks := audiobookFixture(t, repotest.New(t), 2)
 	ctx := context.Background()
 
-	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, model.SegmentResult{
+	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, runGeneration, model.SegmentResult{
 		State: model.SegmentDone, StagedPath: "/staging/seg-0.mp3", DurationMS: 91_500,
 	}); err != nil {
 		t.Fatalf("RecordSegment: %v", err)
@@ -139,7 +150,7 @@ func TestRecordSegmentRefusesASeqThatIsNotInThePlan(t *testing.T) {
 	bookID, audiobooks := audiobookFixture(t, repotest.New(t), 2)
 	ctx := context.Background()
 
-	if _, err := audiobooks.RecordSegment(ctx, bookID, 9, doneResult(1)); !errors.Is(err, repo.ErrNotFound) {
+	if _, err := audiobooks.RecordSegment(ctx, bookID, 9, runGeneration, doneResult(1)); !errors.Is(err, repo.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound for a seq the plan does not have", err)
 	}
 
@@ -160,6 +171,169 @@ func TestRecordSegmentRefusesASeqThatIsNotInThePlan(t *testing.T) {
 	}
 }
 
+// The same refusal for the address one level up: a seq the plan does
+// have, but a generation the run has moved past.
+//
+// Guarded here and not only at the claim because the claim happens before
+// synthesis and synthesis takes minutes: a job can claim under generation
+// 1 and arrive here after generation 2 has started, with the audio
+// already bought. That is the window that matters, and this is the write
+// that closes it (ADR-0031).
+func TestRecordSegmentRefusesASupersededGeneration(t *testing.T) {
+	bookID, audiobooks := audiobookFixture(t, repotest.New(t), 2)
+	ctx := context.Background()
+
+	_, err := audiobooks.RecordSegment(ctx, bookID, 0, runGeneration-1, doneResult(0))
+	if !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound for a result from a superseded run", err)
+	}
+
+	seg, err := audiobooks.GetSegment(ctx, bookID, 0)
+	if err != nil {
+		t.Fatalf("GetSegment: %v", err)
+	}
+	if seg.State != model.SegmentPending || seg.StagedPath != "" || seg.DurationMS != 0 {
+		t.Errorf("segment 0 = %q/%q/%dms, want an untouched pending row",
+			seg.State, seg.StagedPath, seg.DurationMS)
+	}
+	cov, err := audiobooks.Coverage(ctx, bookID)
+	if err != nil {
+		t.Fatalf("Coverage: %v", err)
+	}
+	if cov != (model.AudiobookCoverage{Total: 2}) {
+		t.Errorf("coverage = %+v, want 0 of 2 — nothing was written", cov)
+	}
+}
+
+// The claim is guarded the same way, and it is the cheap half: it is
+// taken before the engine call, so a superseded job refused here spends
+// nothing at all.
+//
+// The generation is read from the parent run rather than from a column on
+// the segment, because segments are wiped and re-planned on every start —
+// a copy on the segment row would be a second place to be wrong.
+func TestMarkSegmentRunningRefusesASupersededGeneration(t *testing.T) {
+	bookID, audiobooks := audiobookFixture(t, repotest.New(t), 2)
+	ctx := context.Background()
+
+	claimed, err := audiobooks.MarkSegmentRunning(ctx, bookID, 0, runGeneration-1)
+	if err != nil {
+		t.Fatalf("MarkSegmentRunning: %v", err)
+	}
+	if claimed {
+		t.Error("a job from a superseded run claimed a segment of the run that replaced it")
+	}
+	if seg, err := audiobooks.GetSegment(ctx, bookID, 0); err != nil {
+		t.Fatalf("GetSegment: %v", err)
+	} else if seg.State != model.SegmentPending {
+		t.Errorf("segment 0 = %q, want pending", seg.State)
+	}
+
+	// The current generation still claims, which is what stops this test
+	// passing for a guard that refuses everything.
+	claimed, err = audiobooks.MarkSegmentRunning(ctx, bookID, 0, runGeneration)
+	if err != nil {
+		t.Fatalf("MarkSegmentRunning: %v", err)
+	}
+	if !claimed {
+		t.Error("the current run's own job could not claim its segment")
+	}
+}
+
+// Start refuses over a run that has not concluded, and leaves it exactly
+// as it was.
+//
+// The segments a second start would delete are audio already paid for,
+// and the jobs still working through that plan would carry on spending.
+// ADR-0028 §6 makes cancel the stop-loss on a run that can cost $170;
+// this makes a user take it rather than lose the same money by pressing
+// Generate twice (ADR-0031).
+func TestStartRefusesOverARunThatHasNotConcluded(t *testing.T) {
+	d := repotest.New(t)
+	bookID, audiobooks := audiobookFixture(t, d, 2)
+	ctx := context.Background()
+
+	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, runGeneration, doneResult(0)); err != nil {
+		t.Fatalf("RecordSegment: %v", err)
+	}
+
+	plan := []model.AudiobookSegment{{BookID: bookID, Seq: 0, ChapterTitle: "Replanned", CharEnd: 50}}
+	_, err := audiobooks.Start(ctx, model.Audiobook{
+		BookID: bookID, Engine: "elevenlabs", Voice: "rachel", TotalChars: 50,
+	}, plan)
+	if !errors.Is(err, repo.ErrRunInProgress) {
+		t.Fatalf("Start over a running run returned %v, want ErrRunInProgress", err)
+	}
+
+	run, err := audiobooks.GetByBookID(ctx, bookID)
+	if err != nil {
+		t.Fatalf("GetByBookID: %v", err)
+	}
+	if run.Generation != runGeneration || run.Engine != "openai" || run.State != model.AudiobookRunning {
+		t.Errorf("run = gen %d / %s / %q, want the live run untouched", run.Generation, run.Engine, run.State)
+	}
+	segs, err := audiobooks.ListSegments(ctx, bookID)
+	if err != nil {
+		t.Fatalf("ListSegments: %v", err)
+	}
+	if len(segs) != 2 || segs[0].State != model.SegmentDone {
+		t.Fatalf("plan = %d segment(s) with seq 0 %q, want the paid-for plan intact",
+			len(segs), segs[0].State)
+	}
+
+	// Every terminal state is a start the run does accept: canceled is the
+	// way through for a live run, and ready and failed are runs a user may
+	// simply want again.
+	for _, state := range []model.AudiobookState{
+		model.AudiobookCanceled, model.AudiobookFailed, model.AudiobookReady,
+	} {
+		if _, err := audiobooks.Transition(ctx, bookID, model.Transition{
+			To: state, From: model.AllAudiobookStates(),
+		}); err != nil {
+			t.Fatalf("transition to %s: %v", state, err)
+		}
+		if _, err := audiobooks.Start(ctx, model.Audiobook{
+			BookID: bookID, Engine: "openai", Voice: "alloy", TotalChars: 50,
+		}, plan); err != nil {
+			t.Errorf("Start over a %s run: %v — a concluded run is replaceable", state, err)
+		}
+	}
+}
+
+// The generation bumps on every start, because that is the whole of the
+// run's identity: a start that reused the number would leave the jobs of
+// the plan it just deleted addressing the plan that replaced it.
+func TestStartBumpsTheGenerationOnEveryRun(t *testing.T) {
+	bookID, audiobooks := audiobookFixture(t, repotest.New(t), 1)
+	ctx := context.Background()
+
+	plan := []model.AudiobookSegment{{BookID: bookID, Seq: 0, ChapterTitle: "Chapter", CharEnd: 100}}
+	for want := runGeneration + 1; want <= runGeneration+3; want++ {
+		if _, err := audiobooks.Transition(ctx, bookID, model.Transition{
+			To: model.AudiobookCanceled, From: model.AllAudiobookStates(),
+		}); err != nil {
+			t.Fatalf("cancel: %v", err)
+		}
+		got, err := audiobooks.Start(ctx, model.Audiobook{
+			BookID: bookID, Engine: "openai", Voice: "alloy", TotalChars: 100,
+		}, plan)
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		if got != want {
+			t.Fatalf("Start assigned generation %d, want %d", got, want)
+		}
+		run, err := audiobooks.GetByBookID(ctx, bookID)
+		if err != nil {
+			t.Fatalf("GetByBookID: %v", err)
+		}
+		if run.Generation != got {
+			t.Errorf("row carries generation %d but Start reported %d — the jobs would address the wrong run",
+				run.Generation, got)
+		}
+	}
+}
+
 // ADR-0028 §6: when the last outstanding segment gives up, the write
 // reports that the run must fail — and reports it from under the run
 // row's lock, so exactly one landing reaches that verdict.
@@ -172,12 +346,12 @@ func TestRecordSegmentReportsFailWhenTheLastSegmentGivesUp(t *testing.T) {
 	ctx := context.Background()
 
 	for seq := range 2 {
-		if _, err := audiobooks.RecordSegment(ctx, bookID, seq, doneResult(seq)); err != nil {
+		if _, err := audiobooks.RecordSegment(ctx, bookID, seq, runGeneration, doneResult(seq)); err != nil {
 			t.Fatalf("RecordSegment %d: %v", seq, err)
 		}
 	}
 
-	out, err := audiobooks.RecordSegment(ctx, bookID, 2, model.SegmentResult{
+	out, err := audiobooks.RecordSegment(ctx, bookID, 2, runGeneration, model.SegmentResult{
 		State: model.SegmentFailed, Error: "engine returned 500",
 	})
 	if err != nil {
@@ -231,12 +405,12 @@ func TestRecordSegmentDoesNotRefailAnAlreadyFailedRun(t *testing.T) {
 	bookID, audiobooks := audiobookFixture(t, repotest.New(t), 2)
 	ctx := context.Background()
 
-	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, model.SegmentResult{
+	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, runGeneration, model.SegmentResult{
 		State: model.SegmentFailed, Error: "first",
 	}); err != nil {
 		t.Fatalf("RecordSegment 0: %v", err)
 	}
-	out, err := audiobooks.RecordSegment(ctx, bookID, 1, model.SegmentResult{
+	out, err := audiobooks.RecordSegment(ctx, bookID, 1, runGeneration, model.SegmentResult{
 		State: model.SegmentFailed, Error: "second",
 	})
 	if err != nil {
@@ -260,7 +434,7 @@ func TestRecordSegmentDoesNotRefailAnAlreadyFailedRun(t *testing.T) {
 	}
 
 	// And once more, as a River retry of the first segment would do.
-	out, err = audiobooks.RecordSegment(ctx, bookID, 0, model.SegmentResult{
+	out, err = audiobooks.RecordSegment(ctx, bookID, 0, runGeneration, model.SegmentResult{
 		State: model.SegmentFailed, Error: "again",
 	})
 	if err != nil {
@@ -303,7 +477,7 @@ func TestRecordSegmentDoesNotFinalizeACanceledRun(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
-	out, err := audiobooks.RecordSegment(ctx, bookID, 0, doneResult(0))
+	out, err := audiobooks.RecordSegment(ctx, bookID, 0, runGeneration, doneResult(0))
 	if err != nil {
 		t.Fatalf("RecordSegment: %v", err)
 	}
@@ -337,7 +511,7 @@ func TestListStaleStagingReclaimsARunStrandedAtRunning(t *testing.T) {
 
 	// One segment landed, one never did, and the process that owned the
 	// run has been gone for a fortnight.
-	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, doneResult(0)); err != nil {
+	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, runGeneration, doneResult(0)); err != nil {
 		t.Fatalf("RecordSegment: %v", err)
 	}
 	age(t, d, bookID, 14)
@@ -359,10 +533,10 @@ func TestListStaleStagingKeepsAFreshFailedRun(t *testing.T) {
 	bookID, audiobooks := audiobookFixture(t, d, 2)
 	ctx := context.Background()
 
-	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, doneResult(0)); err != nil {
+	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, runGeneration, doneResult(0)); err != nil {
 		t.Fatalf("RecordSegment 0: %v", err)
 	}
-	if _, err := audiobooks.RecordSegment(ctx, bookID, 1, model.SegmentResult{
+	if _, err := audiobooks.RecordSegment(ctx, bookID, 1, runGeneration, model.SegmentResult{
 		State: model.SegmentFailed, Error: "engine returned 500",
 	}); err != nil {
 		t.Fatalf("RecordSegment 1: %v", err)
@@ -389,7 +563,7 @@ func TestListStaleStagingSparesACompleteRunAwaitingFinalize(t *testing.T) {
 	ctx := context.Background()
 
 	for seq := range 2 {
-		if _, err := audiobooks.RecordSegment(ctx, bookID, seq, doneResult(seq)); err != nil {
+		if _, err := audiobooks.RecordSegment(ctx, bookID, seq, runGeneration, doneResult(seq)); err != nil {
 			t.Fatalf("RecordSegment %d: %v", seq, err)
 		}
 	}
@@ -411,7 +585,7 @@ func TestListStaleStagingReclaimsAPublishedRun(t *testing.T) {
 	bookID, audiobooks := audiobookFixture(t, d, 1)
 	ctx := context.Background()
 
-	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, doneResult(0)); err != nil {
+	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, runGeneration, doneResult(0)); err != nil {
 		t.Fatalf("RecordSegment: %v", err)
 	}
 	if _, err := audiobooks.Transition(ctx, bookID, model.Transition{
@@ -450,8 +624,15 @@ func TestStartRoundTripsTheSegmentationCap(t *testing.T) {
 	}
 
 	audiobooks := repo.NewBookAudiobookRepo(d)
-	if err := audiobooks.Start(ctx, model.Audiobook{
-		BookID: b.ID, Engine: "openai", Voice: "alloy", Model: "tts-1", SegmentChars: 12_345,
+	// Every field distinct from every other field of its type, so a
+	// crossing between two adjacent same-type columns surfaces as a
+	// mismatch rather than compiling and running. This list and the Scan
+	// destinations in GetByBookID are hand-kept — book_audiobooks has no
+	// projection — which is exactly the hazard CONTEXT.md §Column-order
+	// coupling describes.
+	if _, err := audiobooks.Start(ctx, model.Audiobook{
+		BookID: b.ID, Engine: "openai", Voice: "alloy", Model: "tts-1",
+		SegmentChars: 12_345, TotalChars: 777, SourceContentHash: []byte{0xDE, 0xAD},
 	}, []model.AudiobookSegment{
 		{BookID: b.ID, Seq: 0, ChapterTitle: "Chapter", State: model.SegmentPending, CharStart: 0, CharEnd: 100},
 	}); err != nil {
@@ -464,6 +645,23 @@ func TestStartRoundTripsTheSegmentationCap(t *testing.T) {
 	}
 	if run.SegmentChars != 12_345 {
 		t.Errorf("SegmentChars = %d, want the 12345 the plan was split at", run.SegmentChars)
+	}
+	if run.TotalChars != 777 {
+		t.Errorf("TotalChars = %d, want 777", run.TotalChars)
+	}
+	// The generation is the run's identity, so a column crossed with one
+	// of its integer neighbours would silently address the wrong run.
+	if run.Generation != runGeneration {
+		t.Errorf("Generation = %d, want %d for a book's first run", run.Generation, runGeneration)
+	}
+	if run.State != model.AudiobookPending {
+		t.Errorf("State = %q, want pending", run.State)
+	}
+	if run.Engine != "openai" || run.Voice != "alloy" || run.Model != "tts-1" {
+		t.Errorf("engine/voice/model = %q/%q/%q, want openai/alloy/tts-1", run.Engine, run.Voice, run.Model)
+	}
+	if string(run.SourceContentHash) != "\xde\xad" || run.Error != "" || run.FileID != nil || run.DurationMS != 0 {
+		t.Errorf("run = %+v, want the hash it was planned from and nothing finalize writes", run)
 	}
 }
 
@@ -527,7 +725,10 @@ func TestRecordSegmentWaitsForTheRunRowLock(t *testing.T) {
 	}
 
 	landed := make(chan error, 1)
-	go func() { _, err := audiobooks.RecordSegment(ctx, bookID, 0, doneResult(0)); landed <- err }()
+	go func() {
+		_, err := audiobooks.RecordSegment(ctx, bookID, 0, runGeneration, doneResult(0))
+		landed <- err
+	}()
 
 	select {
 	case err := <-landed:

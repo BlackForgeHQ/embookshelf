@@ -120,9 +120,26 @@ func (ReadingGuideArgs) Kind() string { return "guide.generate" }
 // Book and seq rather than the segment's own id, because that pair is
 // what the plan is keyed on and what a Retry re-enqueues; carrying a row
 // id would mean a retry could address a row a regeneration has replaced.
+//
+// Generation says *which* plan, because book-and-seq alone has the same
+// property one level up: a regeneration wipes the plan and installs
+// another, and sequence 12 of each is one address. The run's two segment
+// writes refuse a generation that is not the run's, so a job left over
+// from a superseded plan is a no-op rather than a result landing in
+// somebody else's row (ADR-0031).
 type AudiobookSegmentArgs struct {
 	BookID string `json:"book_id"`
 	Seq    int    `json:"seq"`
+	// Generation is deliberately allowed to be absent. A job enqueued
+	// before this field existed has no generation in its args, so Go
+	// decodes the zero value — and zero matches a run row still at the
+	// column's default, which is a run nothing has restarted since the
+	// deploy, so that job genuinely is current. The first start after the
+	// deploy bumps the row to 1 and every genuinely stale job goes quiet.
+	// TestAJobEnqueuedBeforeGenerationsExistedStillClaimsItsSegment holds
+	// this, because it rests on a zero value and would otherwise look like
+	// an oversight.
+	Generation int `json:"generation"`
 }
 
 func (AudiobookSegmentArgs) Kind() string  { return "audiobook.segment" }

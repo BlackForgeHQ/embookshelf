@@ -49,9 +49,17 @@ func (s AudiobookState) Terminal() bool {
 type Audiobook struct {
 	BookID string
 	State  AudiobookState
-	Engine string
-	Voice  string
-	Model  string
+	// Generation is which run of this book's narration this row is, bumped
+	// on every start. It is the run's identity, and it exists because
+	// (book, seq) is not one: a regeneration wipes the plan and installs
+	// another, so sequence 12 of the run that went and sequence 12 of the
+	// run that replaced it are one address. Segment jobs carry it and the
+	// two writes that touch a segment refuse a mismatch, which is what
+	// makes a superseded job a no-op by construction (ADR-0031).
+	Generation int
+	Engine     string
+	Voice      string
+	Model      string
 	// SegmentChars is the cap the plan was split at, pinned for the same
 	// reason engine and voice are: every segment job re-extracts the book
 	// from the EPUB, and a cap edited mid-run would hand the remaining

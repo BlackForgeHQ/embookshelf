@@ -195,7 +195,7 @@ func TestBookAudiobookGetWithoutUserWritesOnlyThe401(t *testing.T) {
 	}
 	// A real run, so the handler gets past both audiobook queries and
 	// reaches the point where it used to derive the user id.
-	if err := runs.Start(ctx, model.Audiobook{
+	if _, err := runs.Start(ctx, model.Audiobook{
 		BookID: book.ID, Engine: "openai", Voice: "alloy", TotalChars: 10,
 	}, []model.AudiobookSegment{{Seq: 0, ChapterTitle: "One", CharEnd: 10}}); err != nil {
 		t.Fatalf("Start run: %v", err)
@@ -328,6 +328,31 @@ func TestAudiobookErrorDefaultsToA409(t *testing.T) {
 	}
 }
 
+// Generate over a run that is still working is the newest member of that
+// arm, and it joins deliberately: it is the same category as the two
+// above — the caller's view of this run is stale — with the same fix, so
+// it gets no code of its own and the client needs no branch for it.
+//
+// The message is asserted whole because it is the entire answer: with no
+// code to switch on, the sentence is what tells a user their run is still
+// going and that cancel is the way through (ADR-0031).
+func TestAudiobookErrorAnswersARunInProgressWithA409(t *testing.T) {
+	status, body := audiobookErrorResponse(t, repo.ErrRunInProgress)
+
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body %+v)", status, body)
+	}
+	if body.Code != "" {
+		t.Errorf("code = %q, want none", body.Code)
+	}
+	if body.Error != repo.ErrRunInProgress.Error() {
+		t.Errorf("message = %q, want %q", body.Error, repo.ErrRunInProgress.Error())
+	}
+	if !strings.Contains(body.Error, "cancel") {
+		t.Errorf("message = %q, want it to name the way through", body.Error)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Serving the narration rendition
 // ---------------------------------------------------------------------------
@@ -406,7 +431,7 @@ func newNarrationFixture(t *testing.T, store storage.Storage, libRoot, presign s
 	if err != nil {
 		t.Fatalf("Insert file: %v", err)
 	}
-	if err := runs.Start(ctx, model.Audiobook{
+	if _, err := runs.Start(ctx, model.Audiobook{
 		BookID: book.ID, Engine: "kokoro", Voice: "af_heart", TotalChars: 10,
 	}, nil); err != nil {
 		t.Fatalf("Start run: %v", err)

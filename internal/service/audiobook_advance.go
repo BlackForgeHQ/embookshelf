@@ -27,20 +27,21 @@ import (
 func (s *AudiobookService) AdvanceAfterSegment(
 	ctx context.Context,
 	bookID string,
-	seq int,
+	seq, generation int,
 	res model.SegmentResult,
 ) error {
-	outcome, err := s.d.Store.RecordSegment(ctx, bookID, seq, res)
+	outcome, err := s.d.Store.RecordSegment(ctx, bookID, seq, generation, res)
 	if err != nil {
-		// repo.ErrNotFound is the write refusing a seq the run's current
-		// plan does not have — a job left over from the run a
-		// regeneration replaced. It is permanent, and there is
-		// deliberately no fallback that reads Coverage and advances
-		// anyway: that coverage describes a plan this result never
-		// entered, so a transition derived from it would be a verdict on
-		// somebody else's run. The sentinel is wrapped rather than
-		// swallowed so a caller can see it for what it is, and nothing
-		// below runs (#220).
+		// repo.ErrNotFound is the write refusing a result addressed to a
+		// plan that is not the one that exists — a seq this run does not
+		// have, or a generation a regeneration has moved past, both of
+		// them a job left over from the run that was replaced. It is
+		// permanent, and there is deliberately no fallback that reads
+		// Coverage and advances anyway: that coverage describes a plan
+		// this result never entered, so a transition derived from it
+		// would be a verdict on somebody else's run. The sentinel is
+		// wrapped rather than swallowed so a caller can see it for what
+		// it is, and nothing below runs (#220, #253).
 		return fmt.Errorf("record segment %d: %w", seq, err)
 	}
 	_, err = s.applyNext(ctx, bookID, outcome.Next, outcome.Coverage)

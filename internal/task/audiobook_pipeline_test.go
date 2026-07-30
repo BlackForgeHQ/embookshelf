@@ -104,6 +104,10 @@ type narrationPipeline struct {
 	book    model.Book
 	staging task.Staging
 	epub    []byte
+	// gen is the generation of the run start() most recently installed:
+	// the plan the jobs below belong to. A test that wants a superseded
+	// job says so by driving one with an older value.
+	gen int
 
 	// queued is every job the service handed the queue, in order. Nothing
 	// runs it: each test drives the jobs it wants, in the order it wants,
@@ -230,15 +234,24 @@ func (p *narrationPipeline) start() {
 	if err != nil {
 		p.t.Fatalf("Start: %v", err)
 	}
+	p.gen = p.run().Generation
 }
 
-// runSegment executes one segment job with the engine currently
-// scripted, and returns what the worker handed back to River.
+// runSegment executes one segment job of the current run with the engine
+// currently scripted, and returns what the worker handed back to River.
 func (p *narrationPipeline) runSegment(seq int, reply func(tts.Request) ([]byte, error)) error {
+	p.t.Helper()
+	return p.runSegmentOf(p.gen, seq, reply)
+}
+
+// runSegmentOf is the same, for a job that names its generation — which
+// is how a job left over from a plan that has been replaced is expressed
+// without a River to hold it.
+func (p *narrationPipeline) runSegmentOf(gen, seq int, reply func(tts.Request) ([]byte, error)) error {
 	p.t.Helper()
 	p.engine.reply = reply
 	return task.AudiobookSegment(context.Background(),
-		jobs.AudiobookSegmentArgs{BookID: p.book.ID, Seq: seq}, p.deps)
+		jobs.AudiobookSegmentArgs{BookID: p.book.ID, Seq: seq, Generation: gen}, p.deps)
 }
 
 // speaks is a successful engine reply: four frames of real MPEG audio,
@@ -266,7 +279,12 @@ func (p *narrationPipeline) segment(seq int) model.AudiobookSegment {
 
 func (p *narrationPipeline) stagedExists(seq int) bool {
 	p.t.Helper()
-	path, err := p.staging.SegmentPath(p.book.ID, seq)
+	return p.stagedExistsOf(p.gen, seq)
+}
+
+func (p *narrationPipeline) stagedExistsOf(gen, seq int) bool {
+	p.t.Helper()
+	path, err := p.staging.SegmentPath(p.book.ID, gen, seq)
 	if err != nil {
 		p.t.Fatalf("Staging.SegmentPath: %v", err)
 	}
@@ -541,6 +559,222 @@ func TestNarrationRunReachesReadyWhenATransientFailureIsRetried(t *testing.T) {
 	if p.queuedFinalizes() != 1 || p.publishes != before {
 		t.Errorf("a status read on a ready run queued %d finalize(s) and published %d more time(s), want neither",
 			p.queuedFinalizes()-1, p.publishes-before)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The run that was replaced while it was still working
+// ---------------------------------------------------------------------------
+
+// regenerate is what a user pressing Generate on a book that already has
+// a run does: stop the current one, then start a fresh plan over it.
+//
+// Cancel first because Start refuses over a live run — the segments it
+// would wipe are audio already paid for, and cancel is the stop-loss
+// ADR-0028 §6 puts in front of that.
+func (p *narrationPipeline) regenerate() {
+	p.t.Helper()
+	if err := p.svc.Cancel(context.Background(), p.book.ID); err != nil {
+		p.t.Fatalf("Cancel: %v", err)
+	}
+	p.start()
+}
+
+// A segment job whose run was replaced while it was inside the engine
+// call must land nowhere.
+//
+// The window this is about is the whole of a synthesis. A job claims its
+// segment before the engine call (audiobook.go), the call takes minutes,
+// and a regeneration in between wipes the plan and installs another one.
+// Book-plus-sequence addresses both plans identically, so without a
+// generation the stale result writes into the live run's row — and the
+// interleaving here is the expensive version of that: the new run has
+// every other segment done, so a stale write for the missing one settles
+// its coverage, dispatches finalize, and publishes a book assembled half
+// from audio nobody asked for.
+//
+// Everything is real here for the reason this file exists: the refusal
+// has to hold in the repo's locked write, and a test that stopped at the
+// service seam would be asserting against a double's copy of it.
+func TestASupersededSegmentJobDoesNotTouchTheRunThatReplacedIt(t *testing.T) {
+	p := newNarrationPipeline(t)
+	p.start()
+
+	if err := p.runSegment(0, func(tts.Request) ([]byte, error) { return speaks() }); err != nil {
+		t.Fatalf("segment 0 of the first run: %v", err)
+	}
+
+	publishesAtRegen, finalizesAtRegen := 0, 0
+	// The regeneration lands while segment 1 is inside the engine call —
+	// the claim is already made, the audio is already being bought, and
+	// nothing has told this job its plan no longer exists.
+	err := p.runSegment(1, func(tts.Request) ([]byte, error) {
+		p.regenerate()
+		// The new run then completes every segment of its own plan except
+		// this one, so a stale write for seq 1 would be the write that
+		// settles it.
+		if err := p.runSegment(0, func(tts.Request) ([]byte, error) { return speaks() }); err != nil {
+			t.Fatalf("segment 0 of the second run: %v", err)
+		}
+		publishesAtRegen, finalizesAtRegen = p.publishes, p.queuedFinalizes()
+		return speaks()
+	})
+	if err != nil {
+		t.Fatalf("the superseded segment job returned %v, want nil — there is nothing for River to retry", err)
+	}
+
+	// The plan the stale job addressed is not the plan that exists.
+	if got := p.segment(1); got.State != model.SegmentPending || got.StagedPath != "" || got.DurationMS != 0 {
+		t.Errorf("segment 1 of the new run = %q/%q/%dms, want an untouched pending row — "+
+			"a superseded job wrote into the plan that replaced it",
+			got.State, got.StagedPath, got.DurationMS)
+	}
+	// And no transition was derived from it. Coverage read after that write
+	// would have said 2 of 2.
+	if got := p.queuedFinalizes(); got != finalizesAtRegen {
+		t.Errorf("finalize was queued %d more time(s) by a superseded job, want 0", got-finalizesAtRegen)
+	}
+	if p.publishes != publishesAtRegen {
+		t.Errorf("a superseded job published %d state change(s), want 0", p.publishes-publishesAtRegen)
+	}
+	if got := p.run().State; got != model.AudiobookRunning {
+		t.Errorf("run state = %q, want running — the new run is still missing a segment", got)
+	}
+	// The bytes went to the superseded run's own directory, so the live
+	// run's segment 1 has no file at all. Staging is scoped by generation
+	// because os.WriteFile is not atomic and because the two plans can
+	// differ — a stale write at the live path could leave a truncated
+	// file, or the right length of the wrong voice.
+	if p.stagedExistsOf(p.gen, 1) {
+		t.Error("a superseded job's audio landed at the live run's staging path")
+	}
+	if !p.stagedExistsOf(p.gen-1, 1) {
+		t.Error("the superseded job's audio went nowhere; the test is no longer exercising a stale write")
+	}
+}
+
+// The other half of the same guard, and the cheaper half: a job that has
+// not started synthesizing yet must not even claim.
+//
+// Distinct from the case above rather than a subset of it. This one is
+// refused by MarkSegmentRunning before any money is spent; that one is
+// refused by RecordSegment, minutes later, with the audio already bought.
+// A guard on the claim alone would pass this test and fail that one.
+func TestASupersededSegmentJobCannotClaimTheRunThatReplacedIt(t *testing.T) {
+	p := newNarrationPipeline(t)
+	p.start()
+	stale := p.gen
+
+	p.regenerate()
+
+	before := p.publishes
+	if err := p.runSegmentOf(stale, 1, func(tts.Request) ([]byte, error) { return speaks() }); err != nil {
+		t.Fatalf("the superseded segment job returned %v, want nil", err)
+	}
+
+	if p.engine.calls != 0 {
+		t.Errorf("the engine was called %d time(s) for a job whose plan no longer exists — that is billable",
+			p.engine.calls)
+	}
+	if got := p.segment(1).State; got != model.SegmentPending {
+		t.Errorf("segment 1 of the new run = %q, want pending — a superseded job claimed it", got)
+	}
+	if p.publishes != before || p.queuedFinalizes() != 0 {
+		t.Errorf("a superseded job published %d time(s) and queued %d finalize(s), want neither",
+			p.publishes-before, p.queuedFinalizes())
+	}
+}
+
+// A segment job enqueued before generations existed still claims its
+// segment.
+//
+// The deploy story, and it rests on a zero value: such a job's args have
+// no generation field, so Go decodes 0, and 0 is also what the migration
+// left on every existing row. A row is only still at 0 if nothing has
+// restarted it since the deploy, so the job addressing it genuinely is
+// the current one. Written out because "it works because both sides
+// happen to be zero" is precisely the reasoning that gets lost, and the
+// alternative — a NULL generation, or a pointer in the args — would have
+// failed every in-flight job of an upgraded deployment instead.
+//
+// The row is put back to 0 by hand because nothing in production moves a
+// generation backwards; that is the state a mid-run upgrade leaves, not a
+// state this code can reach.
+func TestAJobEnqueuedBeforeGenerationsExistedStillClaimsItsSegment(t *testing.T) {
+	p := newNarrationPipeline(t)
+	p.start()
+
+	_, err := p.db.SQL.ExecContext(context.Background(),
+		`UPDATE book_audiobooks SET generation = 0 WHERE book_id = $1`, p.book.ID)
+	if err != nil {
+		t.Fatalf("reset generation: %v", err)
+	}
+	p.gen = 0
+
+	// Args as River stored them before the field existed: the zero value
+	// is what json.Unmarshal leaves behind, so this is that job.
+	if err := p.runSegmentOf(0, 0, func(tts.Request) ([]byte, error) { return speaks() }); err != nil {
+		t.Fatalf("a job from before the column existed: %v", err)
+	}
+
+	if got := p.segment(0); got.State != model.SegmentDone || got.StagedPath == "" {
+		t.Errorf("segment 0 = %q/%q, want done — the upgrade silenced a job that was still current",
+			got.State, got.StagedPath)
+	}
+	// And the first start after the deploy moves the row past it, which is
+	// what makes genuinely stale jobs go quiet.
+	p.regenerate()
+	if p.run().Generation == 0 {
+		t.Fatal("a start left the run at generation 0; every pre-deploy job would stay live forever")
+	}
+	if err := p.runSegmentOf(0, 0, func(tts.Request) ([]byte, error) { return speaks() }); err != nil {
+		t.Fatalf("the same job after a restart: %v", err)
+	}
+	if got := p.segment(0).State; got != model.SegmentPending {
+		t.Errorf("segment 0 of the restarted run = %q, want pending", got)
+	}
+}
+
+// Generate over a run that is still working refuses, and refuses without
+// touching it.
+//
+// The first already-running refusal on this path. What a second start
+// would delete is not a stale record: it is a plan whose completed
+// segments are audio that has been paid for, while the jobs still working
+// through it carry on spending. Cancel is the stop-loss ADR-0028 §6 puts
+// in front of that, and this makes a user take it deliberately.
+func TestGenerateRefusesOverARunThatIsStillWorking(t *testing.T) {
+	p := newNarrationPipeline(t)
+	p.start()
+	if err := p.runSegment(0, func(tts.Request) ([]byte, error) { return speaks() }); err != nil {
+		t.Fatalf("segment 0: %v", err)
+	}
+
+	gen, queued := p.gen, len(p.queued)
+	err := p.svc.Generate(context.Background(), p.book, service.GenerateOverride{})
+	if !errors.Is(err, repo.ErrRunInProgress) {
+		t.Fatalf("Generate over a running run returned %v, want ErrRunInProgress", err)
+	}
+
+	if got := p.run().Generation; got != gen {
+		t.Errorf("generation moved to %d on a refused start, want %d", got, gen)
+	}
+	if got := p.segment(0); got.State != model.SegmentDone || got.StagedPath == "" {
+		t.Errorf("segment 0 = %q, want the paid-for row untouched by a refused start", got.State)
+	}
+	if len(p.queued) != queued {
+		t.Errorf("a refused start queued %d job(s)", len(p.queued)-queued)
+	}
+
+	// Cancel is the way through, and after it the same call succeeds.
+	if err := p.svc.Cancel(context.Background(), p.book.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if err := p.svc.Generate(context.Background(), p.book, service.GenerateOverride{}); err != nil {
+		t.Fatalf("Generate after a cancel: %v", err)
+	}
+	if got := p.run().Generation; got != gen+1 {
+		t.Errorf("generation = %d after the regeneration, want %d", got, gen+1)
 	}
 }
 

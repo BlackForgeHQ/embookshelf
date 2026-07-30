@@ -5,6 +5,7 @@ package repo
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/blackforge/embookshelf/internal/db"
@@ -26,8 +27,15 @@ func NewBookAudiobookRepo(d *db.DB) *BookAudiobookRepo {
 	return &BookAudiobookRepo{db: d}
 }
 
+// generation sits between two TEXT columns on purpose. The list below and
+// the Scan destinations in GetByBookID are hand-kept — this table has no
+// projection — so the hazard is a *same-type adjacent* swap, which
+// compiles and silently crosses two fields (CONTEXT.md §Column-order
+// coupling). Wedged between state and engine, a swap in one list and not
+// the other is a scan type error rather than a run reporting somebody
+// else's generation.
 const audiobookCols = `
-	book_id, state, engine, voice, model, segment_chars, source_content_hash,
+	book_id, state, generation, engine, voice, model, segment_chars, source_content_hash,
 	file_id, error, total_chars, duration_ms, created_at, updated_at
 `
 
@@ -36,28 +44,61 @@ const segmentCols = `
 	start_ms, duration_ms, staged_path, state, error
 `
 
-// Start replaces any previous run for a book with a fresh pending one and
-// its full segment plan, in a single transaction.
+// ErrRunInProgress refuses a start over a run that has not concluded.
+//
+// The first already-running refusal on this path: Generate → Preflight →
+// Start had none, and the upsert below went to pending unconditionally.
+// What that wiped was not a stale record but a live plan whose completed
+// segments are audio already bought, while the jobs still working through
+// it carried on spending. Cancel is the stop-loss ADR-0028 §6 puts in
+// front of a run that can cost $170, and this makes a user take it
+// deliberately rather than lose the same money by pressing Generate
+// twice.
+//
+// The handler answers it 409 through writeAudiobookError's default arm,
+// beside cancel-a-finished-run and retry-with-nothing-outstanding: one
+// category, "your view of this run is stale", and no code the client has
+// to learn.
+var ErrRunInProgress = errors.New(
+	"a narration is already being generated for this book — cancel it before starting another")
+
+// Start replaces a concluded run for a book with a fresh pending one and
+// its full segment plan, in a single transaction, and reports the
+// generation it assigned.
 //
 // All-or-nothing because a half-written plan is worse than no plan: the
 // finalize step trusts that seq 0..n-1 all exist, and a partial insert
 // would produce a book missing a chapter with nothing to say so.
 // Regeneration is destructive by design (ADR-0025 §4) — the old segments
 // go, and the caller has already dealt with the old audio file.
-func (r *BookAudiobookRepo) Start(ctx context.Context, ab model.Audiobook, segments []model.AudiobookSegment) error {
+//
+// Destructive over a *concluded* run only. Over a pending or running one
+// it refuses with ErrRunInProgress: see that sentinel.
+//
+// The generation it returns is the run's identity, and the caller carries
+// it into every segment job it dispatches. Bumping it here is what makes
+// the jobs of the plan this call just deleted address a run that no
+// longer exists (ADR-0031).
+func (r *BookAudiobookRepo) Start(
+	ctx context.Context, ab model.Audiobook, segments []model.AudiobookSegment,
+) (int, error) {
 	tx, err := r.db.SQL.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// A first run starts at generation 1, not 0, so that 0 keeps the one
+	// meaning the deploy story needs: a row nothing has started since the
+	// column was added. See the migration.
 	const upsert = `
 		INSERT INTO book_audiobooks (
-			book_id, state, engine, voice, model, segment_chars, source_content_hash,
+			book_id, state, generation, engine, voice, model, segment_chars, source_content_hash,
 			file_id, error, total_chars, duration_ms, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, '', $8, 0, now(), now())
+		) VALUES ($1, $2, 1, $3, $4, $5, $6, $7, NULL, '', $8, 0, now(), now())
 		ON CONFLICT (book_id) DO UPDATE SET
 			state               = EXCLUDED.state,
+			generation          = book_audiobooks.generation + 1,
 			engine              = EXCLUDED.engine,
 			voice               = EXCLUDED.voice,
 			model               = EXCLUDED.model,
@@ -68,16 +109,27 @@ func (r *BookAudiobookRepo) Start(ctx context.Context, ab model.Audiobook, segme
 			total_chars         = EXCLUDED.total_chars,
 			duration_ms         = 0,
 			updated_at          = now()
+		WHERE book_audiobooks.state IN ('ready', 'failed', 'canceled')
+		RETURNING generation
 	`
-	if _, err := tx.ExecContext(ctx, upsert,
+	var generation int
+	err = tx.QueryRowContext(ctx, upsert,
 		ab.BookID, string(model.AudiobookPending), ab.Engine, ab.Voice, ab.Model,
 		ab.SegmentChars, ab.SourceContentHash, ab.TotalChars,
-	); err != nil {
-		return fmt.Errorf("upsert audiobook: %w", err)
+	).Scan(&generation)
+	if err != nil {
+		// No row came back from a statement that inserts or updates exactly
+		// one: the conflicting row failed the terminal-state guard above.
+		// The transaction rolls back in the defer, so the live run keeps its
+		// plan.
+		if dberr.IsNotFound(err) {
+			return 0, ErrRunInProgress
+		}
+		return 0, fmt.Errorf("upsert audiobook: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM book_audiobook_segments WHERE book_id = $1`, ab.BookID); err != nil {
-		return fmt.Errorf("clear segments: %w", err)
+		return 0, fmt.Errorf("clear segments: %w", err)
 	}
 
 	const insertSeg = `
@@ -90,10 +142,13 @@ func (r *BookAudiobookRepo) Start(ctx context.Context, ab model.Audiobook, segme
 		if _, err := tx.ExecContext(ctx, insertSeg,
 			ab.BookID, s.Seq, s.ChapterIndex, s.ChapterTitle, s.CharStart, s.CharEnd,
 		); err != nil {
-			return fmt.Errorf("insert segment %d: %w", s.Seq, err)
+			return 0, fmt.Errorf("insert segment %d: %w", s.Seq, err)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return generation, nil
 }
 
 func (r *BookAudiobookRepo) GetByBookID(ctx context.Context, bookID string) (model.Audiobook, error) {
@@ -105,7 +160,8 @@ func (r *BookAudiobookRepo) GetByBookID(ctx context.Context, bookID string) (mod
 	)
 	row := r.db.SQL.QueryRowContext(ctx, q, bookID)
 	if err := row.Scan(
-		&ab.BookID, &state, &ab.Engine, &ab.Voice, &ab.Model, &ab.SegmentChars, &ab.SourceContentHash,
+		&ab.BookID, &state, &ab.Generation, &ab.Engine, &ab.Voice, &ab.Model,
+		&ab.SegmentChars, &ab.SourceContentHash,
 		&ab.FileID, &ab.Error, &ab.TotalChars, &ab.DurationMS, &ab.CreatedAt, &ab.UpdatedAt,
 	); err != nil {
 		if dberr.IsNotFound(err) {
@@ -158,16 +214,30 @@ func (r *BookAudiobookRepo) ListUnfinishedSegments(ctx context.Context, bookID s
 	return collect(rows, nil, scanSegment)
 }
 
-// MarkSegmentRunning claims a segment. Reports whether the claim landed:
-// a segment already done must not be re-synthesized, because that is a
-// second bill for audio already paid for.
-func (r *BookAudiobookRepo) MarkSegmentRunning(ctx context.Context, bookID string, seq int) (bool, error) {
+// MarkSegmentRunning claims a segment of one generation of a run.
+// Reports whether the claim landed, which it does not for a segment
+// already done — re-synthesizing that is a second bill for audio already
+// paid for — nor for a job whose generation is not the run's.
+//
+// The generation is read from the parent row rather than from a column on
+// the segment. Segments are wiped and re-planned on every Start, so a
+// segment row can never disagree with its run, and a copy here would be a
+// second place to be wrong (ADR-0031). The join is what makes the guard
+// part of the same locked write as the claim: there is no read-then-check
+// for a regeneration to slip between.
+func (r *BookAudiobookRepo) MarkSegmentRunning(
+	ctx context.Context, bookID string, seq, generation int,
+) (bool, error) {
 	const q = `
-		UPDATE book_audiobook_segments
+		UPDATE book_audiobook_segments s
 		SET state = 'running', error = '', updated_at = now()
-		WHERE book_id = $1 AND seq = $2 AND state <> 'done'
+		FROM book_audiobooks r
+		WHERE s.book_id = r.book_id
+		  AND s.book_id = $1 AND s.seq = $2
+		  AND r.generation = $3
+		  AND s.state <> 'done'
 	`
-	res, err := r.db.SQL.ExecContext(ctx, q, bookID, seq)
+	res, err := r.db.SQL.ExecContext(ctx, q, bookID, seq, generation)
 	if err != nil {
 		return false, err
 	}
@@ -197,13 +267,21 @@ func (r *BookAudiobookRepo) MarkSegmentRunning(ctx context.Context, bookID strin
 // and neither dispatches finalize — the same strand reached by a
 // different route.
 //
-// Returns ErrNotFound when there is no run for the book, and when the
-// seq is not in the run's plan: a write that moved nothing has no
-// landing to derive a transition from.
+// Returns ErrNotFound when there is no run for the book, when the seq is
+// not in the run's plan, and when the generation is not the run's: a
+// write that moved nothing has no landing to derive a transition from.
+//
+// The generation is guarded here and not only at the claim, and that is
+// correctness rather than belt-and-braces. A segment is claimed *before*
+// synthesis and synthesis runs for minutes, so the window a regeneration
+// can land in is the whole engine call — a job can claim under generation
+// 1 and arrive here after generation 2 has started. Guarding the claim
+// alone leaves that window wide open, which is the one that matters,
+// since by then the audio exists and would land in the live plan's row.
 func (r *BookAudiobookRepo) RecordSegment(
 	ctx context.Context,
 	bookID string,
-	seq int,
+	seq, generation int,
 	res model.SegmentResult,
 ) (model.AudiobookOutcome, error) {
 	var zero model.AudiobookOutcome
@@ -229,21 +307,25 @@ func (r *BookAudiobookRepo) RecordSegment(
 	// is not already done (MarkSegmentRunning), so nothing that has audio
 	// can arrive here reporting a failure.
 	const writeSeg = `
-		UPDATE book_audiobook_segments
-		SET state = $3, staged_path = $4, duration_ms = $5, error = $6, updated_at = now()
-		WHERE book_id = $1 AND seq = $2
+		UPDATE book_audiobook_segments s
+		SET state = $4, staged_path = $5, duration_ms = $6, error = $7, updated_at = now()
+		FROM book_audiobooks r
+		WHERE s.book_id = r.book_id
+		  AND s.book_id = $1 AND s.seq = $2
+		  AND r.generation = $3
 	`
-	written, err := tx.ExecContext(ctx, writeSeg, bookID, seq,
+	written, err := tx.ExecContext(ctx, writeSeg, bookID, seq, generation,
 		string(res.State), res.StagedPath, res.DurationMS, res.Error)
 	if err != nil {
 		return zero, fmt.Errorf("record segment %d: %w", seq, err)
 	}
-	// A write that matched no row is a seq this run's plan does not have —
-	// a job left over from the run a regeneration replaced. Committing it
-	// would report a transition derived from coverage the result never
-	// entered, for a plan it never wrote to, so the call is refused with
-	// the sentinel a missing run row already gets. The rollback in the
-	// defer releases the lock (#220).
+	// A write that matched no row is a result addressed to a plan that is
+	// not the one that exists — either a seq this run does not have, or a
+	// generation a regeneration has moved past. Committing it would report
+	// a transition derived from coverage the result never entered, for a
+	// plan it never wrote to, so the call is refused with the sentinel a
+	// missing run row already gets. The rollback in the defer releases the
+	// lock (#220, #253).
 	n, err := written.RowsAffected()
 	if err != nil {
 		return zero, fmt.Errorf("record segment %d: %w", seq, err)
@@ -312,12 +394,17 @@ func scanCoverage(ctx context.Context, q rowQuerier, bookID string) (model.Audio
 // Transition moves a run's state, but only out of one of the states the
 // caller says it expects, and reports whether the row actually moved.
 //
-// The one write to book_audiobooks.state. There were four before, three
-// of them reached from a different module and two of them unguarded, and
-// the unguarded pair is what let a late write undo a conclusion — a
-// finalize in flight marking a cancelled run ready, and a trailing
-// `running` write putting back a run a segment had already moved
-// forward (#210).
+// The one write that *moves* a run. There were four before, three of them
+// reached from a different module and two of them unguarded, and the
+// unguarded pair is what let a late write undo a conclusion — a finalize
+// in flight marking a cancelled run ready, and a trailing `running` write
+// putting back a run a segment had already moved forward (#210).
+//
+// Start is the only other statement that writes the column, and it does
+// not move a run: it establishes one, and it is guarded on the same kind
+// of predicate — it takes the row only when there is none or the one
+// there has concluded (ErrRunInProgress). Every other write in this
+// module goes through here.
 //
 // The moved flag is the other half: it is how the SSE publish fires
 // exactly once when two segments settle a run at the same instant.
