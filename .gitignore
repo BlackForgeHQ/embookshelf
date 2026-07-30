@@ -17,7 +17,12 @@
 /internal/repo/generated/
 /.env
 /.DS_Store
+# Built by `go build ./cmd/...` from the repo root. /embookshelf was
+# already ignored; its two siblings were not, so a stray one sat at the
+# root waiting for someone's `git add -A`.
 /embookshelf
+/embookshelf-tag
+/migrate
 /coverage.out
 /test-results/
 /.worktrees/
