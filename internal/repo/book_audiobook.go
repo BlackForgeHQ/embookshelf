@@ -73,7 +73,9 @@ var ErrRunInProgress = errors.New(
 // go, and the caller has already dealt with the old audio file.
 //
 // Destructive over a *concluded* run only. Over a pending or running one
-// it refuses with ErrRunInProgress: see that sentinel.
+// it refuses with ErrRunInProgress: see that sentinel. Which states have
+// concluded is model.TerminalStates, rendered into the guard rather than
+// listed in it, for the reason the staging sweep gives (#252).
 //
 // The generation it returns is the run's identity, and the caller carries
 // it into every segment job it dispatches. Bumping it here is what makes
@@ -109,13 +111,14 @@ func (r *BookAudiobookRepo) Start(
 			total_chars         = EXCLUDED.total_chars,
 			duration_ms         = 0,
 			updated_at          = now()
-		WHERE book_audiobooks.state IN ('ready', 'failed', 'canceled')
+		WHERE book_audiobooks.state = ANY($9::text[])
 		RETURNING generation
 	`
 	var generation int
 	err = tx.QueryRowContext(ctx, upsert,
 		ab.BookID, string(model.AudiobookPending), ab.Engine, ab.Voice, ab.Model,
 		ab.SegmentChars, ab.SourceContentHash, ab.TotalChars,
+		model.StateStrings(model.TerminalStates()),
 	).Scan(&generation)
 	if err != nil {
 		// No row came back from a statement that inserts or updates exactly
@@ -470,6 +473,13 @@ func (r *BookAudiobookRepo) Delete(ctx context.Context, bookID string) error {
 // Everything else is fair game once it is older than the TTL — a
 // published run's staging is redundant, and a run still missing segments
 // has passed the window in which someone was going to retry it.
+//
+// "Concluded" is not spelled out here. `state = ANY($2::text[])` is array
+// membership over model.TerminalStates, the same rendering the transition
+// guard uses, and TestStaleStagingStateSetAgreesWithTheModel holds this
+// predicate to that declaration for every state — so a sixth one, or a
+// change to what terminal means, reaches the sweep rather than leaving it
+// asserting a set from an older reading of the enum (#252, #233).
 func (r *BookAudiobookRepo) ListStaleStaging(ctx context.Context, olderThanDays int) ([]string, error) {
 	// make_interval rather than `($1 || ' days')::interval`: the
 	// concatenation types the placeholder as text, and the driver refuses
@@ -479,14 +489,15 @@ func (r *BookAudiobookRepo) ListStaleStaging(ctx context.Context, olderThanDays 
 		SELECT a.book_id FROM book_audiobooks a
 		WHERE a.updated_at < now() - make_interval(days => $1)
 		  AND (
-		        a.state IN ('ready', 'failed', 'canceled')
+		        a.state = ANY($2::text[])
 		     OR EXISTS (
 		          SELECT 1 FROM book_audiobook_segments s
 		          WHERE s.book_id = a.book_id AND s.state <> 'done'
 		        )
 		  )
 	`
-	rows, err := r.db.SQL.QueryContext(ctx, q, olderThanDays)
+	rows, err := r.db.SQL.QueryContext(ctx, q,
+		olderThanDays, model.StateStrings(model.TerminalStates()))
 	if err != nil {
 		return nil, err
 	}

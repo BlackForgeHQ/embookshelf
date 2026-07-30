@@ -35,10 +35,81 @@ func AllAudiobookStates() []AudiobookState {
 	}
 }
 
+// The three state sets the subsystem reasons in. Each is declared once
+// here and consulted — never restated — by the rules below, by both
+// workers, by the retry path and by the two SQL predicates that ask the
+// same question inside a write. "Which states mean stop" used to be
+// written five times in three languages, so changing what a state meant
+// was a five-site hunt with one site in SQL (#252).
+//
+// They nest: Live and Terminal partition the states, and Sealed is
+// Terminal minus failed. That one-state difference is the whole reason
+// there are two dispositions rather than one — see NextForRecovery.
+
+// LiveStates are the states a run can still move out of under its own
+// steam: it has not concluded. The guard for every transition that a
+// concluded run must not accept.
+func LiveStates() []AudiobookState {
+	return []AudiobookState{AudiobookPending, AudiobookRunning}
+}
+
+// TerminalStates are the states a run has concluded in: no further work
+// will happen without a new user action.
+//
+// Rendered into SQL twice — the staging sweep's reclaim predicate and
+// Start's replaceable-run guard — through StateStrings, for the reason
+// Transition.FromStrings exists: the question has to be askable inside
+// the statement, and a hand-written IN list is a copy nothing holds to
+// this declaration. `repo` tests the two agree for every state.
+func TerminalStates() []AudiobookState {
+	return []AudiobookState{AudiobookReady, AudiobookFailed, AudiobookCanceled}
+}
+
+// SealedStates are the states whose outcome is the one the user has, and
+// which nothing may add to: ready already has its file, and canceled was
+// stopped on purpose and must not be resurrected (ADR-0028 §6).
+//
+// Narrower than TerminalStates by exactly one state, and that state is
+// the point. A failed run has concluded, but it is also precisely what a
+// user pressing Retry is asking to recover, so it belongs in one set and
+// not the other. Conflating the two is what #206 was: reconcile-on-read
+// treating "concluded" and "beyond recovery" as one question re-dispatched
+// a failed run's finalize on every page load.
+func SealedStates() []AudiobookState {
+	return []AudiobookState{AudiobookReady, AudiobookCanceled}
+}
+
 // Terminal reports whether no further work will happen without a new
 // user action.
 func (s AudiobookState) Terminal() bool {
-	return s == AudiobookReady || s == AudiobookFailed || s == AudiobookCanceled
+	return stateIn(TerminalStates(), s)
+}
+
+// Sealed reports that no action on this run — automatic or explicitly
+// asked for — may add to its outcome. See SealedStates.
+func (s AudiobookState) Sealed() bool {
+	return stateIn(SealedStates(), s)
+}
+
+func stateIn(set []AudiobookState, s AudiobookState) bool {
+	for _, member := range set {
+		if member == s {
+			return true
+		}
+	}
+	return false
+}
+
+// StateStrings renders a state set as the argument to a SQL predicate's
+// array membership — the one language the question can be asked in
+// inside a locked write. The rendering, never a second statement of the
+// set: every caller passes one of the declarations above.
+func StateStrings(states []AudiobookState) []string {
+	out := make([]string, 0, len(states))
+	for _, s := range states {
+		out = append(out, string(s))
+	}
+	return out
 }
 
 // Audiobook is one book's generated narration.
@@ -204,18 +275,7 @@ func (t Transition) Admits(state AudiobookState) bool {
 // the question inside the locked write. `repo` tests the two agree for
 // every state.
 func (t Transition) FromStrings() []string {
-	out := make([]string, 0, len(t.From))
-	for _, s := range t.From {
-		out = append(out, string(s))
-	}
-	return out
-}
-
-// LiveStates are the states a run can still move out of under its own
-// steam: it has not concluded. The guard for every transition that a
-// concluded run must not accept.
-func LiveStates() []AudiobookState {
-	return []AudiobookState{AudiobookPending, AudiobookRunning}
+	return StateStrings(t.From)
 }
 
 // SegmentResult is everything a worker learned about one segment.
@@ -246,6 +306,18 @@ type AudiobookOutcome struct {
 	Next     AudiobookNext
 }
 
+// There are two dispositions, because there are two questions.
+//
+// NextForRun answers what should happen to a run *on its own*, from a
+// write that just landed or a read that just observed it. NextForRecovery
+// answers what should happen when a *user explicitly asks* for this run
+// to be recovered. They read the same Coverage and consult the same state
+// sets, so what a state means is stated once — but they are not one
+// function with an exception, and the difference is load-bearing: the
+// automatic rule must refuse a failed run, and the explicit one must not.
+// Conflating them cost an unbounded re-finalize loop on every page load
+// (#206).
+
 // NextForRun derives a run's transition from its Coverage, consulting the
 // state column only to stop work that is already concluded.
 //
@@ -274,7 +346,7 @@ func NextForRun(state AudiobookState, cov AudiobookCoverage) AudiobookNext {
 	//
 	// Recovering such a run is Retry's job: an explicit action, once,
 	// rather than reconcile-on-read guessing forever.
-	if state == AudiobookReady || state == AudiobookCanceled || state == AudiobookFailed {
+	if state.Terminal() {
 		return AudiobookNextNothing
 	}
 	switch {
@@ -285,4 +357,35 @@ func NextForRun(state AudiobookState, cov AudiobookCoverage) AudiobookNext {
 	default:
 		return AudiobookNextNothing
 	}
+}
+
+// NextForRecovery derives what an explicitly requested recovery — a user
+// pressing Retry — needs doing to the run as a whole, before the
+// per-segment re-enqueue that is the rest of that action.
+//
+// Complete Coverage means every Segment landed, so whatever stopped this
+// run was finalize, and a finalize is the entire route back. That is the
+// answer for a *failed* run too, which is exactly where this parts
+// company with NextForRun. The two are not in contradiction: NextForRun
+// runs on every book-detail load and must not re-assemble a
+// half-gigabyte file forever on a run whose finalize is broken, while
+// this runs once, when someone asked (#206).
+//
+// Sealed outranks Coverage here for the same reasons it does there, and
+// they are the only two: ready already has its file, and canceled was
+// stopped on purpose — Retry must not be a way around the stop the user
+// pressed (ADR-0028 §6).
+//
+// Nothing is not a refusal of the whole action. It says this recovery has
+// no run-wide step to take, and the caller carries on to the outstanding
+// segments; the answers that concern them are the segment rows', not this
+// rule's.
+func NextForRecovery(state AudiobookState, cov AudiobookCoverage) AudiobookNext {
+	if state.Sealed() {
+		return AudiobookNextNothing
+	}
+	if cov.Complete() {
+		return AudiobookNextFinalize
+	}
+	return AudiobookNextNothing
 }

@@ -94,14 +94,19 @@ func AudiobookFinalize(ctx context.Context, a jobs.AudiobookFinalizeArgs, deps F
 	if err != nil {
 		return fmt.Errorf("load audiobook %s: %w", a.BookID, err)
 	}
-	if run.State == model.AudiobookCanceled {
-		// Cancelled between the last segment landing and this job being
-		// picked up. Sweep rather than publish — a cancel means the user
-		// does not want the partial, and here the partial is complete.
-		deps.Staging.Clean(a.BookID)
-		return nil
-	}
-	if run.State == model.AudiobookReady {
+	// A sealed run is one nothing may add to, and assembling a file for it
+	// is adding to it. The membership is the model's (#252); which of the
+	// two sealed states this is still matters here, because they differ in
+	// what happens to the bytes.
+	if run.State.Sealed() {
+		if run.State == model.AudiobookCanceled {
+			// Cancelled between the last segment landing and this job being
+			// picked up. Sweep rather than publish — a cancel means the user
+			// does not want the partial, and here the partial is complete.
+			// A ready run's staging is not swept here: the run that made the
+			// file cleaned up after itself, and this job is a duplicate.
+			deps.Staging.Clean(a.BookID)
+		}
 		return nil
 	}
 

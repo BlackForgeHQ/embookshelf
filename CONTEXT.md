@@ -679,9 +679,23 @@ One audiobook per Book (`book_audiobooks.book_id` is the PK, mirroring `book_rea
 
 State lives in `book_audiobooks` (state, engine, voice, model, `segment_chars`, `source_content_hash`, `file_id`, error). Engine, voice, model and `segment_chars` are the run's **pins**: whatever it started with wins over the current settings row for its whole life, so an admin editing settings mid-run cannot produce a book narrated half in one voice — or, in the case of the cap, split two different ways. Provenance is the `file_id` pointer, not a flag on `files`. Staleness is `source_content_hash` against the book's current EPUB hash — surfaced as "generated from an older copy", never auto-invalidated.
 
-The `state` column is a **summary, not the fact**. [[Coverage]] over the Segment rows is the fact, and where the two disagree Coverage wins: `model.NextForRun(state, coverage)` derives the run's next transition from the counts, consulting `state` only for the three conclusions that outrank them (ready has its file, canceled was stopped on purpose, failed needs no second failure). `AudiobookService.Status` applies that rule on every read, so a run whose segments all landed is finalizable on sight however it is labelled — see [[Reconcile-on-read]].
+The `state` column is a **summary, not the fact**. [[Coverage]] over the Segment rows is the fact, and where the two disagree Coverage wins: `model.NextForRun(state, coverage)` derives the run's next transition from the counts, consulting `state` only for the three conclusions that outrank them (ready has its file, canceled was stopped on purpose, failed needs no second failure). `AudiobookService.Status` applies that rule on every read, so a run whose segments all landed is finalizable on sight however it is labelled — see [[Reconcile-on-read]] and [[Run disposition]].
 
 Generation is **not** one of `MetadataWriter`'s triggers: no Sidecar, no in-file embed, no folder rename. In particular `books.narrator` is never written — that column means "what this file's tags said"; the synthesized voice lives on `book_audiobooks.voice`.
+
+### Run disposition
+
+What should happen to an [[Audiobook run]], answered by two functions in `internal/model` over one set of declarations. `NextForRun(state, coverage)` is what the run needs **on its own**, applied by a landing Segment and by every status read. `NextForRecovery(state, coverage)` is what a user **explicitly asking** for recovery needs, applied by `Retry` alone. Both return `AudiobookNext` (nothing, finalize, fail) and both read Coverage before the state column.
+
+Two functions, not one rule with an exception, and they differ in exactly one cell: a `failed` run whose Coverage is complete. NextForRun answers nothing there — it runs on every book-detail load, and a run whose *finalize* is what broke keeps complete Coverage forever, so answering finalize re-assembled a half-gigabyte file unboundedly (#206). NextForRecovery answers finalize, because that is the route back and it happens once, when someone pressed the button.
+
+They share the three state sets, which are the only statement of "which states mean stop" — it used to be written five times in three languages, one of them SQL (#252):
+
+- `LiveStates` (pending, running) — a run that can still move under its own steam; the `From` guard on every transition a concluded run must refuse.
+- `TerminalStates` (ready, failed, canceled) — concluded. Rendered into SQL through `StateStrings` for the [[Staging area]] reclaim predicate and `Start`'s replaceable-run guard, the same way `Transition.FromStrings` renders a transition's `From`.
+- `SealedStates` (ready, canceled) — an outcome nothing may add to. Both workers ask `state.Sealed()`: the segment worker to skip before an engine call, finalize to refuse to assemble, sweeping staging if the reason is a cancel.
+
+Sealed is Terminal minus `failed`, and that one state is the whole reason there are two dispositions: a failed run has concluded, and it is also exactly what Retry acts on.
 
 ### Run generation
 
@@ -729,13 +743,13 @@ Scoped by [[Run generation]] so a superseded worker physically cannot touch the 
 
 Finalize joins the frames byte-wise (same engine, voice and settings across a run, so no transcode and no muxer), writes ID3v2 `CTOC`/`CHAP` chapter frames plus standard tags and cover art, hands the single file to `Placer`, and clears staging.
 
-Reclaim is `BookAudiobookRepo.ListStaleStaging`, swept hourly, following `LoopMissingPurge` and `LoopOrphanedKeys`. It matches any run untouched for 7 days **except** a pending or running one whose Coverage is complete — that run is a single finalize away from a finished book, so reclaiming it would convert something recoverable into audio that has to be bought again. Keyed on the segment rows rather than on the state column, so a run stranded outside `failed`/`canceled` is still reclaimable; the earlier `state IN ('failed','canceled')` predicate left such a run parking gigabytes forever.
+Reclaim is `BookAudiobookRepo.ListStaleStaging`, swept hourly, following `LoopMissingPurge` and `LoopOrphanedKeys`. It matches any run untouched for 7 days **except** a pending or running one whose Coverage is complete — that run is a single finalize away from a finished book, so reclaiming it would convert something recoverable into audio that has to be bought again. Keyed on the segment rows rather than on the state column, so a run stranded outside `failed`/`canceled` is still reclaimable; the earlier `state IN ('failed','canceled')` predicate left such a run parking gigabytes forever. The concluded half of the predicate is `state = ANY(...)` over `model.TerminalStates` (see [[Run disposition]]) rather than a list written out in SQL, and `TestStaleStagingStateSetAgreesWithTheModel` holds the two together for every declared state.
 
 MP3 rather than M4B because every engine emits MP3 and none emits M4B; M4B needs AAC, and no usable pure-Go AAC encoder exists. Requiring `ffmpeg` was rejected — it would make the feature silently dark on installs without it, trading the single-binary property for container polish (ADR-0027).
 
 ### Reconcile-on-read
 
-Where a stranded [[Audiobook run]] recovers. `AudiobookService.Status` reads the run and its [[Coverage]] and applies `NextForRun` before it answers, so the poll the UI already makes every four seconds is also what re-dispatches a finalize job a crash lost. `Retry` runs the same rule first, ahead of its already-running and nothing-outstanding refusals — both of which used to fire on precisely the stranded run.
+Where a stranded [[Audiobook run]] recovers. `AudiobookService.Status` reads the run and its [[Coverage]] and applies `NextForRun` before it answers, so the poll the UI already makes every four seconds is also what re-dispatches a finalize job a crash lost. `Retry` asks the sibling rule — `NextForRecovery`, see [[Run disposition]] — first, ahead of its already-running and nothing-outstanding refusals, both of which used to fire on precisely the stranded run.
 
 Chosen over the two alternatives deliberately. It cannot live in the write alone: `RecordSegment` commits to Postgres and the finalize job goes to River, two systems no transaction spans. And a sweeper would be a second schedule carrying a second copy of the completeness rule, running hourly, for an observation already happening on every page load. Best effort by construction — a queue that is down costs the recovery, not the read.
 

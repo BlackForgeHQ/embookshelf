@@ -657,6 +657,50 @@ func TestListStaleStagingReclaimsAPublishedRun(t *testing.T) {
 	}
 }
 
+// The sweep's notion of a concluded run is model.TerminalStates rendered
+// into SQL, and this is the forcing function that holds the two together
+// — TestTransitionGuardAgreesWithTheModel's job for the transition guard
+// (#233). The predicate used to be a hand-written IN list, free to
+// disagree with the enum it was copied from, and it was one of five
+// places the same membership was written out (#252).
+//
+// Every segment is done, so the "still missing segments" arm of the
+// predicate is false throughout and the state set is the only thing
+// answering. Quantified over every declared state, so a sixth one reaches
+// the sweep instead of silently defaulting to kept-forever.
+func TestStaleStagingStateSetAgreesWithTheModel(t *testing.T) {
+	d := repotest.New(t)
+	bookID, audiobooks := audiobookFixture(t, d, 1)
+	ctx := context.Background()
+
+	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, runGeneration, doneResult(0)); err != nil {
+		t.Fatalf("RecordSegment: %v", err)
+	}
+
+	for _, state := range model.AllAudiobookStates() {
+		// Set the column directly rather than through a transition, for the
+		// reason the guard's parity test gives, and age the run in the same
+		// statement: every repo write stamps now(), which would put it back
+		// inside the TTL the sweep is being asked about.
+		if _, err := d.SQL.ExecContext(ctx,
+			`UPDATE book_audiobooks
+			    SET state = $2, updated_at = now() - make_interval(days => 14)
+			  WHERE book_id = $1`, bookID, string(state)); err != nil {
+			t.Fatalf("force state %q: %v", state, err)
+		}
+
+		ids, err := audiobooks.ListStaleStaging(ctx, 7)
+		if err != nil {
+			t.Fatalf("ListStaleStaging with the run in %q: %v", state, err)
+		}
+		reclaimed := len(ids) == 1 && ids[0] == bookID
+		if want := state.Terminal(); reclaimed != want {
+			t.Errorf("a complete run in %q past the TTL: SQL reclaimed = %v, model Terminal = %v — "+
+				"the sweep's state set and the model's declaration disagree", state, reclaimed, want)
+		}
+	}
+}
+
 // The cap the plan was split at is part of what the run pins, and a
 // segment job hours later reads it back to reproduce that split. Losing
 // it in the round-trip would put the worker back on the live settings

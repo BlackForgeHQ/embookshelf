@@ -38,6 +38,178 @@ func TestTransitionAdmitsExactlyTheStatesItDeclares(t *testing.T) {
 	}
 }
 
+// The state sets are what the two dispositions, both workers, the retry
+// path and two SQL predicates now share instead of each restating "which
+// states mean stop" (#252). Their shape is the thing to hold: Live and
+// Terminal partition the states, Sealed is Terminal minus the one state
+// an explicit recovery acts on, and a sixth state added to the enum and
+// to neither Live nor Terminal is a hole this catches.
+func TestStateSetsPartitionAndNest(t *testing.T) {
+	t.Parallel()
+
+	for _, state := range AllAudiobookStates() {
+		live := stateIn(LiveStates(), state)
+		if live == state.Terminal() {
+			t.Errorf("%q is live = %v and terminal = %v — a state is exactly one of the two",
+				state, live, state.Terminal())
+		}
+		if state.Sealed() && !state.Terminal() {
+			t.Errorf("%q is sealed but not terminal — sealed is the narrower set", state)
+		}
+	}
+
+	// The one state that separates them, named rather than derived: it is
+	// the reason NextForRecovery exists, and a change that let failed seal
+	// a run would silently turn Retry into a no-op for the run it was
+	// written for.
+	if !AudiobookFailed.Terminal() || AudiobookFailed.Sealed() {
+		t.Errorf("failed is terminal = %v, sealed = %v — want concluded but recoverable",
+			AudiobookFailed.Terminal(), AudiobookFailed.Sealed())
+	}
+}
+
+// StateStrings is the SQL rendering of a state set, and the only thing
+// standing between a declaration here and a predicate in `repo`.
+func TestStateStringsRendersEveryMemberInOrder(t *testing.T) {
+	t.Parallel()
+
+	got := StateStrings(TerminalStates())
+	want := []string{"ready", "failed", "canceled"}
+	if len(got) != len(want) {
+		t.Fatalf("StateStrings(TerminalStates()) = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("StateStrings(TerminalStates()) = %v, want %v", got, want)
+		}
+	}
+	if len(StateStrings(nil)) != 0 {
+		t.Error("StateStrings(nil) must render the empty array, which is the guard that admits nothing")
+	}
+}
+
+// The two dispositions over every declared state × every shape Coverage
+// can take. Quantified rather than sampled: the expectation for a state
+// missing from a row is not "the zero value", it is a failure, so adding
+// a sixth state without deciding what both rules answer for it breaks
+// here rather than in production (#252).
+//
+// The cells that matter are the ones where the two answers differ. There
+// is exactly one shape where they do — complete Coverage on a failed run
+// — and that is the whole of the run service's former divergence, now
+// stated in the model instead of in a comment explaining a contradiction.
+func TestDispositionsOverEveryStateAndCoverage(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		shape    string
+		cov      AudiobookCoverage
+		run      map[AudiobookState]AudiobookNext
+		recovery map[AudiobookState]AudiobookNext
+	}{
+		{
+			shape: "every segment landed",
+			cov:   AudiobookCoverage{Total: 3, Done: 3},
+			run: map[AudiobookState]AudiobookNext{
+				AudiobookPending:  AudiobookNextFinalize,
+				AudiobookRunning:  AudiobookNextFinalize,
+				AudiobookReady:    AudiobookNextNothing,
+				AudiobookFailed:   AudiobookNextNothing,
+				AudiobookCanceled: AudiobookNextNothing,
+			},
+			recovery: map[AudiobookState]AudiobookNext{
+				AudiobookPending: AudiobookNextFinalize,
+				AudiobookRunning: AudiobookNextFinalize,
+				AudiobookReady:   AudiobookNextNothing,
+				// The one cell where the two rules part company.
+				AudiobookFailed:   AudiobookNextFinalize,
+				AudiobookCanceled: AudiobookNextNothing,
+			},
+		},
+		{
+			shape: "settled with failures",
+			cov:   AudiobookCoverage{Total: 3, Done: 2, Failed: 1},
+			run: map[AudiobookState]AudiobookNext{
+				AudiobookPending:  AudiobookNextFail,
+				AudiobookRunning:  AudiobookNextFail,
+				AudiobookReady:    AudiobookNextNothing,
+				AudiobookFailed:   AudiobookNextNothing,
+				AudiobookCanceled: AudiobookNextNothing,
+			},
+			// Nothing run-wide: coverage is short, so recovery's business is
+			// with the segments that failed, and Retry re-enqueues those.
+			recovery: map[AudiobookState]AudiobookNext{
+				AudiobookPending:  AudiobookNextNothing,
+				AudiobookRunning:  AudiobookNextNothing,
+				AudiobookReady:    AudiobookNextNothing,
+				AudiobookFailed:   AudiobookNextNothing,
+				AudiobookCanceled: AudiobookNextNothing,
+			},
+		},
+		{
+			// A retrying segment lands here: counted in Total and in neither
+			// column, so the run is neither complete nor settled and neither
+			// rule concludes it (ADR-0032).
+			shape: "segments still outstanding",
+			cov:   AudiobookCoverage{Total: 3, Done: 1},
+			run: map[AudiobookState]AudiobookNext{
+				AudiobookPending:  AudiobookNextNothing,
+				AudiobookRunning:  AudiobookNextNothing,
+				AudiobookReady:    AudiobookNextNothing,
+				AudiobookFailed:   AudiobookNextNothing,
+				AudiobookCanceled: AudiobookNextNothing,
+			},
+			recovery: map[AudiobookState]AudiobookNext{
+				AudiobookPending:  AudiobookNextNothing,
+				AudiobookRunning:  AudiobookNextNothing,
+				AudiobookReady:    AudiobookNextNothing,
+				AudiobookFailed:   AudiobookNextNothing,
+				AudiobookCanceled: AudiobookNextNothing,
+			},
+		},
+		{
+			shape: "no plan at all",
+			cov:   AudiobookCoverage{},
+			run: map[AudiobookState]AudiobookNext{
+				AudiobookPending:  AudiobookNextNothing,
+				AudiobookRunning:  AudiobookNextNothing,
+				AudiobookReady:    AudiobookNextNothing,
+				AudiobookFailed:   AudiobookNextNothing,
+				AudiobookCanceled: AudiobookNextNothing,
+			},
+			recovery: map[AudiobookState]AudiobookNext{
+				AudiobookPending:  AudiobookNextNothing,
+				AudiobookRunning:  AudiobookNextNothing,
+				AudiobookReady:    AudiobookNextNothing,
+				AudiobookFailed:   AudiobookNextNothing,
+				AudiobookCanceled: AudiobookNextNothing,
+			},
+		},
+	} {
+		t.Run(tc.shape, func(t *testing.T) {
+			for _, state := range AllAudiobookStates() {
+				want, declared := tc.run[state]
+				if !declared {
+					t.Fatalf("NextForRun(%q, %v) has no expected answer — a state was added "+
+						"without deciding what the automatic rule does with it", state, tc.cov)
+				}
+				if got := NextForRun(state, tc.cov); got != want {
+					t.Errorf("NextForRun(%q, %+v) = %q, want %q", state, tc.cov, got, want)
+				}
+
+				want, declared = tc.recovery[state]
+				if !declared {
+					t.Fatalf("NextForRecovery(%q, %v) has no expected answer — a state was added "+
+						"without deciding what a user's explicit Retry does with it", state, tc.cov)
+				}
+				if got := NextForRecovery(state, tc.cov); got != want {
+					t.Errorf("NextForRecovery(%q, %+v) = %q, want %q", state, tc.cov, got, want)
+				}
+			}
+		})
+	}
+}
+
 // NextForRun is the whole subsystem's rule — CONTEXT calls Coverage the
 // run's authority on its own lifecycle — and until now every cell of it
 // was reached only through the service's fakes, so the matrix was

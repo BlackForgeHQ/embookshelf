@@ -452,21 +452,19 @@ func (s *AudiobookService) Retry(ctx context.Context, bookID string) error {
 	if err != nil {
 		return err
 	}
-	// Checked before the already-running guard, and before the
+	// Asked before the already-running guard, and before the
 	// nothing-outstanding refusal below, because a stranded run is
 	// precisely a run whose state says running and whose segments say
 	// done. Both of those guards fired on it, which is how the one thing
 	// the user could still press told them there was nothing to do.
 	//
-	// Coverage complete means every Segment landed, so whatever stopped
-	// this run was finalize. Asked directly rather than through
-	// NextForRun, because that rule deliberately answers Nothing for a
-	// failed run now — reconcile-on-read must not retry finalize on every
-	// page load, and this is the route back that replaces it (#206).
-	// Ready already has its file; canceled was stopped on purpose and
-	// must not be resurrected (ADR-0028 §6). Everything else with
-	// complete Coverage is a run that only needs finalize.
-	if cov.Complete() && run.State != model.AudiobookReady && run.State != model.AudiobookCanceled {
+	// NextForRecovery, not NextForRun: this is the explicit-recovery
+	// question, and its answer for a failed run with complete Coverage is
+	// the finalize the automatic rule deliberately withholds. The
+	// membership that used to be spelled out here — and the fourteen lines
+	// arguing that it contradicts the canonical rule — are the model's
+	// now, stated once beside the rule they differ from (#252).
+	if model.NextForRecovery(run.State, cov) == model.AudiobookNextFinalize {
 		return s.dispatchFinalize(ctx, bookID)
 	}
 	if run.State == model.AudiobookRunning {

@@ -150,8 +150,12 @@ func AudiobookSegment(
 	}
 	// Cancel is checked here, before every engine call, because it is the
 	// only thing standing between a user pressing stop and the rest of a
-	// $170 run being billed anyway.
-	if run.State == model.AudiobookCanceled || run.State == model.AudiobookReady {
+	// $170 run being billed anyway. Sealed is that check and the finished
+	// one together, asked of the model rather than restated here: a run
+	// nothing may add to is a run this segment must not be bought for
+	// (#252). A *failed* run is deliberately not sealed, and a job still
+	// working through one is doing exactly what Retry would ask of it.
+	if run.State.Sealed() {
 		slog.Debug("audiobook segment skipped", "book", a.BookID, "seq", a.Seq, "state", run.State)
 		return nil
 	}
