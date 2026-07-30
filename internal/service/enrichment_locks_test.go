@@ -64,7 +64,7 @@ func applyWithLocks(t *testing.T, m provider.Match, locked ...model.LockField) m
 	for _, f := range locked {
 		book.Locks.Set(f, true)
 	}
-	out, _, err := svc.ApplyMatch(context.Background(), book, m, ApplyOptions{}, TriggerManualEdit)
+	out, err := svc.ApplyMatch(context.Background(), book, m, ApplyOptions{}, TriggerManualEdit)
 	if err != nil {
 		t.Fatalf("ApplyMatch: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestApplyMatchCoverLockNamed(t *testing.T) {
 	book.ID = "b1"
 	book.Locks.Set(model.LockCover, true)
 
-	if _, _, err := svc.ApplyMatch(context.Background(), book, m,
+	if _, err := svc.ApplyMatch(context.Background(), book, m,
 		ApplyOptions{ApplyCover: true}, TriggerManualEdit); err != nil {
 		t.Fatalf("ApplyMatch: %v", err)
 	}

@@ -184,26 +184,6 @@ func (r *ProviderSettingsRepo) AllConfigs(ctx context.Context) (map[string]json.
 	return out, rows.Err()
 }
 
-// EnabledIDs is the hot-path helper — returns id → enabled so the
-// enrichment service can filter its provider fan-out in one query.
-func (r *ProviderSettingsRepo) EnabledIDs(ctx context.Context) (map[string]bool, error) {
-	rows, err := r.db.SQL.QueryContext(ctx, `SELECT id, enabled FROM provider_settings`)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	out := make(map[string]bool)
-	for rows.Next() {
-		var id string
-		var enabled bool
-		if err := rows.Scan(&id, &enabled); err != nil {
-			return nil, err
-		}
-		out[id] = enabled
-	}
-	return out, rows.Err()
-}
-
 // SetEnabled upserts a single row. Used by the PATCH endpoint when an
 // admin toggles a provider.
 func (r *ProviderSettingsRepo) SetEnabled(ctx context.Context, id string, enabled bool) error {

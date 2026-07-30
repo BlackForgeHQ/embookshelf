@@ -4,11 +4,66 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/provider"
+	"github.com/blackforge/embookshelf/internal/repo"
 )
+
+// fakeProviderConfigs stands in for providerSettingsStore — the admin
+// half of provider_settings. It carries no health counters, because
+// ProviderSettingsService never records either: the fan-out does, behind
+// its own seam, with its own fake.
+type fakeProviderConfigs struct {
+	enabled    map[string]bool
+	configs    map[string]json.RawMessage
+	priorities map[string]*int
+}
+
+func newFakeProviderConfigs() *fakeProviderConfigs {
+	return &fakeProviderConfigs{
+		enabled:    map[string]bool{},
+		configs:    map[string]json.RawMessage{},
+		priorities: map[string]*int{},
+	}
+}
+
+func (f *fakeProviderConfigs) AllConfigs(context.Context) (map[string]json.RawMessage, error) {
+	return f.configs, nil
+}
+
+// List returns a nil slice when empty, matching what the repo yields for
+// a table with no rows. Config rides along already decrypted, as the repo
+// returns it — the property TestListProvidersSurfacesStoredConfig pins.
+func (f *fakeProviderConfigs) List(context.Context) ([]repo.ProviderSetting, error) {
+	var rows []repo.ProviderSetting
+	for id, on := range f.enabled {
+		rows = append(rows, repo.ProviderSetting{
+			ID:       id,
+			Enabled:  on,
+			Config:   f.configs[id],
+			Priority: f.priorities[id],
+		})
+	}
+	return rows, nil
+}
+
+func (f *fakeProviderConfigs) SetConfig(_ context.Context, id string, cfg json.RawMessage) error {
+	f.configs[id] = cfg
+	return nil
+}
+
+func (f *fakeProviderConfigs) SetEnabled(_ context.Context, id string, on bool) error {
+	f.enabled[id] = on
+	return nil
+}
+
+func (f *fakeProviderConfigs) SetPriority(_ context.Context, id string, priority *int) error {
+	f.priorities[id] = priority
+	return nil
+}
 
 // schemaProvider is a stand-in metadata provider that declares one
 // password-kind field and one plain field, which is all the secret walk
@@ -49,7 +104,7 @@ func newSchemaProvider() *schemaProvider {
 func TestSetProviderConfigPassesBlobToStoreUntouched(t *testing.T) {
 	t.Parallel()
 
-	settings := newFakeProviderSettings()
+	settings := newFakeProviderConfigs()
 	svc := NewProviderSettingsService([]provider.Provider{newSchemaProvider()}, settings)
 
 	plain := `{"token":"plaintext-secret","language":"en"}`
@@ -67,7 +122,7 @@ func TestSetProviderConfigConfiguresProviderWithPlaintext(t *testing.T) {
 	t.Parallel()
 
 	p := newSchemaProvider()
-	svc := NewProviderSettingsService([]provider.Provider{p}, newFakeProviderSettings())
+	svc := NewProviderSettingsService([]provider.Provider{p}, newFakeProviderConfigs())
 
 	err := svc.SetProviderConfig(context.Background(), "hardcover",
 		[]byte(`{"token":"live-token","language":"en"}`))
@@ -85,7 +140,7 @@ func TestLoadConfigsHandsProvidersWhatTheStoreReturns(t *testing.T) {
 	t.Parallel()
 
 	p := newSchemaProvider()
-	settings := newFakeProviderSettings()
+	settings := newFakeProviderConfigs()
 	settings.configs["hardcover"] = []byte(`{"token":"live-token","language":"fr"}`)
 	svc := NewProviderSettingsService([]provider.Provider{p}, settings)
 
@@ -107,7 +162,7 @@ func TestListProvidersSurfacesStoredConfig(t *testing.T) {
 	t.Parallel()
 
 	p := newSchemaProvider()
-	settings := newFakeProviderSettings()
+	settings := newFakeProviderConfigs()
 	settings.enabled["hardcover"] = true
 	settings.configs["hardcover"] = []byte(`{"token":"live-token"}`)
 	svc := NewProviderSettingsService([]provider.Provider{p}, settings)
@@ -138,7 +193,7 @@ func TestSetProviderEnabledRejectsUnknownID(t *testing.T) {
 	t.Parallel()
 
 	svc := NewProviderSettingsService(
-		[]provider.Provider{newSchemaProvider()}, newFakeProviderSettings())
+		[]provider.Provider{newSchemaProvider()}, newFakeProviderConfigs())
 
 	if err := svc.SetProviderEnabled(context.Background(), "not-a-provider", true); err == nil {
 		t.Fatal("want ErrUnknownProvider for an id the binary doesn't ship")
@@ -148,7 +203,7 @@ func TestSetProviderEnabledRejectsUnknownID(t *testing.T) {
 func TestSetProviderEnabledTogglesKnownID(t *testing.T) {
 	t.Parallel()
 
-	settings := newFakeProviderSettings()
+	settings := newFakeProviderConfigs()
 	svc := NewProviderSettingsService([]provider.Provider{newSchemaProvider()}, settings)
 
 	if err := svc.SetProviderEnabled(context.Background(), "hardcover", true); err != nil {

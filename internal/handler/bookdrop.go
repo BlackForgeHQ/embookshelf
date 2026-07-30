@@ -291,7 +291,7 @@ func (h *Handler) BookDropApprove(c *gin.Context) {
 	// hard-code it empty on the assumption that a freshly imported book
 	// sits on no shelf — true of the books row, but the response is per
 	// user, and a Shared shelf or a smart shelf can already claim it.
-	h.writeBookDetail(c, userID, book.ID, service.Outcome{}, "")
+	h.writeBookDetail(c, userID, book.ID, nil)
 }
 
 // maxUploadBytes caps a single BookDrop upload request. Big enough for a

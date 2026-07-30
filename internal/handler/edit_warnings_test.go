@@ -158,6 +158,43 @@ func assertWarnings(t *testing.T, body map[string]any, endpoint string) {
 	}
 }
 
+// The three tests below pin the wire shape at the three endpoints. This one
+// pins where that shape comes from: the seam is handed nothing but what the
+// write returned, and the warning reaches the response anyway. No endpoint
+// is in the picture, so no endpoint can have attached it — and none can
+// forget to, because the only thing there is to pass is an error.
+func TestDegradedWriteReachesResponseThroughTheSeam(t *testing.T) {
+	h, bookID := degradedEditHandler(t)
+	ctx := context.Background()
+
+	book, err := h.books.GetByID(ctx, warnTestUserID, bookID)
+	if err != nil {
+		t.Fatalf("load book: %v", err)
+	}
+	book.Title = "Edited Title"
+
+	writeErr := h.lib.UpdateBookMetadata(ctx, book)
+
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/books/"+bookID, nil)
+	c.Request = r.WithContext(auth.WithUser(r.Context(), &model.User{ID: warnTestUserID}))
+	c.Params = gin.Params{{Key: "id", Value: bookID}}
+
+	h.writeBookDetail(c, warnTestUserID, bookID, writeErr)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — a degraded write still saved the edit: %s",
+			rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v (%s)", err, rec.Body.String())
+	}
+	assertWarnings(t, body, "writeBookDetail")
+}
+
 func TestMetadataPatchReportsDegradedWrite(t *testing.T) {
 	h, bookID := degradedEditHandler(t)
 	body := editRequest(t, h.bookScoped(h.BookPatch), http.MethodPatch,

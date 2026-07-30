@@ -20,7 +20,7 @@ type bookDetailDTO struct {
 }
 
 // writeBookDetail answers with the current wire representation of book
-// bookID for user userID.
+// bookID for user userID, given whatever the write before it returned.
 //
 // One module, five callers: the book read, the metadata PATCH, apply
 // match, the field-lock toggle and bookdrop approve. Each of them used to
@@ -31,7 +31,7 @@ type bookDetailDTO struct {
 // onto a shelf came back claiming it was [[Unshelved]]; two of the five
 // carried no warnings at all.
 //
-// Three rules live here rather than at the call sites:
+// Four rules live here rather than at the call sites:
 //
 //   - Reload. Four of the five callers have just written to the row, and
 //     the response has to carry what the write produced rather than what
@@ -40,16 +40,34 @@ type bookDetailDTO struct {
 //     sites having one answer instead of five.
 //   - Nil to empty. A nil slice marshals to JSON null, and the client's
 //     Book type declares shelves as string[].
+//   - The write's error. Not found is a 404, anything else fatal is a
+//     500, and a *service.Degraded is a 200 that says what did not land:
+//     the write saved the edit, so the status the user gets is success,
+//     qualified. The endpoints used to each own this mapping and then
+//     hand the degradation over separately, which is two chances to
+//     forget and one to disagree.
 //   - Warnings. A degraded write still saved the edit, and only the
 //     person who made it can act on the part that did not land.
 //
-// Callers that cannot degrade — the read and approve, which routes around
-// MetadataWriter by design (ADR-0001 §3) — pass the zero Outcome and an
-// empty log message.
-func (h *Handler) writeBookDetail(
-	c *gin.Context, userID, bookID string, out service.Outcome, logMsg string,
-) {
+// err is the only thing a caller passes about its write, and passing it
+// is not optional the way handing over an outcome was: dropping it means
+// dropping an error, which the compiler and the linter both have an
+// opinion about, and reading it as success is not available — a
+// degradation is not a nil error. Callers that cannot degrade — the read
+// and approve, which routes around MetadataWriter by design (ADR-0001
+// §3) — pass nil, which is the whole of their claim.
+func (h *Handler) writeBookDetail(c *gin.Context, userID, bookID string, err error) {
 	ctx := c.Request.Context()
+
+	deg, fatal := service.Degradation(err)
+	if fatal {
+		if errors.Is(err, repo.ErrNotFound) {
+			writeError(c, http.StatusNotFound, "book not found")
+			return
+		}
+		writeServerError(c, "book detail write", err)
+		return
+	}
 
 	book, err := h.books.GetByID(ctx, userID, bookID)
 	if err != nil {
@@ -79,7 +97,7 @@ func (h *Handler) writeBookDetail(
 			Shelves: shelves,
 		},
 	}
-	attachWarnings(body, out, logMsg, bookID)
+	attachWarnings(c, body, deg, bookID)
 	c.JSON(http.StatusOK, body)
 }
 
@@ -93,14 +111,15 @@ func (h *Handler) writeBookDetail(
 // All three edit endpoints — metadata PATCH, field-lock toggle, apply
 // match — reach it through writeBookDetail, so a client parses one shape
 // whichever it called: a top-level "warnings" array of strings alongside
-// "book", present only when a step actually failed. Apply match used to
-// be missing from that list, because ApplyMatch discarded the Outcome
-// before the handler could see it.
-func attachWarnings(body gin.H, out service.Outcome, logMsg, bookID string) {
-	warnings := out.Warnings()
+// "book", present only when a step actually failed. None of them names
+// itself: the route is on the context, so the log line says which
+// endpoint degraded without an endpoint being trusted to say so.
+func attachWarnings(c *gin.Context, body gin.H, deg *service.Degraded, bookID string) {
+	warnings := deg.Warnings()
 	if len(warnings) == 0 {
 		return
 	}
-	slog.Warn(logMsg, "book", bookID, "warnings", warnings)
+	slog.Warn("book detail write degraded",
+		"route", c.FullPath(), "book", bookID, "warnings", warnings)
 	body["warnings"] = warnings
 }

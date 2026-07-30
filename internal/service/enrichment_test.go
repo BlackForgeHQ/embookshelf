@@ -23,20 +23,26 @@ import (
 // Fakes for the narrow seams
 // ---------------------------------------------------------------------------
 
+// fakeProviderSettings stands in for providerRunStore — the rows the
+// fan-out selects from, and the health counters it writes back. It stubs
+// nothing else: the config blobs and the admin writes live behind
+// providerSettingsStore, which this service never touches.
 type fakeProviderSettings struct {
 	enabled map[string]bool
 	// priorities are the admin's ranking, surfaced on the List rows.
 	// Absent means unranked, which sorts behind every ranked provider.
 	priorities map[string]int
-	configs    map[string]json.RawMessage
+	// configs ride along on the List rows, already decrypted, the way the
+	// repo returns them. Nothing in this service reads them.
+	configs map[string]json.RawMessage
 	// healthMu guards the telemetry slices. The service records provider
 	// health from one detached goroutine per provider, so a fan-out over
 	// more than one provider writes these concurrently.
 	healthMu  sync.Mutex
 	successes []string
 	errs      []string
-	// readErr makes EnabledIDs and List fail, standing in for the
-	// provider_settings table being unreadable.
+	// readErr makes List fail, standing in for the provider_settings
+	// table being unreadable.
 	readErr error
 }
 
@@ -44,15 +50,6 @@ func newFakeProviderSettings() *fakeProviderSettings {
 	return &fakeProviderSettings{enabled: map[string]bool{}, configs: map[string]json.RawMessage{}}
 }
 
-func (f *fakeProviderSettings) AllConfigs(context.Context) (map[string]json.RawMessage, error) {
-	return f.configs, nil
-}
-func (f *fakeProviderSettings) EnabledIDs(context.Context) (map[string]bool, error) {
-	if f.readErr != nil {
-		return nil, f.readErr
-	}
-	return f.enabled, nil
-}
 func (f *fakeProviderSettings) List(context.Context) ([]repo.ProviderSetting, error) {
 	if f.readErr != nil {
 		return nil, f.readErr
@@ -71,15 +68,6 @@ func (f *fakeProviderSettings) List(context.Context) ([]repo.ProviderSetting, er
 	}
 	return rows, nil
 }
-func (f *fakeProviderSettings) SetConfig(_ context.Context, id string, cfg json.RawMessage) error {
-	f.configs[id] = cfg
-	return nil
-}
-func (f *fakeProviderSettings) SetEnabled(_ context.Context, id string, on bool) error {
-	f.enabled[id] = on
-	return nil
-}
-func (f *fakeProviderSettings) SetPriority(context.Context, string, *int) error { return nil }
 func (f *fakeProviderSettings) RecordSuccess(_ context.Context, id string) error {
 	f.healthMu.Lock()
 	defer f.healthMu.Unlock()
@@ -182,7 +170,7 @@ func TestApplyMatchFillsUnlockedFields(t *testing.T) {
 	t.Parallel()
 	svc, books, _ := newEnrichForTest(t)
 
-	got, _, err := svc.ApplyMatch(context.Background(),
+	got, err := svc.ApplyMatch(context.Background(),
 		model.Book{ID: "b1", Title: "old"},
 		provider.Match{
 			Title:       "Deep Work",
@@ -220,7 +208,7 @@ func TestApplyMatchRespectsLocks(t *testing.T) {
 	book.Locks.Title = true
 	book.Locks.Author = true
 
-	got, _, err := svc.ApplyMatch(context.Background(), book,
+	got, err := svc.ApplyMatch(context.Background(), book,
 		provider.Match{Title: "Overwrite", Authors: []string{"Someone"}},
 		ApplyOptions{}, TriggerManualEdit)
 	if err != nil {
@@ -261,7 +249,7 @@ func TestApplyMatchRoutesISBNByDigitCount(t *testing.T) {
 			book.Locks.ISBN = tc.lockISBN
 			book.Locks.ISBN10 = tc.lockISBN10
 
-			got, _, err := svc.ApplyMatch(context.Background(), book,
+			got, err := svc.ApplyMatch(context.Background(), book,
 				provider.Match{ISBN: tc.isbn}, ApplyOptions{}, TriggerManualEdit)
 			if err != nil {
 				t.Fatalf("ApplyMatch: %v", err)
@@ -282,7 +270,7 @@ func TestApplyMatchMergesOrReplacesCategories(t *testing.T) {
 	t.Run("replace by default", func(t *testing.T) {
 		t.Parallel()
 		svc, _, _ := newEnrichForTest(t)
-		got, _, err := svc.ApplyMatch(context.Background(),
+		got, err := svc.ApplyMatch(context.Background(),
 			model.Book{ID: "b1", Genres: []string{"Existing"}},
 			provider.Match{Categories: []string{"Productivity"}},
 			ApplyOptions{}, TriggerManualEdit)
@@ -297,7 +285,7 @@ func TestApplyMatchMergesOrReplacesCategories(t *testing.T) {
 	t.Run("union when MergeCategories", func(t *testing.T) {
 		t.Parallel()
 		svc, _, _ := newEnrichForTest(t)
-		got, _, err := svc.ApplyMatch(context.Background(),
+		got, err := svc.ApplyMatch(context.Background(),
 			model.Book{ID: "b1", Genres: []string{"Existing"}},
 			provider.Match{Categories: []string{"Productivity"}},
 			ApplyOptions{MergeCategories: true}, TriggerManualEdit)
@@ -318,7 +306,7 @@ func TestApplyMatchPropagatesWriteFailure(t *testing.T) {
 	writer, _ := newPipelineWriter(t, books, &recordingSidecarWriter{}, nil)
 	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, &fakeCoverStore{}, writer)
 
-	if _, _, err := svc.ApplyMatch(context.Background(), model.Book{ID: "b1"},
+	if _, err := svc.ApplyMatch(context.Background(), model.Book{ID: "b1"},
 		provider.Match{Title: "x"}, ApplyOptions{}, TriggerManualEdit); err == nil {
 		t.Fatal("want the write error surfaced, got nil")
 	}

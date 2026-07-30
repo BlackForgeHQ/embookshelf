@@ -5,7 +5,6 @@ package service
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -42,19 +41,22 @@ import (
 // from untestable to 17 DB-free tests. Concrete repos satisfy them
 // implicitly, so wiring is unchanged.
 
-// providerSettingsStore is the provider_settings surface: which providers
-// are on, their config blobs, ranking, and health telemetry.
+// providerRunStore is the run-time half of provider_settings: the ranked
+// rows that decide which providers run and in what order, and the health
+// counters each run writes back.
 //
-// EnabledIDs has no caller left: selection reads List, because priority
-// is part of the answer and only the full row carries it. Kept for now so
-// this interface is split once, in #250, rather than trimmed twice.
-type providerSettingsStore interface {
-	AllConfigs(ctx context.Context) (map[string]json.RawMessage, error)
-	EnabledIDs(ctx context.Context) (map[string]bool, error)
+// The admin half — config blobs and the enabled/priority writes — is a
+// separate interface next to its only consumer, ProviderSettingsService.
+// The two services were split at #166; this seam followed at #250, once
+// it was clear the halves are disjoint apart from List, which both need
+// for different reasons: selection reads the rows to order them, the
+// admin surface reads them to render them.
+//
+// EnabledIDs is gone rather than moved. Selection reads List because
+// priority is part of the answer and only the full row carries it, which
+// left the map-shaped helper with no caller on either side.
+type providerRunStore interface {
 	List(ctx context.Context) ([]repo.ProviderSetting, error)
-	SetConfig(ctx context.Context, id string, config json.RawMessage) error
-	SetEnabled(ctx context.Context, id string, enabled bool) error
-	SetPriority(ctx context.Context, id string, priority *int) error
 	RecordSuccess(ctx context.Context, id string) error
 	RecordError(ctx context.Context, id, msg string) error
 }
@@ -82,7 +84,7 @@ type httpDoer interface {
 
 type EnrichmentService struct {
 	providers []provider.Provider
-	settings  providerSettingsStore
+	settings  providerRunStore
 	books     bookMetadataStore
 	covers    coverFileStore
 	http      httpDoer
@@ -134,7 +136,7 @@ const (
 // production, which is where ADR-0012's lock-corruption bug lived.
 func NewEnrichmentService(
 	providers []provider.Provider,
-	settings providerSettingsStore,
+	settings providerRunStore,
 	books bookMetadataStore,
 	covers coverFileStore,
 	writer *MetadataWriter,
@@ -186,9 +188,10 @@ type SearchResult struct {
 // database with the book the request has already loaded, so "settings
 // unreadable, rest of the request fine" is a narrow window.
 //
-// List rather than EnabledIDs because order is part of the answer:
-// priority lives only on the full row. The extra columns cost one config
-// decrypt per row, which is cheaper than two entry points disagreeing.
+// List rather than a bare enabled-set read because order is part of the
+// answer: priority lives only on the full row. The extra columns cost one
+// config decrypt per row, which is cheaper than two entry points
+// disagreeing.
 func (s *EnrichmentService) activeProviders(ctx context.Context) ([]provider.Provider, error) {
 	rows, err := s.settings.List(ctx)
 	if err != nil {
@@ -476,20 +479,20 @@ type ApplyOptions struct {
 
 // ApplyMatch merges the provider candidate onto the book and persists
 // the result. Locked fields are preserved; categories merge or replace
-// depending on options. Returns the refreshed book and the write's
-// Outcome.
+// depending on options. Returns the refreshed book.
 //
-// A nil error means the books row was updated and nothing more, exactly
-// as for a manual edit: the Outcome says whether the Sidecar and in-file
-// copies kept up, so the caller can tell the user their applied match did
-// not reach the file. This used to be discarded here, which left the
-// handler with nothing to report.
+// The error is the write's, with a manual edit's meaning: nil says the
+// whole plan landed, a *Degraded says the books row landed and a copy on
+// disk did not. A degradation is not a reason to stop — the edit is
+// persisted, so the cover import still runs and the book still comes
+// back — but it does travel out to the caller, who is the only one able
+// to tell the user their applied match did not reach the file.
 //
 // The cover import, when requested, is best-effort: failure is logged
 // and the response still returns 200 with the metadata update applied.
 // That matches how the UI already handles "Use cover" — users can retry
 // independently.
-func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m provider.Match, opts ApplyOptions, trigger Trigger) (model.Book, Outcome, error) {
+func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m provider.Match, opts ApplyOptions, trigger Trigger) (model.Book, error) {
 	locks := book.Locks
 
 	// writable reports whether this apply may touch a field: never when
@@ -551,9 +554,12 @@ func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m p
 		}
 	}
 
-	outcome, err := s.writer.Write(ctx, book, trigger)
-	if err != nil {
-		return model.Book{}, Outcome{}, err
+	// Only a fatal write stops the apply. A degradation means the edit is
+	// in the books row and the caller has a user to warn, not a reason to
+	// skip the cover and hand back an empty book.
+	_, writeErr := s.writer.Write(ctx, book, trigger)
+	if _, fatal := Degradation(writeErr); fatal {
+		return model.Book{}, writeErr
 	}
 
 	if opts.ApplyCover && writable(model.LockCover, book.HasCover) && strings.TrimSpace(m.CoverURL) != "" {
@@ -562,7 +568,7 @@ func (s *EnrichmentService) ApplyMatch(ctx context.Context, book model.Book, m p
 		}
 	}
 
-	return book, outcome, nil
+	return book, writeErr
 }
 
 // AutoEnrich is the headless variant of ApplyMatch used by the
@@ -622,10 +628,14 @@ func (s *EnrichmentService) AutoEnrich(ctx context.Context, book model.Book) (bo
 	// populated field, which the write step persisted — permanently
 	// locking every auto-enriched book on every field it already had,
 	// against both the comment here and ADR-0012.
-	// The Outcome is discarded here and only here: auto-enrichment is
-	// DB-only by ADR-0001 §3, so there is no Sidecar or in-file step that
-	// could have degraded, and no user waiting on a response to tell.
-	if _, _, err := s.ApplyMatch(ctx, book, *match, ApplyOptions{
+	//
+	// Nothing is discarded here any more. Auto-enrichment is DB-only by
+	// ADR-0001 §3, so there is no Sidecar or in-file step to degrade —
+	// but that used to be an argument in a comment for throwing the whole
+	// outcome away, and if the plan ever grew a step the comment would
+	// have gone on being wrong quietly. Now a degradation is an error and
+	// rides the return this path already has.
+	if _, err := s.ApplyMatch(ctx, book, *match, ApplyOptions{
 		MergeCategories: true,
 		OnlyEmpty:       true,
 		ApplyCover:      !book.Locks.Cover && !book.HasCover,

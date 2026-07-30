@@ -60,7 +60,7 @@ type LibraryServiceDeps struct {
 	// LibStore resolves a book's Library into the LibraryHandle that
 	// knows where its bytes live. Nil degrades DeleteBook to a row-only
 	// delete — the catalog is still correct, the bytes are left for a
-	// human, and the outcome says so.
+	// human, and the returned error says so.
 	LibStore LibraryStore
 	// Covers removes a deleted book's cover art. Nil skips the step.
 	Covers CoverDeleter
@@ -261,53 +261,14 @@ func slugify(name string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-// UpdateBookMetadata persists an edit and reports what actually landed.
-// A nil error means the books row was updated; the Outcome says whether
-// the sidecar and in-file copies kept up, so the caller can tell the user
-// their edit did not reach the file instead of only logging it.
-func (s *LibraryService) UpdateBookMetadata(ctx context.Context, b model.Book) (Outcome, error) {
-	return s.writer.Write(ctx, b, TriggerManualEdit)
-}
-
-// DeleteOutcome reports what a book deletion accomplished beyond the
-// row. Same shape and same reason as Outcome in metadata_writer.go —
-// one authoritative step that fails the call, a tail of best-effort
-// steps that degrade and must still be visible rather than vanishing
-// into a log line.
-//
-// A separate type rather than a reuse of Outcome: every field Outcome
-// carries beyond Failures (InFileWritten, SidecarMode, FolderRenamed,
-// NewFolderPath) is a write-pipeline fact with no meaning for a delete,
-// and merging the two would make a union nobody can read. StepFailure
-// is shared, because that part genuinely is the same idea.
-type DeleteOutcome struct {
-	// Failures records the cleanup steps that were attempted and did not
-	// complete: the book's bytes, its cover art, its legacy on-disk file.
-	// The books row is never here — it fails the call.
-	Failures []StepFailure
-}
-
-// Degraded reports whether any cleanup step after the row delete failed.
-// A degraded delete still removed the book: the row is canonical, and
-// what is left behind is bytes nobody references.
-func (o DeleteOutcome) Degraded() bool { return len(o.Failures) > 0 }
-
-// Warnings renders the failures for a human, so an operator learns half
-// a gigabyte of narration outlived its book from the response or the
-// log rather than from a disk-usage graph a month later.
-func (o DeleteOutcome) Warnings() []string {
-	if len(o.Failures) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(o.Failures))
-	for _, f := range o.Failures {
-		out = append(out, fmt.Sprintf("%s not removed: %v", f.Step, f.Err))
-	}
-	return out
-}
-
-func (o *DeleteOutcome) fail(step string, err error) {
-	o.Failures = append(o.Failures, StepFailure{Step: step, Err: err})
+// UpdateBookMetadata persists an edit. A nil error means the whole plan
+// landed: the books row, and the sidecar and in-file copies the trigger
+// asked for. A *Degraded means the row landed and a copy did not, which
+// is the user's business — see Degraded. The write pipeline's own facts
+// (Outcome) have no caller on this path and are not passed on.
+func (s *LibraryService) UpdateBookMetadata(ctx context.Context, b model.Book) error {
+	_, err := s.writer.Write(ctx, b, TriggerManualEdit)
+	return err
 }
 
 // DeleteBook hard-deletes a book and everything that belonged to it.
@@ -323,44 +284,45 @@ func (o *DeleteOutcome) fail(step string, err error) {
 // The row is authoritative and the only step that fails the call: FKs on
 // shelf_books, annotations, user_book_progress and reading_sessions
 // cascade with it. Everything after it — the bytes, the cover art, the
-// legacy books.path file — is best-effort and lands in DeleteOutcome
+// legacy books.path file — is best-effort and comes back as a *Degraded
 // instead. Failing the request over a stranded object would tell the
 // user their delete did not happen when it did, and the row is already
 // gone by then; leaving the byte loss unreported is the other half of
-// the mistake, which is what DeleteOutcome exists to prevent.
+// the mistake, and returning it as an error is what stops a caller
+// reading a stranded half-gigabyte of narration as a clean delete.
 //
 // Takes the Book rather than an id because the caller has already loaded
 // it to authorize the request, and both the library (hence which
 // Storage) and the legacy path come off the row.
-func (s *LibraryService) DeleteBook(ctx context.Context, book model.Book) (DeleteOutcome, error) {
-	var out DeleteOutcome
+func (s *LibraryService) DeleteBook(ctx context.Context, book model.Book) error {
+	deg := newDegraded(degradeRemoved)
 
 	// Snapshot first, while the files rows still exist. Every failure
 	// here is a degraded cleanup, never a blocked delete: this leg is
 	// read-only, and a library whose backend is briefly unreachable must
 	// not pin a book in the catalog.
-	handle, locations := s.bookBytes(ctx, book, &out)
+	handle, locations := s.bookBytes(ctx, book, deg)
 
 	if err := s.books.Delete(ctx, book.ID); err != nil {
-		return DeleteOutcome{}, err
+		return err
 	}
 
 	// Past this line the row is gone and nothing below can be retried by
 	// re-issuing the request, which is why each step reports itself.
 	if handle != nil {
 		if err := handle.DeleteBookBytes(ctx, book.ID, locations); err != nil {
-			out.fail("book files", err)
+			deg.fail("book files", err)
 		}
 	}
 	if s.deps.Covers != nil {
 		if err := s.deps.Covers.DeleteBook(book.ID); err != nil {
-			out.fail("cover art", err)
+			deg.fail("cover art", err)
 		}
 	}
 	if err := s.deleteLegacyFile(ctx, book); err != nil {
-		out.fail("book file on disk", err)
+		deg.fail("book file on disk", err)
 	}
-	return out, nil
+	return deg.orNil()
 }
 
 // bookBytes resolves the book's library and lists the storage keys it
@@ -370,13 +332,13 @@ func (s *LibraryService) DeleteBook(ctx context.Context, book model.Book) (Delet
 // A nil handle means "this install could not tell us where the bytes
 // live" — no LibraryStore wired, or a library whose backend would not
 // resolve. The delete proceeds; the bytes wait for an operator.
-func (s *LibraryService) bookBytes(ctx context.Context, book model.Book, out *DeleteOutcome) (*LibraryHandle, []string) {
+func (s *LibraryService) bookBytes(ctx context.Context, book model.Book, deg *Degraded) (*LibraryHandle, []string) {
 	if s.deps.LibStore == nil {
 		return nil, nil
 	}
 	handle, err := s.deps.LibStore.For(ctx, book.LibraryID)
 	if err != nil {
-		out.fail("book files", fmt.Errorf("library handle: %w", err))
+		deg.fail("book files", fmt.Errorf("library handle: %w", err))
 		return nil, nil
 	}
 	locations, err := handle.BookFileLocations(ctx, book.ID)
@@ -384,7 +346,7 @@ func (s *LibraryService) bookBytes(ctx context.Context, book model.Book, out *De
 		// The handle is still returned: DeleteBookBytes with no keys is a
 		// no-op, so this only means we lost the list, not that the caller
 		// should stop.
-		out.fail("book files", err)
+		deg.fail("book files", err)
 		return handle, nil
 	}
 	return handle, locations

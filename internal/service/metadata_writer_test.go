@@ -416,9 +416,11 @@ func TestMetadataWriter_Write_EmbedFailure_FullMirror(t *testing.T) {
 		ID: "b1", LibraryID: "lib1",
 		Path: bookKey, Format: "EPUB", Title: "X",
 	}
+	// The broken embed is a degrade, so the error is expected here — what
+	// this case is about is the compensating full mirror behind it.
 	out, err := mw.Write(context.Background(), book, TriggerManualEdit)
-	if err != nil {
-		t.Fatalf("Write: %v", err)
+	if deg := degradeOf(t, "Write", err); deg == nil {
+		t.Error("a broken embed returned a nil error; the lost in-file copy is unreported")
 	}
 	if out.InFileWritten {
 		t.Errorf("InFileWritten=true; want false (Embed errored)")

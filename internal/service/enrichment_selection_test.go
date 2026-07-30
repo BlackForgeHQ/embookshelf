@@ -17,7 +17,7 @@ import (
 // selectionProviders builds a service over three counting providers in
 // catalog order, so a test can assert both which of them ran and in what
 // order the entry point reported them.
-func selectionProviders(t *testing.T, settings providerSettingsStore) (*EnrichmentService, []*countingProvider) {
+func selectionProviders(t *testing.T, settings providerRunStore) (*EnrichmentService, []*countingProvider) {
 	t.Helper()
 	ps := []*countingProvider{
 		{id: provider.Source("googlebooks")},

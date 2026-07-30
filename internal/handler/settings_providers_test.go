@@ -30,15 +30,9 @@ func (f *fakeProviderSettings) AllConfigs(context.Context) (map[string]json.RawM
 	return map[string]json.RawMessage{}, nil
 }
 
-func (f *fakeProviderSettings) EnabledIDs(context.Context) (map[string]bool, error) {
-	return map[string]bool{}, nil
-}
-
 func (f *fakeProviderSettings) SetConfig(context.Context, string, json.RawMessage) error { return nil }
 func (f *fakeProviderSettings) SetEnabled(context.Context, string, bool) error           { return nil }
 func (f *fakeProviderSettings) SetPriority(context.Context, string, *int) error          { return nil }
-func (f *fakeProviderSettings) RecordSuccess(context.Context, string) error              { return nil }
-func (f *fakeProviderSettings) RecordError(context.Context, string, string) error        { return nil }
 
 // TestSettingsProvidersListReturnsCatalog covers the admin provider
 // surface, which shipped returning 500 because ProviderCfg was declared

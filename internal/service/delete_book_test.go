@@ -230,12 +230,10 @@ func TestDeleteBookReadsLocationsBeforeTheRowGoesAndRemovesBytesAfter(t *testing
 	store := &probingStorage{probe: fx.probe}
 	handle := &LibraryHandle{Library: fx.lib, Storage: store, files: files}
 
-	out, err := fx.svc(handle, LibraryServiceDeps{}).DeleteBook(context.Background(), fx.book)
-	if err != nil {
-		t.Fatalf("DeleteBook: %v", err)
-	}
-	if out.Degraded() {
-		t.Fatalf("clean delete reported %v", out.Warnings())
+	deg := degradeOf(t, "DeleteBook",
+		fx.svc(handle, LibraryServiceDeps{}).DeleteBook(context.Background(), fx.book))
+	if deg != nil {
+		t.Fatalf("clean delete reported %v", deg.Warnings())
 	}
 
 	if files.rowSeen == nil {
@@ -271,7 +269,7 @@ func TestDeleteBookRemovesLocalBytesAtTheirAbsoluteKeys(t *testing.T) {
 	store := &probingStorage{probe: fx.probe}
 	handle := &LibraryHandle{Library: fx.lib, Storage: store, files: files}
 
-	if _, err := fx.svc(handle, LibraryServiceDeps{}).DeleteBook(context.Background(), fx.book); err != nil {
+	if err := fx.svc(handle, LibraryServiceDeps{}).DeleteBook(context.Background(), fx.book); err != nil {
 		t.Fatalf("DeleteBook: %v", err)
 	}
 
@@ -310,12 +308,10 @@ func TestDeleteBookEnqueuesPendingOrphansOnBackendBackedLibrary(t *testing.T) {
 	handle := &LibraryHandle{Library: fx.lib, Storage: store, files: files, orphans: orphans}
 
 	before := time.Now()
-	out, err := fx.svc(handle, LibraryServiceDeps{}).DeleteBook(context.Background(), fx.book)
-	if err != nil {
-		t.Fatalf("DeleteBook: %v", err)
-	}
-	if out.Degraded() {
-		t.Fatalf("clean backend-backed delete reported %v", out.Warnings())
+	deg := degradeOf(t, "DeleteBook",
+		fx.svc(handle, LibraryServiceDeps{}).DeleteBook(context.Background(), fx.book))
+	if deg != nil {
+		t.Fatalf("clean backend-backed delete reported %v", deg.Warnings())
 	}
 
 	if len(store.deleted) != 0 {
@@ -366,17 +362,15 @@ func TestDeleteBookReportsByteCleanupFailureInsteadOfFailingTheCall(t *testing.T
 	}
 	handle := &LibraryHandle{Library: fx.lib, Storage: store, files: files}
 
-	out, err := fx.svc(handle, LibraryServiceDeps{}).DeleteBook(context.Background(), fx.book)
-	if err != nil {
-		t.Fatalf("a stranded object must not fail the delete: %v", err)
-	}
+	deg := degradeOf(t, "a stranded object must not fail the delete",
+		fx.svc(handle, LibraryServiceDeps{}).DeleteBook(context.Background(), fx.book))
 	if fx.probe.rowPresent() {
 		t.Error("the books row survived a failure that is supposed to be best-effort")
 	}
-	if !out.Degraded() {
+	if deg == nil {
 		t.Fatal("the failure was swallowed; nobody would ever learn the bytes are still there")
 	}
-	if got := out.Warnings(); len(got) != 1 || !strings.Contains(got[0], "book files") {
+	if got := deg.Warnings(); len(got) != 1 || !strings.Contains(got[0], "book files") {
 		t.Errorf("warnings = %v, want one naming the book files step", got)
 	}
 	// The other key still went: one unreachable object must not strand the rest.
@@ -390,14 +384,12 @@ func TestDeleteBookReportsCoverFailureInsteadOfFailingTheCall(t *testing.T) {
 	covers := &failingCovers{err: errors.New("read-only filesystem")}
 	handle := &LibraryHandle{Library: fx.lib, files: &probingFiles{probe: fx.probe}}
 
-	out, err := fx.svc(handle, LibraryServiceDeps{Covers: covers}).DeleteBook(context.Background(), fx.book)
-	if err != nil {
-		t.Fatalf("a stuck cover must not fail the delete: %v", err)
-	}
+	deg := degradeOf(t, "a stuck cover must not fail the delete",
+		fx.svc(handle, LibraryServiceDeps{Covers: covers}).DeleteBook(context.Background(), fx.book))
 	if covers.calls != 1 {
 		t.Errorf("cover store called %d times, want 1", covers.calls)
 	}
-	if got := out.Warnings(); len(got) != 1 || !strings.Contains(got[0], "cover art") {
+	if got := deg.Warnings(); len(got) != 1 || !strings.Contains(got[0], "cover art") {
 		t.Errorf("warnings = %v, want one naming the cover art step", got)
 	}
 }
@@ -411,14 +403,11 @@ func TestDeleteBookDegradesWhenTheLibraryHandleIsUnavailable(t *testing.T) {
 		LibStore: &stubLibStore{err: errors.New("backend unreachable")},
 	}, nil)
 
-	out, err := svc.DeleteBook(context.Background(), fx.book)
-	if err != nil {
-		t.Fatalf("DeleteBook: %v", err)
-	}
+	deg := degradeOf(t, "DeleteBook", svc.DeleteBook(context.Background(), fx.book))
 	if fx.probe.rowPresent() {
 		t.Error("the books row survived")
 	}
-	if got := out.Warnings(); len(got) != 1 || !strings.Contains(got[0], "book files") {
+	if got := deg.Warnings(); len(got) != 1 || !strings.Contains(got[0], "book files") {
 		t.Errorf("warnings = %v, want one naming the book files step", got)
 	}
 }
@@ -427,13 +416,10 @@ func TestDeleteBookDegradesWhenTheLibraryHandleIsUnavailable(t *testing.T) {
 // documented degrade, not an error.
 func TestDeleteBookWithoutALibraryStoreStillDeletesTheRow(t *testing.T) {
 	fx := newDeleteFixture(t, false)
-	out, err := NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{}, nil).
-		DeleteBook(context.Background(), fx.book)
-	if err != nil {
-		t.Fatalf("DeleteBook: %v", err)
-	}
-	if out.Degraded() {
-		t.Errorf("an unconfigured install is not a degraded delete: %v", out.Warnings())
+	deg := degradeOf(t, "DeleteBook", NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{}, nil).
+		DeleteBook(context.Background(), fx.book))
+	if deg != nil {
+		t.Errorf("an unconfigured install is not a degraded delete: %v", deg.Warnings())
 	}
 	if fx.probe.rowPresent() {
 		t.Error("the books row survived")
@@ -453,7 +439,7 @@ func TestDeleteBookRunsNoCleanupWhenTheRowDeleteFails(t *testing.T) {
 	ghost := fx.book
 	ghost.ID = db.NewID() // a book id the table has never seen
 
-	_, err := fx.svc(handle, LibraryServiceDeps{Covers: covers}).DeleteBook(context.Background(), ghost)
+	err := fx.svc(handle, LibraryServiceDeps{Covers: covers}).DeleteBook(context.Background(), ghost)
 	if !errors.Is(err, repo.ErrNotFound) {
 		t.Fatalf("err = %v, want repo.ErrNotFound", err)
 	}
@@ -483,13 +469,10 @@ func TestDeleteBookUnlinksTheLegacyPathInsideTheSandbox(t *testing.T) {
 	book := fx.book
 	book.Path = path
 
-	out, err := NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{}, nil).
-		DeleteBook(context.Background(), book)
-	if err != nil {
-		t.Fatalf("DeleteBook: %v", err)
-	}
-	if out.Degraded() {
-		t.Fatalf("clean delete reported %v", out.Warnings())
+	deg := degradeOf(t, "DeleteBook", NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{}, nil).
+		DeleteBook(context.Background(), book))
+	if deg != nil {
+		t.Fatalf("clean delete reported %v", deg.Warnings())
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("legacy file survived: stat err = %v", err)
@@ -507,15 +490,12 @@ func TestDeleteBookRefusesALegacyPathOutsideTheSandbox(t *testing.T) {
 	book := fx.book
 	book.Path = outside
 
-	out, err := NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{}, nil).
-		DeleteBook(context.Background(), book)
-	if err != nil {
-		t.Fatalf("DeleteBook: %v", err)
-	}
+	deg := degradeOf(t, "DeleteBook", NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{}, nil).
+		DeleteBook(context.Background(), book))
 	if _, err := os.Stat(outside); err != nil {
 		t.Errorf("a path outside the sandbox was unlinked anyway: %v", err)
 	}
-	if got := out.Warnings(); len(got) != 1 || !strings.Contains(got[0], "book file on disk") {
+	if got := deg.Warnings(); len(got) != 1 || !strings.Contains(got[0], "book file on disk") {
 		t.Errorf("warnings = %v, want one naming the on-disk file step", got)
 	}
 	if fx.probe.rowPresent() {
@@ -535,13 +515,10 @@ func TestDeleteBookUnlinksALegacyPathUnderBookDrop(t *testing.T) {
 	book := fx.book
 	book.Path = path
 
-	out, err := NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{BookDropPath: drop}, nil).
-		DeleteBook(context.Background(), book)
-	if err != nil {
-		t.Fatalf("DeleteBook: %v", err)
-	}
-	if out.Degraded() {
-		t.Fatalf("clean delete reported %v", out.Warnings())
+	deg := degradeOf(t, "DeleteBook", NewLibraryService(fx.libs, fx.books, LibraryServiceDeps{BookDropPath: drop}, nil).
+		DeleteBook(context.Background(), book))
+	if deg != nil {
+		t.Fatalf("clean delete reported %v", deg.Warnings())
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("staged file survived: stat err = %v", err)

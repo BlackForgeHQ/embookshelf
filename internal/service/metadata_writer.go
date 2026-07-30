@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
@@ -103,9 +104,11 @@ type MetadataWriterDeps struct {
 	RenameGrace time.Duration
 }
 
-// Outcome reports the post-execution facts of a Write call. Tests
-// pin behavior on it; SSE telemetry / audit may consume it later.
-// Callers that don't need it can discard.
+// Outcome reports the post-execution facts of a Write call: what the
+// pipeline did, not whether it managed to. What it failed to do travels
+// on the error, as *Degraded. Tests pin behavior on these facts; SSE
+// telemetry / audit may consume them later. Callers that don't need them
+// can discard — discarding facts loses nothing a user is waiting for.
 type Outcome struct {
 	// InFileWritten is true when the in-file embedded write step
 	// completed successfully (Embed + Put both ok). Drives
@@ -127,43 +130,117 @@ type Outcome struct {
 	// NewFolderPath holds the post-rename library-relative folder
 	// when FolderRenamed is true. Empty otherwise.
 	NewFolderPath string
-	// Failures records the steps that were planned and did not
-	// complete: the sidecar and in-file writes, the two whose silent
-	// loss costs the edit its portable copy. The DB step is never here
-	// — it fails the call. Folder rename is not here either; see Write.
-	Failures []StepFailure
 }
 
-// StepFailure names a write step that was planned and did not complete.
+// StepFailure names a step that was planned and did not complete.
 type StepFailure struct {
 	// Step is the user-facing name of the step: "sidecar", "in-file
-	// write", "folder rename".
+	// write", "book files", "cover art".
 	Step string
 	Err  error
 }
 
-// Degraded reports whether any planned step after the DB write failed.
-// A degraded write still persisted the edit — the books row is
-// canonical — but the on-disk record is behind it.
-func (o Outcome) Degraded() bool { return len(o.Failures) > 0 }
+// Past participles for how a Degraded call's steps did not complete.
+// The only thing that ever differed between the write pipeline's
+// degradation and the delete pipeline's.
+const (
+	degradeWritten = "written"
+	degradeRemoved = "removed"
+)
 
-// Warnings renders the failures for a human. Callers put these on the
-// response so the person who made the edit learns their change did not
-// reach the file, instead of it only appearing in a server log.
-func (o Outcome) Warnings() []string {
-	if len(o.Failures) == 0 {
+// Degraded is the result of a call whose authoritative step succeeded
+// and whose best-effort tail did not. It is an error, and that is the
+// whole point.
+//
+// The write and the delete pipeline both used to return this beside a
+// nil error, so "the call succeeded" and "the copy on disk kept up" were
+// the same value and twenty lines of prose asked callers to please
+// consult the second return. They did not: the accessor that reported it
+// had no production caller on either type, and the auto-enrich path
+// dropped the outcome whole. As an error it cannot be dropped quietly.
+// nil means every planned step landed. A *Degraded means the
+// authoritative step landed and the named ones did not. Anything else
+// means the call failed. A caller that checks err and does not
+// distinguish the middle case reports a loud failure — a bug someone
+// sees — instead of an unqualified success, which is a bug nobody sees.
+//
+// One type for both paths. The write pipeline's own facts
+// (InFileWritten, SidecarMode, FolderRenamed, NewFolderPath) stay on
+// Outcome, where they always belonged and where a delete has no reason
+// to look; the degradation — named steps that did not happen, rendered
+// for a human — was the same idea written twice, down to identical
+// method bodies, with only the verb differing.
+type Degraded struct {
+	// Failures records the steps that were planned and did not complete:
+	// the sidecar and in-file writes, whose silent loss costs an edit its
+	// portable copy; the bytes and cover art, whose silent loss strands
+	// them on disk. The authoritative step is never here — it fails the
+	// call. Folder rename is not here either; see Write.
+	Failures []StepFailure
+	// verb is how those steps did not complete, for the human-facing
+	// rendering: a write's step was "not written", a delete's "not
+	// removed".
+	verb string
+}
+
+// newDegraded starts an accumulator for a call's best-effort tail. It is
+// built before the tail runs and is nil-as-an-error until something in
+// the tail actually fails — see orNil.
+func newDegraded(verb string) *Degraded { return &Degraded{verb: verb} }
+
+// fail records a step that was planned and did not complete.
+func (d *Degraded) fail(step string, err error) {
+	d.Failures = append(d.Failures, StepFailure{Step: step, Err: err})
+}
+
+// orNil returns d as an error, or a nil error when the tail was clean.
+// Every producer returns through this: handing back a *Degraded with no
+// failures would be a non-nil error interface holding a nil-meaning
+// value, the one way this design could lie.
+func (d *Degraded) orNil() error {
+	if d == nil || len(d.Failures) == 0 {
 		return nil
 	}
-	out := make([]string, 0, len(o.Failures))
-	for _, f := range o.Failures {
-		out = append(out, fmt.Sprintf("%s not written: %v", f.Step, f.Err))
+	return d
+}
+
+// Warnings renders the failures for a human. The response seam puts
+// these on the body so the person who made the edit learns their change
+// did not reach the file, instead of it only appearing in a server log.
+func (d *Degraded) Warnings() []string {
+	if d == nil {
+		return nil
+	}
+	out := make([]string, 0, len(d.Failures))
+	for _, f := range d.Failures {
+		out = append(out, fmt.Sprintf("%s not %s: %v", f.Step, d.verb, f.Err))
 	}
 	return out
 }
 
-// fail records a step failure on the outcome.
-func (o *Outcome) fail(step string, err error) {
-	o.Failures = append(o.Failures, StepFailure{Step: step, Err: err})
+// Error makes the degradation the call's error. The message is the same
+// list a user would see, so a caller that only logs err still logs the
+// steps that did not happen.
+func (d *Degraded) Error() string {
+	return "degraded: " + strings.Join(d.Warnings(), "; ")
+}
+
+// Degradation splits a call's error into the degradation it carries and
+// whether it was fatal. The two questions are one lookup because
+// answering only the first is how a fatal error gets read as success,
+// and because every caller of a degradable call asks both.
+//
+//	deg, fatal := service.Degradation(err)
+//	if fatal { ...the call did not happen... }
+//	// past here the authoritative step landed; deg may be nil
+func Degradation(err error) (deg *Degraded, fatal bool) {
+	if err == nil {
+		return nil, false
+	}
+	if errors.As(err, &deg) {
+		return deg, false
+	}
+	return nil, true
 }
 
 // MetadataWriter is the **edit-side write pipeline** module. Owns
@@ -184,12 +261,12 @@ func NewMetadataWriter(deps MetadataWriterDeps) *MetadataWriter {
 // Write persists the book's edited metadata per the plan returned by
 // DecideEffects.
 //
-// Only the DB step fails the call. The later steps are best-effort, but
-// "best-effort" is not "unreported": a nil error means the books row was
-// updated and nothing more, so callers must consult Outcome to learn
-// whether the sidecar and in-file copies kept up. Outcome.Degraded and
-// Outcome.Warnings exist for exactly that, and the handlers put the
-// warnings on the response — a user whose edit did not reach the file
+// Only the DB step fails the call outright. The later steps are
+// best-effort, but "best-effort" is not "unreported": when one of them
+// does not land the error is a *Degraded naming it, so a nil error means
+// the whole plan landed and nothing weaker. Callers split the two with
+// Degradation; the response seam turns the degradation into warnings a
+// user can act on, because someone whose edit did not reach the file
 // should not have to read server logs to find out.
 //
 // Step order (ADR-0003 §6.5): DB → in-file embed (old path) →
@@ -215,6 +292,7 @@ func (w *MetadataWriter) Write(ctx context.Context, b model.Book, trigger Trigge
 	folderChanged, oldFolder, newFolder := w.folderDelta(b)
 	eff := DecideEffects(trigger, handle, folderChanged)
 	out := Outcome{}
+	deg := newDegraded(degradeWritten)
 
 	if eff.InFile && w.deps.Dispatch != nil {
 		if err := w.embedAndStamp(ctx, b, handle); err != nil {
@@ -223,7 +301,7 @@ func (w *MetadataWriter) Write(ctx context.Context, b model.Book, trigger Trigge
 			// so this is a degradation and not a failure — but it is
 			// still one the caller should be able to see.
 			if !errors.Is(err, fileproc.ErrUnsupportedEmbed) {
-				out.fail("in-file write", err)
+				deg.fail("in-file write", err)
 			}
 		} else {
 			out.InFileWritten = true
@@ -239,7 +317,7 @@ func (w *MetadataWriter) Write(ctx context.Context, b model.Book, trigger Trigge
 			// Nothing compensates for this one. When the in-file step
 			// was skipped or failed, the sidecar is the only portable
 			// copy of the edit (ADR-0001).
-			out.fail("sidecar", err)
+			deg.fail("sidecar", err)
 		} else {
 			out.SidecarWritten = true
 			out.SidecarMode = mode
@@ -282,7 +360,7 @@ func (w *MetadataWriter) Write(ctx context.Context, b model.Book, trigger Trigge
 		}
 	}
 
-	return out, nil
+	return out, deg.orNil()
 }
 
 // folderDelta computes whether the Book's stored folder_path differs

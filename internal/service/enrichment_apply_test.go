@@ -73,7 +73,7 @@ func TestApplyMatchOnlyEmptyLeavesLocksAlone(t *testing.T) {
 		Genres: []string{"Local Genre"},
 	}
 
-	if _, _, err := svc.ApplyMatch(context.Background(), book, fullMatch,
+	if _, err := svc.ApplyMatch(context.Background(), book, fullMatch,
 		ApplyOptions{OnlyEmpty: true}, TriggerAutoEnrichment); err != nil {
 		t.Fatalf("ApplyMatch: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestApplyMatchOnlyEmptyPreservesUserLocks(t *testing.T) {
 		Locks: model.BookLocks{Publisher: true},
 	}
 
-	if _, _, err := svc.ApplyMatch(context.Background(), book, fullMatch,
+	if _, err := svc.ApplyMatch(context.Background(), book, fullMatch,
 		ApplyOptions{OnlyEmpty: true}, TriggerAutoEnrichment); err != nil {
 		t.Fatalf("ApplyMatch: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestApplyMatchOnlyEmptyFillsBlanksOnly(t *testing.T) {
 		Author: "Local Author",
 	}
 
-	if _, _, err := svc.ApplyMatch(context.Background(), book, fullMatch,
+	if _, err := svc.ApplyMatch(context.Background(), book, fullMatch,
 		ApplyOptions{OnlyEmpty: true}, TriggerAutoEnrichment); err != nil {
 		t.Fatalf("ApplyMatch: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestApplyMatchOnlyEmptySkipsPopulatedSlices(t *testing.T) {
 	svc, store := applyHarness(t)
 	book := model.Book{ID: "b1", Genres: []string{"Local Genre"}}
 
-	if _, _, err := svc.ApplyMatch(context.Background(), book, fullMatch,
+	if _, err := svc.ApplyMatch(context.Background(), book, fullMatch,
 		ApplyOptions{OnlyEmpty: true, MergeCategories: true}, TriggerAutoEnrichment); err != nil {
 		t.Fatalf("ApplyMatch: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestApplyMatchOnlyEmptyFillsEmptySlices(t *testing.T) {
 	svc, store := applyHarness(t)
 	book := model.Book{ID: "b1"}
 
-	if _, _, err := svc.ApplyMatch(context.Background(), book, fullMatch,
+	if _, err := svc.ApplyMatch(context.Background(), book, fullMatch,
 		ApplyOptions{OnlyEmpty: true}, TriggerAutoEnrichment); err != nil {
 		t.Fatalf("ApplyMatch: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestApplyMatchOnlyEmptyYearAndISBN(t *testing.T) {
 	svc, store := applyHarness(t)
 	book := model.Book{ID: "b1", Year: 1965, ISBN: "9780441013593"}
 
-	if _, _, err := svc.ApplyMatch(context.Background(), book,
+	if _, err := svc.ApplyMatch(context.Background(), book,
 		provider.Match{Year: 1999, ISBN: "9999999999999"},
 		ApplyOptions{OnlyEmpty: true}, TriggerAutoEnrichment); err != nil {
 		t.Fatalf("ApplyMatch: %v", err)
@@ -204,7 +204,7 @@ func TestApplyMatchWithoutOnlyEmptyOverwrites(t *testing.T) {
 	svc, store := applyHarness(t)
 	book := model.Book{ID: "b1", Title: "Local Title", Author: "Local Author"}
 
-	if _, _, err := svc.ApplyMatch(context.Background(), book, fullMatch,
+	if _, err := svc.ApplyMatch(context.Background(), book, fullMatch,
 		ApplyOptions{}, TriggerApplyEnrichment); err != nil {
 		t.Fatalf("ApplyMatch: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestApplyMatchRunsTheWriteBackPipeline(t *testing.T) {
 	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, &fakeCoverStore{}, writer)
 
 	book := model.Book{ID: "b1", LibraryID: "lib1", Path: "books/x.epub", Format: "EPUB"}
-	if _, _, err := svc.ApplyMatch(ctx, book, fullMatch, ApplyOptions{}, TriggerApplyEnrichment); err != nil {
+	if _, err := svc.ApplyMatch(ctx, book, fullMatch, ApplyOptions{}, TriggerApplyEnrichment); err != nil {
 		t.Fatalf("ApplyMatch: %v", err)
 	}
 

@@ -34,25 +34,36 @@ func degradedBook() model.Book {
 	return model.Book{ID: "b1", LibraryID: "lib1", Path: "books/x.cbz", Format: "CBZ", Title: "X"}
 }
 
-func assertWarns(t *testing.T, out Outcome, step string) {
+// degradeOf runs the split every production caller runs: fatal means the
+// call did not happen, and none of the cases below is about that. Returns
+// nil when nothing degraded.
+func degradeOf(t *testing.T, what string, err error) *Degraded {
 	t.Helper()
-	for _, w := range out.Warnings() {
+	deg, fatal := Degradation(err)
+	if fatal {
+		t.Fatalf("%s: %v", what, err)
+	}
+	return deg
+}
+
+func assertWarns(t *testing.T, deg *Degraded, step string) {
+	t.Helper()
+	for _, w := range deg.Warnings() {
 		if strings.Contains(w, step) {
 			return
 		}
 	}
-	t.Fatalf("warnings %v mention no %q failure", out.Warnings(), step)
+	t.Fatalf("warnings %v mention no %q failure", deg.Warnings(), step)
 }
 
-// A metadata edit is four steps and only the first one can fail loudly.
-// Write returns nil the moment the books row lands, so a caller holding
-// err == nil has learned "the DB was updated" and nothing else. The sidecar
-// may have failed, the in-file embed may have failed, the folder may still
-// be at its old name — and on an S3-backed library or a format with no
-// in-file write target the sidecar IS the portable record, which is the
-// whole point of ADR-0001. Outcome was the only channel for that, no
-// production caller read it, and it was not even accurate: SidecarMode was
-// set from the plan before the write was attempted.
+// A metadata edit is four steps and only the first one fails the call. It
+// used to be the only one that said anything: Write returned nil the moment
+// the books row landed, so a caller holding err == nil had learned "the DB
+// was updated" and nothing else, while the sidecar may have failed, the
+// in-file embed may have failed, and on an S3-backed library or a format
+// with no in-file write target the sidecar IS the portable record, which is
+// the whole point of ADR-0001. The degradation now travels on the error, so
+// err == nil means the whole plan landed; these tests pin that.
 
 func TestMetadataWriterReportsSidecarFailure(t *testing.T) {
 	books := &fakeBookWriter{}
@@ -60,16 +71,14 @@ func TestMetadataWriterReportsSidecarFailure(t *testing.T) {
 	mw := newDegradedWriter(t, books, side, nil)
 
 	out, err := mw.Write(context.Background(), degradedBook(), TriggerManualEdit)
-	if err != nil {
-		t.Fatalf("Write = %v, want nil — the DB write succeeded", err)
-	}
+	deg := degradeOf(t, "Write — the DB write succeeded", err)
 	if out.SidecarWritten {
 		t.Error("Outcome.SidecarWritten is true despite the write failing")
 	}
-	if !out.Degraded() {
-		t.Fatal("Outcome.Degraded() is false after a failed sidecar write")
+	if deg == nil {
+		t.Fatal("a failed sidecar write returned a nil error — the caller reads that as a clean save")
 	}
-	assertWarns(t, out, "sidecar")
+	assertWarns(t, deg, "sidecar")
 }
 
 // TestMetadataWriterSidecarModeReflectsReality — SidecarMode used to be
@@ -91,6 +100,8 @@ func TestMetadataWriterSidecarSuccessIsNotDegraded(t *testing.T) {
 	side := &recordingSidecarWriter{}
 	mw := newDegradedWriter(t, books, side, nil)
 
+	// The nil check is the assertion: a clean write is the only thing that
+	// returns one, so there is no separate "not degraded" question to ask.
 	out, err := mw.Write(context.Background(), degradedBook(), TriggerManualEdit)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
@@ -100,12 +111,6 @@ func TestMetadataWriterSidecarSuccessIsNotDegraded(t *testing.T) {
 	}
 	if out.SidecarMode != sidecar.ModeFull {
 		t.Errorf("SidecarMode = %q, want full mirror on a backend library", out.SidecarMode)
-	}
-	if out.Degraded() {
-		t.Errorf("Degraded() is true on a clean write: %v", out.Warnings())
-	}
-	if len(out.Warnings()) != 0 {
-		t.Errorf("warnings on a clean write: %v", out.Warnings())
 	}
 }
 
@@ -127,8 +132,8 @@ func TestMetadataWriterWarningsNameTheStep(t *testing.T) {
 	side := &recordingSidecarWriter{err: errStepFailed}
 	mw := newDegradedWriter(t, books, side, nil)
 
-	out, _ := mw.Write(context.Background(), degradedBook(), TriggerManualEdit)
-	warns := out.Warnings()
+	_, err := mw.Write(context.Background(), degradedBook(), TriggerManualEdit)
+	warns := degradeOf(t, "Write", err).Warnings()
 	if len(warns) != 1 {
 		t.Fatalf("warnings = %v, want exactly one", warns)
 	}
@@ -151,16 +156,14 @@ func TestMetadataWriterReportsInFileFailure(t *testing.T) {
 	book := degradedBook()
 	book.Format = "EPUB"
 	out, err := mw.Write(context.Background(), book, TriggerManualEdit)
-	if err != nil {
-		t.Fatalf("Write = %v, want nil — the DB write succeeded", err)
-	}
+	deg := degradeOf(t, "Write — the DB write succeeded", err)
 	if out.InFileWritten {
 		t.Error("InFileWritten is true after the embed failed")
 	}
-	if !out.Degraded() {
-		t.Fatal("Degraded() is false after a failed in-file write")
+	if deg == nil {
+		t.Fatal("a failed in-file write returned a nil error — the caller reads that as a clean save")
 	}
-	assertWarns(t, out, "in-file")
+	assertWarns(t, deg, "in-file")
 
 	// The compensating fallback still has to fire.
 	if out.SidecarMode != sidecar.ModeFull {
@@ -176,73 +179,62 @@ func TestMetadataWriterUnsupportedFormatIsNotDegraded(t *testing.T) {
 	side := &recordingSidecarWriter{}
 	mw := newDegradedWriter(t, books, side, nil) // dispatch refuses
 
-	out, err := mw.Write(context.Background(), degradedBook(), TriggerManualEdit)
-	if err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	if out.Degraded() {
-		t.Fatalf("an unsupported format was reported as degraded: %v", out.Warnings())
+	if _, err := mw.Write(context.Background(), degradedBook(), TriggerManualEdit); err != nil {
+		t.Fatalf("an unsupported format was reported as degraded: %v", err)
 	}
 }
 
 // --- the callers -------------------------------------------------------
 
-// An Outcome nothing reads is a log line with extra steps. Both edit-side
-// services hand it back so their handler can put the warnings on the
-// response; ApplyMatch used to discard it at the service, which is how
-// apply match became the one edit endpoint of three that could answer a
-// lost Sidecar with an unqualified 200.
+// A degradation nothing reads is a log line with extra steps. Both
+// edit-side services now pass it out on the error their caller already has
+// to handle, so the handler can put the warnings on the response; ApplyMatch
+// used to discard the Outcome at the service, which is how apply match
+// became the one edit endpoint of three that could answer a lost Sidecar
+// with an unqualified 200.
 
-func TestUpdateBookMetadataReturnsOutcome(t *testing.T) {
+func TestUpdateBookMetadataReportsTheDegradeOnItsError(t *testing.T) {
 	books := &fakeBookWriter{}
 	mw := newDegradedWriter(t, books, &recordingSidecarWriter{err: errStepFailed}, nil)
 	// Neither repo is reachable from UpdateBookMetadata: the edit goes to
 	// the writer and nowhere else.
 	svc := NewLibraryService(nil, nil, LibraryServiceDeps{}, mw)
 
-	out, err := svc.UpdateBookMetadata(context.Background(), degradedBook())
-	if err != nil {
-		t.Fatalf("UpdateBookMetadata = %v, want nil — the DB write succeeded", err)
+	deg := degradeOf(t, "UpdateBookMetadata — the DB write succeeded",
+		svc.UpdateBookMetadata(context.Background(), degradedBook()))
+	if deg == nil {
+		t.Fatal("a failed sidecar write returned a nil error — the caller reads that as a clean save")
 	}
-	if !out.Degraded() {
-		t.Fatal("Outcome.Degraded() is false after a failed sidecar write")
-	}
-	assertWarns(t, out, "sidecar")
+	assertWarns(t, deg, "sidecar")
 }
 
-func TestApplyMatchReturnsOutcome(t *testing.T) {
+func TestApplyMatchReportsTheDegradeOnItsError(t *testing.T) {
 	books := &fakeBookStore{}
 	mw, _ := newPipelineWriter(t, books, &recordingSidecarWriter{err: errStepFailed}, nil)
 	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, &fakeCoverStore{}, mw)
 
-	got, out, err := svc.ApplyMatch(context.Background(), degradedBook(),
+	got, err := svc.ApplyMatch(context.Background(), degradedBook(),
 		provider.Match{Title: "Provider Title"}, ApplyOptions{}, TriggerApplyEnrichment)
-	if err != nil {
-		t.Fatalf("ApplyMatch = %v, want nil — the DB write succeeded", err)
-	}
+	deg := degradeOf(t, "ApplyMatch — the DB write succeeded", err)
 	if got.Title != "Provider Title" {
-		t.Errorf("Title = %q, want the applied match — the Outcome must accompany the book, not replace it", got.Title)
+		t.Errorf("Title = %q, want the applied match — a degrade accompanies the book, it does not replace it", got.Title)
 	}
-	if !out.Degraded() {
-		t.Fatal("Outcome.Degraded() is false after a failed sidecar write")
+	if deg == nil {
+		t.Fatal("a failed sidecar write returned a nil error — the caller reads that as a clean save")
 	}
-	assertWarns(t, out, "sidecar")
+	assertWarns(t, deg, "sidecar")
 }
 
-// Auto-enrichment is DB-only by ADR-0001 §3, so there is no later step
-// that could degrade and nothing for AutoEnrich's discarded Outcome to
-// have hidden.
-func TestApplyMatchAutoEnrichmentOutcomeIsClean(t *testing.T) {
+// Auto-enrichment is DB-only by ADR-0001 §3, so there is no later step that
+// could degrade — which is why AutoEnrich can hand its error straight to a
+// caller that treats any error as a failed job.
+func TestApplyMatchAutoEnrichmentIsNeverDegraded(t *testing.T) {
 	books := &fakeBookStore{}
 	mw, _ := newPipelineWriter(t, books, &recordingSidecarWriter{err: errStepFailed}, nil)
 	svc := NewEnrichmentService(nil, newFakeProviderSettings(), books, &fakeCoverStore{}, mw)
 
-	_, out, err := svc.ApplyMatch(context.Background(), degradedBook(),
-		provider.Match{Title: "Provider Title"}, ApplyOptions{}, TriggerAutoEnrichment)
-	if err != nil {
-		t.Fatalf("ApplyMatch: %v", err)
-	}
-	if out.Degraded() {
-		t.Fatalf("auto-enrichment reported a degraded write it never attempted: %v", out.Warnings())
+	if _, err := svc.ApplyMatch(context.Background(), degradedBook(),
+		provider.Match{Title: "Provider Title"}, ApplyOptions{}, TriggerAutoEnrichment); err != nil {
+		t.Fatalf("auto-enrichment reported a write step it never attempted: %v", err)
 	}
 }

@@ -269,7 +269,9 @@ Opaque change token from a backend (S3 returns one; LocalFS leaves it empty). Us
 
 ### Walker
 
-`internal/scan.Walk`; streams `WalkEntry{Location, Size, Mtime, ETag}` from a Storage.
+`internal/scan.Walk`; streams `WalkEntry{Location, Key, Size, Mtime, ETag}` from a Storage. It has no Library, so it reports the listing key in both `Location` and `Key`.
+
+The walk workers actually use is `service.LibraryHandle.Walk`, which answers the rooting question once and yields **library-relative** `Location`s for both kinds of Backend — an object store from the top of its own prefix, a local Backend from the Library root under a `/`-rooted LocalFS (ADR-0030 §1) — while carrying through the `Key` the object was listed under, so a caller reading the bytes does not re-derive one. Returns `service.ErrNoWalkRoot` for a local Library with no root, which must never be confused with an empty walk: that reads as "every file is gone".
 
 ### Differ
 
@@ -277,7 +279,11 @@ Opaque change token from a backend (S3 returns one; LocalFS leaves it empty). Us
 
 ### Relocate by hash
 
-`scan.RelocateByHash` (or inline equivalent in `task.LibraryScan`); for a New walk entry, hashes the bytes and queries `Files.GetByContentHash` in the same library. On hit, updates the existing `files.location` to the new path — the rename safety net under ADR-0018. On miss, returns without side effect; scan is never an ingest path.
+`scan.RelocateByHash`; for a New walk entry, hashes the bytes and queries `Files.GetByContentHash` in the same library. On hit, updates the existing `files.location` to the new path — the rename safety net under ADR-0018. On miss, returns without side effect; scan is never an ingest path.
+
+Returns `scan.Relocated`, the set of row ids it moved, because the Missing pass has to skip them: the location a relocated row used to live at also comes back Missing in the same scan, and flagging it would undo the relocate one line later. That coupling is why this lived inline in `task.LibraryScan` for as long as this entry claimed otherwise.
+
+Its reach ends at rows that carry a `content_hash`. The absolute-location rows ADR-0030 declines to migrate come from `migrator.seedFilesFromBooks`, which writes none — so for exactly those rows, Missing is the final answer and the purge sweeper acts on it (`TestLibraryScanRescuesAnAbsoluteRowOnlyWhenItCarriesAHash`).
 
 ### Audio format
 
@@ -397,11 +403,11 @@ Routes that need only existence — add-to-shelf, progress, cancel a run — tak
 
 ### Book detail response
 
-`handler.writeBookDetail(c, userID, bookID, outcome, logMsg)`; the one module that answers "the current wire representation of book X for user Y". Owns three rules that were previously restated at five sites across the library, enrichment and bookdrop surfaces: reload the row after a write (so the response carries repo-computed fields and stays in lockstep with a fresh GET), turn a nil shelf-slug slice into an empty one (a JSON `null` where the client's type says `string[]`), and attach [[Outcome]] warnings when the write degraded.
+`handler.writeBookDetail(c, userID, bookID, err)`; the one module that answers "the current wire representation of book X for user Y". Owns four rules that were previously restated at five sites across the library, enrichment and bookdrop surfaces: reload the row after a write (so the response carries repo-computed fields and stays in lockstep with a fresh GET), turn a nil shelf-slug slice into an empty one (a JSON `null` where the client's type says `string[]`), map the write's error (not found → 404, fatal → 500, [[Degraded]] → a qualified 200), and attach that degradation's warnings.
 
 They had already drifted, which is the argument for the module: bookdrop approve hard-coded `Shelves: []string{}` instead of querying, and two of the five carried no warnings. `attachWarnings` — the shared warning attachment the three edit endpoints already used — is absorbed into it rather than sitting beside it.
 
-Callers hand it a book id and it writes the response. A read passes the zero `Outcome` and an empty log message; a plain GET therefore pays one extra primary-key lookup, which is the price of the five sites having one answer instead of five.
+Callers hand it a book id and whatever their write returned, and it writes the response. A read or an approve — neither of which can degrade — passes `nil`; a plain GET therefore pays one extra primary-key lookup, which is the price of the five sites having one answer instead of five. The endpoints used to hand over an `Outcome` plus a log message, which is a thing a new endpoint can forget; an error is not, and a degradation is not a `nil` one.
 
 ### Book file sandbox
 
@@ -413,7 +419,7 @@ Callers hand it a book id and it writes the response. A read passes the zero `Ou
 
 ### MetadataWriter
 
-`service.MetadataWriter`; the **edit-side write pipeline** module. Owns the `DB → file embedded → JSON sidecar → folder rename` sequence for user-driven edits only. Three triggers in scope: `manual_edit`, `apply_enrichment`, `auto_enrichment`. The other ADR-0001 §3 rows (`bookdrop approve`, `library scan re-ingest`) deliberately route around this module — for those, the file *is* the source, so a writer that rewrites the file would loop. Single entry point: `Write(ctx, book, trigger) (Outcome, error)`. Only the DB step fails the call; a nil error means the books row was updated and nothing more, so callers read `Outcome.Degraded()` / `Outcome.Warnings()` to learn whether the sidecar and in-file copies kept up. All three edit endpoints — metadata PATCH, field-lock toggle, Apply match — put those warnings on the response, in one shape, via the handler's `attachWarnings`. Decision lives in `decideEffects` (pure); execution is a flat orchestration of the three write steps (DB, in-file embed, sidecar) plus a call into the rename — the embed precedes the sidecar because the sidecar's mode is chosen from whether it landed. The rename is its own module and reports a [[Rename outcome]] rather than a boolean, so the pipeline can tell a rename that declined from one that broke. Stamps `files.content_hash` after a successful in-file write so the next library scan recognises its own write and skips re-extract.
+`service.MetadataWriter`; the **edit-side write pipeline** module. Owns the `DB → file embedded → JSON sidecar → folder rename` sequence for user-driven edits only. Three triggers in scope: `manual_edit`, `apply_enrichment`, `auto_enrichment`. The other ADR-0001 §3 rows (`bookdrop approve`, `library scan re-ingest`) deliberately route around this module — for those, the file *is* the source, so a writer that rewrites the file would loop. Single entry point: `Write(ctx, book, trigger) (Outcome, error)`. Only the DB step fails the call; the best-effort tail returns a [[Degraded]] as the error, so a nil error means the whole plan landed and callers split the two with `service.Degradation(err)`. All three edit endpoints — metadata PATCH, field-lock toggle, Apply match — report it in one shape, through the [[Book detail response]] module, which is the only place that turns it into warnings. Decision lives in `decideEffects` (pure); execution is a flat orchestration of the three write steps (DB, in-file embed, sidecar) plus a call into the rename — the embed precedes the sidecar because the sidecar's mode is chosen from whether it landed. The rename is its own module and reports a [[Rename outcome]] rather than a boolean, so the pipeline can tell a rename that declined from one that broke. Stamps `files.content_hash` after a successful in-file write so the next library scan recognises its own write and skips re-extract.
 
 ### Effects
 
@@ -421,7 +427,13 @@ Callers hand it a book id and it writes the response. A read passes the zero `Ou
 
 ### Outcome
 
-`service.Outcome{InFileWritten, SidecarMode, FolderRenamed}`; what the executor returns alongside `error`. `SidecarMode` is decided post-hoc from `InFileWritten` per ADR-0001's `inFileWritten == false → sidecar = full mirror` rule. `FolderRenamed` is set when ADR-0003 §6 fired. Outcome is consumed by tests, optionally by SSE telemetry/audit; callers that don't care can discard.
+`service.Outcome{InFileWritten, SidecarMode, SidecarWritten, FolderRenamed, NewFolderPath}`; what the executor did, returned alongside `error`. Facts only — what it failed to do is the error's job, see [[Degraded]]. `SidecarMode` is decided post-hoc from `InFileWritten` per ADR-0001's `inFileWritten == false → sidecar = full mirror` rule. `FolderRenamed` is set when ADR-0003 §6 fired. Outcome is consumed by tests, optionally by SSE telemetry/audit; callers that don't care can discard, and discarding facts costs no user anything.
+
+### Degraded
+
+`service.Degraded{Failures []StepFailure}`, an `error`; the result of a call whose authoritative step succeeded and whose best-effort tail did not. One type for both degradable pipelines: the metadata write (steps `sidecar`, `in-file write`) and `LibraryService.DeleteBook` (steps `book files`, `cover art`, `book file on disk`), which differ only in the verb the warnings render with — "not written" vs "not removed". They used to be two types with verbatim-identical `Warnings`/`fail` bodies under a comment arguing the split was real; what was actually different was the write pipeline's own facts, which stayed on [[Outcome]].
+
+It is an error because the alternative was proven not to work: both pipelines used to return the degradation beside a `nil` error under twenty lines of prose asking callers to consult it, and the `Degraded()` accessor ended with zero production callers on either type while auto-enrich dropped the outcome whole. Now `nil` means every planned step landed, a `*Degraded` means the authoritative step landed and the named ones did not, and anything else means the call failed. `service.Degradation(err) (*Degraded, fatal bool)` is the one split; misreading a degradation gets you a loud 500, never a quiet 200.
 
 ---
 
@@ -561,7 +573,7 @@ Fan-out policy: per-provider error → log + write to health table + return nil 
 
 ### Apply match
 
-`EnrichmentService.ApplyMatch(ctx, book, match, opts, trigger)`; the lock-honoring merge. For each unlocked field, overwrite from match if non-empty; categories union when `opts.MergeCategories`; cover imported when `opts.ApplyCover` and unlocked. Always routes through `MetadataWriter`, which `EnrichmentService` and `LibraryService` both take as a required constructor argument — there is no direct-to-repo fallback and no wiring that skips the ADR-0001 pipeline. Returns `(model.Book, Outcome, error)`: the Outcome travels with the book so the endpoint can report a degraded write, the same as the other two edit endpoints. Single codepath shared by manual UI apply and auto-enrich; only `AutoEnrich` discards the Outcome, and only because ADR-0001 §3 makes its write DB-only.
+`EnrichmentService.ApplyMatch(ctx, book, match, opts, trigger)`; the lock-honoring merge. For each unlocked field, overwrite from match if non-empty; categories union when `opts.MergeCategories`; cover imported when `opts.ApplyCover` and unlocked. Always routes through `MetadataWriter`, which `EnrichmentService` and `LibraryService` both take as a required constructor argument — there is no direct-to-repo fallback and no wiring that skips the ADR-0001 pipeline. Returns `(model.Book, error)`: the error is the write's, so a [[Degraded]] travels back with the book and the endpoint reports it the same as the other two edit endpoints. A degradation does not stop the apply — the cover import still runs — only a fatal write does. Single codepath shared by manual UI apply and auto-enrich; `AutoEnrich` no longer discards anything, since its write is DB-only by ADR-0001 §3 and any error it did produce rides the return it already has.
 
 ---
 

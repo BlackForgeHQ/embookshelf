@@ -13,7 +13,6 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/provider"
-	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 )
 
@@ -222,22 +221,17 @@ func (h *Handler) EnrichApplyMatch(c *gin.Context, s bookScope) {
 		CoverURL:    body.CoverURL,
 	}
 
-	updated, outcome, err := h.enrich.ApplyMatch(c.Request.Context(), book, match, service.ApplyOptions{
+	updated, err := h.enrich.ApplyMatch(c.Request.Context(), book, match, service.ApplyOptions{
 		MergeCategories: body.MergeCategories,
 		ApplyCover:      body.ApplyCover,
 	}, service.TriggerApplyEnrichment)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "enrich apply", err)
-		return
-	}
 
-	// The reload the module performs is what picks up the cover flags the
-	// cover-from-url import set after UpdateMetadata returned.
-	h.writeBookDetail(c, userID, updated.ID, outcome, "apply match write degraded")
+	// The write's result goes to the seam whole: it maps a fatal error to
+	// a status and a degradation to warnings on the 200. The reload it
+	// performs is what picks up the cover flags the cover-from-url import
+	// set after UpdateMetadata returned. On a fatal error updated is the
+	// zero Book and the seam answers from err before it looks at the id.
+	h.writeBookDetail(c, userID, updated.ID, err)
 }
 
 // toggleFieldLocksReq flips the lock flag for one or more metadata
@@ -274,17 +268,7 @@ func (h *Handler) EnrichToggleFieldLocks(c *gin.Context, s bookScope) {
 		book.Locks.Set(f, v)
 	}
 
-	lockOutcome, err := h.lib.UpdateBookMetadata(c.Request.Context(), book)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "lock update", err)
-		return
-	}
-
-	h.writeBookDetail(c, userID, id, lockOutcome, "lock update write degraded")
+	h.writeBookDetail(c, userID, id, h.lib.UpdateBookMetadata(c.Request.Context(), book))
 }
 
 // isbnLookupReq drives POST /books/metadata/isbn-lookup. Walks enabled

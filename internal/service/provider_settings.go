@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"time"
@@ -11,6 +12,23 @@ import (
 	"github.com/blackforge/embookshelf/internal/provider"
 	"github.com/blackforge/embookshelf/internal/repo"
 )
+
+// providerSettingsStore is the admin half of provider_settings: the config
+// blobs boot pushes into the live providers, the rows the Settings panel
+// renders, and the three writes an admin makes.
+//
+// It holds no health telemetry. RecordSuccess and RecordError belong to
+// the fan-out, which is a different service behind providerRunStore — this
+// one reads what the admin set and writes what the admin changed, and a
+// fake for it that stubbed the counters was answering for a call that can
+// never arrive.
+type providerSettingsStore interface {
+	AllConfigs(ctx context.Context) (map[string]json.RawMessage, error)
+	List(ctx context.Context) ([]repo.ProviderSetting, error)
+	SetConfig(ctx context.Context, id string, config json.RawMessage) error
+	SetEnabled(ctx context.Context, id string, enabled bool) error
+	SetPriority(ctx context.Context, id string, priority *int) error
+}
 
 // ProviderSettingsService is the admin surface over provider_settings:
 // which metadata providers are enabled, their config blobs, their ranking,

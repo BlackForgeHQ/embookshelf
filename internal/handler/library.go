@@ -321,17 +321,9 @@ func (h *Handler) BookPatch(c *gin.Context, s bookScope) {
 	}
 	patch.toDomain().Apply(&current)
 
-	outcome, err := h.lib.UpdateBookMetadata(c.Request.Context(), current)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "book not found")
-			return
-		}
-		writeServerError(c, "book update", err)
-		return
-	}
-
-	h.writeBookDetail(c, userID, id, outcome, "book metadata write degraded")
+	// The write's result goes to the seam whole — degraded or not, fatal
+	// or not. This endpoint has nothing left to decide about it.
+	h.writeBookDetail(c, userID, id, h.lib.UpdateBookMetadata(c.Request.Context(), current))
 }
 
 // BookProgressUpdate stores the current user's reading progress + resume
@@ -391,12 +383,19 @@ func (h *Handler) BookAddShelf(c *gin.Context, s bookScope) {
 // A degraded cleanup does not change the status code. The row is gone,
 // so 204 is the truth as far as the client is concerned, and 204 carries
 // no body to put warnings in; what is left behind is bytes nothing
-// references, which is an operator's problem and goes to the log.
+// references, which is an operator's problem and goes to the log. That is
+// the one thing this endpoint has to say for itself, and it has to say
+// it: the degradation arrives as an error, so answering `err != nil` with
+// a 500 would report a delete that happened as one that did not. The
+// service.Degradation split is how it says which it is — and the failure
+// it forecloses is the opposite one, a stranded half-gigabyte read as a
+// clean 204.
 func (h *Handler) BookDelete(c *gin.Context, s bookScope) {
 	id := s.Book.ID
 
-	outcome, err := h.lib.DeleteBook(c.Request.Context(), s.Book)
-	if err != nil {
+	err := h.lib.DeleteBook(c.Request.Context(), s.Book)
+	deg, fatal := service.Degradation(err)
+	if fatal {
 		if errors.Is(err, repo.ErrNotFound) {
 			writeError(c, http.StatusNotFound, "book not found")
 			return
@@ -404,7 +403,7 @@ func (h *Handler) BookDelete(c *gin.Context, s bookScope) {
 		writeServerError(c, "book delete", err)
 		return
 	}
-	if warnings := outcome.Warnings(); len(warnings) > 0 {
+	if warnings := deg.Warnings(); len(warnings) > 0 {
 		slog.Warn("book delete degraded", "book", id, "warnings", warnings)
 	}
 
@@ -468,7 +467,7 @@ func (p bookPatch) toDomain() model.BookPatch {
 // BookDetail returns a single book enriched with the user's shelf
 // membership slugs.
 func (h *Handler) BookDetail(c *gin.Context, s bookScope) {
-	h.writeBookDetail(c, s.UserID, s.Book.ID, service.Outcome{}, "")
+	h.writeBookDetail(c, s.UserID, s.Book.ID, nil)
 }
 
 // writeBooksPayload projects a repo result into the list envelope the SPA
