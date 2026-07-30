@@ -112,6 +112,59 @@ func TestRecordSegmentAsksForFinalizeWhenTheLastSegmentLands(t *testing.T) {
 	}
 }
 
+// A segment awaiting a retry is outstanding, and the coverage query is
+// where that has to be true.
+//
+// The counts are the run's authority on its own lifecycle, so a state
+// that fell into the failed column would settle the run and conclude it
+// failed while the retry was still to come — the retry then lands on a
+// run the disposition refuses to act on (ADR-0032, #263). It falls into
+// neither column: total counts it, nothing else does, and the run is
+// neither complete nor settled until it lands or gives up.
+func TestRecordSegmentCountsASegmentAwaitingARetryAsOutstanding(t *testing.T) {
+	bookID, audiobooks := audiobookFixture(t, repotest.New(t), 2)
+	ctx := context.Background()
+
+	out, err := audiobooks.RecordSegment(ctx, bookID, 0, runGeneration, model.SegmentResult{
+		State: model.SegmentRetrying, Error: "openai: 503 service unavailable",
+	})
+	if err != nil {
+		t.Fatalf("RecordSegment: %v", err)
+	}
+	if out.Coverage != (model.AudiobookCoverage{Total: 2}) {
+		t.Fatalf("coverage = %+v, want 2 total with neither column moved", out.Coverage)
+	}
+
+	// And the sibling landing on top of it does not settle the run: this
+	// is the read that used to conclude it failed.
+	out, err = audiobooks.RecordSegment(ctx, bookID, 1, runGeneration, doneResult(1))
+	if err != nil {
+		t.Fatalf("RecordSegment 1: %v", err)
+	}
+	if out.Coverage != (model.AudiobookCoverage{Total: 2, Done: 1}) {
+		t.Errorf("coverage = %+v, want 2 total / 1 done / 0 failed", out.Coverage)
+	}
+	if out.Coverage.Settled() || out.Next != model.AudiobookNextNothing {
+		t.Errorf("the sibling's landing asked for %q (settled=%v), want nothing while a retry is outstanding",
+			out.Next, out.Coverage.Settled())
+	}
+
+	// The retry lands, and the run is finalizable exactly as if it had
+	// never stumbled.
+	out, err = audiobooks.RecordSegment(ctx, bookID, 0, runGeneration, doneResult(0))
+	if err != nil {
+		t.Fatalf("RecordSegment 0 retry: %v", err)
+	}
+	if out.Next != model.AudiobookNextFinalize {
+		t.Errorf("the retry asked for %q, want finalize", out.Next)
+	}
+	if seg, err := audiobooks.GetSegment(ctx, bookID, 0); err != nil {
+		t.Fatalf("GetSegment: %v", err)
+	} else if seg.State != model.SegmentDone || seg.Error != "" {
+		t.Errorf("segment 0 = %q/%q, want done with the stale message cleared", seg.State, seg.Error)
+	}
+}
+
 // The alignment map is written by the same call. A segment result that
 // recorded the transition but not the duration would leave finalize
 // unable to place the segment in the finished file.
@@ -674,9 +727,16 @@ func TestSegmentCharsDefaultMatchesTheSplittersDefault(t *testing.T) {
 	d := repotest.New(t)
 
 	var backfill int
+	// Scoped to this test's own schema. information_schema is not
+	// filtered by search_path, so an unscoped query matches every schema
+	// in the database — including another test's, caught between the
+	// migration that creates the table and the one that adds this
+	// default, which reads back NULL and fails a test that is not about
+	// that at all.
 	err := d.SQL.QueryRowContext(context.Background(),
 		`SELECT column_default::int FROM information_schema.columns
-		 WHERE table_name = 'book_audiobooks' AND column_name = 'segment_chars'`).Scan(&backfill)
+		 WHERE table_schema = current_schema()
+		   AND table_name = 'book_audiobooks' AND column_name = 'segment_chars'`).Scan(&backfill)
 	if err != nil {
 		t.Fatalf("read column default: %v", err)
 	}
