@@ -19,6 +19,7 @@ import {
   Select,
   Toggle,
 } from "@/components/SettingsShared"
+import { SecretInput } from "@/components/settings/SecretInput"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ProgressBar } from "@/components/ProgressBar"
@@ -168,20 +169,13 @@ export function ReadingGuidesPanel() {
             placeholder="llama3.1 / gpt-4o-mini"
           />
         </Field>
-        <Field
-          label={
-            form.keySet ? "API key (stored — leave blank to keep)" : "API key"
-          }
-        >
-          <Input
-            type="password"
-            value={apiKey.value}
-            onChange={(e) => apiKey.set(e.target.value)}
-            placeholder={
-              form.keySet ? "••••••••" : "not needed for a local model"
-            }
-          />
-        </Field>
+        <SecretInput
+          label="API key"
+          noun="key"
+          secret={apiKey}
+          stored={form.keySet}
+          placeholder="not needed for a local model"
+        />
         <Field label="Credential header">
           <Select
             value={form.authStyle}

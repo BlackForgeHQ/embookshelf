@@ -22,6 +22,7 @@ import {
   PanelLoading,
   Select,
 } from "@/components/SettingsShared"
+import { SecretInput } from "@/components/settings/SecretInput"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -279,47 +280,6 @@ function useOidcTest(slug: ProviderSlug) {
   })
 }
 
-// SecretInput is the one write-only secret control in this panel. The
-// field shows only what was typed this session; leaving it alone keeps
-// the stored secret, and dropping it is the separate, explicit act below.
-function SecretInput({
-  secret,
-  stored,
-}: {
-  secret: SecretField
-  stored: boolean
-}) {
-  return (
-    <>
-      <Input
-        type="password"
-        autoComplete="new-password"
-        value={secret.value}
-        placeholder={stored ? "••••••••" : ""}
-        onChange={(e) => secret.set(e.target.value)}
-      />
-      {stored && !secret.touched && (
-        <button
-          type="button"
-          className="t-small"
-          style={{
-            marginTop: 4,
-            background: "none",
-            border: "none",
-            padding: 0,
-            cursor: "pointer",
-            color: "var(--color-accent)",
-            alignSelf: "flex-start",
-          }}
-          onClick={secret.clear}
-        >
-          Clear stored secret
-        </button>
-      )}
-    </>
-  )
-}
-
 function PresetProviderPanel({
   title,
   slug,
@@ -392,11 +352,14 @@ function PresetProviderPanel({
             onChange={(e) => onChange({ ...value, clientId: e.target.value })}
           />
         </Field>
-        <Field
-          label={`Client secret${value.clientSecretSet ? " (stored — leave blank to keep)" : ""}`}
-        >
-          <SecretInput secret={secret} stored={value.clientSecretSet} />
-        </Field>
+        <SecretInput
+          label="Client secret"
+          // Three providers render a "Client secret" field on one page,
+          // so the removal control names whose secret it drops.
+          noun={`${title} client secret`}
+          secret={secret}
+          stored={value.clientSecretSet}
+        />
         <div style={{ marginTop: 10 }}>
           <Button
             variant="outline"
@@ -528,11 +491,12 @@ function GenericOidcPanel({
             onChange={(e) => onChange({ ...value, clientId: e.target.value })}
           />
         </Field>
-        <Field
-          label={`Client secret${value.clientSecretSet ? " (stored — leave blank to keep)" : ""}`}
-        >
-          <SecretInput secret={secret} stored={value.clientSecretSet} />
-        </Field>
+        <SecretInput
+          label="Client secret"
+          noun={`${value.providerName || "custom provider"} client secret`}
+          secret={secret}
+          stored={value.clientSecretSet}
+        />
         <Field label="Scopes (space-separated)">
           <Input
             value={value.scopes}

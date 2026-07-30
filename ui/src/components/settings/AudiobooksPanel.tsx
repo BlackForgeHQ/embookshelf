@@ -20,6 +20,7 @@ import {
   Select,
   Toggle,
 } from "@/components/SettingsShared"
+import { SecretInput } from "@/components/settings/SecretInput"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { narratableFormatList } from "@/lib/formats"
@@ -215,20 +216,17 @@ function EngineCard({
         </Field>
       ) : null}
 
-      <Field label="API key">
-        <Input
-          type="password"
-          value={apiKey.value}
-          placeholder={
-            engine.keySet
-              ? "stored — leave blank to keep it"
-              : engine.id === "openai"
-                ? "optional for a local engine"
-                : "required"
-          }
-          onChange={(e) => apiKey.set(e.target.value)}
-        />
-      </Field>
+      <SecretInput
+        label="API key"
+        // Three engine cards render an "API key" field, so the removal
+        // control names its engine rather than repeating "key" thrice.
+        noun={`${engine.label} key`}
+        secret={apiKey}
+        stored={engine.keySet}
+        placeholder={
+          engine.id === "openai" ? "optional for a local engine" : "required"
+        }
+      />
 
       {engine.needsModel && (
         <Field label="Model">

@@ -20,6 +20,7 @@ import {
   Select,
   Toggle,
 } from "@/components/SettingsShared"
+import { SecretInput } from "@/components/settings/SecretInput"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -186,31 +187,13 @@ export function EmailPanel() {
             />
           </Field>
 
-          <div className="flex flex-col gap-1.5">
-            <span className="t-label flex items-center gap-2">
-              Password
-              <span
-                className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
-                  form.passwordSet
-                    ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
-                    : "bg-muted text-muted-foreground"
-                }`}
-              >
-                {form.passwordSet ? "Configured" : "Not set"}
-              </span>
-            </span>
-            <Input
-              type="password"
-              value={password.value}
-              onChange={(e) => password.set(e.target.value)}
-              placeholder={
-                form.passwordSet
-                  ? "Leave blank to keep existing"
-                  : "Set a password"
-              }
-              autoComplete="new-password"
-            />
-          </div>
+          <SecretInput
+            label="Password"
+            noun="password"
+            secret={password}
+            stored={form.passwordSet}
+            placeholder="Set a password"
+          />
         </Card>
 
         <Card>
