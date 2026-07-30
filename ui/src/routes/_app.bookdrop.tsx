@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
+import { toast } from "sonner"
 import type { ReactNode } from "react"
 
 import type { ApiError } from "@/api/client"
@@ -71,6 +72,10 @@ function BookDrop() {
 
   const rejectMut = useApiMutation(rejectBookDrop, { reportErrors: "inline" })
 
+  // Only the two single-row controls report here. The sweep's failures
+  // belong to rows the reviewer may not have selected, so pinning one of
+  // them above whichever row happens to be open would say the wrong
+  // thing about the wrong file.
   const error = approveMut.error ?? rejectMut.error
 
   // The sweep is the reviewable phase, not everything approvable: a
@@ -78,6 +83,43 @@ function BookDrop() {
   // its error, but bulk approve would import it with nobody looking.
   const sweepable = active.filter((i) => bookdropView(i).phase === "reviewable")
   const readyCount = sweepable.length
+
+  // The sweep's own handle on the same endpoint. It reports nothing per
+  // row — one click that fires twenty approvals would raise twenty
+  // toasts, none of which says how the sweep as a whole went — and it
+  // does not navigate, because where to go is a decision the sweep can
+  // only make once every row has settled.
+  const sweepMut = useApiMutation(approveBookDrop, { reportErrors: "inline" })
+  const [sweeping, setSweeping] = useState(false)
+
+  const approveSweep = async () => {
+    const rows = sweepable
+    if (sweeping || rows.length === 0) return
+    setSweeping(true)
+    const settled = await Promise.allSettled(
+      rows.map((item) => sweepMut.mutateAsync({ id: item.id }))
+    )
+    setSweeping(false)
+
+    const failed = rows.filter((_, i) => settled[i]?.status === "rejected")
+    if (failed.length > 0) {
+      // A toast, because the alternative is a Notice on a page the
+      // reviewer may be leaving, and because it has to survive the
+      // navigation a full success performs. Staying put is the other
+      // half of the report: the rows that failed are still in the queue
+      // behind this toast, and the reviewer is the one who has to
+      // decide what to do about them.
+      toast.error(sweepFailureReport(failed, rows.length))
+      return
+    }
+    // Every row imported, so this behaves as a single approve of the
+    // last one: the reviewer lands in the library, on a book that is
+    // now there.
+    const last = settled[settled.length - 1]
+    if (last?.status === "fulfilled") {
+      void navigate({ to: "/book/$id", params: { id: last.value.id } })
+    }
+  }
 
   return (
     <div className="bdrop-shell fade-in">
@@ -99,11 +141,9 @@ function BookDrop() {
             <Button
               variant="accent"
               size="sm"
-              disabled={approveMut.isPending || readyCount === 0}
+              disabled={sweeping || readyCount === 0}
               onClick={() => {
-                for (const item of sweepable) {
-                  approveMut.mutate({ id: item.id })
-                }
+                void approveSweep()
               }}
             >
               <Icon name="check" size={13} /> Approve{" "}
@@ -157,7 +197,7 @@ function BookDrop() {
               item={current}
               libraries={libraries.data ?? []}
               error={error}
-              busy={approveMut.isPending || rejectMut.isPending}
+              busy={approveMut.isPending || rejectMut.isPending || sweeping}
               onApprove={(libraryId) =>
                 approveMut.mutate({ id: current.id, libraryId })
               }
@@ -170,6 +210,28 @@ function BookDrop() {
       </div>
     </div>
   )
+}
+
+/**
+ * What the sweep tells the reviewer when it could not approve
+ * everything.
+ *
+ * One count, not two. The sweep only fires at rows in the reviewable
+ * phase — the ones the server has already said it will take — so a
+ * rejection here is a failure rather than a refusal, and splitting the
+ * number would name a category that cannot happen. Which rows they were
+ * is the part the reviewer acts on, and they are still in the queue
+ * behind this sentence; the first few names are enough to find them.
+ */
+function sweepFailureReport(
+  failed: ReadonlyArray<BookDropItem>,
+  total: number
+): string {
+  const named = failed.slice(0, 3).map((i) => i.title || i.filename)
+  const rest = failed.length - named.length
+  const list =
+    rest > 0 ? `${named.join(", ")} and ${rest} more` : named.join(", ")
+  return `${failed.length} of ${total} could not be approved: ${list}`
 }
 
 function RailSectionHeader({
