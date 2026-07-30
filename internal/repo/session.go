@@ -20,36 +20,55 @@ func NewSessionRepo(d *db.DB) *SessionRepo {
 	return &SessionRepo{db: d}
 }
 
+// sessionProjection is the sessions row, declared once. Both RETURNING
+// clauses and the Scan destinations render from here.
+//
+// Three of the six columns are TIMESTAMPTZ — expires_at, created_at and
+// last_used_at — which is the Column-order coupling hazard on the auth
+// surface: crossing a session's creation time with its expiry compiles,
+// runs, and reads downstream as an expiry bug rather than as a wrong
+// column. Stating a column's position and its destination in one value
+// makes that swap unrepresentable.
+var sessionProjection = projection[model.Session]{
+	{name: "id", dest: func(s *model.Session) any { return &s.ID }},
+	{name: "user_id", dest: func(s *model.Session) any { return &s.UserID }},
+	{name: "expires_at", dest: func(s *model.Session) any { return &s.ExpiresAt }},
+	{name: "user_agent", dest: func(s *model.Session) any { return &s.UserAgent }},
+	{name: "created_at", dest: func(s *model.Session) any { return &s.CreatedAt }},
+	{name: "last_used_at", dest: func(s *model.Session) any { return &s.LastUsedAt }},
+}
+
+// sessionReturning renders the projection with no alias in scope: both
+// queries that read a session row are RETURNING clauses, which have no
+// FROM to alias the table.
+var sessionReturning = sessionProjection.returningList("sessions")
+
 func (r *SessionRepo) Create(ctx context.Context, userID, userAgent string, ttl time.Duration) (model.Session, error) {
-	const q = `
+	// The INSERT's own column list stays outside the projection: it
+	// names the insertable subset (the three defaulted columns are not
+	// in it), which is a different membership question. Create's
+	// round-trip test guards it.
+	q := `
 		INSERT INTO sessions (user_id, expires_at, user_agent)
 		VALUES ($1, now() + $2::interval, $3)
-		RETURNING id, user_id, expires_at, user_agent, created_at, last_used_at
-	`
-	var s model.Session
-	err := r.db.SQL.QueryRowContext(ctx, q, userID, ttl.String(), userAgent).Scan(
-		&s.ID, &s.UserID, &s.ExpiresAt, &s.UserAgent, &s.CreatedAt, &s.LastUsedAt,
-	)
-	if err != nil {
-		return s, err
-	}
-	return s, nil
+		RETURNING ` + sessionReturning
+	row := r.db.SQL.QueryRowContext(ctx, q, userID, ttl.String(), userAgent)
+	return scanSession(row)
 }
 
 // GetActive returns the session and its user when the session id is valid and
 // not expired, and updates last_used_at to slide the session forward. Expired
 // or missing rows return ErrNotFound.
 func (r *SessionRepo) GetActive(ctx context.Context, id string) (model.Session, model.User, error) {
-	const q = `
+	q := `
 		UPDATE sessions
 		SET last_used_at = now()
 		WHERE id = $1 AND expires_at > now()
-		RETURNING id, user_id, expires_at, user_agent, created_at, last_used_at
-	`
+		RETURNING ` + sessionReturning
 
-	var s model.Session
 	row := r.db.SQL.QueryRowContext(ctx, q, id)
-	if err := row.Scan(&s.ID, &s.UserID, &s.ExpiresAt, &s.UserAgent, &s.CreatedAt, &s.LastUsedAt); err != nil {
+	s, err := scanSession(row)
+	if err != nil {
 		if dberr.IsNotFound(err) {
 			return s, model.User{}, ErrNotFound
 		}
@@ -98,6 +117,19 @@ func (r *SessionRepo) DeleteForUser(ctx context.Context, userID string) (int64, 
 		return 0, fmt.Errorf("rows affected: %w", err)
 	}
 	return n, nil
+}
+
+// scanSession hydrates a row into the model shape, taking its
+// destinations from the projection in the order it declares.
+//
+// The raw error is returned rather than mapped to ErrNotFound: Create's
+// INSERT ... RETURNING always produces a row, and GetActive is the only
+// caller for which "no row" means "expired or gone", so it does the
+// mapping itself.
+func scanSession(s scanner) (model.Session, error) {
+	var sess model.Session
+	err := sessionProjection.scan(s, &sess)
+	return sess, err
 }
 
 // PurgeExpired removes all expired sessions; called opportunistically at boot.

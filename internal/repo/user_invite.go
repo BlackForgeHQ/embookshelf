@@ -38,6 +38,36 @@ type UserInvite struct {
 	UserID     *string
 }
 
+// userInviteProjection is the user_invites row, declared once. Both
+// SELECT lists and the Scan destinations render from here.
+//
+// Three of the eight columns are TIMESTAMPTZ (created_at, expires_at,
+// accepted_at) and two are uuid (invited_by, user_id), which is the
+// Column-order coupling hazard on the auth surface: crossing an invite's
+// issue time with its deadline compiles, runs, and reads downstream as
+// an expiry bug rather than as a wrong column.
+//
+// The destinations are the struct fields themselves — model.Role and the
+// two nullable pointers scan directly — because a post-scan fixup is a
+// second positional list by another name.
+//
+// No entry carries an `arg`: the table has no full-row update.
+// MarkAccepted patches exactly two columns and names them inline.
+var userInviteProjection = projection[UserInvite]{
+	{name: "token_hash", dest: func(i *UserInvite) any { return &i.TokenHash }},
+	{name: "email", dest: func(i *UserInvite) any { return &i.Email }},
+	{name: "role", dest: func(i *UserInvite) any { return &i.Role }},
+	{name: "invited_by", dest: func(i *UserInvite) any { return &i.InvitedBy }},
+	{name: "created_at", dest: func(i *UserInvite) any { return &i.CreatedAt }},
+	{name: "expires_at", dest: func(i *UserInvite) any { return &i.ExpiresAt }},
+	{name: "accepted_at", dest: func(i *UserInvite) any { return &i.AcceptedAt }},
+	{name: "user_id", dest: func(i *UserInvite) any { return &i.UserID }},
+}
+
+// userInviteCols is the projection rendered for the two read queries.
+// Neither aliases the table, so the table name is its own qualifier.
+var userInviteCols = userInviteProjection.selectList("user_invites")
+
 // Create inserts a row keyed by sha256(token). expiresAt is the
 // absolute deadline; the handler picks 7d typical.
 func (r *UserInviteRepo) Create(ctx context.Context, hash []byte, email string, role model.Role, invitedBy string, expiresAt time.Time) error {
@@ -53,8 +83,8 @@ func (r *UserInviteRepo) Create(ctx context.Context, hash []byte, email string, 
 // when missing, expired, or already accepted — handler returns 410
 // regardless to avoid leaking status to a guesser.
 func (r *UserInviteRepo) GetByHash(ctx context.Context, hash []byte, now time.Time) (UserInvite, error) {
-	const q = `
-		SELECT token_hash, email, role, invited_by, created_at, expires_at, accepted_at, user_id
+	q := `
+		SELECT ` + userInviteCols + `
 		FROM user_invites
 		WHERE token_hash = $1 AND accepted_at IS NULL AND expires_at > $2
 	`
@@ -76,8 +106,8 @@ func (r *UserInviteRepo) MarkAccepted(ctx context.Context, hash []byte, userID s
 // ListPending returns every unaccepted, unexpired invite ordered by
 // most-recent-first. Drives the admin invites panel.
 func (r *UserInviteRepo) ListPending(ctx context.Context, now time.Time) ([]UserInvite, error) {
-	const q = `
-		SELECT token_hash, email, role, invited_by, created_at, expires_at, accepted_at, user_id
+	q := `
+		SELECT ` + userInviteCols + `
 		FROM user_invites
 		WHERE accepted_at IS NULL AND expires_at > $1
 		ORDER BY created_at DESC
@@ -108,19 +138,15 @@ func (r *UserInviteRepo) PurgeExpired(ctx context.Context, now time.Time) (int64
 	return res.RowsAffected()
 }
 
+// scan hydrates a row into UserInvite, taking its destinations from the
+// projection in the order it declares.
 func (r *UserInviteRepo) scan(s scanner) (UserInvite, error) {
-	var (
-		inv    UserInvite
-		role   string
-		userID *string
-	)
-	if err := s.Scan(&inv.TokenHash, &inv.Email, &role, &inv.InvitedBy, &inv.CreatedAt, &inv.ExpiresAt, &inv.AcceptedAt, &userID); err != nil {
+	var inv UserInvite
+	if err := userInviteProjection.scan(s, &inv); err != nil {
 		if dberr.IsNotFound(err) {
 			return UserInvite{}, ErrNotFound
 		}
 		return UserInvite{}, err
 	}
-	inv.Role = model.Role(role)
-	inv.UserID = userID
 	return inv, nil
 }
