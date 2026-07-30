@@ -122,6 +122,23 @@ The binary ships self-contained. The compiled SPA is embedded via
 [internal/staticfs/staticfs.go](internal/staticfs/staticfs.go), so
 there is no Node/Bun runtime in production.
 
+## Upgrading
+
+Schema migrations apply on boot (`MIGRATE_ON_START=true`, the default).
+One release range needs a manual check as well:
+
+- **Upgrading from v0.3.1 – v0.6.2, on an install older than v0.3.0?**
+  A bug in those releases could write an approved book's file to the
+  filesystem root instead of into its library — silently, but **only if
+  the server ran as root**. Under the official images' non-root user the
+  approve failed loudly and nothing was misplaced. Check with
+  `embookshelf recover-misplaced` (dry run; `--apply` repairs) and see
+  [docs/ops/misplaced-books.md](docs/ops/misplaced-books.md).
+
+- **Coming from a SQLite install?** embookshelf is Postgres-only
+  (ADR-0023). Migrate with
+  `embookshelf import-sqlite --from <file.db>`.
+
 ## What's live end-to-end
 
 ### Auth

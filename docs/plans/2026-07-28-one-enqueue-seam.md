@@ -116,7 +116,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/blackforge/embookshelf/internal/jobs"
+	"github.com/BlackForgeHQ/embookshelf/internal/jobs"
 )
 
 // probeArgs is a payload for exercising the seam itself.
@@ -360,7 +360,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/blackforge/embookshelf/internal/jobs"
+	"github.com/BlackForgeHQ/embookshelf/internal/jobs"
 )
 
 // Kind strings and json tags are stored values: River persists the kind

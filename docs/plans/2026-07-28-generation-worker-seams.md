@@ -202,11 +202,11 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/blackforge/embookshelf/internal/audio"
-	"github.com/blackforge/embookshelf/internal/fileproc"
-	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/storage"
-	"github.com/blackforge/embookshelf/internal/tts"
+	"github.com/BlackForgeHQ/embookshelf/internal/audio"
+	"github.com/BlackForgeHQ/embookshelf/internal/fileproc"
+	"github.com/BlackForgeHQ/embookshelf/internal/model"
+	"github.com/BlackForgeHQ/embookshelf/internal/storage"
+	"github.com/BlackForgeHQ/embookshelf/internal/tts"
 )
 
 // ---------------------------------------------------------------------------
@@ -426,12 +426,12 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/storage"
-	"github.com/blackforge/embookshelf/internal/task"
-	"github.com/blackforge/embookshelf/internal/tts"
+	"github.com/BlackForgeHQ/embookshelf/internal/model"
+	"github.com/BlackForgeHQ/embookshelf/internal/repo"
+	"github.com/BlackForgeHQ/embookshelf/internal/service"
+	"github.com/BlackForgeHQ/embookshelf/internal/storage"
+	"github.com/BlackForgeHQ/embookshelf/internal/task"
+	"github.com/BlackForgeHQ/embookshelf/internal/tts"
 )
 
 // ---------------------------------------------------------------------------
@@ -832,7 +832,7 @@ Expected: FAIL to compile — `undefined: task.SegmentDeps`.
 
 In `internal/task/audiobook.go`:
 
-Replace the import block's `"github.com/blackforge/embookshelf/internal/coverstore"` and `"github.com/blackforge/embookshelf/internal/sse"` with `"github.com/blackforge/embookshelf/internal/storage"`. The final block is:
+Replace the import block's `"github.com/BlackForgeHQ/embookshelf/internal/coverstore"` and `"github.com/BlackForgeHQ/embookshelf/internal/sse"` with `"github.com/BlackForgeHQ/embookshelf/internal/storage"`. The final block is:
 
 ```go
 import (
@@ -844,13 +844,13 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/blackforge/embookshelf/internal/audio"
-	"github.com/blackforge/embookshelf/internal/fileproc"
-	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/storage"
-	"github.com/blackforge/embookshelf/internal/tts"
+	"github.com/BlackForgeHQ/embookshelf/internal/audio"
+	"github.com/BlackForgeHQ/embookshelf/internal/fileproc"
+	"github.com/BlackForgeHQ/embookshelf/internal/model"
+	"github.com/BlackForgeHQ/embookshelf/internal/repo"
+	"github.com/BlackForgeHQ/embookshelf/internal/service"
+	"github.com/BlackForgeHQ/embookshelf/internal/storage"
+	"github.com/BlackForgeHQ/embookshelf/internal/tts"
 )
 ```
 
@@ -1029,7 +1029,7 @@ Change the segment registration to use `segment`:
 		}),
 ```
 
-Add `"errors"`, `"github.com/blackforge/embookshelf/internal/repo"` and `"github.com/blackforge/embookshelf/internal/sse"` to the imports.
+Add `"errors"`, `"github.com/BlackForgeHQ/embookshelf/internal/repo"` and `"github.com/BlackForgeHQ/embookshelf/internal/sse"` to the imports.
 
 `AudiobookDeps` itself moves from `audiobook.go` to `audiobook_finalize.go`, alongside the `publishAudiobook` function Step 3 relocated there — the segment worker no longer reads either. Move the struct verbatim minus its `Settings` and `Dispatch` fields, which nothing left references. Task 5 deletes both.
 
@@ -1095,12 +1095,12 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/blackforge/embookshelf/internal/llm"
-	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/storage"
-	"github.com/blackforge/embookshelf/internal/task"
+	"github.com/BlackForgeHQ/embookshelf/internal/llm"
+	"github.com/BlackForgeHQ/embookshelf/internal/model"
+	"github.com/BlackForgeHQ/embookshelf/internal/repo"
+	"github.com/BlackForgeHQ/embookshelf/internal/service"
+	"github.com/BlackForgeHQ/embookshelf/internal/storage"
+	"github.com/BlackForgeHQ/embookshelf/internal/task"
 )
 
 // fakeGuides records what the worker wrote.
@@ -1276,10 +1276,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/storage"
+	"github.com/BlackForgeHQ/embookshelf/internal/model"
+	"github.com/BlackForgeHQ/embookshelf/internal/repo"
+	"github.com/BlackForgeHQ/embookshelf/internal/service"
+	"github.com/BlackForgeHQ/embookshelf/internal/storage"
 )
 ```
 
@@ -1458,10 +1458,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/task"
+	"github.com/BlackForgeHQ/embookshelf/internal/model"
+	"github.com/BlackForgeHQ/embookshelf/internal/repo"
+	"github.com/BlackForgeHQ/embookshelf/internal/service"
+	"github.com/BlackForgeHQ/embookshelf/internal/task"
 )
 
 // ---------------------------------------------------------------------------
@@ -1818,10 +1818,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/blackforge/embookshelf/internal/audio"
-	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/BlackForgeHQ/embookshelf/internal/audio"
+	"github.com/BlackForgeHQ/embookshelf/internal/model"
+	"github.com/BlackForgeHQ/embookshelf/internal/repo"
+	"github.com/BlackForgeHQ/embookshelf/internal/service"
 )
 ```
 
@@ -1959,7 +1959,7 @@ Change the finalize registration:
 		}),
 ```
 
-Add `"fmt"` and `"github.com/blackforge/embookshelf/internal/model"` to the imports.
+Add `"fmt"` and `"github.com/BlackForgeHQ/embookshelf/internal/model"` to the imports.
 
 - [ ] **Step 5: Run the tests**
 

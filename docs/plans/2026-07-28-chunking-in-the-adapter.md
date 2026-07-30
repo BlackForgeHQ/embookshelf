@@ -339,8 +339,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/blackforge/embookshelf/internal/audio"
-	"github.com/blackforge/embookshelf/internal/textsplit"
+	"github.com/BlackForgeHQ/embookshelf/internal/audio"
+	"github.com/BlackForgeHQ/embookshelf/internal/textsplit"
 )
 
 // speaker is the per-request primitive: one engine call, one piece of

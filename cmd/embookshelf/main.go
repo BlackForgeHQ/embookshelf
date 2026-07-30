@@ -43,12 +43,17 @@ func main() {
 		switch os.Args[1] {
 		case "import-sqlite":
 			os.Exit(importSQLiteCmd(os.Args[2:]))
+		case "recover-misplaced":
+			os.Exit(recoverMisplacedCmd(os.Args[2:]))
 		case "-h", "--help", "help":
 			fmt.Fprintf(os.Stderr, `embookshelf %s (%s)
 
 Usage:
-  embookshelf                      serve (default)
-  embookshelf import-sqlite ...    import an existing SQLite library into Postgres
+  embookshelf                        serve (default)
+  embookshelf import-sqlite ...      import an existing SQLite library into Postgres
+  embookshelf recover-misplaced      find book files written outside their library
+                                     by the v0.3.1–v0.6.2 placer bug (dry run;
+                                     --apply to repair)
 `, version, commit)
 			os.Exit(0)
 		}

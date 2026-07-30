@@ -257,6 +257,14 @@ One entry in the `files` table per physical artifact tied to a `book_id`. Carrie
 
 Hot / warm / cold; assigned by `internal/tagging.Classify` based on last-read time. Drives S3 lifecycle transitions via `tag:tier=...` on the object.
 
+### Misplaced-file recovery
+
+`embookshelf recover-misplaced` (`internal/recovery`); the one-shot repair for installs that ran the broken placer dispatch shipped in v0.3.1–v0.6.2 (#265). Those approves resolved a library-relative key against `/` instead of the [[Library]] root, so the bytes went outside the library while `files.location` and `books.path` recorded the right key — silent as root, a loud `mkdir` refusal as any other user. Dry run by default; `--apply` moves.
+
+It derives every path it looks at from the catalog — `filepath.Join(FSRoot, location)`, where `FSRoot` is `/` in production and a parameter only so a test can point it somewhere writable — so it never walks a filesystem and never examines a path no book names. A file is moved only when the correct location is empty, a regular file sits at the suspect path, and its bytes match the row's `content_hash` (or its size, for a row the hash backfill never reached). Scope comes from the handle, not the column: a library with no backend row post-dates the storage-v2 backfill and was never affected, and `LibraryHandle.IsObjectStore` rules out the genuine object stores.
+
+A recovered file whose [[Files row]] the [[Missing purge]] already deleted gets the row recreated from `books.path` plus the moved bytes — a [[Library scan]] will never adopt them (ADR-0018), so without it the move lands bytes nothing points at. Everything else is reported as a stray and left alone: an occupied destination means the book was re-imported and the copy at the root is a duplicate. Nothing under the filesystem root is ever deleted, whatever the hashes say. `docs/ops/misplaced-books.md`.
+
 ---
 
 ## Content identity

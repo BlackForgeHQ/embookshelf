@@ -3,9 +3,9 @@
 > The Reading guide job and the two Audiobook workers depend on nine concrete types between them, which is why 685 lines of claim, cancel and permanent-failure branching have no test file. This replaces those dependencies with narrow interfaces and function seams, so the branching is exercisable without Postgres, River, or a live TTS endpoint. It deliberately does **not** merge the jobs into a shared generation module.
 
 - **Status:** Approved
-- **Issue:** [#177](https://github.com/blackforge/embookshelf/issues/177) — HITL; this document is the agreed shape
+- **Issue:** [#177](https://github.com/BlackForgeHQ/embookshelf/issues/177) — HITL; this document is the agreed shape
 - **Scope:** `internal/task` (`audiobook.go`, `audiobook_finalize.go`, `reading_guide.go`), `internal/queue/registry.go`, `cmd/embookshelf/main.go`
-- **Unblocks:** [#183](https://github.com/blackforge/embookshelf/issues/183) (chunking into the engine adapter), [#184](https://github.com/blackforge/embookshelf/issues/184) (service/queue cycle)
+- **Unblocks:** [#183](https://github.com/BlackForgeHQ/embookshelf/issues/183) (chunking into the engine adapter), [#184](https://github.com/BlackForgeHQ/embookshelf/issues/184) (service/queue cycle)
 - **Companion artifacts:** `docs/adr/0024-reading-guides.md`, `docs/adr/0028-audiobook-generation-pipeline.md` §6
 
 ---
