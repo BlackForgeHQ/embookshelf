@@ -30,9 +30,11 @@ import (
 // from a provider URL.
 //
 // The provider set passed at construction is the full list of built-in
-// sources. Which of those are actually queried per request is decided by
-// the provider_settings table — an admin toggles them in Settings and the
-// filter below applies on the next Search.
+// sources. Which of those are actually queried per request, and in what
+// order, is decided by activeProviders from the provider_settings table —
+// an admin toggles or reranks them in Settings and the next Search,
+// SearchStream or LookupByISBN picks the change up. All three go through
+// that one resolver; none reads the enabled flag or priority itself.
 
 // The narrow interfaces below are the slices of each repo this service
 // actually uses. They exist so the enrichment logic can be tested without
@@ -42,6 +44,10 @@ import (
 
 // providerSettingsStore is the provider_settings surface: which providers
 // are on, their config blobs, ranking, and health telemetry.
+//
+// EnabledIDs has no caller left: selection reads List, because priority
+// is part of the answer and only the full row carries it. Kept for now so
+// this interface is split once, in #250, rather than trimmed twice.
 type providerSettingsStore interface {
 	AllConfigs(ctx context.Context) (map[string]json.RawMessage, error)
 	EnabledIDs(ctx context.Context) (map[string]bool, error)
@@ -166,6 +172,83 @@ type SearchResult struct {
 	QueriedProviders []provider.Source
 }
 
+// activeProviders answers "which providers may run right now, in what
+// order" for every external entry point: Search, SearchStream and
+// LookupByISBN. It is the only place that reads the enabled flag or the
+// priority column — the three used to walk provider_settings themselves
+// and disagreed about the answer.
+//
+// Degrade closed (ADR-0013 §4). If the settings table cannot be read we
+// return the error rather than guessing: an admin disables a provider
+// deliberately — the Amazon and Goodreads adapters are scrapers, others
+// cost quota — so querying one on a transient read failure sends traffic
+// somewhere the operator explicitly refused. provider_settings shares a
+// database with the book the request has already loaded, so "settings
+// unreadable, rest of the request fine" is a narrow window.
+//
+// List rather than EnabledIDs because order is part of the answer:
+// priority lives only on the full row. The extra columns cost one config
+// decrypt per row, which is cheaper than two entry points disagreeing.
+func (s *EnrichmentService) activeProviders(ctx context.Context) ([]provider.Provider, error) {
+	rows, err := s.settings.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("provider settings: %w", err)
+	}
+	return selectProviders(s.providers, rows), nil
+}
+
+// selectProviders is activeProviders' pure core: filter the catalog by
+// the enabled flag, then order by admin priority.
+//
+// A provider with no row is disabled, so nil, empty and all-false row
+// sets are the same answer — nothing runs. That equivalence is the bug
+// this function replaced: LookupByISBN gated its filter on `rows != nil`
+// and so ran every provider on an empty table, Search's fan-out gated on
+// a nil map and did the same, while SearchStream and Search's own
+// reported provider list read the identical state as "nothing enabled".
+//
+// Ordering is a stable sort by priority ASC with ranked providers first;
+// unranked ones keep catalog order behind them (ADR-0011 §2). Only
+// LookupByISBN's serial chain is order-sensitive, but the fan-out paths
+// report the same order so the UI's "we searched X, Y, Z" caption matches
+// the chain an admin sees in Settings.
+func selectProviders(all []provider.Provider, rows []repo.ProviderSetting) []provider.Provider {
+	enabled := make(map[string]bool, len(rows))
+	priority := make(map[string]int, len(rows))
+	for _, r := range rows {
+		enabled[r.ID] = r.Enabled
+		if r.Priority != nil {
+			priority[r.ID] = *r.Priority
+		}
+	}
+
+	active := make([]provider.Provider, 0, len(all))
+	for _, p := range all {
+		if !enabled[string(p.Name())] {
+			continue
+		}
+		active = append(active, p)
+	}
+	sort.SliceStable(active, func(i, j int) bool {
+		pi, hasI := priority[string(active[i].Name())]
+		pj, hasJ := priority[string(active[j].Name())]
+		if hasI && hasJ {
+			return pi < pj
+		}
+		return hasI && !hasJ
+	})
+	return active
+}
+
+// providerSources names a resolved provider set for the UI.
+func providerSources(ps []provider.Provider) []provider.Source {
+	out := make([]provider.Source, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, p.Name())
+	}
+	return out
+}
+
 // Search queries every enabled provider in parallel and returns a merged,
 // sorted slice. A provider failure is logged but does not abort the
 // fan-out. Disabled providers are skipped without hitting the network.
@@ -180,29 +263,16 @@ func (s *EnrichmentService) Search(ctx context.Context, q provider.Query) (Searc
 		return SearchResult{}, nil
 	}
 
-	// Fetch the live enabled map; on DB error fall through to the full
-	// provider list so an outage of the settings table doesn't silently
-	// disable enrichment entirely. Best-effort graceful degrade.
-	// Degrade closed. If we cannot read which providers the admin enabled
-	// we do not guess: querying a provider someone deliberately disabled —
-	// the Amazon and Goodreads adapters are scrapers, others cost quota —
-	// is worse than reporting the search as unavailable. The settings row
-	// shares a database with the book this request already loaded, so this
-	// failure rarely occurs on its own.
-	enabled, err := s.settings.EnabledIDs(ctx)
+	// Who runs is activeProviders' call, including the degrade-closed
+	// policy on an unreadable settings table (ADR-0013 §4). Naming the set
+	// once is also what keeps QueriedProviders honest: the UI's "we
+	// searched these three" caption is the same list the fan-out below
+	// iterates, on cache hits and fresh runs alike.
+	active, err := s.activeProviders(ctx)
 	if err != nil {
-		return SearchResult{}, fmt.Errorf("provider settings: %w", err)
+		return SearchResult{}, err
 	}
-
-	// Compute the set we'd actually query so the UI can say "we searched
-	// these three" consistently across cache hits and fresh fan-outs.
-	queried := make([]provider.Source, 0, len(s.providers))
-	for _, p := range s.providers {
-		if !enabled[string(p.Name())] {
-			continue
-		}
-		queried = append(queried, p.Name())
-	}
+	queried := providerSources(active)
 
 	cacheKey := enrichCacheKey(q)
 	if hit, ok := s.cacheGet(cacheKey); ok {
@@ -214,11 +284,8 @@ func (s *EnrichmentService) Search(ctx context.Context, q provider.Query) (Searc
 		mu  sync.Mutex
 		all []provider.Match
 	)
-	for _, p := range s.providers {
+	for _, p := range active {
 		p := p
-		if enabled != nil && !enabled[string(p.Name())] {
-			continue
-		}
 		g.Go(func() error {
 			matches, err := p.Search(gctx, q)
 			if err != nil {
@@ -287,53 +354,44 @@ func (s *EnrichmentService) SearchStream(ctx context.Context, q provider.Query) 
 		return out
 	}
 
-	// Degrade closed, as Search does. The stream has no error return, so
-	// the failure rides an Err frame followed by Done — the handler already
-	// renders Err as a provider-error event, and Done keeps the UI from
-	// waiting forever.
-	enabled, err := s.settings.EnabledIDs(ctx)
+	// Same resolver as Search, so identical settings always select an
+	// identical provider set here. The stream has no error return, so the
+	// degrade-closed failure rides an Err frame followed by Done — the
+	// handler already renders Err as a provider-error event, and Done keeps
+	// the UI from waiting forever.
+	active, err := s.activeProviders(ctx)
 	if err != nil {
 		go func() {
-			out <- StreamEvent{Err: fmt.Errorf("provider settings: %w", err)}
+			out <- StreamEvent{Err: err}
 			out <- StreamEvent{Done: true}
 			close(out)
 		}()
 		return out
 	}
-
-	queried := make([]provider.Source, 0, len(s.providers))
-	type run struct{ p provider.Provider }
-	runs := make([]run, 0, len(s.providers))
-	for _, p := range s.providers {
-		if !enabled[string(p.Name())] {
-			continue
-		}
-		queried = append(queried, p.Name())
-		runs = append(runs, run{p: p})
-	}
+	queried := providerSources(active)
 
 	go func() {
 		defer close(out)
 		g, gctx := errgroup.WithContext(ctx)
-		for _, r := range runs {
-			r := r
+		for _, p := range active {
+			p := p
 			g.Go(func() error {
-				matches, err := r.p.Search(gctx, q)
+				matches, err := p.Search(gctx, q)
 				if err != nil {
-					slog.Warn("provider search failed", "provider", r.p.Name(), "err", err)
-					s.recordProviderError(r.p.Name(), err)
+					slog.Warn("provider search failed", "provider", p.Name(), "err", err)
+					s.recordProviderError(p.Name(), err)
 					select {
-					case out <- StreamEvent{Provider: r.p.Name(), Err: err}:
+					case out <- StreamEvent{Provider: p.Name(), Err: err}:
 					case <-gctx.Done():
 						return gctx.Err()
 					}
 					return nil
 				}
-				s.recordProviderSuccess(r.p.Name())
+				s.recordProviderSuccess(p.Name())
 				for i := range matches {
 					m := matches[i]
 					select {
-					case out <- StreamEvent{Provider: r.p.Name(), Match: &m}:
+					case out <- StreamEvent{Provider: p.Name(), Match: &m}:
 					case <-gctx.Done():
 						return gctx.Err()
 					}
@@ -353,57 +411,25 @@ func (s *EnrichmentService) SearchStream(ctx context.Context, q provider.Query) 
 	return out
 }
 
-// LookupByISBN walks enabled providers in priority order and returns
+// LookupByISBN walks the active providers in priority order and returns
 // the first non-empty hit. Used by the /isbn-lookup endpoint and the
-// bookdrop auto-enrich path. Priority comes from provider_settings;
-// unranked providers fall back to catalog order after ranked ones.
+// bookdrop auto-enrich path. The order is activeProviders' — ranked
+// providers first, unranked in catalog order behind them (ADR-0011).
 func (s *EnrichmentService) LookupByISBN(ctx context.Context, isbn string) (*provider.Match, provider.Source, error) {
 	isbn = strings.TrimSpace(isbn)
 	if isbn == "" {
 		return nil, "", nil
 	}
-	// Degrade closed, as Search does.
-	rows, err := s.settings.List(ctx)
+	// Same resolver as the two fan-out paths, which is what keeps the
+	// enabled set and the priority order from drifting between them. It
+	// also carries the degrade-closed policy (ADR-0013 §4).
+	active, err := s.activeProviders(ctx)
 	if err != nil {
-		return nil, "", fmt.Errorf("provider settings: %w", err)
+		return nil, "", err
 	}
-	enabled := map[string]bool{}
-	priority := map[string]int{}
-	for _, r := range rows {
-		enabled[r.ID] = r.Enabled
-		if r.Priority != nil {
-			priority[r.ID] = *r.Priority
-		}
-	}
-
-	// Stable sort by priority ASC (ranked first), unranked fall back to
-	// the existing catalog order already baked into s.providers.
-	ordered := make([]provider.Provider, len(s.providers))
-	copy(ordered, s.providers)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		pi, hasI := priority[string(ordered[i].Name())]
-		pj, hasJ := priority[string(ordered[j].Name())]
-		if hasI && hasJ {
-			return pi < pj
-		}
-		if hasI {
-			return true
-		}
-		if hasJ {
-			return false
-		}
-		return false
-	})
 
 	q := provider.Query{ISBN: isbn}
-	for _, p := range ordered {
-		// No `rows != nil` guard: an empty table means nothing is enabled,
-		// the same reading Search gives an empty EnabledIDs map. The old
-		// guard made a nil slice mean "no filter", so identical database
-		// state ran every provider here and none there.
-		if !enabled[string(p.Name())] {
-			continue
-		}
+	for _, p := range active {
 		matches, err := p.Search(ctx, q)
 		if err != nil {
 			slog.Warn("isbn lookup provider failed", "provider", p.Name(), "err", err)

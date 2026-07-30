@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,8 +24,15 @@ import (
 // ---------------------------------------------------------------------------
 
 type fakeProviderSettings struct {
-	enabled   map[string]bool
-	configs   map[string]json.RawMessage
+	enabled map[string]bool
+	// priorities are the admin's ranking, surfaced on the List rows.
+	// Absent means unranked, which sorts behind every ranked provider.
+	priorities map[string]int
+	configs    map[string]json.RawMessage
+	// healthMu guards the telemetry slices. The service records provider
+	// health from one detached goroutine per provider, so a fan-out over
+	// more than one provider writes these concurrently.
+	healthMu  sync.Mutex
 	successes []string
 	errs      []string
 	// readErr makes EnabledIDs and List fail, standing in for the
@@ -54,7 +62,12 @@ func (f *fakeProviderSettings) List(context.Context) ([]repo.ProviderSetting, er
 	// Config rides along already decrypted, as the repo now returns it.
 	var rows []repo.ProviderSetting
 	for id, on := range f.enabled {
-		rows = append(rows, repo.ProviderSetting{ID: id, Enabled: on, Config: f.configs[id]})
+		row := repo.ProviderSetting{ID: id, Enabled: on, Config: f.configs[id]}
+		if p, ok := f.priorities[id]; ok {
+			p := p
+			row.Priority = &p
+		}
+		rows = append(rows, row)
 	}
 	return rows, nil
 }
@@ -68,10 +81,14 @@ func (f *fakeProviderSettings) SetEnabled(_ context.Context, id string, on bool)
 }
 func (f *fakeProviderSettings) SetPriority(context.Context, string, *int) error { return nil }
 func (f *fakeProviderSettings) RecordSuccess(_ context.Context, id string) error {
+	f.healthMu.Lock()
+	defer f.healthMu.Unlock()
 	f.successes = append(f.successes, id)
 	return nil
 }
 func (f *fakeProviderSettings) RecordError(_ context.Context, id, msg string) error {
+	f.healthMu.Lock()
+	defer f.healthMu.Unlock()
 	f.errs = append(f.errs, id+":"+msg)
 	return nil
 }
