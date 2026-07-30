@@ -14,9 +14,9 @@ import (
 // audiobookEngineDTO is one engine's row in the settings panel.
 //
 // KeySet rather than the key itself: a GET must never hand back a
-// credential it was given, and the form treats an empty submitted key as
-// "keep the stored one" — the same write-only shape the reading-guide
-// panel uses.
+// credential it was given. It comes back on PUT too, so an empty
+// submitted key can mean either "keep the stored one" or "clear it" —
+// the same write-only shape the reading-guide panel uses.
 type audiobookEngineDTO struct {
 	ID                   string  `json:"id"`
 	Label                string  `json:"label"`
@@ -48,6 +48,7 @@ type audiobookEngineRequest struct {
 	Enabled              bool    `json:"enabled"`
 	BaseURL              string  `json:"baseUrl"`
 	APIKey               string  `json:"apiKey"`
+	KeySet               bool    `json:"keySet"`
 	Model                string  `json:"model"`
 	DefaultVoice         string  `json:"defaultVoice"`
 	PricePerMillionChars float64 `json:"pricePerMillionChars"`
@@ -83,8 +84,8 @@ func (h *Handler) SettingsAudiobookUpdate(c *gin.Context) {
 		return
 	}
 
-	// Load first so an omitted key keeps the stored one. Submitting the
-	// form without retyping every credential has to be safe, or admins
+	// Load first so a key the admin did not retype can be kept. Submitting
+	// the form without retyping every credential has to be safe, or admins
 	// learn to paste keys into a field they can no longer read back.
 	cfg, err := h.appSettings.GetAudiobook(c.Request.Context())
 	if err != nil {
@@ -103,9 +104,7 @@ func (h *Handler) SettingsAudiobookUpdate(c *gin.Context) {
 		slot.Model = in.Model
 		slot.DefaultVoice = in.DefaultVoice
 		slot.PricePerMillionChars = in.PricePerMillionChars
-		if in.APIKey != "" {
-			slot.APIKey = in.APIKey
-		}
+		slot.APIKey = resolveSecret(in.APIKey, in.KeySet, slot.APIKey)
 	}
 
 	if err := h.appSettings.SetAudiobook(c.Request.Context(), cfg); err != nil {

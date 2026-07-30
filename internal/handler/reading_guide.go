@@ -132,8 +132,9 @@ func (h *Handler) BookGuideEdit(c *gin.Context, s bookScope) {
 // --- admin surface --------------------------------------------------------
 
 // readingGuideSettingsDTO never carries the API key. keySet tells the UI
-// whether one is stored; an empty key on PUT means "leave it alone",
-// matching how the SMTP password is handled.
+// whether one is stored, and comes back on PUT so an empty key can mean
+// either "keep" or "clear" — the same three-state rule as the SMTP
+// password (resolveSecret).
 type readingGuideSettingsDTO struct {
 	Enabled         bool   `json:"enabled"`
 	BaseURL         string `json:"baseUrl"`
@@ -175,16 +176,11 @@ func (h *Handler) SettingsReadingGuideUpdate(c *gin.Context) {
 		Enabled:         body.Enabled,
 		BaseURL:         body.BaseURL,
 		Model:           body.Model,
-		APIKey:          current.APIKey,
+		APIKey:          resolveSecret(strings.TrimSpace(body.APIKey), body.KeySet, current.APIKey),
 		AuthStyle:       body.AuthStyle,
 		Language:        body.Language,
 		TextCap:         body.TextCap,
 		RequestJSONMode: body.RequestJSONMode,
-	}
-	// An empty key means "keep what is stored" — the GET never returned
-	// it, so the form cannot echo it back.
-	if strings.TrimSpace(body.APIKey) != "" {
-		next.APIKey = body.APIKey
 	}
 
 	if err := h.appSettings.SetReadingGuide(ctx, next); err != nil {

@@ -3,6 +3,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,8 @@ import (
 	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/repo/repotest"
 )
 
 func guideCtx(t *testing.T, method, target string, body string) (*gin.Context, *httptest.ResponseRecorder) {
@@ -89,6 +92,61 @@ func TestReadingGuideJobArgsCarryTheBook(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"book_id":"b1"`) {
 		t.Fatalf("payload = %s", raw)
+	}
+}
+
+// TestSettingsReadingGuideUpdateResolvesTheKey covers the three-state key
+// input. The clear arm is the one that was missing: an admin who stored an
+// LLM key had no way to remove it, because an empty key always meant
+// "keep".
+func TestSettingsReadingGuideUpdateResolvesTheKey(t *testing.T) {
+	ctx := context.Background()
+	stored := repo.ReadingGuideConfig{
+		BaseURL: "https://api.openai.com/v1", Model: "gpt-4o-mini", APIKey: "stored-key",
+	}
+	body := func(apiKey string, keySet bool) string {
+		b, err := json.Marshal(readingGuideSettingsDTO{
+			BaseURL: stored.BaseURL, Model: stored.Model,
+			APIKey: apiKey, KeySet: keySet,
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return string(b)
+	}
+
+	cases := []struct {
+		name   string
+		apiKey string
+		keySet bool
+		want   string
+	}{
+		{"clear", "", false, ""},
+		{"keep", "", true, "stored-key"},
+		{"replace", "new-key", true, "new-key"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &Handler{appSettings: repo.NewAppSettingsRepo(repotest.New(t), nil)}
+			if err := h.appSettings.SetReadingGuide(ctx, stored); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+
+			c, rec := guideCtx(t, http.MethodPut, "/api/v1/settings/reading-guide",
+				body(tc.apiKey, tc.keySet))
+			h.SettingsReadingGuideUpdate(c)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+			got, err := h.appSettings.GetReadingGuide(ctx)
+			if err != nil {
+				t.Fatalf("GetReadingGuide: %v", err)
+			}
+			if got.APIKey != tc.want {
+				t.Errorf("APIKey = %q, want %q", got.APIKey, tc.want)
+			}
+		})
 	}
 }
 
