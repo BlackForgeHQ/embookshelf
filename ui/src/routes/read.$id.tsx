@@ -17,6 +17,7 @@ import type {
 import type { PdfProgress, PdfReaderHandle } from "@/components/PdfReader"
 import type { Locator } from "@/lib/locator"
 import { useApiMutation } from "@/api/mutation"
+import { runView } from "@/lib/audiobookRun"
 import {
   CONTINUOUS_DEBOUNCE_MS,
   useReadingPosition,
@@ -95,7 +96,14 @@ function RenditionReader({ book }: { book: BookDetail }) {
   })
   const [prefer, setPrefer] = useState<Rendition>("primary")
 
-  const rendition = renditionsFor(book.format, narration.data, prefer)
+  // The wire row becomes derived facts here, where the query that
+  // fetched it is: `renditionsFor` asks whether the narration is
+  // playable and never sees a state string (#243). Null is a book that
+  // has never been narrated — no run, so nothing to view — which is a
+  // different question from the run's state and stays out here.
+  const run = narration.data ? runView(narration.data) : null
+
+  const rendition = renditionsFor(book.format, run, prefer)
 
   if (rendition.selected === null) {
     return (

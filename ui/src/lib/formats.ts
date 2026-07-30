@@ -1,4 +1,4 @@
-import type { Audiobook } from "@/api/audiobooks"
+import type { RunView } from "@/lib/audiobookRun"
 
 // What a book format can do, declared once for the client.
 //
@@ -139,9 +139,16 @@ export type RenditionState = {
  * Which Renditions a book has, and which one to open.
  *
  * `prefer` is what the reader asked for — the Listen toggle — and is a
- * request rather than an instruction: a narration that is not ready
+ * request rather than an instruction: a narration that is not playable
  * falls back to the book's own file, which is what a reader who reloads
  * mid-run needs to land on instead of a player with nothing behind it.
+ *
+ * `narration` is the run *view*, not the wire row, and null when the
+ * book has never been narrated. This module used to take the row and
+ * compare `state === "ready"` itself, which put "is this narration
+ * playable" in two modules and meant a new terminal state had to be
+ * found in both (#243). `lib/audiobookRun` owns that question now, and
+ * with it the only read of `Audiobook.state` in the UI.
  *
  * It answers for a non-narratable format too — a re-import can turn a
  * narrated EPUB into something else and the audio is still paid for and
@@ -152,7 +159,7 @@ export type RenditionState = {
  */
 export function renditionsFor(
   format: string,
-  narration: Audiobook | null | undefined,
+  narration: RunView | null | undefined,
   prefer: Rendition,
 ): RenditionState {
   const available: Array<Rendition> = []
@@ -160,10 +167,7 @@ export function renditionsFor(
   // A format with no reader has no primary rendition, but it may still
   // have a narration — the audio was paid for and is still playable.
   if (readerKindForFormat(format) !== null) available.push("primary")
-  // Ready, not merely present: a run still going has no file behind it.
-  // A stale narration stays offered — ADR-0025 §2 surfaces staleness
-  // rather than acting on it.
-  if (narration?.state === "ready") available.push("narration")
+  if (narration?.playable) available.push("narration")
 
   const selected = available.includes(prefer) ? prefer : (available[0] ?? null)
 

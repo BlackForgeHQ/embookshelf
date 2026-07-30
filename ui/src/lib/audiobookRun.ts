@@ -10,6 +10,11 @@ export type RunPhase = "running" | "ready" | "stopped"
  * three-way render switch, a failed check for the retry button, and a
  * pending check for the provenance line — so a new state meant finding
  * all four (#197).
+ *
+ * This module is the only reader of `Audiobook.state`. `playable` is the
+ * field that made that true: the Rendition module kept its own
+ * `state === "ready"` check, so a new terminal state meant finding two
+ * modules rather than one — the same disease, one floor down (#243).
  */
 export type RunView = {
   phase: RunPhase
@@ -19,6 +24,8 @@ export type RunView = {
   canRetry: boolean
   canRegenerate: boolean
   showProvenance: boolean
+  /** Whether there are bytes behind the run: the audio Rendition exists. */
+  playable: boolean
 }
 
 export function runView(a: Audiobook): RunView {
@@ -40,6 +47,11 @@ export function runView(a: Audiobook): RunView {
     canRegenerate: !moving,
     // A pending run has produced nothing to describe yet.
     showProvenance: a.state !== "pending",
+    // Ready, not merely present: a run still going, and either way of
+    // stopping short, leaves no stitched file for a player to open. A
+    // stale narration is playable — ADR-0025 §2 surfaces staleness
+    // rather than acting on it.
+    playable: a.state === "ready",
   }
 }
 

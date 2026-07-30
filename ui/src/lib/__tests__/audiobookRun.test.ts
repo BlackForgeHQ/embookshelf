@@ -36,6 +36,45 @@ describe("runView phases", () => {
   })
 })
 
+describe("runView playable", () => {
+  // Whether the audio Rendition exists — the question `renditionsFor`
+  // used to answer for itself by comparing the wire `state` (#243), which
+  // is exactly the two-places-to-look failure this view-model was built
+  // to close (#197).
+  //
+  // Keyed by state rather than looped over a literal list: a state added
+  // to the wire type fails to compile here until this table says whether
+  // it has bytes behind it.
+  const playableByState: Record<Audiobook["state"], boolean> = {
+    // Nothing has been written yet.
+    pending: false,
+    // Partial audio is not a file anyone can open.
+    running: false,
+    ready: true,
+    // Both terminal and both empty-handed: a failed run may have written
+    // some segments and a cancelled one certainly did, but neither ever
+    // produced the stitched file the player would ask for.
+    failed: false,
+    canceled: false,
+  }
+
+  it("answers whether the narration has bytes to play, for every state", () => {
+    for (const [state, want] of Object.entries(playableByState)) {
+      expect(runView(run({ state: state as Audiobook["state"] })).playable).toBe(
+        want,
+      )
+    }
+  })
+
+  // ADR-0025 §2 surfaces staleness rather than acting on it: discarding
+  // hours of audio because someone re-uploaded a better EPUB would be
+  // worse. Asserted here rather than in `formats.test.ts`, where it used
+  // to live, because staleness no longer reaches the Rendition module.
+  it("keeps a stale narration playable", () => {
+    expect(runView(run({ state: "ready", stale: true })).playable).toBe(true)
+  })
+})
+
 describe("runView percent", () => {
   // Done over total on persisted rows, not job state: that is what
   // survives a reload on a run measured in tens of minutes (ADR-0028 §7).

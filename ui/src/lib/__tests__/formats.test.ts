@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 
 import type { Audiobook } from "@/api/audiobooks"
+import type { RunView } from "@/lib/audiobookRun"
+import { runView } from "@/lib/audiobookRun"
 import {
   NARRATABLE_FORMATS,
   isNarratableFormat,
@@ -73,8 +75,11 @@ describe("narratableFormatList", () => {
   })
 })
 
-function narration(over: Partial<Audiobook> = {}): Audiobook {
-  return {
+// A run as this module now receives it: the view, not the wire row.
+// Built by `runView` rather than hand-rolled so the pair cannot drift
+// into a combination the real view-model never produces (#243).
+function narration(over: Partial<Audiobook> = {}): RunView {
+  return runView({
     bookId: "b1",
     state: "ready",
     engine: "openai",
@@ -85,7 +90,7 @@ function narration(over: Partial<Audiobook> = {}): Audiobook {
     durationSeconds: 3600,
     stale: false,
     ...over,
-  } as Audiobook
+  } as Audiobook)
 }
 
 describe("renditionsFor", () => {
@@ -101,17 +106,18 @@ describe("renditionsFor", () => {
     expect(state.canSwitch).toBe(false)
   })
 
-  it("offers narration once one is ready", () => {
+  it("offers narration once one is playable", () => {
     const state = renditionsFor("EPUB", narration(), "primary")
 
     expect(state.available).toEqual(["primary", "narration"])
     expect(state.canSwitch).toBe(true)
   })
 
-  // A run still going has no file behind it. Offering Listen would open
-  // a player pointed at nothing — which is why the panel's own gate is
-  // on ready rather than on the run existing.
-  it("withholds narration until the run is ready", () => {
+  // Offering Listen for a run with nothing behind it would open a player
+  // pointed at silence. Which states have bytes is not asked here — that
+  // table lives in `audiobookRun`, and this asserts only that the answer
+  // is obeyed.
+  it("withholds narration while the run is not playable", () => {
     for (const state of ["pending", "running", "failed", "canceled"] as const) {
       const got = renditionsFor("EPUB", narration({ state }), "primary")
 
@@ -120,7 +126,7 @@ describe("renditionsFor", () => {
     }
   })
 
-  it("selects the narration when it is asked for and ready", () => {
+  it("selects the narration when it is asked for and playable", () => {
     expect(renditionsFor("EPUB", narration(), "narration").selected).toBe(
       "narration",
     )
@@ -129,7 +135,7 @@ describe("renditionsFor", () => {
   // The fallback that matters on a reload mid-run: a reader who was
   // listening comes back to a run that is no longer ready and gets the
   // text, not a player with nothing behind it.
-  it("falls back to the book's own file when the narration is not ready", () => {
+  it("falls back to the book's own file when the narration is not playable", () => {
     const state = renditionsFor("EPUB", narration({ state: "running" }), "narration")
 
     expect(state.selected).toBe("primary")
@@ -139,15 +145,9 @@ describe("renditionsFor", () => {
     expect(renditionsFor("EPUB", null, "narration").selected).toBe("primary")
   })
 
-  // A stale narration is still playable — ADR-0025 §2 surfaces the
-  // staleness rather than acting on it, because discarding hours of
-  // audio over a re-upload would be worse.
-  it("keeps a stale narration selectable", () => {
-    const state = renditionsFor("EPUB", narration({ stale: true }), "narration")
-
-    expect(state.available).toContain("narration")
-    expect(state.selected).toBe("narration")
-  })
+  // Staleness no longer reaches this module at all — it is not on the
+  // view — so the assertion that it does not withhold a stale narration
+  // moved to `audiobookRun.test.ts`, next to the field that decides.
 
   it("has nothing to offer for an unreadable book with no narration", () => {
     const state = renditionsFor("MOBI", null, "primary")
