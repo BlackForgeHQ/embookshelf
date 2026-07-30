@@ -10,9 +10,20 @@ import (
 	"testing"
 
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 
 	"github.com/blackforge/embookshelf/internal/jobs"
 )
+
+// riverJob is a segment job as River hands one over: the args plus the
+// row that carries everything about the job itself. Constructed with the
+// row because River always has one — a bare river.Job has a nil embedded
+// pointer, and reading the attempt off it panics.
+func riverJob(attempt, maxAttempts int) *river.Job[jobs.AudiobookSegmentArgs] {
+	return &river.Job[jobs.AudiobookSegmentArgs]{
+		JobRow: &rivertype.JobRow{Attempt: attempt, MaxAttempts: maxAttempts},
+	}
+}
 
 // probeArgs is a stand-in job type — the registry must work for any
 // jobs.Args, not just the three this binary ships.
@@ -26,7 +37,7 @@ func (probeArgs) Kind() string { return "test.probe" }
 func TestRegisterExposesTheArgsKind(t *testing.T) {
 	t.Parallel()
 
-	reg := register(func(context.Context, probeArgs) error { return nil })
+	reg := register(func(context.Context, probeArgs, jobs.Attempt) error { return nil })
 	if reg.kind != "test.probe" {
 		t.Fatalf("kind = %q, want test.probe", reg.kind)
 	}
@@ -35,7 +46,7 @@ func TestRegisterExposesTheArgsKind(t *testing.T) {
 func TestRegisterProducesARiverWorker(t *testing.T) {
 	t.Parallel()
 
-	reg := register(func(context.Context, probeArgs) error { return nil })
+	reg := register(func(context.Context, probeArgs, jobs.Attempt) error { return nil })
 	if reg.addToRiver == nil {
 		t.Fatal("registration has no River worker builder")
 	}
@@ -114,12 +125,12 @@ func TestRiverWorkerCancelsAJobThatWillNeverSucceed(t *testing.T) {
 	t.Parallel()
 
 	w := &riverWorker[jobs.AudiobookSegmentArgs]{
-		work: func(context.Context, jobs.AudiobookSegmentArgs) error {
+		work: func(context.Context, jobs.AudiobookSegmentArgs, jobs.Attempt) error {
 			return fmt.Errorf("audiobook generation is not enabled: %w", jobs.ErrDoNotRetry)
 		},
 	}
 
-	err := w.Work(context.Background(), &river.Job[jobs.AudiobookSegmentArgs]{})
+	err := w.Work(context.Background(), riverJob(1, 25))
 
 	var cancel *river.JobCancelError
 	if !errors.As(err, &cancel) {
@@ -137,15 +148,43 @@ func TestRiverWorkerLeavesAnOrdinaryFailureRetryable(t *testing.T) {
 	t.Parallel()
 
 	w := &riverWorker[jobs.AudiobookSegmentArgs]{
-		work: func(context.Context, jobs.AudiobookSegmentArgs) error {
+		work: func(context.Context, jobs.AudiobookSegmentArgs, jobs.Attempt) error {
 			return errors.New("connection reset")
 		},
 	}
 
-	err := w.Work(context.Background(), &river.Job[jobs.AudiobookSegmentArgs]{})
+	err := w.Work(context.Background(), riverJob(1, 25))
 
 	var cancel *river.JobCancelError
 	if errors.As(err, &cancel) {
 		t.Fatalf("err = %v was turned into a cancel — River would never retry a transient failure", err)
+	}
+}
+
+// The attempt River is on has to reach the work function, because a
+// worker cannot ask River itself: internal/task does not import it. This
+// adapter is the whole crossing, and a segment worker that never learns
+// which attempt it is records every transient failure as settled — the
+// state ADR-0032 exists to stop.
+func TestRiverWorkerCarriesTheAttemptToTheWorkFunction(t *testing.T) {
+	t.Parallel()
+
+	var got jobs.Attempt
+	w := &riverWorker[jobs.AudiobookSegmentArgs]{
+		work: func(_ context.Context, _ jobs.AudiobookSegmentArgs, a jobs.Attempt) error {
+			got = a
+			return nil
+		},
+	}
+
+	if err := w.Work(context.Background(), riverJob(3, 25)); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if got != (jobs.Attempt{Number: 3, Max: 25}) {
+		t.Errorf("work function saw %+v, want attempt 3 of 25 — River's own numbers", got)
+	}
+	if got.Last() {
+		t.Error("attempt 3 of 25 reported itself as the last one")
 	}
 }

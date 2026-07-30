@@ -114,11 +114,21 @@ func (d SegmentDeps) publish(bookID string) {
 // AudiobookSegment synthesizes one segment and stages its audio.
 //
 // Every exit path leaves the run legible: a claimed segment either
-// finishes, or is marked failed with the reason, or is abandoned because
-// the whole run was cancelled. A segment that simply stops is the one
-// outcome nothing downstream can recover from — the finalize step waits
-// on a count that would never complete.
-func AudiobookSegment(ctx context.Context, a jobs.AudiobookSegmentArgs, deps SegmentDeps) error {
+// finishes, or is marked failed with the reason, or is recorded as
+// awaiting the retry the queue is about to give it, or is abandoned
+// because the whole run was cancelled. A segment that simply stops is the
+// one outcome nothing downstream can recover from — the finalize step
+// waits on a count that would never complete.
+//
+// The attempt is what separates the third case from the second. It comes
+// from the queue tier as two ints (jobs.Attempt) rather than as River's
+// job, because this package deliberately does not import River.
+func AudiobookSegment(
+	ctx context.Context,
+	a jobs.AudiobookSegmentArgs,
+	attempt jobs.Attempt,
+	deps SegmentDeps,
+) error {
 	cfg, err := deps.Config(ctx)
 	if err != nil {
 		return fmt.Errorf("read audiobook settings: %w", err)
@@ -167,16 +177,35 @@ func AudiobookSegment(ctx context.Context, a jobs.AudiobookSegmentArgs, deps Seg
 		return nil
 	}
 	if err != nil {
-		recordSegment(ctx, deps, a, model.SegmentResult{
-			State: model.SegmentFailed,
-			Error: err.Error(),
-		})
 		if errors.Is(err, tts.ErrPermanent) || errors.Is(err, service.ErrNotNarratable) {
 			// Returning nil stops River retrying something that cannot
 			// improve; the failed row and its message carry the outcome.
+			recordSegment(ctx, deps, a, model.SegmentResult{
+				State: model.SegmentFailed,
+				Error: err.Error(),
+			})
 			deps.publish(a.BookID)
 			return nil
 		}
+		// Transient, and the row has to say which. A failure the queue is
+		// going to try again is outstanding, not settled: recorded as failed
+		// it was counted by Coverage, so a sibling segment landing before
+		// the retry did concluded the run failed, and the retry that then
+		// succeeded was a no-op against a run the disposition refuses to act
+		// on. Retrying keeps the run running until the attempt actually
+		// happens (ADR-0032).
+		//
+		// The last attempt is a settled failure, though, and is recorded as
+		// one. Deferring a conclusion is only honest while something is
+		// still going to run.
+		state := model.SegmentRetrying
+		if attempt.Last() {
+			state = model.SegmentFailed
+		}
+		recordSegment(ctx, deps, a, model.SegmentResult{
+			State: state,
+			Error: err.Error(),
+		})
 		return err
 	}
 

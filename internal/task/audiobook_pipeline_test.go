@@ -237,6 +237,15 @@ func (p *narrationPipeline) start() {
 	p.gen = p.run().Generation
 }
 
+// pipelineAttempt is the attempt every job runs at unless a test says
+// otherwise: the first of several, so River still holds attempts on a
+// segment that fails here. A test about the last one states it, because
+// the difference is exactly what it is testing.
+var pipelineAttempt = jobs.Attempt{Number: 1, Max: 25}
+
+// lastAttempt is a job River will not run again.
+var lastAttempt = jobs.Attempt{Number: 25, Max: 25}
+
 // runSegment executes one segment job of the current run with the engine
 // currently scripted, and returns what the worker handed back to River.
 func (p *narrationPipeline) runSegment(seq int, reply func(tts.Request) ([]byte, error)) error {
@@ -249,9 +258,18 @@ func (p *narrationPipeline) runSegment(seq int, reply func(tts.Request) ([]byte,
 // without a River to hold it.
 func (p *narrationPipeline) runSegmentOf(gen, seq int, reply func(tts.Request) ([]byte, error)) error {
 	p.t.Helper()
+	return p.runSegmentAt(gen, seq, pipelineAttempt, reply)
+}
+
+// runSegmentAt is the same again, for a job that names which attempt it
+// is — the other thing River holds that the run's outcome depends on.
+func (p *narrationPipeline) runSegmentAt(
+	gen, seq int, attempt jobs.Attempt, reply func(tts.Request) ([]byte, error),
+) error {
+	p.t.Helper()
 	p.engine.reply = reply
 	return task.AudiobookSegment(context.Background(),
-		jobs.AudiobookSegmentArgs{BookID: p.book.ID, Seq: seq, Generation: gen}, p.deps)
+		jobs.AudiobookSegmentArgs{BookID: p.book.ID, Seq: seq, Generation: gen}, attempt, p.deps)
 }
 
 // speaks is a successful engine reply: four frames of real MPEG audio,
@@ -470,10 +488,9 @@ func TestNarrationRunLandsFailedWhenASegmentFailsPermanently(t *testing.T) {
 // and the run reaches ready through the guarded → ready write.
 //
 // The interleaving is stated rather than incidental: River retries the
-// failed segment before the other one finishes. The opposite order — the
-// sibling landing first — settles the coverage with a failure in it and
-// concludes the run, which is the behaviour the permanent case above
-// covers.
+// failed segment before the other one finishes. The opposite order is
+// the test below, and the two now agree — which they did not, and could
+// not, while a segment awaiting a retry was recorded as failed (#263).
 func TestNarrationRunReachesReadyWhenATransientFailureIsRetried(t *testing.T) {
 	p := newNarrationPipeline(t)
 	p.start()
@@ -486,8 +503,9 @@ func TestNarrationRunReachesReadyWhenATransientFailureIsRetried(t *testing.T) {
 	if !strings.Contains(err.Error(), "503") {
 		t.Errorf("err = %v, want the engine's reason so the retry is attributable", err)
 	}
-	if got := p.segment(0).State; got != model.SegmentFailed {
-		t.Errorf("segment 0 = %q, want failed so Retry re-enqueues it", got)
+	if got := p.segment(0).State; got != model.SegmentRetrying {
+		t.Errorf("segment 0 = %q, want retrying — River holds an attempt on it, so it is "+
+			"outstanding rather than settled, and Retry re-enqueues it either way", got)
 	}
 	// One failure out of two segments is not a settled run: the other
 	// segment has not reported, so there is nothing to conclude yet.
@@ -559,6 +577,123 @@ func TestNarrationRunReachesReadyWhenATransientFailureIsRetried(t *testing.T) {
 	if p.queuedFinalizes() != 1 || p.publishes != before {
 		t.Errorf("a status read on a ready run queued %d finalize(s) and published %d more time(s), want neither",
 			p.queuedFinalizes()-1, p.publishes-before)
+	}
+}
+
+// The same transient failure, in the other order — and the order is the
+// whole test.
+//
+// Here the sibling lands while the retry is still outstanding, so it is
+// the write that reads coverage and decides what the run is. Counting a
+// segment River is going to try again as a settled failure concluded the
+// run failed at that moment, and the retry that then succeeded was a
+// no-op, because the disposition refuses to act on a failed run: a run
+// sitting at failed with every segment done and audio on disk for all of
+// them, recoverable only by an explicit Retry (#263).
+//
+// Which of the two orders happens is a timing coincidence, so the two
+// tests have to agree, and they do.
+func TestNarrationRunSurvivesATransientFailureWhoseSiblingSettlesFirst(t *testing.T) {
+	p := newNarrationPipeline(t)
+	p.start()
+
+	flaky := errors.New("openai: 503 service unavailable")
+	if err := p.runSegment(0, func(tts.Request) ([]byte, error) { return nil, flaky }); err == nil {
+		t.Fatal("segment 0 returned nil for a transient failure — River would never retry it")
+	}
+
+	if got := p.segment(0).State; got != model.SegmentRetrying {
+		t.Fatalf("segment 0 = %q, want retrying — this is the row a sibling's coverage read "+
+			"is about to count", got)
+	}
+
+	// The sibling lands before the retry does.
+	if err := p.runSegment(1, func(tts.Request) ([]byte, error) { return speaks() }); err != nil {
+		t.Fatalf("segment 1: %v", err)
+	}
+	if got := p.run().State; got != model.AudiobookRunning {
+		t.Fatalf("run state = %q once the sibling landed, want running — a retry River still "+
+			"holds an attempt on is outstanding, not a settled failure", got)
+	}
+	if p.queuedFinalizes() != 0 {
+		t.Fatalf("finalize was queued while a segment was still awaiting its retry")
+	}
+	// And the coverage the whole disposition rests on says so: the
+	// retrying segment is in the total and in neither column, so the run
+	// is neither complete nor settled.
+	_, cov, err := p.svc.Status(context.Background(), p.book.ID)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if cov.Total != 2 || cov.Done != 1 || cov.Failed != 0 || cov.Settled() {
+		t.Fatalf("coverage = %+v (settled=%v), want 2 total / 1 done / 0 failed and unsettled",
+			cov, cov.Settled())
+	}
+
+	// River's retry, and from here the run finishes exactly as it does
+	// when the retry happens to land first.
+	if err := p.runSegment(0, func(tts.Request) ([]byte, error) { return speaks() }); err != nil {
+		t.Fatalf("segment 0 retry: %v", err)
+	}
+	if got := p.segment(0); got.State != model.SegmentDone || got.Error != "" {
+		t.Errorf("segment 0 after the retry = %q/%q, want done with the stale message cleared",
+			got.State, got.Error)
+	}
+	if p.queuedFinalizes() != 1 {
+		t.Fatalf("finalize queued %d times once every segment landed, want exactly 1", p.queuedFinalizes())
+	}
+
+	fileID := p.narrationFile()
+	if err := p.svc.NarrationAssembled(context.Background(), p.book.ID, fileID, 4_000); err != nil {
+		t.Fatalf("NarrationAssembled: %v", err)
+	}
+	if run := p.run(); run.State != model.AudiobookReady || run.Error != "" {
+		t.Fatalf("run = %q/%q, want ready with no error — every segment was bought and staged",
+			run.State, run.Error)
+	}
+}
+
+// And the run still concludes when the retries run out.
+//
+// The other half of the rule above, and the half that keeps it honest: a
+// run is only held open while something is actually going to run again.
+// On River's last attempt the same transient error is a settled failure
+// and is recorded as one, so the sibling's coverage read concludes the
+// run exactly as a permanent failure does. Without this, deferring the
+// conclusion would defer it forever, and a run whose engine was simply
+// down would sit at running with a row nothing would ever move (#263).
+func TestNarrationRunFailsWhenATransientFailureExhaustsItsAttempts(t *testing.T) {
+	p := newNarrationPipeline(t)
+	p.start()
+
+	flaky := errors.New("openai: 503 service unavailable")
+	err := p.runSegmentAt(p.gen, 0, lastAttempt, func(tts.Request) ([]byte, error) { return nil, flaky })
+	if err == nil {
+		t.Fatal("segment 0 returned nil on its last attempt — River is owed the failure")
+	}
+	if got := p.segment(0); got.State != model.SegmentFailed || !strings.Contains(got.Error, "503") {
+		t.Fatalf("segment 0 = %q/%q, want failed carrying the engine's reason — nothing will run again",
+			got.State, got.Error)
+	}
+
+	// The sibling lands, reads the coverage, and concludes the run: one
+	// settled failure out of two.
+	if err := p.runSegment(1, func(tts.Request) ([]byte, error) { return speaks() }); err != nil {
+		t.Fatalf("segment 1: %v", err)
+	}
+	if run := p.run(); run.State != model.AudiobookFailed || run.Error != "1 of 2 segments failed" {
+		t.Fatalf("run = %q/%q, want failed with the coverage's phrasing", run.State, run.Error)
+	}
+	if p.queuedFinalizes() != 0 {
+		t.Errorf("finalize was queued %d time(s) for a run missing a segment", p.queuedFinalizes())
+	}
+	// The staging policy is untouched by any of this: a failed run keeps
+	// every paid-for segment so Retry costs nothing (ADR-0028 §6).
+	if len(p.sweeps) != 0 {
+		t.Errorf("SweepStaging called %v on a failed run", p.sweeps)
+	}
+	if !p.stagedExists(1) {
+		t.Error("segment 1's audio was discarded by the failure")
 	}
 }
 

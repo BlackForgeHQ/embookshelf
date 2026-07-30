@@ -34,11 +34,18 @@ type registration struct {
 // interface, so task packages never import river.
 type riverWorker[T jobs.Args] struct {
 	river.WorkerDefaults[T]
-	work func(context.Context, T) error
+	work func(context.Context, T, jobs.Attempt) error
 }
 
 func (w *riverWorker[T]) Work(ctx context.Context, job *river.Job[T]) error {
-	err := w.work(ctx, job.Args)
+	// Where the one fact a worker sometimes needs from River crosses into
+	// the task tier: the attempt, as two ints rather than as the job. A
+	// worker whose durable record depends on whether anything will run
+	// again — the audiobook segment worker, recording a transient failure
+	// as retrying or as failed (ADR-0032) — cannot ask River itself, and
+	// giving it the *river.Job would put River in internal/task's imports
+	// to answer a question about a number.
+	err := w.work(ctx, job.Args, jobs.Attempt{Number: job.Attempt, Max: job.MaxAttempts})
 	// A work function saying its failure is closed is the only place the
 	// task tier can express that — it does not import River. Honouring it
 	// here is what makes the claim true rather than a comment (#185).
@@ -51,7 +58,7 @@ func (w *riverWorker[T]) Work(ctx context.Context, job *river.Job[T]) error {
 // register builds a registration from a job's args type and the
 // function that works it. The args type supplies its own kind, so a
 // registration cannot disagree with the payload it names.
-func register[T jobs.Args](work func(context.Context, T) error) registration {
+func register[T jobs.Args](work func(context.Context, T, jobs.Attempt) error) registration {
 	var zero T
 	return registration{
 		kind:  zero.Kind(),
@@ -164,26 +171,30 @@ func registry(deps Deps) []registration {
 		finalize.Cover = deps.Covers.Open
 	}
 
+	// The attempt is passed to the one worker whose durable record depends
+	// on it and ignored by the rest, rather than plumbed only where it is
+	// wanted: the adapter that fills it in is generic over every job type,
+	// so a second worker that needs it needs no new seam.
 	return []registration{
-		register(func(ctx context.Context, a jobs.BookDropIngestArgs) error {
+		register(func(ctx context.Context, a jobs.BookDropIngestArgs, _ jobs.Attempt) error {
 			return task.BookDropIngest(ctx, a, bookdrop)
 		}),
-		register(func(ctx context.Context, a jobs.BookDropAutoEnrichArgs) error {
+		register(func(ctx context.Context, a jobs.BookDropAutoEnrichArgs, _ jobs.Attempt) error {
 			return task.BookDropAutoEnrich(ctx, a, autoEnrich)
 		}),
-		register(func(ctx context.Context, a jobs.LibraryScanArgs) error {
+		register(func(ctx context.Context, a jobs.LibraryScanArgs, _ jobs.Attempt) error {
 			return task.LibraryScan(ctx, a, libraryScan)
 		}),
-		register(func(ctx context.Context, a jobs.SendToKindleArgs) error {
+		register(func(ctx context.Context, a jobs.SendToKindleArgs, _ jobs.Attempt) error {
 			return task.SendToKindle(ctx, a, sendToKindle)
 		}),
-		register(func(ctx context.Context, a jobs.ReadingGuideArgs) error {
+		register(func(ctx context.Context, a jobs.ReadingGuideArgs, _ jobs.Attempt) error {
 			return task.ReadingGuide(ctx, a, readingGuide)
 		}),
-		register(func(ctx context.Context, a jobs.AudiobookSegmentArgs) error {
-			return task.AudiobookSegment(ctx, a, segment)
+		register(func(ctx context.Context, a jobs.AudiobookSegmentArgs, at jobs.Attempt) error {
+			return task.AudiobookSegment(ctx, a, at, segment)
 		}),
-		register(func(ctx context.Context, a jobs.AudiobookFinalizeArgs) error {
+		register(func(ctx context.Context, a jobs.AudiobookFinalizeArgs, _ jobs.Attempt) error {
 			return task.AudiobookFinalize(ctx, a, finalize)
 		}),
 	}

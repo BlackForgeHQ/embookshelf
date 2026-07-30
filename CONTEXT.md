@@ -355,6 +355,8 @@ Routing replaced client-side filtering. `Hub` fanned every event to every subscr
 
 Crash recovery is River's JobRescuer, which reclaims jobs left `running` by a killed process after a timeout (default 1h). The SQLite polling backend that used to sit behind this same interface is gone (ADR-0023).
 
+A work function is `func(ctx, args, jobs.Attempt) error`. The attempt — River's `job.Attempt` / `job.MaxAttempts` as two ints — is the one fact about the job itself that crosses into `internal/task`, and it crosses as a plain value precisely so the River import stays confined: the [[Segment]] worker's durable record depends on whether anything will run again, and handing it the `*river.Job` to answer that would put River in the task tier's imports (ADR-0032). Six of the seven jobs ignore it; the adapter that fills it in is generic, so the seventh needed no new seam.
+
 ### Drainer
 
 `task.Drain[T]`; the loop shape used by boot-time backfills that read pending rows from a predicate query, do per-item work that may fail per item, and exit when the predicate is empty or no item in a batch made progress. Owns logging + the in-run skip set so closures stay focused on the work itself. Used by Files backfill (sha256 fill) and Covers backfill (legacy → hash-keyed). Distinct from a schema-bootstrap backfill (`migrator.BackfillStorageV2`), which runs once after `migrate.Up`, sentinel-gated, DB-only.
@@ -699,7 +701,9 @@ Boundaries come from EPUB spine items, titles from a `toc.ncx` / EPUB3 `nav` par
 
 The split itself happens twice: once at plan time, and again in every segment job, because the EPUB stays the source of truth for what a character range contains rather than a stored copy of the prose. Both go through `service.SegmentBook` at the run's own pinned cap, so the two cannot disagree by construction, and `service.SegmentTextAt` refuses a segment whose re-extracted range is not the one the planner stored. That check is the [[Alignment map]] earning its storage: a book re-uploaded with a paragraph added keeps its segment count and moves every later offset, which the segment-count comparison this replaced waved through and narrated from text nobody planned.
 
-Chapter granularity is load-bearing twice over: a book-length job would outlive River's ~1h JobRescuer window and be silently re-run and re-billed, and a failure at call 170 of 180 would otherwise cost the whole book. On failure the run fails but every completed segment is retained; Retry re-enqueues only `pending` and `failed`.
+Chapter granularity is load-bearing twice over: a book-length job would outlive River's ~1h JobRescuer window and be silently re-run and re-billed, and a failure at call 170 of 180 would otherwise cost the whole book. On failure the run fails but every completed segment is retained; Retry re-enqueues every segment that is not `done` — `running` and `retrying` included, since a worker or a queue that gave up leaves a row nothing else will move.
+
+A segment's states are `pending → running → done`, or `failed`, or **`retrying`** — the one the queue is going to try again (ADR-0032). It is a state rather than a flavour of failure because [[Coverage]] counts `failed` as settled and a settled failure concludes the run: a sibling landing while a retry was still in flight therefore failed a run whose segments all eventually succeeded, and the retry that then arrived was a no-op against a run the disposition refuses to act on. The worker writes `retrying` for a transient failure while attempts remain and `failed` on the last one, so the deferral lasts exactly as long as something is still going to run. Which attempt it is comes from `jobs.Attempt{Number, Max}`, a plain value the [[Job registry]]'s River adapter fills in for every work function — `internal/task` still does not import River.
 
 **Distinct** from `model.Chapter` — a Chapter is the playback view written to `books.chapters` at finalize; several Segments may share one.
 
@@ -709,7 +713,7 @@ A Segment's result is never written on its own. `BookAudiobookRepo.RecordSegment
 
 `model.AudiobookCoverage{Total, Done, Failed}`; the three counts of an [[Audiobook run]]'s Segments, taken in one query so they cannot be read a moment apart and disagree while segments are landing. Progress is done-over-total on persisted rows rather than job state, which is what survives a reload and a restart on a job measured in tens of minutes (ADR-0028 §7).
 
-It is also the run's **authority on its own lifecycle**, not merely a progress bar: `Complete()` (every Segment landed) and `Settled()` (none still outstanding) are what `NextForRun` decides transitions from, in preference to the `book_audiobooks.state` column. Same shape and same reasoning as the reading-guide run's `CountCoverage`.
+It is also the run's **authority on its own lifecycle**, not merely a progress bar: `Complete()` (every Segment landed) and `Settled()` (none still outstanding) are what `NextForRun` decides transitions from, in preference to the `book_audiobooks.state` column. `Failed` counts `state = 'failed'` and nothing else — a `retrying` Segment is in `Total` and in neither column, so a run holding one is unsettled and does not conclude. Widening that filter is the single edit that puts #263 back. Same shape and same reasoning as the reading-guide run's `CountCoverage`.
 
 ### Alignment map
 

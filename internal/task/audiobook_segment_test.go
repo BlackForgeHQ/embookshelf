@@ -180,10 +180,21 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 // test written at the zero value.
 const harnessGeneration = 3
 
+// harnessAttempt is the attempt the harness's jobs run at: the first of
+// several, so a transient failure here has retries still to come. The
+// last-attempt case is its own test, which says so.
+var harnessAttempt = jobs.Attempt{Number: 1, Max: 25}
+
 func (h *segmentHarness) run(t *testing.T, seq int) error {
 	t.Helper()
+	return h.runAt(t, seq, harnessAttempt)
+}
+
+func (h *segmentHarness) runAt(t *testing.T, seq int, attempt jobs.Attempt) error {
+	t.Helper()
 	return task.AudiobookSegment(context.Background(),
-		jobs.AudiobookSegmentArgs{BookID: "b1", Seq: seq, Generation: harnessGeneration}, h.deps)
+		jobs.AudiobookSegmentArgs{BookID: "b1", Seq: seq, Generation: harnessGeneration},
+		attempt, h.deps)
 }
 
 func (h *segmentHarness) staged(seq int) bool {
@@ -447,13 +458,18 @@ func TestSegmentRecordsAPermanentEngineFailureAndStopsRetrying(t *testing.T) {
 
 // A transient error is River's to retry, so the worker has to return it.
 // Whatever untagged error the engine reports, for whatever reason, the
-// worker returns it for River, records exactly one failed segment, and
-// never publishes — it never promotes a bare error to permanent on its
-// own say-so. The converse, unusable audio, is tagged permanent by
+// worker returns it for River, records exactly one segment as retrying,
+// and never publishes — it never promotes a bare error to permanent on
+// its own say-so. The converse, unusable audio, is tagged permanent by
 // whichever layer decodes it: internal/tts for a multi-chunk segment
 // (TestChunkedJoinTagsMultiChunkUnusableAudioPermanent) and the worker's
 // own audio.Payload call for one chunk. Both land in
 // TestSegmentRecordsUnusableAudioAsAPermanentFailure below.
+//
+// Retrying rather than failed, because the row is read by a sibling
+// segment's coverage before this retry happens, and a failure counted
+// there concludes the run — after which the retry that succeeds is a
+// no-op (ADR-0032).
 func TestSegmentReturnsATransientEngineFailureForRiver(t *testing.T) {
 	h := newSegmentHarness(t)
 	h.engine.err = errors.New("connection reset")
@@ -463,11 +479,36 @@ func TestSegmentReturnsATransientEngineFailureForRiver(t *testing.T) {
 	if err == nil {
 		t.Fatal("AudiobookSegment returned nil for a transient failure — River would never retry")
 	}
-	if len(h.runs.recorded) != 1 || h.runs.recorded[0].State != model.SegmentFailed {
-		t.Fatalf("recorded %+v, want one failed segment", h.runs.recorded)
+	if len(h.runs.recorded) != 1 || h.runs.recorded[0].State != model.SegmentRetrying {
+		t.Fatalf("recorded %+v, want one segment awaiting its retry", h.runs.recorded)
+	}
+	if h.runs.recorded[0].Error != "connection reset" {
+		t.Errorf("recorded error %q, want the engine's reason kept so the retry is attributable",
+			h.runs.recorded[0].Error)
 	}
 	if h.published != 0 {
 		t.Errorf("published %d times, want zero — this path never reaches the permanent-failure publish", h.published)
+	}
+}
+
+// The same transient error on the last attempt is a settled failure.
+//
+// Nothing is going to run again, so holding the run open would hold it
+// open forever: the row would sit at retrying, Coverage would never
+// settle, and the run would never conclude. The error is still returned —
+// what River does with the last attempt is River's business — but the row
+// says the outcome (ADR-0032).
+func TestSegmentRecordsATransientFailureAsFailedOnTheLastAttempt(t *testing.T) {
+	h := newSegmentHarness(t)
+	h.engine.err = errors.New("connection reset")
+
+	err := h.runAt(t, 0, jobs.Attempt{Number: 25, Max: 25})
+
+	if err == nil {
+		t.Fatal("AudiobookSegment returned nil on the last attempt — River is owed the failure")
+	}
+	if len(h.runs.recorded) != 1 || h.runs.recorded[0].State != model.SegmentFailed {
+		t.Fatalf("recorded %+v, want one failed segment", h.runs.recorded)
 	}
 }
 

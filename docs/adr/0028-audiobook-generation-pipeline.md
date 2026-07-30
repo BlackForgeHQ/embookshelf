@@ -85,6 +85,7 @@ Following `llm.Client`'s deliberate omission, there is no HTTP-level retry decor
 ## Consequences
 
 - **Amended by ADR-0031.** A run now carries a **generation**, bumped on every start and carried in the segment job args, because `(book, seq)` addresses the plan a regeneration deleted and the plan that replaced it identically. Both writes that touch a segment refuse a mismatch, staging is scoped by generation, and — new here — a start over a run that has not concluded is refused rather than clobbering it, which makes cancel the way through and §6's stop-loss the only route past a live run.
+- **Amended by ADR-0032.** A segment awaiting a retry is a state of its own (`retrying`) rather than a `failed` row the worker happens to have returned an error for. §7's Coverage counts only `failed` as settled, so a run holding a retry stays running until the retry lands or River's attempts run out — which is what stops a transient hiccup concluding a run whose segments all eventually succeeded.
 
 ## Open questions
 

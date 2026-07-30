@@ -82,11 +82,20 @@ type Audiobook struct {
 // SegmentState is where one unit of synthesis has got to.
 type SegmentState string
 
+// Retrying is a first-class state rather than a flavour of failure, for
+// the reason Canceled is one on the run: a segment the queue is going to
+// try again is outstanding, and a segment that has given up is settled,
+// and Coverage has to be able to tell them apart. Recording both as
+// Failed meant a sibling landing while a retry was still in flight
+// counted it as a settled failure and concluded the run — after which the
+// successful retry was a no-op, because the disposition refuses to act on
+// a failed run (ADR-0032).
 const (
-	SegmentPending SegmentState = "pending"
-	SegmentRunning SegmentState = "running"
-	SegmentDone    SegmentState = "done"
-	SegmentFailed  SegmentState = "failed"
+	SegmentPending  SegmentState = "pending"
+	SegmentRunning  SegmentState = "running"
+	SegmentRetrying SegmentState = "retrying"
+	SegmentDone     SegmentState = "done"
+	SegmentFailed   SegmentState = "failed"
 )
 
 // AudiobookSegment is one engine call's worth of the book: one River job,
@@ -130,6 +139,12 @@ func (c AudiobookCoverage) Complete() bool {
 
 // Settled reports that no segment is still outstanding — each one either
 // landed or gave up.
+//
+// A segment the queue is going to try again is neither. It is counted in
+// Total and in neither Done nor Failed, so a run holding one is not
+// settled and does not conclude: the retry either lands, or exhausts its
+// attempts and is recorded Failed, and the conclusion follows from
+// whichever happened (ADR-0032).
 func (c AudiobookCoverage) Settled() bool {
 	return c.Total > 0 && c.Done+c.Failed == c.Total
 }

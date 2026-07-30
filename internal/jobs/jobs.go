@@ -30,6 +30,36 @@ import (
 // could plausibly clear is River's to keep.
 var ErrDoNotRetry = errors.New("job will not succeed on retry")
 
+// Attempt is which try of a job this is, and how many it gets.
+//
+// A plain value rather than the queue's job handle, deliberately. The
+// task packages do not import River — that is what ErrDoNotRetry above
+// exists for, and what lets the workers be exercised without a queue —
+// so the one fact a worker sometimes needs from River travels as two
+// ints filled in by the registry's adapter.
+//
+// A worker needs it when the durable record it writes depends on whether
+// anything will run again: the audiobook segment worker records a
+// transient failure as retrying while attempts remain and as failed on
+// the last one, which is what stops a sibling reading a pending retry as
+// a settled failure (ADR-0032).
+type Attempt struct {
+	// Number is 1 on the first run of a job, 2 on its first retry, and so
+	// on — River's own numbering.
+	Number int
+	// Max is how many attempts the job gets in total.
+	Max int
+}
+
+// Last reports that nothing will run this job again if it fails now.
+//
+// The zero value says yes, and that is the safe answer rather than an
+// accident. A zero Attempt means no queue told this worker anything, so
+// there is no retry to wait for; recording the failure as settled
+// concludes the run, where recording it as retrying would leave a row
+// nothing is ever going to move.
+func (a Attempt) Last() bool { return a.Number >= a.Max }
+
 // Args is one job's payload: a JSON-serializable struct that names its
 // own kind.
 //

@@ -123,3 +123,33 @@ func TestOnlyAudiobookJobsDeclareTheirOwnQueue(t *testing.T) {
 		}
 	}
 }
+
+// Attempt.Last is the whole of the retry verdict a worker can reach
+// without importing River, so what it says at each end of the range is
+// worth stating — including at the zero value, which is the case a reader
+// is most likely to mistake for an oversight.
+//
+// A zero Attempt means no queue told this worker anything. Last says yes,
+// because there is no retry to wait for: a segment worker that recorded
+// "retrying" on it would leave a row nothing is ever going to move, and
+// a run that never concludes (ADR-0032).
+func TestAttemptLastIsTrueOnTheLastAttemptAndAtTheZeroValue(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		attempt jobs.Attempt
+		want    bool
+	}{
+		{"first of many", jobs.Attempt{Number: 1, Max: 25}, false},
+		{"one to go", jobs.Attempt{Number: 24, Max: 25}, false},
+		{"the last one", jobs.Attempt{Number: 25, Max: 25}, true},
+		{"a job that gets one attempt", jobs.Attempt{Number: 1, Max: 1}, true},
+		{"nothing told us", jobs.Attempt{}, true},
+	}
+	for _, c := range cases {
+		if got := c.attempt.Last(); got != c.want {
+			t.Errorf("%s: Attempt%+v.Last() = %v, want %v", c.name, c.attempt, got, c.want)
+		}
+	}
+}

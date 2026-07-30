@@ -201,7 +201,10 @@ func (r *BookAudiobookRepo) GetSegment(ctx context.Context, bookID string, seq i
 //
 // Running is included deliberately. A worker killed mid-call leaves its
 // row running forever, and excluding those would make Retry silently skip
-// exactly the segment that needs it.
+// exactly the segment that needs it. Retrying is included for the same
+// reason and one more: a queue that gave up on a job — River's rescuer
+// discarding it, a restart losing it — leaves a row nothing else will
+// move, and Retry is the route back (ADR-0032).
 func (r *BookAudiobookRepo) ListUnfinishedSegments(ctx context.Context, bookID string) ([]model.AudiobookSegment, error) {
 	const q = `SELECT ` + segmentCols + `
 		FROM book_audiobook_segments
@@ -376,6 +379,13 @@ type rowQuerier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+// The failed filter is exactly `state = 'failed'`, and widening it is the
+// bug this is written to stop. A segment the queue is going to try again
+// is `retrying`, which this counts in the total and in neither column, so
+// the run is neither complete nor settled while one is outstanding —
+// which is what keeps a sibling's landing from concluding the run failed
+// moments before a successful retry arrives at a run the disposition
+// refuses to act on (ADR-0032, #263).
 func scanCoverage(ctx context.Context, q rowQuerier, bookID string) (model.AudiobookCoverage, error) {
 	const sel = `
 		SELECT count(*) AS total,
