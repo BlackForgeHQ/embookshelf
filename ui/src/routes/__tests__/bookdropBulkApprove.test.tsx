@@ -72,6 +72,11 @@ function row(id: string, title: string): BookDropItem {
 const queue = [row("a", "Dune"), row("b", "Neuromancer"), row("c", "Solaris")]
 
 /** Which ids the approve endpoint refuses, and with what. */
+// The waits below can run to 10s on a cold runner, and vitest's default
+// budget for a test is 5s — which would cut one short and report a
+// timeout instead of the element error that says what was missing.
+vi.setConfig({ testTimeout: 20_000 })
+
 let refuse: Record<string, string> = {}
 
 function reply(status: number, body: unknown) {
@@ -127,7 +132,18 @@ async function renderQueue() {
   })
   // The sweep button counts the reviewable rows, so its label is the
   // signal that the queue has loaded.
-  return await screen.findByRole("button", { name: /Approve 3/ })
+  //
+  // Longer than the 1s default because the first render in this file
+  // pays for the route's whole module graph, and a cold CI runner does
+  // not finish that inside the default — which is how this went red on
+  // main while the other three tests here, which reuse the warm graph,
+  // stayed green. The bound is a patience limit, not an assertion: a
+  // button that never arrives still fails, just later.
+  return await screen.findByRole(
+    "button",
+    { name: /Approve 3/ },
+    { timeout: 10_000 }
+  )
 }
 
 describe("bulk approve", () => {
