@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -18,7 +19,7 @@ import (
 // stagedRun creates a running Audiobook run with n pending segments and a
 // staging directory holding one file per segment, so a sweep has
 // something real to reclaim.
-func stagedRun(t *testing.T, d *db.DB, dataPath string, segments int) (string, *repo.BookAudiobookRepo) {
+func stagedRun(t *testing.T, d *db.DB, dataPath config.DataRoot, segments int) (string, *repo.BookAudiobookRepo) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -51,7 +52,7 @@ func stagedRun(t *testing.T, d *db.DB, dataPath string, segments int) (string, *
 		t.Fatalf("set running: %v", err)
 	}
 
-	dir := task.StagingDir(dataPath, b.ID)
+	dir := stagingDir(t, dataPath, b.ID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("create staging: %v", err)
 	}
@@ -72,10 +73,31 @@ func ageRun(t *testing.T, d *db.DB, bookID string, days int) {
 	}
 }
 
-func stagingExists(t *testing.T, dataPath, bookID string) bool {
+func stagingExists(t *testing.T, dataPath config.DataRoot, bookID string) bool {
 	t.Helper()
-	_, err := os.Stat(task.StagingDir(dataPath, bookID))
+	_, err := os.Stat(stagingDir(t, dataPath, bookID))
 	return err == nil
+}
+
+// tempRoot is a configured data root over a temp dir.
+func tempRoot(t *testing.T) config.DataRoot {
+	t.Helper()
+	root, err := config.NewDataRoot(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewDataRoot: %v", err)
+	}
+	return root
+}
+
+// stagingDir is StagingDir for a root the test has already configured,
+// so the unset case does not have to be threaded through every caller.
+func stagingDir(t *testing.T, root config.DataRoot, bookID string) string {
+	t.Helper()
+	dir, err := task.StagingDir(root, bookID)
+	if err != nil {
+		t.Fatalf("StagingDir: %v", err)
+	}
+	return dir
 }
 
 // A run abandoned at running — every segment written, no finalize job,
@@ -83,7 +105,7 @@ func stagingExists(t *testing.T, dataPath, bookID string) bool {
 // so its staged MP3s sat on disk forever (#157).
 func TestSweepAudiobookStagingReclaimsAStrandedRun(t *testing.T) {
 	d := repotest.New(t)
-	dataPath := t.TempDir()
+	dataPath := tempRoot(t)
 	bookID, audiobooks := stagedRun(t, d, dataPath, 2)
 	ctx := context.Background()
 
@@ -113,7 +135,7 @@ func TestSweepAudiobookStagingReclaimsAStrandedRun(t *testing.T) {
 // did have to still be on disk.
 func TestSweepAudiobookStagingRetainsAFreshlyFailedRun(t *testing.T) {
 	d := repotest.New(t)
-	dataPath := t.TempDir()
+	dataPath := tempRoot(t)
 	bookID, audiobooks := stagedRun(t, d, dataPath, 2)
 	ctx := context.Background()
 

@@ -203,7 +203,7 @@ func (h *Handler) InstanceInfo(c *gin.Context) {
 		GoVersion:           runtime.Version(),
 		AllowedOrigins:      h.cfg.AllowedOrigins,
 		BookDropPath:        h.cfg.BookDropPath,
-		DataPath:            h.cfg.DataPath,
+		DataPath:            h.cfg.DataPath.String(),
 		MigrateOnStart:      h.cfg.MigrateOnStart,
 		EnrichmentProviders: providers,
 		Counts:              counts,

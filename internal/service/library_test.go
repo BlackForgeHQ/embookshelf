@@ -34,11 +34,21 @@ func newLibSvc(t *testing.T, deps service.LibraryServiceDeps) *service.LibrarySe
 	))
 }
 
+// dataRoot builds a configured data root over a temp dir.
+func dataRoot(t *testing.T, p string) config.DataRoot {
+	t.Helper()
+	root, err := config.NewDataRoot(p)
+	if err != nil {
+		t.Fatalf("NewDataRoot(%q): %v", p, err)
+	}
+	return root
+}
+
 // TestLibraryService_Create_local verifies that creating a local library
 // derives its path under DataPath, mkdirs it, and sets a nil BackendID.
 func TestLibraryService_Create_local(t *testing.T) {
 	dataPath := t.TempDir()
-	svc := newLibSvc(t, service.LibraryServiceDeps{DataPath: dataPath})
+	svc := newLibSvc(t, service.LibraryServiceDeps{DataPath: dataRoot(t, dataPath)})
 	ctx := context.Background()
 
 	lib, err := svc.Create(ctx, "My Fiction", service.LibraryKindLocal)
@@ -63,7 +73,7 @@ func TestLibraryService_Create_local(t *testing.T) {
 // TestLibraryService_Create_emptyKind verifies that kind="" defaults to local.
 func TestLibraryService_Create_emptyKind(t *testing.T) {
 	dataPath := t.TempDir()
-	svc := newLibSvc(t, service.LibraryServiceDeps{DataPath: dataPath})
+	svc := newLibSvc(t, service.LibraryServiceDeps{DataPath: dataRoot(t, dataPath)})
 	ctx := context.Background()
 
 	lib, err := svc.Create(ctx, "Classics", "")
@@ -86,7 +96,7 @@ func TestLibraryService_Create_emptyKind(t *testing.T) {
 // a local library without DataPath configured returns
 // ErrDataPathNotConfigured.
 func TestLibraryService_Create_LocalRequiresDataPath(t *testing.T) {
-	svc := newLibSvc(t, service.LibraryServiceDeps{}) // DataPath empty
+	svc := newLibSvc(t, service.LibraryServiceDeps{}) // the zero DataRoot: unset
 	_, err := svc.Create(context.Background(), "Test", service.LibraryKindLocal)
 	if !errors.Is(err, service.ErrDataPathNotConfigured) {
 		t.Errorf("err=%v want ErrDataPathNotConfigured", err)

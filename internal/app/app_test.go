@@ -36,11 +36,15 @@ yourself and export the DSN:
 	}
 
 	dataPath := t.TempDir()
+	dataRoot, err := config.NewDataRoot(dataPath)
+	if err != nil {
+		t.Fatalf("NewDataRoot(%q): %v", dataPath, err)
+	}
 	cfg := config.Config{
 		DatabaseURL:      dsn,
 		DatabaseMaxConns: 4,
 		DatabaseMinConns: 0,
-		DataPath:         dataPath,
+		DataPath:         dataRoot,
 		BookDropPath:     filepath.Join(dataPath, "bookdrop"),
 		BookDropInterval: time.Second,
 		MigrateOnStart:   true,

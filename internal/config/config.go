@@ -4,6 +4,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -39,8 +40,11 @@ type Config struct {
 	LogLevel         string
 	BookDropPath     string
 	BookDropInterval time.Duration
-	DataPath         string
-	MigrateOnStart   bool
+	// DataPath roots everything the deployment derives rather than
+	// stores. A DataRoot, not a string, so the rule about it is stated
+	// once here instead of re-read by every consumer — see dataroot.go.
+	DataPath       DataRoot
+	MigrateOnStart bool
 
 	// AppURL is the public origin of the BookLore instance. It feeds
 	// the OIDC redirect URI (${AppURL}/api/v1/auth/oidc/callback) and
@@ -110,7 +114,6 @@ func Load() (Config, error) {
 		LogLevel:         envStr("LOG_LEVEL", "info"),
 		BookDropPath:     envStr("BOOKDROP_PATH", "./bookdrop"),
 		BookDropInterval: time.Duration(envInt("BOOKDROP_POLL_SECONDS", 5)) * time.Second,
-		DataPath:         envStr("DATA_PATH", "./data"),
 		MigrateOnStart:   envBool("MIGRATE_ON_START", true),
 
 		AppURL:    strings.TrimRight(envStr("APP_URL", ""), "/"),
@@ -155,19 +158,17 @@ func Load() (Config, error) {
 		}
 	}
 
-	// Same reasoning for DataPath, which roots every local library.
-	// LibraryService.Create makes the directory relative to the working
-	// directory and stores that on the row; every later read resolves it
-	// as an absolute key against the "/"-rooted LocalFS. Left relative
-	// the two disagree, so the library is created, the books import, and
-	// every file fetch 403s with "no such file or directory /data/...".
-	// The default is "./data" and the repo's own .env sets it, so this
-	// was the out-of-the-box behaviour.
-	if cfg.DataPath != "" {
-		if abs, err := filepath.Abs(cfg.DataPath); err == nil {
-			cfg.DataPath = abs
-		}
+	// The data root states the same rule for itself, once, in its own
+	// constructor — including that a relative value is resolved here and
+	// never reaches a consumer. Unlike BookDropPath above, a failure is
+	// fatal rather than shrugged off: booting with a data root nobody
+	// could resolve is how libraries end up written to one place and read
+	// from another (ADR-0030 §1).
+	dataRoot, err := NewDataRoot(envStr("DATA_PATH", "./data"))
+	if err != nil {
+		return cfg, fmt.Errorf("DATA_PATH: %w", err)
 	}
+	cfg.DataPath = dataRoot
 
 	return cfg, nil
 }

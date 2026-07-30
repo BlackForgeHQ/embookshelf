@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 
+	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/jobs"
@@ -80,7 +81,7 @@ type Deps struct {
 	// workers report to it instead of deciding for themselves (#190).
 	AudiobookSvc *service.AudiobookService
 	Covers       *coverstore.Store
-	DataPath     string
+	DataPath     config.DataRoot
 }
 
 // New constructs the River-backed Client but does not start it. River

@@ -41,8 +41,20 @@ func TestDetectDialect(t *testing.T) {
 	}
 }
 
+// dataRoot builds a configured root for the DSN tests. Absolute inputs
+// only: the type resolves anything relative against the working
+// directory, which would make these assertions machine-dependent.
+func dataRoot(t *testing.T, p string) config.DataRoot {
+	t.Helper()
+	root, err := config.NewDataRoot(p)
+	if err != nil {
+		t.Fatalf("NewDataRoot(%q): %v", p, err)
+	}
+	return root
+}
+
 func TestSQLiteDSN_resolvesAgainstDataPath(t *testing.T) {
-	got, err := sqliteDSN("sqlite://./data/foo.db", "/srv/embookshelf")
+	got, err := sqliteDSN("sqlite://./data/foo.db", dataRoot(t, "/srv/embookshelf"))
 	if err != nil {
 		t.Fatalf("sqliteDSN: %v", err)
 	}
@@ -53,7 +65,7 @@ func TestSQLiteDSN_resolvesAgainstDataPath(t *testing.T) {
 }
 
 func TestSQLiteDSN_absolutePath_unchanged(t *testing.T) {
-	got, err := sqliteDSN("sqlite:///var/lib/foo.db", "/ignored")
+	got, err := sqliteDSN("sqlite:///var/lib/foo.db", dataRoot(t, "/ignored"))
 	if err != nil {
 		t.Fatalf("sqliteDSN: %v", err)
 	}
@@ -63,8 +75,8 @@ func TestSQLiteDSN_absolutePath_unchanged(t *testing.T) {
 	}
 }
 
-func TestSQLiteDSN_emptyDataPath_noResolution(t *testing.T) {
-	got, err := sqliteDSN("sqlite://./data/foo.db", "")
+func TestSQLiteDSN_unsetDataRoot_noResolution(t *testing.T) {
+	got, err := sqliteDSN("sqlite://./data/foo.db", config.DataRoot{})
 	if err != nil {
 		t.Fatalf("sqliteDSN: %v", err)
 	}

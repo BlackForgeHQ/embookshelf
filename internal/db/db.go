@@ -189,11 +189,11 @@ func openSQLite(ctx context.Context, cfg config.Config) (*DB, error) {
 // All forms are equivalent; the driver opens the file (creating it if
 // absent) using whatever the OS does with that path.
 //
-// When dataPath is non-empty and the resolved path has a leading "./data/"
-// prefix, that prefix is replaced with dataPath so that
+// When a data root is configured and the resolved path has a leading
+// "./data/" prefix, that prefix is replaced with the root so that
 // DATA_PATH=/var/lib/embookshelf causes the DB to land at
 // /var/lib/embookshelf/embookshelf.db.
-func sqliteDSN(url, dataPath string) (string, error) {
+func sqliteDSN(url string, dataRoot config.DataRoot) (string, error) {
 	var path string
 	low := strings.ToLower(url)
 	switch {
@@ -215,12 +215,15 @@ func sqliteDSN(url, dataPath string) (string, error) {
 		path = url
 	}
 
-	// Resolve a leading "./data/" prefix against cfg.DataPath. This lets
+	// Resolve a leading "./data/" prefix against the data root. This lets
 	// operators set DATA_PATH=/var/lib/foo and have the SQLite file
 	// land at /var/lib/foo/embookshelf.db without rewriting the URL.
+	// No root configured means nothing to resolve against, and the path
+	// stays as written — the root itself says so, rather than this
+	// function reading an empty string and deciding what it meant.
 	const prefix = "./data/"
-	if dataPath != "" && strings.HasPrefix(path, prefix) {
-		path = filepath.Join(dataPath, strings.TrimPrefix(path, prefix))
+	if root, err := dataRoot.Path(); err == nil && strings.HasPrefix(path, prefix) {
+		path = filepath.Join(root, strings.TrimPrefix(path, prefix))
 	}
 	return path, nil
 }

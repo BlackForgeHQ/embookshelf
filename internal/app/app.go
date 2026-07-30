@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -244,7 +243,14 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 	hub := sse.NewHub()
 
 	// Cover image store (files on disk under ${DATA_PATH}/covers/).
-	covers := coverstore.New(filepath.Join(cfg.DataPath, "covers"))
+	// The root derives the location; joining it here is how a deployment
+	// with no data root ended up caching covers into ./covers under
+	// whatever the working directory happened to be.
+	coversDir, err := cfg.DataPath.Covers()
+	if err != nil {
+		return nil, fmt.Errorf("cover store: %w", err)
+	}
+	covers := coverstore.New(coversDir)
 
 	// Services.
 	//
@@ -417,7 +423,12 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 		Settings: appSettingsRepo.GetAudiobook,
 
 		SweepStaging: func(bookID string) {
-			if err := os.RemoveAll(task.StagingDir(cfg.DataPath, bookID)); err != nil {
+			dir, err := task.StagingDir(cfg.DataPath, bookID)
+			if err != nil {
+				slog.Warn("audiobook: sweep staging after cancel", "book", bookID, "err", err)
+				return
+			}
+			if err := os.RemoveAll(dir); err != nil {
 				slog.Warn("audiobook: sweep staging after cancel", "book", bookID, "err", err)
 			}
 		},

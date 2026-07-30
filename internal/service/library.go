@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/blackforge/embookshelf/internal/config"
@@ -31,8 +30,11 @@ const (
 var ErrS3NotConfigured = errors.New("s3 libraries require EMBOOKSHELF_S3_BUCKET to be set")
 
 // ErrDataPathNotConfigured is returned when the caller requests
-// kind=local but cfg.DataPath is empty in deps.
-var ErrDataPathNotConfigured = errors.New("local libraries require DATA_PATH to be set")
+// kind=local but no data root is configured. It is config's own error
+// under this package's name, not a second one for the same fact: the
+// handler that maps this to a 4xx and the config type that decides what
+// "not configured" means must not be able to drift apart.
+var ErrDataPathNotConfigured = config.ErrDataRootUnset
 
 // CoverDeleter is the slice of *coverstore.Store book deletion needs:
 // drop the cover art belonging to a book id. Narrow so the deletion
@@ -51,9 +53,10 @@ type LibraryServiceDeps struct {
 	Resolver storage.Resolver
 	// DataPath is the root under which managed local-library folders
 	// live. Per ADR 0002, kind=local libraries derive their filesystem
-	// path as `${DataPath}/libraries/{slug}/`. Required for local
-	// library creation; empty DataPath returns ErrDataPathNotConfigured.
-	DataPath string
+	// path as `${DataPath}/libraries/{slug}/` — which the root itself
+	// derives, via Library. Required for local library creation; an
+	// unset root returns ErrDataPathNotConfigured.
+	DataPath config.DataRoot
 	// LibStore resolves a book's Library into the LibraryHandle that
 	// knows where its bytes live. Nil degrades DeleteBook to a row-only
 	// delete — the catalog is still correct, the bytes are left for a
@@ -122,10 +125,11 @@ func (s *LibraryService) Create(ctx context.Context, name string, kind LibraryKi
 
 	switch kind {
 	case "", LibraryKindLocal:
-		if s.deps.DataPath == "" {
-			return model.Library{}, ErrDataPathNotConfigured
+		path, err := s.deps.DataPath.Library(slug)
+		if err != nil {
+			// ErrDataRootUnset, which is ErrDataPathNotConfigured.
+			return model.Library{}, err
 		}
-		path := filepath.Join(s.deps.DataPath, "libraries", slug)
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			return model.Library{}, fmt.Errorf("create library directory: %w", err)
 		}

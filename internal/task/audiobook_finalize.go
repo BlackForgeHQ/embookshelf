@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/audio"
+	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -77,7 +78,7 @@ type FinalizeDeps struct {
 	// DataPath roots the staging directory. Per-segment MP3s live on
 	// local disk until finalize, outside storage.Storage, following the
 	// coverstore precedent for derived bytes.
-	DataPath string
+	DataPath config.DataRoot
 }
 
 // AudiobookFinalize joins a finished run's staged segments into the one
@@ -343,12 +344,11 @@ func fail(ctx context.Context, deps FinalizeDeps, bookID string, cause error) er
 	return nil
 }
 
-// cleanStaging removes a book's staged segments.
-func cleanStaging(dataPath, bookID string) {
-	// Empty means no staging area is configured — StagingDir's reading,
-	// shared by all three callers (#207).
-	dir := StagingDir(dataPath, bookID)
-	if dir == "" {
+// cleanStaging removes a book's staged segments. No configured root
+// means there is nothing staged to remove.
+func cleanStaging(dataPath config.DataRoot, bookID string) {
+	dir, err := StagingDir(dataPath, bookID)
+	if err != nil {
 		return
 	}
 	if err := os.RemoveAll(dir); err != nil {
@@ -371,14 +371,17 @@ type stagingLister interface {
 // SweepAudiobookStaging removes staging for runs whose staged segments
 // have been dead weight for longer than StaleStagingTTL. Which runs
 // those are is ListStaleStaging's judgement, not this loop's.
-func SweepAudiobookStaging(ctx context.Context, runs stagingLister, dataPath string) (int, error) {
+func SweepAudiobookStaging(ctx context.Context, runs stagingLister, dataPath config.DataRoot) (int, error) {
 	ids, err := runs.ListStaleStaging(ctx, int(StaleStagingTTL/(24*time.Hour)))
 	if err != nil {
 		return 0, err
 	}
 	swept := 0
 	for _, id := range ids {
-		dir := StagingDir(dataPath, id)
+		dir, err := StagingDir(dataPath, id)
+		if err != nil {
+			return swept, err
+		}
 		if _, err := os.Stat(dir); err != nil {
 			continue
 		}
@@ -390,8 +393,8 @@ func SweepAudiobookStaging(ctx context.Context, runs stagingLister, dataPath str
 
 // LoopAudiobookStagingSweep runs the sweep hourly, matching the shape of
 // the missing-file and orphaned-key sweepers.
-func LoopAudiobookStagingSweep(ctx context.Context, runs stagingLister, dataPath string) {
-	if dataPath == "" || runs == nil {
+func LoopAudiobookStagingSweep(ctx context.Context, runs stagingLister, dataPath config.DataRoot) {
+	if !dataPath.IsSet() || runs == nil {
 		return
 	}
 	ticker := time.NewTicker(time.Hour)

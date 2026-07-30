@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/audio/audiotest"
+	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -91,7 +92,7 @@ type segmentHarness struct {
 	engine    *fakeEngine
 	published int
 	engineErr error
-	dataPath  string
+	dataPath  config.DataRoot
 }
 
 // harnessSegmentChars is the cap the harness's run was planned at. Large
@@ -134,7 +135,7 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 			ID: "b1", LibraryID: "lib1", Title: "Dune", Author: "Frank Herbert", Format: "EPUB",
 		}},
 		engine:   &fakeEngine{reply: audiotest.Frames(4)},
-		dataPath: t.TempDir(),
+		dataPath: tempRoot(t),
 	}
 	src := epubWithChapters(t, "One sentence. Another sentence. A third one.", "Second chapter here.")
 	h.runs.plan = planSegments(t, src, harnessSegmentChars)
@@ -172,7 +173,11 @@ func (h *segmentHarness) run(t *testing.T, seq int) error {
 }
 
 func (h *segmentHarness) staged(seq int) bool {
-	_, err := os.Stat(filepath.Join(task.StagingDir(h.dataPath, "b1"), "seg-"+strconv.Itoa(seq)+".mp3"))
+	dir, err := task.StagingDir(h.dataPath, "b1")
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(dir, "seg-"+strconv.Itoa(seq)+".mp3"))
 	return err == nil
 }
 
@@ -659,7 +664,7 @@ func TestSegmentSwallowsAnAdvanceFailure(t *testing.T) {
 // decided there was nothing to reclaim (#207).
 func TestSegmentRefusesWhenNoStagingAreaIsConfigured(t *testing.T) {
 	h := newSegmentHarness(t)
-	h.deps.DataPath = ""
+	h.deps.DataPath = config.DataRoot{}
 
 	err := h.run(t, 0)
 
