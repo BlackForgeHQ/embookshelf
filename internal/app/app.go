@@ -516,7 +516,7 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 			enrichSvc, providerCfgSvc, searchSvc,
 			statsSvc, readingStatsSvc, annotationSvc,
 			guideRepo, guideRunner,
-			audiobookSvc, audiobookRepo,
+			audiobookSvc,
 		),
 		handler.NewAccountDeps(authSvc, userRepo, deviceSvc, appSettingsRepo),
 		handler.NewEmailDeps(notifier, resetSvc, inviteRepo, secretCipher, emailTpl),

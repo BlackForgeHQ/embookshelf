@@ -10,8 +10,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -20,6 +23,8 @@ import (
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/repo/repotest"
 	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/storage"
+	"github.com/blackforge/embookshelf/internal/storage/local"
 	"github.com/blackforge/embookshelf/internal/tts"
 )
 
@@ -36,10 +41,9 @@ func audiobookGetHandler(t *testing.T) (*Handler, *repo.BookRepo, *repo.LibraryR
 	libs := repo.NewLibraryRepo(d)
 	runs := repo.NewBookAudiobookRepo(d)
 	h := &Handler{
-		lib:           service.NewLibraryService(libs, books, service.LibraryServiceDeps{}, nil),
-		books:         books,
-		audiobookRepo: runs,
-		audiobooks:    &service.AudiobookService{},
+		lib:        service.NewLibraryService(libs, books, service.LibraryServiceDeps{}, nil),
+		books:      books,
+		audiobooks: &service.AudiobookService{},
 	}
 	return h, books, libs, runs
 }
@@ -279,5 +283,195 @@ func TestAudiobookErrorDefaultsToA409(t *testing.T) {
 	}
 	if body.Code != "" {
 		t.Fatalf("code = %q, want none — a state conflict is not a coded case", body.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Serving the narration rendition
+// ---------------------------------------------------------------------------
+
+// narrationLocationKey is where the generated audio lives, in the
+// vocabulary files.location is stored in: relative to the library root.
+const narrationLocationKey = "Author/Narrated Book/book.mp3"
+
+// narrationBytes stands in for half a gigabyte of MP3.
+var narrationBytes = []byte("id3-and-frames")
+
+// presigningObjectStore is the backend shape that makes the delivery
+// decision visible: an object store that can hand out a signed URL, which
+// is what an install with EMBOOKSHELF_PRESIGN_FALLBACK=presign asks the
+// file-serve path to use rather than piping the bytes through the app.
+type presigningObjectStore struct {
+	*objectStore
+	presigned []string
+}
+
+func (s *presigningObjectStore) Capabilities() storage.Capability {
+	return storage.CapObjectStore | storage.CapRange | storage.CapPresign
+}
+
+func (s *presigningObjectStore) PresignGet(_ context.Context, key string, _ time.Duration) (string, error) {
+	s.presigned = append(s.presigned, key)
+	return "https://signed.example/" + key, nil
+}
+
+// narrationFixture is a handler wired to one library holding one book
+// with a finished narration, over a real LibraryStore and a real run
+// repo — real enough that the storage key rule, the files-row lookup and
+// the reconciling read are the ones production runs.
+type narrationFixture struct {
+	h    *Handler
+	book model.Book
+}
+
+// newNarrationFixture builds that library over the given Storage. libRoot
+// is the library's local path — empty for an object-store library, which
+// by design has none. presign selects the delivery mode the deployment
+// configured, exactly as app.go passes it through.
+func newNarrationFixture(t *testing.T, store storage.Storage, libRoot, presign string) narrationFixture {
+	t.Helper()
+	ctx := context.Background()
+	d := repotest.New(t)
+	libRepo := repo.NewLibraryRepo(d)
+	bookRepo := repo.NewBookRepo(d)
+	fileRepo := repo.NewFileRepo(d)
+	runs := repo.NewBookAudiobookRepo(d)
+
+	lib, err := libRepo.CreateLibrary(ctx, "Narrated", "narrated", libRoot, nil)
+	if err != nil {
+		t.Fatalf("CreateLibrary: %v", err)
+	}
+	book, err := bookRepo.Create(ctx, model.Book{
+		LibraryID: lib.ID,
+		Title:     "Narrated Book",
+		Author:    "Author",
+		Format:    "EPUB",
+	})
+	if err != nil {
+		t.Fatalf("Create book: %v", err)
+	}
+	// The narration is an ordinary files row in the book's own folder
+	// (ADR-0025); what makes it the narration is the run pointing at it.
+	audio, err := fileRepo.Insert(ctx, model.File{
+		LibraryID:   lib.ID,
+		BookID:      book.ID,
+		Location:    narrationLocationKey,
+		Format:      "MP3",
+		Size:        int64(len(narrationBytes)),
+		Mtime:       time.Now(),
+		LastScanned: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Insert file: %v", err)
+	}
+	if err := runs.Start(ctx, model.Audiobook{
+		BookID: book.ID, Engine: "kokoro", Voice: "af_heart", TotalChars: 10,
+	}, nil); err != nil {
+		t.Fatalf("Start run: %v", err)
+	}
+	if _, err := runs.Transition(ctx, book.ID, model.Transition{
+		To:     model.AudiobookReady,
+		From:   []model.AudiobookState{model.AudiobookPending},
+		FileID: &audio.ID,
+	}); err != nil {
+		t.Fatalf("Transition to ready: %v", err)
+	}
+
+	h := &Handler{
+		books:      bookRepo,
+		lib:        service.NewLibraryService(libRepo, bookRepo, service.LibraryServiceDeps{}, nil),
+		audiobooks: service.NewAudiobookService(service.AudiobookDeps{Store: runs}),
+		libStore: service.NewLibraryStore(service.LibraryStoreDeps{
+			Libs:            libRepo,
+			Resolver:        storage.ConstantResolver{S: store},
+			Files:           fileRepo,
+			PresignTTL:      10 * time.Minute,
+			PresignFallback: presign,
+		}),
+	}
+	return narrationFixture{h: h, book: book}
+}
+
+// narrationRequest drives the rendition serve with a resolved scope, the
+// way the file route does after bookScoped.
+func narrationRequest(t *testing.T, f narrationFixture, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet,
+		"/api/v1/books/"+f.book.ID+"/file?rendition=audio"+query, nil)
+	f.h.serveNarrationRendition(c, f.book)
+	return rec
+}
+
+// The narration is delivered by the same decision as the primary file.
+// It used to re-derive its own: whatever the deployment asked for, the
+// audio was always piped through the app server, so an install that
+// configured presign redirected its EPUBs and streamed its half-gigabyte
+// MP3s. One rendition selector cannot mean two delivery policies.
+func TestNarrationHonoursThePresignDeliveryDecision(t *testing.T) {
+	store := &presigningObjectStore{objectStore: &objectStore{objects: map[string][]byte{
+		narrationLocationKey: narrationBytes,
+	}}}
+	f := newNarrationFixture(t, store, "", service.BookDeliveryPresign)
+
+	rec := narrationRequest(t, f, "")
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Location"); got != "https://signed.example/"+narrationLocationKey {
+		t.Errorf("Location = %q, want the signed URL for the narration key", got)
+	}
+}
+
+// Without presign configured the same decision streams the bytes, and it
+// asks the object store for the key the files row names — an object store
+// owns its own per-library prefix, so the location is already the key.
+func TestNarrationStreamsFromAnObjectStoreBackedLibrary(t *testing.T) {
+	store := &objectStore{objects: map[string][]byte{narrationLocationKey: narrationBytes}}
+	f := newNarrationFixture(t, store, "", "")
+
+	rec := narrationRequest(t, f, "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); got != string(narrationBytes) {
+		t.Errorf("body = %q, want the narration bytes", got)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "audio/mpeg" {
+		t.Errorf("Content-Type = %q, want audio/mpeg", got)
+	}
+}
+
+// The local library, whose bytes live under the library root on a
+// backend rooted at "/" (ADR-0030 §1). Same decision, same answer.
+func TestNarrationServesALocalLibrary(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, filepath.FromSlash(narrationLocationKey))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, narrationBytes, 0o600); err != nil {
+		t.Fatalf("write mp3: %v", err)
+	}
+	fs, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	f := newNarrationFixture(t, fs, root, "")
+
+	rec := narrationRequest(t, f, "&download=1")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); got != string(narrationBytes) {
+		t.Errorf("body = %q, want the narration bytes", got)
+	}
+	if got := rec.Header().Get("Content-Disposition"); !strings.Contains(got, "Narrated Book.mp3") {
+		t.Errorf("Content-Disposition = %q, want the download filename", got)
 	}
 }

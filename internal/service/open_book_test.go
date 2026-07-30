@@ -366,3 +366,83 @@ func TestALocalLibraryWithABackendRowResolvesKeysLikeOneWithout(t *testing.T) {
 			"made it answer as though its bytes were in an object store", got, want)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// FileSource — the delivery decision, asked of one location
+// ---------------------------------------------------------------------------
+
+// The decision a deployment configured applies to every rendition, not
+// just to the primary file. The narration path used to answer this for
+// itself and always streamed, so an install that turned presign on
+// redirected its EPUBs and piped its half-gigabyte MP3s through the app.
+func TestFileSourcePresignsWhateverRenditionIsAskedFor(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStorage{caps: storage.CapObjectStore | storage.CapPresign}
+	handle := &LibraryHandle{
+		Library:         model.Library{ID: "lib1"},
+		Storage:         store,
+		presignFallback: BookDeliveryPresign,
+		presignTTL:      time.Minute,
+	}
+
+	src, err := handle.FileSource(context.Background(), "Author/Title/book.mp3")
+	if err != nil {
+		t.Fatalf("FileSource: %v", err)
+	}
+	if src.Kind != BookDeliveryPresign {
+		t.Fatalf("kind = %q, want %q", src.Kind, BookDeliveryPresign)
+	}
+	if src.URL != "https://signed.example/Author/Title/book.mp3" {
+		t.Errorf("URL = %q, want the signed URL for the location as stored", src.URL)
+	}
+}
+
+// Streaming is the default, and the key it streams is the one this
+// library's Storage answers to: a local install's LocalFS is rooted at
+// "/", so the library-relative location has to be rooted first.
+func TestFileSourceStreamsALocalLibraryAtItsRootedKey(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	rootedAtSlash, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	handle := &LibraryHandle{
+		Library: model.Library{ID: "lib1", Root: &root},
+		Storage: rootedAtSlash,
+	}
+
+	src, err := handle.FileSource(context.Background(), "Author/Title/book.mp3")
+	if err != nil {
+		t.Fatalf("FileSource: %v", err)
+	}
+	if src.Kind != BookDeliveryStream {
+		t.Fatalf("kind = %q, want %q", src.Kind, BookDeliveryStream)
+	}
+	if want := filepath.Join(root, "Author/Title/book.mp3"); src.Key != want {
+		t.Errorf("key = %q, want %q", src.Key, want)
+	}
+}
+
+// An object store owns its own per-library prefix, so a stored location
+// is already the key — and a nil Storage is the legacy install with no
+// backend wired at all, which can still hand the handler a path.
+func TestFileSourceFallsBackToTheLocalPathWithoutStorage(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	handle := &LibraryHandle{Library: model.Library{ID: "lib1", Root: &root}}
+
+	src, err := handle.FileSource(context.Background(), "Author/Title/book.mp3")
+	if err != nil {
+		t.Fatalf("FileSource: %v", err)
+	}
+	if src.Kind != BookDeliveryLocal {
+		t.Fatalf("kind = %q, want %q", src.Kind, BookDeliveryLocal)
+	}
+	if want := filepath.Join(root, "Author/Title/book.mp3"); src.Path != want {
+		t.Errorf("path = %q, want %q", src.Path, want)
+	}
+}

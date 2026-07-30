@@ -270,15 +270,27 @@ const renditionAudio = "audio"
 // (ADR-0025 §3). Without an explicit selector the narration has no URL:
 // the ordinary file route resolves through primaryFile, which by
 // definition returns the EPUB.
+//
+// The run comes from the reconciling read rather than straight from the
+// repo. Serving is one more caller asking how a run is doing, and Status
+// is where recovery lives (ADR-0028 §7): a run whose finalize job was
+// lost is finalized on sight there, so the same poll that shows the user
+// their narration is what makes it servable. Reading the row directly
+// meant the serve path was the one caller that could see a run the rest
+// of the application had already moved on from — and it cost the handler
+// a second seam onto the same table, held beside the service that owns it.
 func (h *Handler) serveNarrationRendition(c *gin.Context, book model.Book) {
-	if h.audiobookRepo == nil || h.libStore == nil {
+	if h.libStore == nil {
 		writeError(c, http.StatusNotFound, "this book has no generated narration")
 		return
 	}
 	ctx := c.Request.Context()
 
-	run, err := h.audiobookRepo.GetByBookID(ctx, book.ID)
-	if err != nil || run.State != model.AudiobookReady || run.FileID == nil {
+	rep, err := h.audiobooks.Report(ctx, book)
+	// Ready *and* pointing at a file: finalize sets the state only once it
+	// has written the row, so a run marked ready without one is a book the
+	// UI offers and the player cannot open.
+	if err != nil || rep.Run.State != model.AudiobookReady || rep.Run.FileID == nil {
 		writeError(c, http.StatusNotFound, "this book has no generated narration")
 		return
 	}
@@ -287,7 +299,7 @@ func (h *Handler) serveNarrationRendition(c *gin.Context, book model.Book) {
 		writeServerError(c, "narration library handle", err)
 		return
 	}
-	location := narrationLocation(ctx, handle, book.ID, run)
+	location := narrationLocation(ctx, handle, book.ID, rep.Run)
 	if location == "" {
 		writeError(c, http.StatusNotFound, "this book has no generated narration")
 		return
@@ -300,22 +312,16 @@ func (h *Handler) serveNarrationRendition(c *gin.Context, book model.Book) {
 				asciiFallback(filename), url.PathEscape(filename)))
 	}
 
-	if handle.IsObjectStore() {
-		src := service.BookSource{
-			Kind:    service.BookDeliveryStream,
-			Storage: handle.Storage,
-			Key:     location,
-		}
-		if err := h.serveStreamedBookFile(c, src, "audio/mpeg"); err != nil {
-			writeError(c, http.StatusForbidden, err.Error())
-		}
+	// The library's own delivery decision, not a second reading of where
+	// its bytes live. Whether these bytes are redirected to, streamed
+	// through the app or read off disk is one question per library, and
+	// serveBookFile already asks it for the primary file.
+	src, err := handle.FileSource(ctx, location)
+	if err != nil {
+		writeError(c, http.StatusNotFound, "this book has no generated narration")
 		return
 	}
-
-	// Local libraries go through the same sandbox every other filesystem
-	// read of a book file passes, so a malformed location cannot escape
-	// the library tree.
-	if err := h.serveLocalBookFile(c, handle.LocalPath(location), "audio/mpeg"); err != nil {
+	if err := h.serveBookSource(c, src, "audio/mpeg"); err != nil {
 		writeError(c, http.StatusForbidden, err.Error())
 	}
 }

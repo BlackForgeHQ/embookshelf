@@ -85,9 +85,16 @@ type bookFileLister interface {
 // object store rather than on the local filesystem. Names the question
 // once: the in-file metadata embed (ADR-0001), the folder-rename
 // strategy (ADR-0005) and byte deletion (whether the orphan queue is
-// involved at all) branch on it. Every question about *keys* — walking,
-// resolving a location, writing one — goes through keyRoot instead,
-// which asks this once on their behalf.
+// involved at all, also ADR-0005) branch on it. Those are policies — what
+// this library's kind means for a decision — and each is stated where its
+// ADR lives.
+//
+// The mechanical questions do not come here. Every question about *keys*
+// — walking, resolving a location, writing one — goes through keyRoot,
+// and every question about *serving* bytes goes through FileSource; both
+// ask this once on their caller's behalf. A caller reading the capability
+// to derive a key or a delivery mode is answering a question that already
+// has an answer, and will answer it differently.
 //
 // Asked of the adapter, not of libraries.backend_id. That column was
 // the previous answer and it was wrong for exactly one install shape:
@@ -244,12 +251,46 @@ func (h *LibraryHandle) OpenBook(ctx context.Context, book model.Book) (io.Reade
 // already in flight when the row went finishes rather than 404s.
 const BookDeleteGrace = time.Hour
 
+// DeleteBookAndBytes deletes a book and the bytes it owned, in the only
+// order that works, by taking the row delete as the middle step.
+//
+// The ordering is forced by the schema and it is not free to choose:
+// deleting the books row cascades its files rows, so the keys have to be
+// snapshotted while the row that names them still exists, and the bytes
+// removed only once it is gone. Both halves were well covered on their
+// own and neither can enforce the sequence alone, so it lived as prose
+// plus one correct caller — which is a rule, not a type. Handing the row
+// delete in makes the wrong order unwritable: a caller supplies *what*
+// deletes the row and this method decides *when*, so there is no
+// arrangement of the two calls left for it to get wrong.
+//
+// Two errors because the caller does two different things with them.
+// err is the row delete's, and it is fatal: it is the authoritative step,
+// nothing after it has run, and re-issuing the request is a legitimate
+// retry. bytesErr is the cleanup's, and it is a warning: the row is
+// already gone, so failing the call would tell the user their delete did
+// not happen when it did — while swallowing it would let a stranded
+// half-gigabyte of narration read as a clean delete (ADR-0025 §6). A
+// failed snapshot lands in bytesErr too: it costs the list, not the
+// delete, so the row still goes and the bytes wait for an operator.
+func (h *LibraryHandle) DeleteBookAndBytes(
+	ctx context.Context,
+	bookID string,
+	deleteRow func(context.Context) error,
+) (bytesErr error, err error) {
+	locations, listErr := h.BookFileLocations(ctx, bookID)
+	if err := deleteRow(ctx); err != nil {
+		return nil, err
+	}
+	return errors.Join(listErr, h.DeleteBookBytes(ctx, bookID, locations)), nil
+}
+
 // BookFileLocations lists the storage keys belonging to a book.
 //
-// Split from DeleteBookBytes on purpose. Deleting a book cascades its
-// files rows, so the keys must be read *before* the row goes and the
-// bytes removed *after* it has — a single method taking only a book
-// would have to pick one side of that and would be wrong either way.
+// Split from DeleteBookBytes on purpose: they sit on opposite sides of
+// the row delete, and DeleteBookAndBytes above is what holds them in that
+// order. Kept exported for the readers that want the list for its own
+// sake — the comic handler asks whether a book has any files at all.
 // A nil error with no keys is the normal answer for a book whose files
 // were never backfilled.
 func (h *LibraryHandle) BookFileLocations(ctx context.Context, bookID string) ([]string, error) {
@@ -301,8 +342,11 @@ func (h *LibraryHandle) PrimaryContentHash(ctx context.Context, book model.Book)
 	return f.ContentHash
 }
 
-// DeleteBookBytes removes the objects a book owned, given the keys
-// BookFileLocations returned before the row was deleted.
+// DeleteBookBytes removes the objects a book owned, given keys that were
+// read before the row was deleted. Deleting a book goes through
+// DeleteBookAndBytes, which is what guarantees that; this stays exported
+// for the callers that already hold one specific key — the narration
+// sweep holds the single files row a run generated.
 //
 // Exists because deleting a book used to unlink only books.path — the
 // legacy single-path field — so a book on a backend-backed library left
@@ -642,31 +686,59 @@ func (h *LibraryHandle) BookSource(ctx context.Context, book model.Book) (BookSo
 	}
 
 	f, ferr := primaryFile(ctx, h.files, book)
-
-	if h.presignFallback == BookDeliveryPresign && h.Storage.Capabilities()&storage.CapPresign != 0 {
-		if ps, ok := h.Storage.(Presigner); ok && ferr == nil {
-			// A no-op today — only backend-backed libraries advertise
-			// CapPresign, and storageKey passes their keys through
-			// untouched — but the raw location was the odd one out among
-			// this file's four key resolutions (#168).
-			if url, err := ps.PresignGet(ctx, h.StorageKey(f.Location), h.presignTTL); err == nil {
-				return BookSource{Kind: BookDeliveryPresign, URL: url, TTL: h.presignTTL}, nil
-			}
-		}
-	}
-
 	if ferr == nil {
-		return BookSource{
-			Kind:    BookDeliveryStream,
-			Storage: h.Storage,
-			Key:     h.StorageKey(f.Location),
-		}, nil
+		return h.FileSource(ctx, f.Location)
 	}
 
 	if book.Path != "" {
 		return BookSource{Kind: BookDeliveryLocal, Path: book.Path}, nil
 	}
 	return BookSource{}, fmt.Errorf("book source: %w", ferr)
+}
+
+// FileSource is the delivery decision for one stored location, which is
+// the whole of the decision — BookSource above is this plus the question
+// of which of a book's files is the primary one.
+//
+// Split out because a book has more than one thing to serve. The reader
+// dispatches on the rendition the user picked rather than on books.format
+// (ADR-0025 §3), so the generated narration is served by location while
+// the EPUB is served by primaryFile, and the narration path answered the
+// delivery question a second time to get there: it read the object-store
+// capability itself and hardcoded a stream. Whatever the deployment
+// configured, the audio was piped through the app server — so an install
+// that turned presign on redirected its EPUBs and streamed its
+// half-gigabyte MP3s, which is the case presign exists for. One selector
+// must not mean two delivery policies.
+//
+// The key rule is not restated either: StorageKey answers it for both
+// kinds of backend, so an object store gets the location it already
+// answers to and a local library gets it rooted (#168).
+func (h *LibraryHandle) FileSource(ctx context.Context, location string) (BookSource, error) {
+	if location == "" {
+		return BookSource{}, errors.New("file source: no location")
+	}
+	if h.Storage == nil {
+		// No Storage resolved: the local filesystem is all that is left,
+		// and only a local library has a path to offer.
+		if path := h.LocalPath(location); path != "" {
+			return BookSource{Kind: BookDeliveryLocal, Path: path}, nil
+		}
+		return BookSource{}, errors.New("file source: library has no storage")
+	}
+
+	key := h.StorageKey(location)
+	if h.presignFallback == BookDeliveryPresign && h.Storage.Capabilities()&storage.CapPresign != 0 {
+		if ps, ok := h.Storage.(Presigner); ok {
+			// A failed signature falls through to streaming rather than
+			// failing the read: the bytes are reachable either way, and the
+			// redirect is an optimisation.
+			if url, err := ps.PresignGet(ctx, key, h.presignTTL); err == nil {
+				return BookSource{Kind: BookDeliveryPresign, URL: url, TTL: h.presignTTL}, nil
+			}
+		}
+	}
+	return BookSource{Kind: BookDeliveryStream, Storage: h.Storage, Key: key}, nil
 }
 
 // BookSource describes how a book file should be delivered.

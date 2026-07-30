@@ -47,6 +47,17 @@ func (h *Handler) serveBookFile(c *gin.Context, book model.Book, mime string) er
 	if err != nil {
 		return err
 	}
+	return h.serveBookSource(c, src, mime)
+}
+
+// serveBookSource carries out a delivery decision. The switch is here
+// once, for every rendition of a book: the primary file above and the
+// generated narration, which used to re-derive the local-versus-object-
+// store split for itself and so could not honour presign at all.
+//
+// Kind is the whole input — a BookSource carries what its own mode needs
+// and nothing else, so this cannot consult the library again.
+func (h *Handler) serveBookSource(c *gin.Context, src service.BookSource, mime string) error {
 	switch src.Kind {
 	case service.BookDeliveryPresign:
 		c.Redirect(http.StatusFound, src.URL)

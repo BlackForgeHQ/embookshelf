@@ -273,13 +273,13 @@ func (s *LibraryService) UpdateBookMetadata(ctx context.Context, b model.Book) e
 
 // DeleteBook hard-deletes a book and everything that belonged to it.
 //
-// The order is the whole point of this method, and it is not free to
-// choose. Deleting the books row cascades its files rows, so the storage
-// keys have to be snapshotted *before* the row goes and the bytes
-// removed *after* it has. That invariant used to live in an HTTP
-// handler with no test over it, sitting between two well-tested halves
-// (LibraryHandle.BookFileLocations, LibraryHandle.DeleteBookBytes)
-// neither of which can enforce it alone.
+// The row delete and the bytes go together through
+// LibraryHandle.DeleteBookAndBytes, which owns the order they happen in:
+// deleting the books row cascades its files rows, so the keys have to be
+// snapshotted before the row goes and the bytes removed after it has.
+// This method used to state that sequence itself, and being the one
+// correct statement of it is what made it a rule rather than a type —
+// the invariant is the handle's now, and nothing here can re-order it.
 //
 // The row is authoritative and the only step that fails the call: FKs on
 // shelf_books, annotations, user_book_progress and reading_sessions
@@ -296,24 +296,29 @@ func (s *LibraryService) UpdateBookMetadata(ctx context.Context, b model.Book) e
 // Storage) and the legacy path come off the row.
 func (s *LibraryService) DeleteBook(ctx context.Context, book model.Book) error {
 	deg := newDegraded(degradeRemoved)
+	deleteRow := func(ctx context.Context) error { return s.books.Delete(ctx, book.ID) }
 
-	// Snapshot first, while the files rows still exist. Every failure
-	// here is a degraded cleanup, never a blocked delete: this leg is
-	// read-only, and a library whose backend is briefly unreachable must
-	// not pin a book in the catalog.
-	handle, locations := s.bookBytes(ctx, book, deg)
-
-	if err := s.books.Delete(ctx, book.ID); err != nil {
-		return err
+	// A library we could not reach is a degraded cleanup, never a blocked
+	// delete: resolving the handle is read-only, and a library whose
+	// backend is briefly unreachable must not pin a book in the catalog.
+	// The row still goes; the bytes wait for an operator.
+	handle := s.bookHandle(ctx, book, deg)
+	if handle == nil {
+		if err := deleteRow(ctx); err != nil {
+			return err
+		}
+	} else {
+		bytesErr, err := handle.DeleteBookAndBytes(ctx, book.ID, deleteRow)
+		if err != nil {
+			return err
+		}
+		if bytesErr != nil {
+			deg.fail("book files", bytesErr)
+		}
 	}
 
 	// Past this line the row is gone and nothing below can be retried by
 	// re-issuing the request, which is why each step reports itself.
-	if handle != nil {
-		if err := handle.DeleteBookBytes(ctx, book.ID, locations); err != nil {
-			deg.fail("book files", err)
-		}
-	}
 	if s.deps.Covers != nil {
 		if err := s.deps.Covers.DeleteBook(book.ID); err != nil {
 			deg.fail("cover art", err)
@@ -325,31 +330,22 @@ func (s *LibraryService) DeleteBook(ctx context.Context, book model.Book) error 
 	return deg.orNil()
 }
 
-// bookBytes resolves the book's library and lists the storage keys it
-// owns. Split out so DeleteBook reads as the sequence it is; both
-// failures are recorded and both leave the delete itself untouched.
+// bookHandle resolves the book's library, recording a failure as a
+// degraded cleanup rather than a blocked delete.
 //
 // A nil handle means "this install could not tell us where the bytes
 // live" — no LibraryStore wired, or a library whose backend would not
 // resolve. The delete proceeds; the bytes wait for an operator.
-func (s *LibraryService) bookBytes(ctx context.Context, book model.Book, deg *Degraded) (*LibraryHandle, []string) {
+func (s *LibraryService) bookHandle(ctx context.Context, book model.Book, deg *Degraded) *LibraryHandle {
 	if s.deps.LibStore == nil {
-		return nil, nil
+		return nil
 	}
 	handle, err := s.deps.LibStore.For(ctx, book.LibraryID)
 	if err != nil {
 		deg.fail("book files", fmt.Errorf("library handle: %w", err))
-		return nil, nil
+		return nil
 	}
-	locations, err := handle.BookFileLocations(ctx, book.ID)
-	if err != nil {
-		// The handle is still returned: DeleteBookBytes with no keys is a
-		// no-op, so this only means we lost the list, not that the caller
-		// should stop.
-		deg.fail("book files", err)
-		return handle, nil
-	}
-	return handle, locations
+	return handle
 }
 
 // deleteLegacyFile unlinks books.path — the single-path field that
