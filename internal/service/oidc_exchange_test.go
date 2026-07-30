@@ -192,7 +192,8 @@ func TestExchangeLoginResolvedMintsSession(t *testing.T) {
 // A pending user is one the Provisioning policy created (or found) but an
 // admin has not approved. Exchange returns the user *and* an error: the
 // handler needs the user to render the "awaiting approval" landing page,
-// but no session may be minted.
+// but no session may be minted. That pairing is the documented exception
+// on ExchangeOutcome, and the sweep below is the other half of it.
 func TestExchangeLoginPendingApprovalReturnsUserAndRefuses(t *testing.T) {
 	t.Parallel()
 
@@ -211,6 +212,86 @@ func TestExchangeLoginPendingApprovalReturnsUserAndRefuses(t *testing.T) {
 	}
 	if len(f.sessions.created) != 0 {
 		t.Errorf("a session was minted for an unapproved user: %+v", f.sessions.created)
+	}
+}
+
+// Pending-approval is the *only* error Exchange returns alongside a
+// populated outcome — ExchangeOutcome's doc says so, because a caller
+// following the ordinary Go habit of discarding the value on a non-nil
+// error would drop the user the approval landing page renders. An
+// exception is only safe while it stays exactly one, so this sweeps
+// every other refusal and pins the zero outcome.
+func TestExchangeReturnsAZeroOutcomeForEveryRefusalButPendingApproval(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		run  func(f *exchangeFixture) (ExchangeOutcome, error)
+	}{
+		{
+			name: "unknown state",
+			run: func(f *exchangeFixture) (ExchangeOutcome, error) {
+				return f.svc.Exchange(context.Background(), "the-code", "never-minted", "curl/8", "")
+			},
+		},
+		{
+			name: "link callback on another session",
+			run: func(f *exchangeFixture) (ExchangeOutcome, error) {
+				return f.svc.Exchange(context.Background(), "the-code", f.seedState(t, IntentLink, "u1"), "curl/8", "u2")
+			},
+		},
+		{
+			name: "denied user",
+			run: func(f *exchangeFixture) (ExchangeOutcome, error) {
+				f.users.add(model.User{ID: "u-denied", Email: "reader@example.com", Status: model.UserStatusDenied})
+				f.idents.byIssuerSubject[testIssuer+"|sub-1"] = model.Identity{ID: "i1", UserID: "u-denied"}
+				return f.svc.Exchange(context.Background(), "the-code", f.seedState(t, IntentLogin, ""), "curl/8", "")
+			},
+		},
+		{
+			name: "policy refusal",
+			run: func(f *exchangeFixture) (ExchangeOutcome, error) {
+				f.users.add(model.User{ID: "someone-else", Email: "other@example.com", Status: model.UserStatusActive})
+				return f.svc.Exchange(context.Background(), "the-code", f.seedState(t, IntentLogin, ""), "curl/8", "")
+			},
+		},
+		{
+			name: "no email claim",
+			run: func(f *exchangeFixture) (ExchangeOutcome, error) {
+				f.claims.Email = ""
+				return f.svc.Exchange(context.Background(), "the-code", f.seedState(t, IntentLogin, ""), "curl/8", "")
+			},
+		},
+		{
+			name: "token exchange failed",
+			run: func(f *exchangeFixture) (ExchangeOutcome, error) {
+				f.callbackErr = errors.New("token exchange: boom")
+				return f.svc.Exchange(context.Background(), "the-code", f.seedState(t, IntentLogin, ""), "curl/8", "")
+			},
+		},
+		{
+			name: "session store failed",
+			run: func(f *exchangeFixture) (ExchangeOutcome, error) {
+				f.users.add(model.User{ID: "u1", Email: "reader@example.com", Status: model.UserStatusActive})
+				f.idents.byIssuerSubject[testIssuer+"|sub-1"] = model.Identity{ID: "i1", UserID: "u1"}
+				f.sessions.err = errors.New("sessions: down")
+				return f.svc.Exchange(context.Background(), "the-code", f.seedState(t, IntentLogin, ""), "curl/8", "")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newExchangeFixture(t, repo.DefaultOIDCAutoProvisionDetails())
+			out, err := tc.run(f)
+			if err == nil {
+				t.Fatalf("outcome %+v came back with no error — this case must refuse", out)
+			}
+			if out != (ExchangeOutcome{}) {
+				t.Errorf("outcome = %+v, want zero: only pending-approval may carry one", out)
+			}
+		})
 	}
 }
 
@@ -260,7 +341,9 @@ func TestExchangeLoginNotAllowedRefuses(t *testing.T) {
 
 // An IdP that returns no email claim cannot have a users row created for
 // it. The switch has its own arm for this so the admin sees a
-// configuration problem rather than a generic "not allowed".
+// configuration problem rather than a generic "not allowed" — which
+// means the refusal has to be a sentinel the handler can match, not a
+// string it would have to grep.
 func TestExchangeLoginEmailRequiredRefuses(t *testing.T) {
 	t.Parallel()
 
@@ -271,17 +354,71 @@ func TestExchangeLoginEmailRequiredRefuses(t *testing.T) {
 	state := f.seedState(t, IntentLogin, "")
 	_, err := f.svc.Exchange(context.Background(), "the-code", state, "curl/8", "")
 
-	if err == nil {
-		t.Fatal("a login with no email claim succeeded")
+	if !errors.Is(err, ErrOIDCEmailClaimMissing) {
+		t.Fatalf("err = %v, want ErrOIDCEmailClaimMissing", err)
 	}
 	if errors.Is(err, ErrOIDCLoginNotAllowed) {
 		t.Fatalf("email_required collapsed into the not-allowed arm: %v", err)
 	}
-	if !strings.Contains(err.Error(), "email") {
-		t.Errorf("err = %v, want it to name the missing email claim", err)
-	}
 	if len(f.users.created) != 0 {
 		t.Errorf("a user was created without an email: %+v", f.users.created)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The refusal mapping itself
+// ---------------------------------------------------------------------------
+
+// Denied and not-allowed are flattened into one refusal on purpose: the
+// login page must not tell an attacker whether the account exists and was
+// refused, or never existed at all. Asserted on the mapping rather than
+// through Exchange because indistinguishability is the property — the two
+// have to produce the same bytes, not merely both fail.
+func TestRefuseLoginKeepsDeniedAndNotAllowedIndistinguishable(t *testing.T) {
+	t.Parallel()
+
+	denied, dErr := refuseLogin(ProvisionResult{Status: ProvisionDenied})
+	notAllowed, nErr := refuseLogin(ProvisionResult{Status: ProvisionNotAllowed})
+
+	if !errors.Is(dErr, ErrOIDCLoginNotAllowed) || !errors.Is(nErr, ErrOIDCLoginNotAllowed) {
+		t.Fatalf("denied = %v, not-allowed = %v, want both ErrOIDCLoginNotAllowed", dErr, nErr)
+	}
+	if dErr.Error() != nErr.Error() {
+		t.Errorf("denied says %q and not-allowed says %q — the difference tells a caller the account exists", dErr, nErr)
+	}
+	if denied != (ExchangeOutcome{}) || notAllowed != (ExchangeOutcome{}) {
+		t.Errorf("outcomes %+v / %+v, want both zero", denied, notAllowed)
+	}
+}
+
+// A provisioning status this switch has no arm for is a bug in whoever
+// added it, not a login refusal. Absorbing it into the not-allowed arm
+// would turn that bug into a silently rejected user; it fails loudly
+// instead — loudly enough for a log, still opaque to the browser.
+func TestRefuseLoginFailsLoudlyOnAnUnknownStatus(t *testing.T) {
+	t.Parallel()
+
+	out, err := refuseLogin(ProvisionResult{
+		Status: ProvisionStatus("quarantined"),
+		User:   model.User{ID: "u-secret", Email: "secret@example.com"},
+	})
+
+	if !errors.Is(err, ErrOIDCUnknownProvisionStatus) {
+		t.Fatalf("err = %v, want ErrOIDCUnknownProvisionStatus", err)
+	}
+	if errors.Is(err, ErrOIDCLoginNotAllowed) {
+		t.Fatal("a status nobody wrote a rule for was absorbed into the ordinary refusal")
+	}
+	if !strings.Contains(err.Error(), "quarantined") {
+		t.Errorf("err = %v, want it to name the status nobody handled", err)
+	}
+	// The status is a programming fact; the user behind it is not. An
+	// unknown arm must not become the one place a refusal says who it was.
+	if strings.Contains(err.Error(), "u-secret") || strings.Contains(err.Error(), "secret@example.com") {
+		t.Errorf("err = %v leaks the account the status belonged to", err)
+	}
+	if out != (ExchangeOutcome{}) {
+		t.Errorf("outcome = %+v, want zero", out)
 	}
 }
 
@@ -321,6 +458,37 @@ func TestExchangeRejectsUnknownState(t *testing.T) {
 	}
 	if f.callbacks != 0 {
 		t.Errorf("the token exchange ran for a forged state (%d calls)", f.callbacks)
+	}
+}
+
+// A state carrying no redirect URL cannot complete a token exchange: the
+// redirect_uri replayed to the token endpoint would be empty and the IdP
+// answers with something opaque that names nothing an operator can fix.
+// Both authorize builders already refuse with ErrOIDCNotConfigured before
+// minting such a state, so today this is only reachable by minting one
+// directly — as this test does. Exchange refuses with the same sentinel
+// rather than trusting that every future caller of issueStateWithIntent
+// remembered the guard.
+func TestExchangeRefusesAStateWithNoRedirectURL(t *testing.T) {
+	t.Parallel()
+
+	f := newExchangeFixture(t, repo.DefaultOIDCAutoProvisionDetails())
+	f.users.add(model.User{ID: "u1", Email: "reader@example.com", Status: model.UserStatusActive})
+	f.idents.byIssuerSubject[testIssuer+"|sub-1"] = model.Identity{ID: "i1", UserID: "u1"}
+
+	state, _, _, err := f.svc.issueStateWithIntent(testIdPSlug, "", IntentLogin, "")
+	if err != nil {
+		t.Fatalf("issueStateWithIntent: %v", err)
+	}
+
+	if _, err := f.svc.Exchange(context.Background(), "the-code", state, "curl/8", ""); !errors.Is(err, ErrOIDCNotConfigured) {
+		t.Fatalf("err = %v, want ErrOIDCNotConfigured — the same refusal both authorize builders give", err)
+	}
+	if f.callbacks != 0 {
+		t.Errorf("the token exchange ran with an empty redirect_uri (%d calls)", f.callbacks)
+	}
+	if len(f.sessions.created) != 0 {
+		t.Errorf("a session was minted off an unconfigured redirect: %+v", f.sessions.created)
 	}
 }
 

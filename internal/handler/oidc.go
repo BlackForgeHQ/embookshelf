@@ -4,6 +4,7 @@ package handler
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -110,7 +111,7 @@ func (h *Handler) OIDCCallback(c *gin.Context) {
 			c.Redirect(http.StatusFound, "/account?error=session_expired")
 			return
 		}
-		c.Redirect(http.StatusFound, "/login?oidcError="+oidcErrorCode(err))
+		c.Redirect(http.StatusFound, "/login?oidcError="+oidcCallbackRefusal(err))
 		return
 	}
 	if out.Intent == service.IntentLink {
@@ -119,6 +120,19 @@ func (h *Handler) OIDCCallback(c *gin.Context) {
 	}
 	auth.SetSessionCookie(c, out.Session.ID, service.SessionTTL, h.Secure())
 	c.Redirect(http.StatusFound, "/")
+}
+
+// oidcCallbackRefusal is the code the login page renders for a failed
+// callback. Every refusal reaches the browser as a code and nothing else,
+// so one that no code explains — an unhandled provisioning status, a
+// store that failed mid-flow — would otherwise leave no trace at all:
+// this logs those, and only those, before answering the same way.
+func oidcCallbackRefusal(err error) string {
+	code := oidcErrorCode(err)
+	if code == "unknown" {
+		slog.Error("oidc callback", "err", err)
+	}
+	return code
 }
 
 func oidcErrorCode(err error) string {
@@ -135,6 +149,12 @@ func oidcErrorCode(err error) string {
 		return "notConfigured"
 	case errors.Is(err, service.ErrOIDCPendingApproval):
 		return "pendingApproval"
+	case errors.Is(err, service.ErrOIDCEmailClaimMissing):
+		// Not a user error: the IdP completed the exchange but its claim
+		// mapping (or its scopes) never yielded an email. Its own code so
+		// the login page can name the missing claim and point at the
+		// provider settings instead of telling the operator to try again.
+		return "emailClaimMissing"
 	default:
 		return "unknown"
 	}

@@ -3,9 +3,13 @@
 package handler
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -145,12 +149,45 @@ func TestOIDCErrorCodeMaps(t *testing.T) {
 		{service.ErrOIDCNotConfigured, "notConfigured"},
 		{service.ErrOIDCUnknownProvider, "notConfigured"},
 		{service.ErrOIDCPendingApproval, "pendingApproval"},
+		// A claim-mapping misconfiguration is the operator's to fix, so
+		// it gets its own code naming the claim that is missing rather
+		// than the generic "sign-in failed" every unclassified error
+		// shares.
+		{service.ErrOIDCEmailClaimMissing, "emailClaimMissing"},
 		{errors.New("anything else"), "unknown"},
 	}
 	for _, tc := range cases {
 		if got := oidcErrorCode(tc.err); got != tc.want {
 			t.Errorf("oidcErrorCode(%v) = %q, want %q", tc.err, got, tc.want)
 		}
+	}
+}
+
+// The callback answers the browser with an opaque code and nothing else,
+// which is right for a refusal — but an error no code classifies is then
+// a server-side fact nobody ever sees. An unhandled provisioning status
+// is exactly that shape: the user is turned away, and without this the
+// only record of why is the goroutine that discarded it.
+func TestOIDCCallbackRefusalLogsWhatNoCodeExplains(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	unhandled := fmt.Errorf("%w %q", service.ErrOIDCUnknownProvisionStatus, "quarantined")
+	if got := oidcCallbackRefusal(unhandled); got != "unknown" {
+		t.Errorf("code = %q, want unknown — the browser learns nothing new either way", got)
+	}
+	if !strings.Contains(buf.String(), "quarantined") {
+		t.Errorf("log = %q, want the unclassified refusal recorded with its cause", buf.String())
+	}
+
+	buf.Reset()
+	if got := oidcCallbackRefusal(service.ErrOIDCStateMismatch); got != "stateMismatch" {
+		t.Errorf("code = %q, want stateMismatch", got)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("an expected refusal was logged as a server error: %s", buf.String())
 	}
 }
 

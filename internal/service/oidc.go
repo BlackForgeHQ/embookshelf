@@ -32,6 +32,23 @@ var (
 	ErrOIDCForceOnlyBlocked = errors.New("OIDC-only mode cannot be enabled without at least one configured provider")
 	ErrOIDCUnknownProvider  = errors.New("unknown OIDC provider")
 	ErrOIDCPendingApproval  = errors.New("this OIDC account is awaiting administrator approval")
+
+	// ErrOIDCEmailClaimMissing is the refusal for an IdP that completed
+	// the exchange but returned no email claim, which this instance
+	// requires to create an account. A sentinel rather than an inline
+	// error because it is the one refusal an admin can fix: it means the
+	// provider's claim mapping is wrong (or the scope is too narrow), and
+	// the handler has to be able to say so instead of reporting a generic
+	// failure the operator cannot act on.
+	ErrOIDCEmailClaimMissing = errors.New("the OIDC provider returned no email claim and this instance requires one")
+
+	// ErrOIDCUnknownProvisionStatus is returned when the Provisioner
+	// reports a status refuseLogin has no arm for. It is a programming
+	// error — someone added a ProvisionStatus and did not teach the OIDC
+	// adapter what it means — so it is deliberately not one of the login
+	// refusals: absorbing it would turn that omission into users being
+	// quietly turned away with no trace of why.
+	ErrOIDCUnknownProvisionStatus = errors.New("oidc: unhandled provisioning status")
 )
 
 const (
@@ -317,6 +334,16 @@ func (s *OIDCService) AuthURL(ctx context.Context, slug, baseURL string) (string
 // ExchangeOutcome is the discriminated result of completing an OIDC
 // callback. Intent reflects how the flow was started; login outcomes
 // populate Session+User, link outcomes populate Provider+UserID.
+//
+// One error is returned *with* a populated outcome, and it is the only
+// one: ErrOIDCPendingApproval carries Intent+User, because the account
+// exists and awaits approval, and the landing page the handler redirects
+// to has nothing to render without the user. The ordinary Go habit of
+// discarding the value when err != nil therefore drops something real
+// here. Every other refusal — state mismatch, link user mismatch,
+// denied, not allowed, missing email claim, an unhandled provisioning
+// status, or any store failure — returns the zero outcome, which is
+// what makes the exception safe to remember.
 type ExchangeOutcome struct {
 	Intent   string // IntentLogin | IntentLink
 	Session  model.Session
@@ -349,9 +376,17 @@ func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent, sess
 		return ExchangeOutcome{}, ErrOIDCLinkUserMismatch
 	}
 
+	// The redirect_uri replayed to the token endpoint must be the exact
+	// one the authorize request carried, which is why the state stamps it.
+	// An empty one is not something to paper over: it would reach the IdP
+	// as a blank redirect_uri and come back as an error naming nothing an
+	// operator could act on. Both AuthURL and AuthURLForLink already
+	// refuse with this sentinel before minting such a state, so this is
+	// the same refusal at the other end of the round trip rather than a
+	// second policy.
 	redirect := entry.RedirectURL
 	if redirect == "" {
-		redirect = s.resolveRedirectURL("")
+		return ExchangeOutcome{}, ErrOIDCNotConfigured
 	}
 
 	claims, issuer, err := s.resolveCallback(ctx, code, entry, redirect)
@@ -396,15 +431,8 @@ func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent, sess
 	if err != nil {
 		return ExchangeOutcome{}, err
 	}
-	switch res.Status {
-	case ProvisionResolved:
-		// fall through to session create below
-	case ProvisionPendingApproval:
-		return ExchangeOutcome{Intent: IntentLogin, User: res.User}, ErrOIDCPendingApproval
-	case ProvisionEmailRequired:
-		return ExchangeOutcome{}, errors.New("OIDC provider did not return an email claim and email is required")
-	default: // ProvisionDenied, ProvisionNotAllowed
-		return ExchangeOutcome{}, ErrOIDCLoginNotAllowed
+	if res.Status != ProvisionResolved {
+		return refuseLogin(res)
 	}
 	u := res.User
 	_ = s.users.SyncOIDCProfile(ctx, u.ID, claims.Name, claims.Picture)
@@ -414,6 +442,31 @@ func (s *OIDCService) Exchange(ctx context.Context, code, state, userAgent, sess
 		return ExchangeOutcome{}, err
 	}
 	return ExchangeOutcome{Intent: IntentLogin, Session: sess, User: u}, nil
+}
+
+// refuseLogin maps a non-resolved provisioning status to the pair
+// Exchange returns for it. Callers handle ProvisionResolved themselves —
+// there is no session to mint here.
+func refuseLogin(res ProvisionResult) (ExchangeOutcome, error) {
+	switch res.Status {
+	case ProvisionPendingApproval:
+		// The one refusal that returns a populated outcome; see
+		// ExchangeOutcome's doc for why the caller must keep it.
+		return ExchangeOutcome{Intent: IntentLogin, User: res.User}, ErrOIDCPendingApproval
+	case ProvisionEmailRequired:
+		return ExchangeOutcome{}, ErrOIDCEmailClaimMissing
+	case ProvisionDenied, ProvisionNotAllowed:
+		// Flattened on purpose, and the flattening is the point: an
+		// account an admin denied and an identity no policy admits must
+		// be one indistinguishable refusal, or the login page reports
+		// whether the account exists to anyone who asks.
+		return ExchangeOutcome{}, ErrOIDCLoginNotAllowed
+	default:
+		// Not a refusal — a status this adapter was never taught. Names
+		// the status (a fact about the code) and nothing about the user
+		// it arrived with, so a loud failure stays a safe one.
+		return ExchangeOutcome{}, fmt.Errorf("%w %q", ErrOIDCUnknownProvisionStatus, res.Status)
+	}
 }
 
 // resolveCallback runs the provider-specific OAuth/OIDC token exchange
