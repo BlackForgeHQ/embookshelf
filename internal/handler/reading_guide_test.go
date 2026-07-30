@@ -3,7 +3,6 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +15,6 @@ import (
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/repo/repotest"
 )
 
 func guideCtx(t *testing.T, method, target string, body string) (*gin.Context, *httptest.ResponseRecorder) {
@@ -95,18 +93,53 @@ func TestReadingGuideJobArgsCarryTheBook(t *testing.T) {
 	}
 }
 
+// storedReadingGuide is a configured READING_GUIDE row with a key in it.
+func storedReadingGuide() repo.ReadingGuideConfig {
+	return repo.ReadingGuideConfig{
+		Enabled: true,
+		BaseURL: "https://api.openai.com/v1", Model: "gpt-4o-mini",
+		APIKey: "stored-key", Language: "en", TextCap: 48_000,
+	}
+}
+
+// TestSettingsReadingGuideGetNeverReturnsTheKey — the LLM key is the one
+// field on this panel that costs money if it leaks, and the GET is
+// allowed to say only that one exists.
+func TestSettingsReadingGuideGetNeverReturnsTheKey(t *testing.T) {
+	h := &Handler{appSettings: &fakeAppSettings{guide: storedReadingGuide()}}
+
+	c, rec := settingsCtx(t, http.MethodGet, "/api/v1/settings/reading-guide", "")
+	h.SettingsReadingGuideGet(c)
+
+	if httpStatus(c, rec) != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "stored-key") {
+		t.Fatalf("the API key travelled to the client: %s", rec.Body.String())
+	}
+	var got readingGuideSettingsDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v (body %s)", err, rec.Body.String())
+	}
+	if !got.KeySet || got.Model != "gpt-4o-mini" || got.TextCap != 48_000 {
+		t.Errorf("round trip lost fields: %+v", got)
+	}
+}
+
 // TestSettingsReadingGuideUpdateResolvesTheKey covers the three-state key
 // input. The clear arm is the one that was missing: an admin who stored an
 // LLM key had no way to remove it, because an empty key always meant
 // "keep".
+//
+// Runs against the fake store rather than a live database. It used to
+// need Postgres, which is the reason the other four settings panels had
+// no endpoint test at all — the same rule, five times over, testable only
+// where someone had already paid for a schema.
 func TestSettingsReadingGuideUpdateResolvesTheKey(t *testing.T) {
-	ctx := context.Background()
-	stored := repo.ReadingGuideConfig{
-		BaseURL: "https://api.openai.com/v1", Model: "gpt-4o-mini", APIKey: "stored-key",
-	}
+	stored := storedReadingGuide()
 	body := func(apiKey string, keySet bool) string {
 		b, err := json.Marshal(readingGuideSettingsDTO{
-			BaseURL: stored.BaseURL, Model: stored.Model,
+			Enabled: true, BaseURL: stored.BaseURL, Model: stored.Model,
 			APIKey: apiKey, KeySet: keySet,
 		})
 		if err != nil {
@@ -123,30 +156,76 @@ func TestSettingsReadingGuideUpdateResolvesTheKey(t *testing.T) {
 	}{
 		{"clear", "", false, ""},
 		{"keep", "", true, "stored-key"},
-		{"replace", "new-key", true, "new-key"},
+		{"replace", " new-key ", true, "new-key"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := &Handler{appSettings: repo.NewAppSettingsRepo(repotest.New(t), nil)}
-			if err := h.appSettings.SetReadingGuide(ctx, stored); err != nil {
-				t.Fatalf("seed: %v", err)
-			}
+			store := &fakeAppSettings{guide: stored}
+			h := &Handler{appSettings: store}
 
-			c, rec := guideCtx(t, http.MethodPut, "/api/v1/settings/reading-guide",
+			c, rec := settingsCtx(t, http.MethodPut, "/api/v1/settings/reading-guide",
 				body(tc.apiKey, tc.keySet))
 			h.SettingsReadingGuideUpdate(c)
 
-			if rec.Code != http.StatusOK {
+			if httpStatus(c, rec) != http.StatusOK {
 				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 			}
-			got, err := h.appSettings.GetReadingGuide(ctx)
-			if err != nil {
-				t.Fatalf("GetReadingGuide: %v", err)
+			if store.guideWrites != 1 {
+				t.Fatalf("row written %d times, want 1", store.guideWrites)
 			}
-			if got.APIKey != tc.want {
-				t.Errorf("APIKey = %q, want %q", got.APIKey, tc.want)
+			if store.guide.APIKey != tc.want {
+				t.Errorf("APIKey = %q, want %q", store.guide.APIKey, tc.want)
+			}
+			if strings.Contains(rec.Body.String(), "key") && strings.Contains(rec.Body.String(), tc.want) && tc.want != "" {
+				t.Errorf("the PUT response echoed the key back: %s", rec.Body.String())
 			}
 		})
+	}
+}
+
+// TestSettingsReadingGuideUpdateRefusalIsA400 — the row refuses being
+// enabled without an endpoint to call, which is the admin's to fix and
+// not a 500.
+func TestSettingsReadingGuideUpdateRefusalIsA400(t *testing.T) {
+	store := &fakeAppSettings{guide: storedReadingGuide(), setGuideErr: errBoom}
+	h := &Handler{appSettings: store}
+
+	c, rec := settingsCtx(t, http.MethodPut, "/api/v1/settings/reading-guide",
+		`{"enabled":true,"baseUrl":"","model":""}`)
+	h.SettingsReadingGuideUpdate(c)
+
+	if httpStatus(c, rec) != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSettingsReadingGuideTestNeedsAnEndpoint — the connection probe
+// refuses before it dials when there is nothing configured to dial.
+func TestSettingsReadingGuideTestNeedsAnEndpoint(t *testing.T) {
+	h := &Handler{appSettings: &fakeAppSettings{guide: repo.ReadingGuideConfig{Enabled: true}}}
+
+	c, rec := settingsCtx(t, http.MethodPost, "/api/v1/settings/reading-guide/test", "")
+	h.SettingsReadingGuideTest(c)
+
+	if httpStatus(c, rec) != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestBookGuideGenerateIsA503WhenGuidesAreOff — the book-scoped generate
+// gates on the admin row, and the UI switches on the catalogued code to
+// explain the button that did nothing.
+func TestBookGuideGenerateIsA503WhenGuidesAreOff(t *testing.T) {
+	h := &Handler{appSettings: &fakeAppSettings{guide: repo.ReadingGuideConfig{Enabled: false}}}
+
+	c, rec := settingsCtx(t, http.MethodPost, "/api/v1/books/b1/guide", "")
+	h.BookGuideGenerate(c, bookScope{UserID: "u1", Book: model.Book{ID: "b1"}})
+
+	if httpStatus(c, rec) != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), CodeGuidesDisabled) {
+		t.Errorf("body carries no %s code: %s", CodeGuidesDisabled, rec.Body.String())
 	}
 }
 

@@ -43,10 +43,14 @@ type Handler struct {
 	oidc         *service.OIDCService
 	identities   *repo.IdentityRepo
 	search       *service.SearchService
-	appSettings  *repo.AppSettingsRepo
-	covers       *coverstore.Store
-	hub          *sse.Hub
-	queue        queue.Client
+	// appSettings is the app_settings rows behind the settings surfaces.
+	// Held as the appSettingsStore interface rather than
+	// *repo.AppSettingsRepo so a settings endpoint is reachable in a test
+	// with a fake — see settings.go.
+	appSettings appSettingsStore
+	covers      *coverstore.Store
+	hub         *sse.Hub
+	queue       queue.Client
 	// libStore powers the file-serve path's BookSource decision
 	// (presign vs. local) and any other library-aware lookup. nil on
 	// installs that haven't configured a storage backend — serveBookFile
@@ -244,7 +248,8 @@ func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailD
 		guides: d.guides, guideRunner: d.guideRunner,
 		audiobooks: d.audiobooks, audiobookRepo: d.audiobookRepo,
 
-		auth: a.auth, users: a.users, devices: a.devices, appSettings: a.appSettings,
+		auth: a.auth, users: a.users, devices: a.devices,
+		appSettings: newAppSettingsStore(a.appSettings),
 
 		notifier: e.notifier, resets: e.resets, inviteRepo: e.inviteRepo,
 		cipher: e.cipher, emailTpl: e.emailTpl,
@@ -254,6 +259,20 @@ func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailD
 		covers:       opts.Covers, queue: opts.Queue,
 		fwdAuthHolder: opts.FwdAuthHolder, fwdAuth: opts.FwdAuth,
 	}
+}
+
+// newAppSettingsStore holds the settings repo behind the handler tier's
+// interface, keeping a missing repo a nil interface.
+//
+// The explicit check is the same trap newOIDCSettingsService documents
+// below: a nil *AppSettingsRepo stored straight into an interface field
+// is not a nil interface, so the `h.appSettings == nil` degrades that
+// answer 503 would sail past their guard and panic instead.
+func newAppSettingsStore(r *repo.AppSettingsRepo) appSettingsStore {
+	if r == nil {
+		return nil
+	}
+	return r
 }
 
 // newOIDCSettingsService wires the module that applies an OIDC settings

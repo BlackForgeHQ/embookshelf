@@ -3,6 +3,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,51 @@ import (
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 )
+
+// appSettingsStore is the handler tier's view of the app_settings rows,
+// declared here for the same reason bookStore is declared in
+// bookscope.go: an interface the settings endpoints can be driven
+// against, rather than *repo.AppSettingsRepo, which drags a live
+// Postgres into every test and so meant none were written. The rules
+// inside these endpoints — the tri-state secret, the keep-versus-clear
+// contract for every stored credential, which repo refusal is a 400 and
+// which is a 500 — were unreachable without a database, and every one of
+// them went untested.
+//
+// Narrow on purpose: exactly the methods the settings endpoints call and
+// nothing else. The rows are typed accessors rather than a generic
+// get/set because the row owns its own normalize-and-validate (see
+// repo.Setting), and a handler that reached past that would be able to
+// persist a config the CLI would refuse.
+//
+// Writes the OIDC panel makes are absent by design — those go through
+// service.OIDCSettingsService as one decision (#195), so this store only
+// reads OIDC rows.
+type appSettingsStore interface {
+	GetBool(ctx context.Context, name string) (bool, error)
+	SetBool(ctx context.Context, name string, v bool) error
+
+	GetEmail(ctx context.Context) (repo.EmailConfig, error)
+	SetEmail(ctx context.Context, cfg repo.EmailConfig) error
+
+	GetReadingGuide(ctx context.Context) (repo.ReadingGuideConfig, error)
+	SetReadingGuide(ctx context.Context, cfg repo.ReadingGuideConfig) error
+
+	GetAudiobook(ctx context.Context) (repo.AudiobookConfig, error)
+	SetAudiobook(ctx context.Context, cfg repo.AudiobookConfig) error
+
+	GetForwardAuth(ctx context.Context) (repo.ForwardAuthConfig, error)
+	SetForwardAuth(ctx context.Context, cfg repo.ForwardAuthConfig) error
+
+	GetOIDCAutoProvision(ctx context.Context) (repo.OIDCAutoProvisionDetails, error)
+	GetGoogle(ctx context.Context) (repo.OAuthPresetConfig, error)
+	GetGitHub(ctx context.Context) (repo.OAuthPresetConfig, error)
+	GetGenericOIDC(ctx context.Context) (repo.GenericOIDCConfig, error)
+}
+
+// The production store is the repo itself; this is where that stops
+// compiling if the two drift.
+var _ appSettingsStore = (*repo.AppSettingsRepo)(nil)
 
 // resolveSecret reconciles the three-state secret input every settings
 // panel sends, so the SMTP password and the OIDC client secrets follow
