@@ -7,12 +7,12 @@ import type { ApiError } from "@/api/client"
 import type { BookDropItem, BookDropUploadResult } from "@/api/bookdrop"
 import type { Library } from "@/api/books"
 import {
-  BOOKDROP_STATE_LABEL,
   approveBookDrop,
   bookdropCoverUrl,
   bookdropFileUrl,
   bookdropQuery,
   bookdropQueryKey,
+  bookdropView,
   isTerminalState,
   putBookDropCover,
   rejectBookDrop,
@@ -68,7 +68,11 @@ function BookDrop() {
 
   const error = approveMut.error ?? rejectMut.error
 
-  const readyCount = active.filter((i) => i.state === "ready").length
+  // The sweep is the reviewable phase, not everything approvable: a
+  // failed row can be approved one at a time, by someone who has read
+  // its error, but bulk approve would import it with nobody looking.
+  const sweepable = active.filter((i) => bookdropView(i).phase === "reviewable")
+  const readyCount = sweepable.length
 
   return (
     <div className="bdrop-shell fade-in">
@@ -92,10 +96,8 @@ function BookDrop() {
               size="sm"
               disabled={approveMut.isPending || readyCount === 0}
               onClick={() => {
-                for (const item of active) {
-                  if (item.state === "ready") {
-                    approveMut.mutate({ id: item.id })
-                  }
+                for (const item of sweepable) {
+                  approveMut.mutate({ id: item.id })
                 }
               }}
             >
@@ -343,7 +345,7 @@ function QueueRow({
   selected: boolean
   onSelect: () => void
 }) {
-  const isProcessing = item.state === "processing"
+  const view = bookdropView(item)
   return (
     <button
       type="button"
@@ -366,7 +368,7 @@ function QueueRow({
         </div>
         <div className="bdrop-row-meta">
           <span className="bdrop-dot" data-state={item.state} />
-          <span>{BOOKDROP_STATE_LABEL[item.state]}</span>
+          <span>{view.label}</span>
           <span className="bdrop-row-meta-divider" aria-hidden />
           <span>{formatBytes(item.fileSize)}</span>
           {item.author && (
@@ -376,7 +378,7 @@ function QueueRow({
             </>
           )}
         </div>
-        {isProcessing && (
+        {view.showProgress && (
           <div className="bdrop-row-progress" aria-hidden>
             <span />
           </div>
@@ -401,14 +403,7 @@ function DetailPane({
   onApprove: (libraryId?: string) => void
   onReject: () => void
 }) {
-  const eyebrow =
-    item.state === "failed"
-      ? "Needs attention"
-      : item.state === "ready"
-        ? "Review import"
-        : item.state === "processing"
-          ? "Extracting metadata"
-          : "Discovered"
+  const view = bookdropView(item)
 
   return (
     <div className="bdrop-detail-inner">
@@ -423,14 +418,14 @@ function DetailPane({
 
       <div className="bdrop-detail-head">
         <div className="min-w-0">
-          <p className="bdrop-eyebrow">{eyebrow}</p>
+          <p className="bdrop-eyebrow">{view.eyebrow}</p>
           <h2 className="bdrop-title wrap-break-word">
             {item.title || "Untitled file"}
           </h2>
         </div>
         <span className="bdrop-state-ribbon">
           <span className="bdrop-dot" data-state={item.state} />
-          {BOOKDROP_STATE_LABEL[item.state]}
+          {view.label}
         </span>
       </div>
 
@@ -456,7 +451,7 @@ function DetailPane({
             <MetaCell label="Format" value={item.format} mono />
             <MetaCell label="Size" value={formatBytes(item.fileSize)} mono />
             <MetaCell label="Language" value={item.language} mono missing="—" />
-            <MetaCell label="State" value={BOOKDROP_STATE_LABEL[item.state]} mono />
+            <MetaCell label="State" value={view.label} mono />
           </dl>
 
           {item.description && (
@@ -466,7 +461,7 @@ function DetailPane({
             </div>
           )}
 
-          {item.state === "failed" && item.errorMsg && (
+          {view.showError && (
             <div className="bdrop-error">
               <strong className="font-medium not-italic">
                 Processing error.
@@ -517,22 +512,15 @@ function CoverPanel({ item }: { item: BookDropItem }) {
   // component instance. Relies on backend 409 idempotency for
   // cross-mount duplicate suppression.
   const uploadedRef = useRef<Set<string>>(new Set())
-  // Whether a pre-approval cover can still be uploaded for this row.
-  // The server enforces the same three states in BookDropPutCover
-  // (internal/handler/bookdrop.go) and refuses the rest with a 409 —
-  // this is the client half of that pair. Failed rows are excluded even
-  // though they are approvable: the upload exists to supply a cover the
-  // extractor could not find, and a failed extraction has no page to
-  // render one from.
-  const isPreapprovalState =
-    item.state === "discovered" ||
-    item.state === "processing" ||
-    item.state === "ready"
+  // Whether a pre-approval cover can still be uploaded for this row —
+  // the client half of the state gate in BookDropPutCover, which the
+  // view owns and documents.
+  const { canUploadCover } = bookdropView(item)
 
   useEffect(() => {
     if (item.format !== "PDF") return
     if (item.hasCover) return
-    if (!isPreapprovalState) return
+    if (!canUploadCover) return
     if (uploadedRef.current.has(item.id)) return
     uploadedRef.current.add(item.id)
     const ctrl = new AbortController()
@@ -550,7 +538,7 @@ function CoverPanel({ item }: { item: BookDropItem }) {
     return () => {
       ctrl.abort()
     }
-  }, [item.id, item.format, item.hasCover, isPreapprovalState, queryClient])
+  }, [item.id, item.format, item.hasCover, canUploadCover, queryClient])
 
   return (
     <div className="bdrop-cover-frame">
@@ -560,7 +548,7 @@ function CoverPanel({ item }: { item: BookDropItem }) {
         <div className="bdrop-cover-blank">
           <Icon name="book" size={28} className="mb-2 text-(--color-ink-3)" />
           <span className="bdrop-cover-blank-label">
-            {item.format === "PDF" && isPreapprovalState
+            {item.format === "PDF" && canUploadCover
               ? "rendering cover…"
               : "no cover detected"}
           </span>
@@ -586,10 +574,7 @@ function ApprovalBar({
   const [libraryId, setLibraryId] = useState<string | undefined>(
     libraries[0]?.id
   )
-  // Failed rows are approvable on purpose: extraction failing means the
-  // metadata is poor, not that the file is unusable, and the user can
-  // fill the gaps in by hand rather than losing the book.
-  const approvable = item.state === "ready" || item.state === "failed"
+  const { canApprove } = bookdropView(item)
 
   return (
     <>
@@ -614,7 +599,7 @@ function ApprovalBar({
         </div>
       )}
       <Button
-        disabled={disabled || !approvable}
+        disabled={disabled || !canApprove}
         onClick={() => onApprove(libraryId)}
       >
         <Icon name="check" size={13} /> Approve import

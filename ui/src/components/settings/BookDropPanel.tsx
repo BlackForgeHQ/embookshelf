@@ -3,9 +3,9 @@ import { Link } from "@tanstack/react-router"
 
 import type { BookDropItem } from "@/api/bookdrop"
 import {
-  BOOKDROP_STATE_LABEL,
   bookdropFilesQuery,
   bookdropQuery,
+  bookdropView,
   clearProcessedBookDrop,
   isTerminalState,
   wipeBookDropFiles,
@@ -186,11 +186,10 @@ function ProcessedRow({ item }: { item: BookDropItem }) {
         minute: "2-digit",
       })
   const title = item.title?.trim() || item.filename
-  const isImported = item.state === "imported"
-  // The shared map, not a third spelling of the same two words: this
+  // The shared view, not a third spelling of the same two words: this
   // panel used to render "Imported"/"Discarded" while the queue route
   // rendered "imported"/"discarded" from the map (#213).
-  const stateLabel = BOOKDROP_STATE_LABEL[item.state]
+  const view = bookdropView(item)
   return (
     <li className="flex items-center gap-3 border-t border-dashed border-border py-2 first:border-0">
       <span
@@ -204,17 +203,17 @@ function ProcessedRow({ item }: { item: BookDropItem }) {
         <div className="t-small text-muted-foreground">
           <span
             className={`capitalize ${
-              isImported
+              view.imported
                 ? "text-(--color-editorial-accent)"
                 : "text-(--color-accent-ink)"
             }`}
           >
-            {stateLabel}
+            {view.label}
           </span>
           {item.author ? <> · {item.author}</> : null} · {dateLabel}
         </div>
       </div>
-      {isImported && item.bookId ? (
+      {view.imported && item.bookId ? (
         <Link
           to="/book/$id"
           params={{ id: item.bookId }}

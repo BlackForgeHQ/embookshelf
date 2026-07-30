@@ -8,34 +8,151 @@ import type { BookDetail } from "./books"
 export type BookDropState =
   "discovered" | "processing" | "ready" | "failed" | "imported" | "rejected"
 
+/** Where a queue row is in its life, as a reader sees it. */
+export type BookDropPhase =
+  | "waiting"
+  | "extracting"
+  | "reviewable"
+  | "attention"
+  | "done"
+
+/**
+ * A queue row as the interface needs it: derived facts, not state
+ * strings.
+ *
+ * The state vocabulary used to be restated at twelve sites across the
+ * queue route and the settings panel — a ready count, a bulk-approve
+ * filter, a processing flag, a four-way eyebrow ternary, a failure
+ * condition, a pre-approval predicate, an approvable predicate, an
+ * imported flag — so a new state meant finding all twelve, and two of
+ * them had already drifted apart (#242). Only the terminal check had a
+ * home, and it is below, reading the same table as everything here.
+ */
+export type BookDropView = {
+  phase: BookDropPhase
+  /** What the state is called in the interface. */
+  label: string
+  /** The line above the title in the detail pane. */
+  eyebrow: string
+  canApprove: boolean
+  canUploadCover: boolean
+  showProgress: boolean
+  showError: boolean
+  /** Ended in the library rather than the bin. */
+  imported: boolean
+}
+
+/** The facts that follow from the state alone. One row per state. */
+type StateFacts = Omit<BookDropView, "showProgress" | "showError">
+
+/**
+ * The whole state vocabulary, in one table.
+ *
+ * The shown words and the wire words differ deliberately — "discovered"
+ * is what the watcher did, "queued" is what the user sees waiting — and
+ * this is the only place either vocabulary meets the other. The map of
+ * labels lived inside the queue route, which is why the settings panel
+ * could not reach it and recomputed what it needed instead (#198), then
+ * in a module of its own beside four predicates only the route used
+ * (#213), and now here with the rest of what a state implies. Adding a
+ * state is this table and the test's.
+ *
+ * The two approval facts are the client halves of two different server
+ * gates and are not meant to agree:
+ *
+ *   - `canApprove` mirrors `BookDropService.Approve`, which accepts
+ *     ready and failed. A failed extraction means the metadata is poor,
+ *     not that the file is unusable, and the user can fill the gaps in
+ *     by hand rather than lose the book.
+ *   - `canUploadCover` mirrors `BookDropPutCover`, which accepts the
+ *     three pre-approval states and answers 409 for the rest. Failed
+ *     rows are excluded even though they are approvable: the upload
+ *     exists to supply a cover the extractor could not find, and a
+ *     failed extraction has no page to render one from.
+ */
+const BOOKDROP_STATE_FACTS: Record<BookDropState, StateFacts> = {
+  discovered: {
+    phase: "waiting",
+    label: "queued",
+    eyebrow: "Discovered",
+    canApprove: false,
+    canUploadCover: true,
+    imported: false,
+  },
+  processing: {
+    phase: "extracting",
+    label: "processing",
+    eyebrow: "Extracting metadata",
+    canApprove: false,
+    canUploadCover: true,
+    imported: false,
+  },
+  ready: {
+    phase: "reviewable",
+    label: "ready",
+    eyebrow: "Review import",
+    canApprove: true,
+    canUploadCover: true,
+    imported: false,
+  },
+  failed: {
+    phase: "attention",
+    label: "failed",
+    eyebrow: "Needs attention",
+    canApprove: true,
+    canUploadCover: false,
+    imported: false,
+  },
+  imported: {
+    phase: "done",
+    label: "imported",
+    eyebrow: "In your library",
+    canApprove: false,
+    canUploadCover: false,
+    imported: true,
+  },
+  rejected: {
+    phase: "done",
+    label: "discarded",
+    eyebrow: "Discarded",
+    canApprove: false,
+    canUploadCover: false,
+    imported: false,
+  },
+}
+
 /**
  * What a queue row's state is called in the interface.
  *
- * The wire words and the shown words differ deliberately — "discovered"
- * is what the scanner did, "queued" is what the user sees waiting — so
- * this map is the only place either vocabulary meets the other. It lived
- * inside the queue route, which is why the settings panel could not
- * reach it and recomputed what it needed instead (#198), and then in a
- * module of its own alongside four predicates only the queue route used
- * (#213). Here, beside the type it maps, both surfaces can reach it and
- * neither can add a third vocabulary without seeing this one.
+ * Kept as a map of its own because a few callers hold a bare state and
+ * no row, but it is a column of the table above rather than a second
+ * copy of the vocabulary.
  */
-export const BOOKDROP_STATE_LABEL: Record<BookDropState, string> = {
-  discovered: "queued",
-  processing: "processing",
-  ready: "ready",
-  failed: "failed",
-  imported: "imported",
-  rejected: "discarded",
+export const BOOKDROP_STATE_LABEL = Object.fromEntries(
+  Object.entries(BOOKDROP_STATE_FACTS).map(([state, f]) => [state, f.label])
+) as Record<BookDropState, string>
+
+export function bookdropView(item: BookDropItem): BookDropView {
+  const facts = BOOKDROP_STATE_FACTS[item.state]
+  return {
+    ...facts,
+    // Extraction is the only phase where anything moves on its own.
+    showProgress: facts.phase === "extracting",
+    // A failure with nothing to say would render an empty callout, and a
+    // message left over from an earlier attempt is not news once the row
+    // has moved on.
+    showError: facts.phase === "attention" && Boolean(item.errorMsg),
+  }
 }
 
 /**
  * Terminal rows are done with: imported into the library, or discarded.
  * They are what the settings panel's cleanup sweeps and what the queue
- * hides from its active list.
+ * hides from its active list — one phase, so the two lists cannot drift
+ * into disagreeing about which rows exist.
  */
 export function isTerminalState(state: BookDropState): boolean {
-  return state === "imported" || state === "rejected"
+  return BOOKDROP_STATE_FACTS[state].phase === "done"
 }
 
 export type BookDropItem = {
