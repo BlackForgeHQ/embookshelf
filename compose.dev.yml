@@ -42,7 +42,11 @@ services:
   # rule out. Bump deliberately.
   #
   # No bucket is provisioned here: the test creates its own on first run,
-  # so pointing TEST_S3_ENDPOINT at any object store is enough.
+  # so pointing TEST_S3_ENDPOINT at any object store is enough. What the
+  # test cannot do for itself is switch versioning on — that is a
+  # property of the bucket, and without it the conformance suite's
+  # CapVersioning row asserts nothing (#270). `make s3-up` provisions it,
+  # and CI calls that target rather than starting this service directly.
   minio:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped

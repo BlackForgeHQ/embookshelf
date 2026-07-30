@@ -10,9 +10,14 @@ package storagetest
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -393,6 +398,7 @@ func runContract(t *testing.T, make MakeBackend) {
 	t.Run("ListEmptyOnMissingPrefix", func(t *testing.T) { testListEmptyOnMissingPrefix(t, make) })
 	t.Run("CapabilitiesIsStable", func(t *testing.T) { testCapabilitiesIsStable(t, make) })
 	t.Run("CapabilityGatesItsOption", func(t *testing.T) { testCapabilityGatesItsOption(t, make) })
+	t.Run("PutDoesNotBufferTheWholeObject", func(t *testing.T) { testPutDoesNotBufferTheWholeObject(t, make) })
 	t.Run("OpenReadsBytesAtRandomOffsets", func(t *testing.T) { testOpenRandomAccess(t, make) })
 }
 
@@ -806,6 +812,16 @@ func refuseConditional(_ *testing.T, s storage.Storage) error {
 // cannot match on — when it does not. The refused writes must also have
 // left the bytes alone, which is the reason a caller reaches for a
 // conditional Put in the first place.
+//
+// If this case ever fails on a real store with an ETag that looks
+// correct, start with the quoting: the S3 adapter strips the surrounding
+// quotes from the ETag it reports but forwards a caller's value verbatim
+// as If-Match, so the round trip below — read the reported ETag, pass it
+// straight back — hands the store an unquoted value where RFC 9110 says
+// an entity-tag is quoted. MinIO accepts it, which is why no test here
+// reaches it, and a stricter store would refuse a legitimate conditional
+// write (#228, #270). The fix belongs in the adapter, not in a caller
+// that re-quotes by hand.
 func honourConditional(t *testing.T, s storage.Storage) {
 	t.Helper()
 	ctx := context.Background()
@@ -868,6 +884,25 @@ func refuseVersioning(_ *testing.T, s storage.Storage) error {
 	return s.Delete(ctx, "cap/version", storage.WithVersionID("some-version-id"))
 }
 
+// versionedStoreEnv, when set to anything non-empty, declares that the
+// store this run is pointed at is configured to keep versions. It is what
+// turns the conditional half of honourVersioning from a hope into a gate.
+//
+// A declaration is needed because the suite cannot tell the two failures
+// apart from the outside: a bucket with versioning switched off and a
+// backend that keeps versions but drops the id on the floor both look
+// like "no distinct version ids came back", and the second is a defect
+// that reaches every caller of WithVersionID. Before this, the versioning
+// row asserted only that a versioned Delete was not refused, and CI's
+// bucket was not versioned — so the deeper assertion never ran anywhere
+// and the row could not fail (#270).
+//
+// Whoever provisions the store sets it: `make test-s3` and the CI
+// workflow both enable versioning on the bucket and then set this, so the
+// gate holds in the run a developer makes before pushing and in the run
+// that guards main.
+const versionedStoreEnv = "STORAGETEST_VERSIONED_STORE"
+
 // honourVersioning pins the part of CapVersioning the adapter owns —
 // that a versioned Delete is accepted rather than refused — and then the
 // part it can only demonstrate where the store really is keeping
@@ -880,6 +915,11 @@ func refuseVersioning(_ *testing.T, s storage.Storage) error {
 // version id to name it with, so the deeper assertion would be testing
 // the bucket, not the backend. What still holds everywhere is that the
 // option must not come back as ErrUnsupportedOption.
+//
+// versionedStoreEnv is how a run says which side of that split it is on.
+// Set, the conditional branch stops being optional: the store keeps
+// versions, so a backend that hands back no distinct ids is dropping
+// them, and that is a failure rather than a note in the log.
 func honourVersioning(t *testing.T, s storage.Storage) {
 	t.Helper()
 	ctx := context.Background()
@@ -896,6 +936,15 @@ func honourVersioning(t *testing.T, s storage.Storage) {
 
 	versioned := first.VersionID != "" && second.VersionID != "" &&
 		first.VersionID != second.VersionID
+	if declared := os.Getenv(versionedStoreEnv) != ""; declared && !versioned {
+		t.Fatalf("%s is set, so the store under test keeps versions, but two "+
+			"Puts to %q reported version ids %q and %q. A backend that "+
+			"advertises CapVersioning must hand back a distinct id per "+
+			"version — without one a caller has nothing to pass to "+
+			"WithVersionID, and every versioned Delete it issues targets "+
+			"whatever is current.",
+			versionedStoreEnv, key, first.VersionID, second.VersionID)
+	}
 	target := first.VersionID
 	if target == "" {
 		// The id both AWS and S3-compatible stores report for the sole
@@ -912,7 +961,9 @@ func honourVersioning(t *testing.T, s storage.Storage) {
 		if err != nil {
 			t.Logf("versioned Delete returned %v; the store handed back no "+
 				"distinct version ids, so this deployment is not keeping "+
-				"versions and only the refusal check above applies", err)
+				"versions and only the refusal check above applies. Point "+
+				"the run at a versioned store and set %s to gate on the rest.",
+				err, versionedStoreEnv)
 		}
 		return
 	}
@@ -924,6 +975,149 @@ func honourVersioning(t *testing.T, s storage.Storage) {
 		t.Errorf("after deleting the older version, %q = %q, want %q", key, got, "v2")
 	}
 }
+
+// The two sizes testPutDoesNotBufferTheWholeObject compares. The small
+// one is past any plausible adapter's internal chunk — the S3 backend's
+// part size is 8 MiB — so a streaming backend has already reached its
+// steady-state working set by then and the step up to the large one adds
+// nothing to it. Quadrupling is the point: "allocation tracks the object"
+// and "allocation is bounded" cannot both survive it.
+const (
+	streamSmallObject = 16 << 20 // 16 MiB
+	streamLargeObject = 64 << 20 // 64 MiB
+)
+
+// testPutDoesNotBufferTheWholeObject is the suite-level expression of the
+// streaming expectation (ADR-0030 §3, #266, #270): the memory a Put costs
+// is the backend's own working set, not the object.
+//
+// Written as a size — "it works at 500 MB" — this case would have passed
+// against the buffering S3 put that shipped, which is exactly how that
+// defect survived review: every in-memory fake reads the body into a map,
+// so a large-object test proves the machine had the RAM and nothing else.
+// So the assertion is on allocation, taken across the call with a reader
+// that materialises nothing, which leaves the backend as the only thing
+// that can have allocated what the delta counts.
+//
+// Both backends can express it and both must: LocalFS io.Copy's into a
+// temp file, the S3 adapter streams part by part. A backend that cannot
+// pass this cannot serve a 5 GB audiobook, whatever its other rows say.
+func testPutDoesNotBufferTheWholeObject(t *testing.T, mk MakeBackend) {
+	s, cleanup := mk(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	put := func(key string, size int64) uint64 {
+		t.Helper()
+		var err error
+		allocated := allocatedDuring(func() {
+			_, err = s.Put(ctx, key, newPattern(size))
+		})
+		if err != nil {
+			t.Fatalf("Put(%q, %s): %v", key, mib(size), err)
+		}
+		return allocated
+	}
+
+	const smallKey, largeKey = "stream/small.bin", "stream/large.bin"
+	smallAlloc := put(smallKey, streamSmallObject)
+	largeAlloc := put(largeKey, streamLargeObject)
+
+	t.Logf("put of %s allocated %s; put of %s allocated %s",
+		mib(streamSmallObject), mib(int64(smallAlloc)),
+		mib(streamLargeObject), mib(int64(largeAlloc)))
+
+	// The growth check is the one that needs no calibration against any
+	// backend's internals: the slack is a quarter of the *small* object,
+	// so an adapter whose cost tracks the object misses by an order of
+	// magnitude while a per-chunk overhead that grew fourfold passes.
+	const slack = streamSmallObject / 4
+	if largeAlloc > smallAlloc+slack {
+		t.Errorf("quadrupling the object from %s to %s took allocation from %s "+
+			"to %s, a rise of %s (slack %s). Put's cost tracks the object, so "+
+			"the backend is holding the body rather than streaming it.",
+			mib(streamSmallObject), mib(streamLargeObject),
+			mib(int64(smallAlloc)), mib(int64(largeAlloc)),
+			mib(int64(largeAlloc-smallAlloc)), mib(slack))
+	}
+	// And an absolute ceiling, because a backend that buffered *both*
+	// objects would show no growth at all. Half the large object is well
+	// above any streaming backend's working set and well below one copy
+	// of the body.
+	if largeAlloc > streamLargeObject/2 {
+		t.Errorf("Put allocated %s for a %s object (%.2fx the object); a "+
+			"streaming backend stays far under %s.",
+			mib(int64(largeAlloc)), mib(streamLargeObject),
+			float64(largeAlloc)/float64(streamLargeObject), mib(streamLargeObject/2))
+	}
+
+	// A Put that allocates nothing and writes garbage is not a pass, so
+	// the bytes are checked here rather than in a sibling case that could
+	// be satisfied on its own.
+	info, err := s.Head(ctx, largeKey)
+	if err != nil {
+		t.Fatalf("Head after a %s put: %v", mib(streamLargeObject), err)
+	}
+	if info.Size != streamLargeObject {
+		t.Errorf("Head reports %d bytes, want %d", info.Size, int64(streamLargeObject))
+	}
+	rc, err := s.Get(ctx, largeKey)
+	if err != nil {
+		t.Fatalf("Get(%q): %v", largeKey, err)
+	}
+	defer func() { _ = rc.Close() }()
+	if got, want := digestOf(rc), digestOf(newPattern(streamLargeObject)); got != want {
+		t.Errorf("round-tripped digest = %s, want %s", got, want)
+	}
+}
+
+// allocatedDuring reports the bytes the heap handed out while f ran.
+// TotalAlloc is cumulative and never decreases, so a delta across it
+// counts every allocation f made whether or not the collector reclaimed
+// it — which is the question here: a buffering Put's 64 MiB is invisible
+// to a live-heap reading taken once the call has returned.
+func allocatedDuring(f func()) uint64 {
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// pattern produces deterministic bytes into the caller's buffer and holds
+// nothing itself, so every byte the measurement attributes to the heap
+// was allocated by the backend under test.
+type pattern struct{ off, remaining int64 }
+
+func newPattern(n int64) *pattern { return &pattern{remaining: n} }
+
+func (p *pattern) Read(b []byte) (int, error) {
+	if p.remaining <= 0 {
+		return 0, io.EOF
+	}
+	n := int64(len(b))
+	if n > p.remaining {
+		n = p.remaining
+	}
+	for i := int64(0); i < n; i++ {
+		b[i] = byte((p.off + i) % 251)
+	}
+	p.off += n
+	p.remaining -= n
+	return int(n), nil
+}
+
+func digestOf(r io.Reader) string {
+	h := sha256.New()
+	buf := make([]byte, 1<<20)
+	if _, err := io.CopyBuffer(h, r, buf); err != nil {
+		return "read error: " + err.Error()
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func mib(n int64) string { return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20)) }
 
 func testOpenRandomAccess(t *testing.T, mk MakeBackend) {
 	s, cleanup := mk(t)

@@ -31,9 +31,26 @@ db-up: ## Start Postgres via compose
 db-down: ## Stop Postgres
 	docker compose -f compose.dev.yml down
 
+# s3-up starts the store AND provisions the bucket with versioning on.
+# Versioning is not decoration: the conformance suite's CapVersioning row
+# can only assert that deleting an older version leaves the current one
+# readable where the store actually keeps versions, and against an
+# unversioned bucket a backend that drops the version id looks exactly
+# like an honest one (#270). CI calls this target rather than restating
+# the steps, so the gate is the same in both places.
+#
+# `mc` ships inside the MinIO image (its healthcheck uses it), so this
+# needs no second image. The alias is set here rather than trusted from
+# the image, whose built-in `local` alias carries no credentials.
 .PHONY: s3-up
-s3-up: ## Start the dev MinIO (S3 API :9000, console :9001) and wait for it
-	docker compose -f compose.dev.yml up -d --wait minio
+s3-up: ## Start the dev MinIO (S3 API :9000, console :9001), wait, and make the test bucket versioned
+	docker compose -f compose.dev.yml up -d --wait --wait-timeout 120 minio
+	@docker compose -f compose.dev.yml exec -T minio sh -c '\
+		mc alias set embookshelf-test-store http://127.0.0.1:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null && \
+		mc mb --ignore-existing embookshelf-test-store/$(TEST_S3_BUCKET) >/dev/null && \
+		mc version enable embookshelf-test-store/$(TEST_S3_BUCKET) >/dev/null' \
+		|| { echo "error: could not enable versioning on bucket $(TEST_S3_BUCKET)"; exit 1; }
+	@echo "minio ready: bucket $(TEST_S3_BUCKET) is versioned"
 
 .PHONY: s3-down
 s3-down: ## Stop the dev MinIO
@@ -205,13 +222,22 @@ TEST_S3_BUCKET   ?= embookshelf-test
 TEST_S3_AK       ?= embookshelf
 TEST_S3_SK       ?= embookshelf
 
+# Whole storage tree, not one -run: the S3 arm is the conformance suite
+# *and* the streaming measurements next to it, and CI runs `go test ./...`
+# with these variables set, so anything narrower here is a local gate that
+# checks less than the remote one — the drift #227 set out to close.
+#
+# STORAGETEST_VERSIONED_STORE says the bucket s3-up just provisioned keeps
+# versions, which is what makes the suite's versioning row assert
+# something a version-id-dropping backend can fail.
 .PHONY: test-s3
-test-s3: s3-up ## Run the storage conformance suite against S3 (starts the dev MinIO)
+test-s3: s3-up ## Run the storage suite against S3 (starts the dev MinIO, versioned bucket)
 	TEST_S3_ENDPOINT='$(TEST_S3_ENDPOINT)' \
 	TEST_S3_BUCKET='$(TEST_S3_BUCKET)' \
 	TEST_S3_AK='$(TEST_S3_AK)' \
 	TEST_S3_SK='$(TEST_S3_SK)' \
-	go test -race -count=1 -v -run TestS3Backend_Contract ./internal/storage/s3/
+	STORAGETEST_VERSIONED_STORE=1 \
+	go test -race -count=1 ./internal/storage/...
 
 # Repo tests need a real Postgres — they refuse to skip, because a
 # skipped integration test is an unrun one (ADR-0023).
@@ -266,8 +292,16 @@ ui-typecheck: ## Typecheck the UI (tsc --noEmit)
 ui-test: ## Run UI unit tests (Vitest)
 	cd ui && bun run test
 
+# test-s3 is in here because ci-local is what a developer runs before
+# pushing, and the workflow's go-test job sets TEST_S3_ENDPOINT — so
+# without it the local gate and the remote gate check different things,
+# which is the drift #227 closed and #270 found reopened one layer up.
+# `test` leaves the S3 arm skipping, so the two targets together are the
+# workflow's job: everything once, plus the storage tree again with a
+# real object store behind it. It costs a docker compose up and a few
+# seconds.
 .PHONY: ci-local
-ci-local: go-lint test ui-install ui-lint ui-typecheck ui-test ui-build build ## Run the same checks CI runs on a PR
+ci-local: go-lint test test-s3 ui-install ui-lint ui-typecheck ui-test ui-build build ## Run the same checks CI runs on a PR
 
 .PHONY: e2e-install
 e2e-install: ## Install Playwright deps + Chromium

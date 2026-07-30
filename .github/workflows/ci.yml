@@ -86,6 +86,13 @@ jobs:
       TEST_S3_BUCKET: embookshelf-test
       TEST_S3_AK: embookshelf
       TEST_S3_SK: embookshelf
+      # Declares that the bucket the step below provisions keeps
+      # versions. The suite's CapVersioning row asserts that deleting an
+      # older version leaves the current one readable only where that is
+      # true, and it cannot tell an unversioned bucket from a backend
+      # that drops the version id — so until this was set the row could
+      # not fail (#270).
+      STORAGETEST_VERSIONED_STORE: "1"
     steps:
       - uses: actions/checkout@v7
 
@@ -96,11 +103,13 @@ jobs:
 
       # Not a `services:` entry like postgres above, because GitHub's
       # service containers cannot supply a command and `minio` without
-      # its `server` subcommand prints help and exits. Starting the
-      # compose service instead also means CI and `make test-s3` run
-      # against one definition rather than two that drift.
+      # its `server` subcommand prints help and exits. Via the Makefile
+      # target rather than compose directly, so CI and `make test-s3`
+      # bring the store up one way instead of two that drift — including
+      # switching bucket versioning on, which is what STORAGETEST_VERSIONED_STORE
+      # above is claiming.
       - name: Start object store
-        run: docker compose -f compose.dev.yml up -d --wait --wait-timeout 120 minio
+        run: make s3-up
 
       - run: go test -race -coverprofile=coverage.out ./...
 
