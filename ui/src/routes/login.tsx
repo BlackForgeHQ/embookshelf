@@ -29,6 +29,11 @@ const OIDC_ERROR_MESSAGES: Record<string, string> = {
   notConfigured: "SSO is not configured on this instance.",
   invalidRequest:
     "The provider returned an incomplete response — please try again.",
+  // Names the claim, because this one is an admin's misconfiguration
+  // rather than anything the person signing in can retry their way out
+  // of: the provider answered, it just did not send an email.
+  emailClaimMissing:
+    "The identity provider did not return an email claim. An administrator needs to check the claim mapping and scopes in Settings → SSO.",
   unknown: "Sign-in failed. Please try again or use a local account.",
 }
 
