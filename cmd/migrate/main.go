@@ -3,7 +3,8 @@
 // Tiny CLI around internal/migrator. Usage:
 //
 //	go run ./cmd/migrate up
-//	go run ./cmd/migrate down
+//	go run ./cmd/migrate down          # one migration
+//	go run ./cmd/migrate down -all     # everything, back to 0
 //	go run ./cmd/migrate force <version>
 //	go run ./cmd/migrate version
 //
@@ -138,7 +139,24 @@ func runMigratorCmd(d *db.DB, cmd string, args []string, out io.Writer) error {
 
 	switch cmd {
 	case "down":
-		if err := m.Down(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		// One step unless asked for all of them. It used to call Down(),
+		// which rolls every migration back to version 0 — while the
+		// Makefile target advertised it as "revert the most recent
+		// migration" and CI's own comment described a -all flag that did
+		// not exist. Anyone believing either lost their whole schema, as
+		// happened here.
+		all := false
+		fs := flag.NewFlagSet("down", flag.ContinueOnError)
+		fs.SetOutput(out)
+		fs.BoolVar(&all, "all", false, "revert every migration, back to version 0")
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		step := func() error { return m.Steps(-1) }
+		if all {
+			step = m.Down
+		}
+		if err := step(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 			return fmt.Errorf("down: %w", err)
 		}
 		_, _ = fmt.Fprintln(out, "ok")

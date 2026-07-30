@@ -73,8 +73,8 @@ migrate: ## Apply all pending migrations
 	DATABASE_URL="$(DB_URL)" go run ./cmd/migrate up
 
 .PHONY: migrate-down
-migrate-down: ## Revert the most recent migration
-	DATABASE_URL="$(DB_URL)" go run ./cmd/migrate down
+migrate-down: ## Revert the most recent migration (add ARGS=-all to revert every one)
+	DATABASE_URL="$(DB_URL)" go run ./cmd/migrate down $(ARGS)
 
 .PHONY: migrate-version
 migrate-version: ## Show current migration version

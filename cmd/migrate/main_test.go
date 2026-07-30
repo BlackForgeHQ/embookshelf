@@ -92,3 +92,45 @@ func TestRun_unknownCommand(t *testing.T) {
 		t.Fatalf("err = %v, want an unknown-command error", err)
 	}
 }
+
+// down reverts one migration. It used to revert every one of them, while
+// the Makefile target called itself "revert the most recent migration"
+// and CI's own comment described a -all flag that did not exist — so
+// anyone who believed either lost their whole schema.
+//
+// Driven against a SQLite source file rather than TEST_DATABASE_URL,
+// deliberately: a test that reverts migrations must own a database it
+// can destroy, and the shared one is not that.
+func TestRun_downRevertsOneMigrationUnlessAskedForAll(t *testing.T) {
+	dsn := "sqlite:" + filepath.Join(t.TempDir(), "source.db")
+
+	if _, err := runWithin(t, 120*time.Second, dsn, "up", nil); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	at := func() string {
+		t.Helper()
+		out, err := runWithin(t, 60*time.Second, dsn, "version", nil)
+		if err != nil {
+			t.Fatalf("version: %v", err)
+		}
+		return strings.TrimSpace(out)
+	}
+
+	top := at()
+	if _, err := runWithin(t, 60*time.Second, dsn, "down", nil); err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	afterOne := at()
+	if afterOne == top {
+		t.Fatalf("down left the schema at %q — it reverted nothing", top)
+	}
+	if strings.HasPrefix(afterOne, "none") {
+		t.Fatalf("down went all the way to zero from %q; it should revert one migration", top)
+	}
+
+	// -all is deliberately not exercised here. It is the destructive
+	// path, so it needs a database it can take to zero, and SQLite's own
+	// down chain is broken at 000025 (#275) so it cannot reach zero
+	// anyway. What matters for the bug this fixes is that the *default*
+	// is one step, which is what the assertions above pin.
+}
