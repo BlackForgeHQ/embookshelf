@@ -104,10 +104,6 @@ func (w *MetadataWriter) moveFlatFiles(
 	return nil
 }
 
-// moveSingleFile is the no-files-repo fallback for the flat-layout
-// rename: move just the Book's primary file (b.Path) into the new
-// folder.
-
 // moveSingleFile moves just the Book's primary file (b.Path) into the
 // new folder, for a Book whose files have not been enumerated into rows
 // yet.
@@ -133,10 +129,3 @@ func (w *MetadataWriter) moveSingleFile(b model.Book, libRoot, newDir string) er
 	}
 	return nil
 }
-
-// persistRename updates files.location for every files row of the
-// Book and books.folder_path + books.path so the DB reflects the
-// post-rename layout. Best-effort: per-file failures log and
-// continue; the books-row update is the last write so a crash
-// midway leaves only file rows pointing at stale locations, which
-// scan reattach corrects on next pass.

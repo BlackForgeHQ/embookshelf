@@ -212,25 +212,6 @@ func (w *MetadataWriter) persistRename(
 // Inline phase-2 deletes do not happen here — the sweeper drains
 // pending_orphans after the grace window. This keeps already-issued
 // presigned URLs valid for at least 2× PresignTTL.
-
-// renameFolderBackend is the S3 (any non-local Storage) arm, per
-// ADR-0005. Pipeline:
-//
-//  1. Resolve a non-colliding new prefix via uniqueBackendFolder.
-//  2. Storage.MovePrefix the old folder onto it. The adapter owns the
-//     list, the per-key copy and its retry budget; it hands back the
-//     destinations it wrote and the sources it left alive.
-//  3. On failure, schedule MoveResult.Written with RenameRollbackGrace
-//     and bail.
-//  4. Compute the per-files location updates for the rows DB knows
-//     about (others ride along under the new prefix without a row).
-//  5. RenameFolderTx: single transaction wraps files updates +
-//     books folder_path/path + INSERT pending_orphans
-//     (MoveResult.Reclaim, RenameGrace).
-//
-// Inline phase-2 deletes do not happen here — the sweeper drains
-// pending_orphans after the grace window. This keeps already-issued
-// presigned URLs valid for at least 2× PresignTTL.
 func (w *MetadataWriter) renameFolderBackend(
 	ctx context.Context,
 	b model.Book,
@@ -294,22 +275,12 @@ func (w *MetadataWriter) renameFolderBackend(
 // renameGrace returns the configured grace duration for old keys
 // after a successful rename. Defaults to 1h when unset, matching
 // the ADR-0005 fallback used in cmd/embookshelf wiring.
-
-// renameGrace returns the configured grace duration for old keys
-// after a successful rename. Defaults to 1h when unset, matching
-// the ADR-0005 fallback used in cmd/embookshelf wiring.
 func (w *MetadataWriter) renameGrace() time.Duration {
 	if w.deps.RenameGrace > 0 {
 		return w.deps.RenameGrace
 	}
 	return time.Hour
 }
-
-// collectFileLocationUpdates lists the Book's files rows and builds
-// per-row UPDATE inputs for any row whose location lives under the
-// old prefix. Rows that don't (legacy data drift) are skipped — they
-// will not survive the post-tx state but the rename should not fail
-// over a misaligned row.
 
 // collectFileLocationUpdates lists the Book's files rows and builds
 // per-row UPDATE inputs for any row whose location lives under the
@@ -348,12 +319,6 @@ func (w *MetadataWriter) collectFileLocationUpdates(
 // sweeper deletes the half-rename garbage on its next pass. Best
 // effort — failure to enqueue is logged but does not change the
 // caller's error path.
-
-// scheduleOrphans is the rollback escape hatch: enqueue the supplied
-// (presumably new-prefix) keys with RenameRollbackGrace so the
-// sweeper deletes the half-rename garbage on its next pass. Best
-// effort — failure to enqueue is logged but does not change the
-// caller's error path.
 func (w *MetadataWriter) scheduleOrphans(
 	ctx context.Context,
 	libraryID string,
@@ -370,9 +335,6 @@ func (w *MetadataWriter) scheduleOrphans(
 			"library_id", libraryID, "count", len(keys), "err", err)
 	}
 }
-
-// buildOrphanInserts converts a slice of keys into the typed insert
-// rows for the pending_orphans table. eligible_at is now+grace.
 
 // buildOrphanInserts converts a slice of keys into the typed insert
 // rows for the pending_orphans table. eligible_at is now+grace.
@@ -400,18 +362,9 @@ func buildOrphanInserts(libraryID string, keys []string, grace time.Duration, bo
 // rename to avoid bumping a target that is the same directory we're
 // renaming from (a no-op rename) — though folderDelta should have
 // short-circuited that case already.
-
-// uniqueDirectoryUnless is a variant of uniqueDirectory that returns
-// the input unchanged when it equals the source (oldAbs). Used by
-// rename to avoid bumping a target that is the same directory we're
-// renaming from (a no-op rename) — though folderDelta should have
-// short-circuited that case already.
 func uniqueDirectoryUnless(dest, oldAbs string) string {
 	if dest == oldAbs {
 		return dest
 	}
 	return uniqueDirectory(dest)
 }
-
-// lookupHandle resolves the library handle once per Write call. nil
-// is a valid return — DecideEffects degrades the plan accordingly.

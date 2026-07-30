@@ -65,12 +65,6 @@ type PendingOrphansEnqueuer interface {
 	Insert(ctx context.Context, rows []repo.PendingOrphanInsert) error
 }
 
-// LibraryStoreFor is the slice of LibraryStore we depend on.
-// Avoids a hard import of *defaultLibraryStore so tests can fake it.
-type LibraryStoreFor interface {
-	For(ctx context.Context, libraryID string) (*LibraryHandle, error)
-}
-
 // SidecarWriterFor is the slice of *sidecar.Writer we depend on.
 // Mirrors the Plan 1 signature exactly.
 type SidecarWriterFor interface {
@@ -95,7 +89,7 @@ type FileMetadataRepo interface {
 // case (DB write succeeds without them).
 type MetadataWriterDeps struct {
 	Books    BookMetadataWriter
-	LibStore LibraryStoreFor
+	LibStore LibraryStore
 	Sidecar  SidecarWriterFor
 	Dispatch EmbedderDispatcher
 	Files    FileMetadataRepo
@@ -343,6 +337,8 @@ func folderMatches(folder, ideal string) bool {
 	return false
 }
 
+// lookupHandle resolves the library handle once per Write call. nil
+// is a valid return — DecideEffects degrades the plan accordingly.
 func (w *MetadataWriter) lookupHandle(ctx context.Context, b model.Book) *LibraryHandle {
 	if w.deps.LibStore == nil {
 		return nil
