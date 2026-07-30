@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -92,7 +91,7 @@ type segmentHarness struct {
 	engine    *fakeEngine
 	published int
 	engineErr error
-	dataPath  config.DataRoot
+	staging   task.Staging
 }
 
 // harnessSegmentChars is the cap the harness's run was planned at. Large
@@ -134,8 +133,8 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 		books: &fakeBooks{book: model.Book{
 			ID: "b1", LibraryID: "lib1", Title: "Dune", Author: "Frank Herbert", Format: "EPUB",
 		}},
-		engine:   &fakeEngine{reply: audiotest.Frames(4)},
-		dataPath: tempRoot(t),
+		engine:  &fakeEngine{reply: audiotest.Frames(4)},
+		staging: tempStaging(t),
 	}
 	src := epubWithChapters(t, "One sentence. Another sentence. A third one.", "Second chapter here.")
 	h.runs.plan = planSegments(t, src, harnessSegmentChars)
@@ -161,8 +160,8 @@ func newSegmentHarness(t *testing.T) *segmentHarness {
 		Open: func(context.Context, model.Book) (storage.Source, error) {
 			return src, nil
 		},
-		Publish:  func(string) { h.published++ },
-		DataPath: h.dataPath,
+		Publish: func(string) { h.published++ },
+		Staging: h.staging,
 	}
 	return h
 }
@@ -173,11 +172,11 @@ func (h *segmentHarness) run(t *testing.T, seq int) error {
 }
 
 func (h *segmentHarness) staged(seq int) bool {
-	dir, err := task.StagingDir(h.dataPath, "b1")
+	path, err := h.staging.SegmentPath("b1", seq)
 	if err != nil {
 		return false
 	}
-	_, err = os.Stat(filepath.Join(dir, "seg-"+strconv.Itoa(seq)+".mp3"))
+	_, err = os.Stat(path)
 	return err == nil
 }
 
@@ -664,7 +663,7 @@ func TestSegmentSwallowsAnAdvanceFailure(t *testing.T) {
 // decided there was nothing to reclaim (#207).
 func TestSegmentRefusesWhenNoStagingAreaIsConfigured(t *testing.T) {
 	h := newSegmentHarness(t)
-	h.deps.DataPath = config.DataRoot{}
+	h.deps.Staging = task.NewStaging(config.DataRoot{})
 
 	err := h.run(t, 0)
 

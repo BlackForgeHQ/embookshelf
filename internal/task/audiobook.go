@@ -7,12 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"strconv"
 
 	"github.com/blackforge/embookshelf/internal/audio"
-	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -100,10 +96,11 @@ type SegmentDeps struct {
 	// on S3 libraries was once silently broken.
 	Open    func(context.Context, model.Book) (storage.Source, error)
 	Publish func(bookID string)
-	// DataPath roots the staging directory. Per-segment MP3s live on
-	// local disk until finalize, outside storage.Storage, following the
-	// coverstore precedent for derived bytes.
-	DataPath config.DataRoot
+	// Staging is where this run's segments are written until finalize
+	// joins them. The value, not the root it was built from: where a
+	// segment lands and what it is called are the staging module's to
+	// know, and this worker's only question is whether it can write.
+	Staging Staging
 }
 
 // publish emits the run's terminal event. A missing publisher is a
@@ -112,23 +109,6 @@ func (d SegmentDeps) publish(bookID string) {
 	if d.Publish != nil {
 		d.Publish(bookID)
 	}
-}
-
-// StagingDir is where one book's per-segment MP3s live until finalize.
-//
-// An unconfigured root is an error here, not an empty string each caller
-// reads for itself. Two of the three callers used to agree on what empty
-// meant and the third did not: joining an empty root gives the
-// *relative* path audiobooks/{book_id}, so the segment worker created it
-// under the process working directory and wrote hundreds of megabytes
-// into it, while the sweeper that reclaims staging had already decided
-// there was nothing to reclaim (#207).
-func StagingDir(dataPath config.DataRoot, bookID string) (string, error) {
-	return dataPath.AudiobookStaging(bookID)
-}
-
-func segmentPath(dir string, seq int) string {
-	return filepath.Join(dir, "seg-"+strconv.Itoa(seq)+".mp3")
 }
 
 // AudiobookSegment synthesizes one segment and stages its audio.
@@ -148,9 +128,9 @@ func AudiobookSegment(ctx context.Context, a jobs.AudiobookSegmentArgs, deps Seg
 	}
 	// Before the engine call, deliberately. By the time staging is
 	// written the audio has been bought, so a job that cannot stage must
-	// find that out while a retry is still free (#207).
-	dir, err := StagingDir(deps.DataPath, a.BookID)
-	if err != nil {
+	// find that out while a retry is still free (#207). Asking for the
+	// path is the check: an unconfigured staging area has none to give.
+	if _, err := deps.Staging.Dir(a.BookID); err != nil {
 		return fmt.Errorf("audiobook segment %d: %w", a.Seq, err)
 	}
 
@@ -194,10 +174,6 @@ func AudiobookSegment(ctx context.Context, a jobs.AudiobookSegmentArgs, deps Seg
 		return err
 	}
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create staging dir: %w", err)
-	}
-	path := segmentPath(dir, a.Seq)
 	frames, durationMS, err := audio.Payload(audioBytes)
 	if err != nil {
 		recordSegment(ctx, deps, a, model.SegmentResult{
@@ -207,7 +183,8 @@ func AudiobookSegment(ctx context.Context, a jobs.AudiobookSegmentArgs, deps Seg
 		deps.publish(a.BookID)
 		return nil
 	}
-	if err := os.WriteFile(path, frames, 0o600); err != nil {
+	path, err := deps.Staging.WriteSegment(a.BookID, a.Seq, frames)
+	if err != nil {
 		return fmt.Errorf("stage segment %d: %w", a.Seq, err)
 	}
 

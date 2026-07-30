@@ -19,7 +19,7 @@ import (
 // stagedRun creates a running Audiobook run with n pending segments and a
 // staging directory holding one file per segment, so a sweep has
 // something real to reclaim.
-func stagedRun(t *testing.T, d *db.DB, dataPath config.DataRoot, segments int) (string, *repo.BookAudiobookRepo) {
+func stagedRun(t *testing.T, d *db.DB, staging task.Staging, segments int) (string, *repo.BookAudiobookRepo) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -52,7 +52,7 @@ func stagedRun(t *testing.T, d *db.DB, dataPath config.DataRoot, segments int) (
 		t.Fatalf("set running: %v", err)
 	}
 
-	dir := stagingDir(t, dataPath, b.ID)
+	dir := stagingDir(t, staging, b.ID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("create staging: %v", err)
 	}
@@ -73,9 +73,9 @@ func ageRun(t *testing.T, d *db.DB, bookID string, days int) {
 	}
 }
 
-func stagingExists(t *testing.T, dataPath config.DataRoot, bookID string) bool {
+func stagingExists(t *testing.T, staging task.Staging, bookID string) bool {
 	t.Helper()
-	_, err := os.Stat(stagingDir(t, dataPath, bookID))
+	_, err := os.Stat(stagingDir(t, staging, bookID))
 	return err == nil
 }
 
@@ -89,13 +89,20 @@ func tempRoot(t *testing.T) config.DataRoot {
 	return root
 }
 
-// stagingDir is StagingDir for a root the test has already configured,
-// so the unset case does not have to be threaded through every caller.
-func stagingDir(t *testing.T, root config.DataRoot, bookID string) string {
+// tempStaging is a staging area over a temp dir, already configured, so
+// the unset case does not have to be threaded through every caller — it
+// has its own test.
+func tempStaging(t *testing.T) task.Staging {
 	t.Helper()
-	dir, err := task.StagingDir(root, bookID)
+	return task.NewStaging(tempRoot(t))
+}
+
+// stagingDir is Staging.Dir for an area the test has already configured.
+func stagingDir(t *testing.T, staging task.Staging, bookID string) string {
+	t.Helper()
+	dir, err := staging.Dir(bookID)
 	if err != nil {
-		t.Fatalf("StagingDir: %v", err)
+		t.Fatalf("Staging.Dir: %v", err)
 	}
 	return dir
 }
@@ -103,10 +110,10 @@ func stagingDir(t *testing.T, root config.DataRoot, bookID string) string {
 // A run abandoned at running — every segment written, no finalize job,
 // nobody ever coming back — used to match nothing the sweeper looked for,
 // so its staged MP3s sat on disk forever (#157).
-func TestSweepAudiobookStagingReclaimsAStrandedRun(t *testing.T) {
+func TestStagingSweepReclaimsAStrandedRun(t *testing.T) {
 	d := repotest.New(t)
-	dataPath := tempRoot(t)
-	bookID, audiobooks := stagedRun(t, d, dataPath, 2)
+	staging := tempStaging(t)
+	bookID, audiobooks := stagedRun(t, d, staging, 2)
 	ctx := context.Background()
 
 	// One segment landed, one never did: nothing here is one finalize away.
@@ -117,14 +124,14 @@ func TestSweepAudiobookStagingReclaimsAStrandedRun(t *testing.T) {
 	}
 	ageRun(t, d, bookID, 14)
 
-	n, err := task.SweepAudiobookStaging(ctx, audiobooks, dataPath)
+	n, err := staging.Sweep(ctx, audiobooks)
 	if err != nil {
-		t.Fatalf("SweepAudiobookStaging: %v", err)
+		t.Fatalf("Staging.Sweep: %v", err)
 	}
 	if n != 1 {
 		t.Fatalf("swept %d runs, want 1", n)
 	}
-	if stagingExists(t, dataPath, bookID) {
+	if stagingExists(t, staging, bookID) {
 		t.Error("the stranded run's staging survived the sweep")
 	}
 }
@@ -133,10 +140,10 @@ func TestSweepAudiobookStagingReclaimsAStrandedRun(t *testing.T) {
 // yesterday is exactly the run a user is about to retry, and Retry
 // re-enqueues only the segments that never finished — so the ones that
 // did have to still be on disk.
-func TestSweepAudiobookStagingRetainsAFreshlyFailedRun(t *testing.T) {
+func TestStagingSweepRetainsAFreshlyFailedRun(t *testing.T) {
 	d := repotest.New(t)
-	dataPath := tempRoot(t)
-	bookID, audiobooks := stagedRun(t, d, dataPath, 2)
+	staging := tempStaging(t)
+	bookID, audiobooks := stagedRun(t, d, staging, 2)
 	ctx := context.Background()
 
 	if _, err := audiobooks.RecordSegment(ctx, bookID, 0, model.SegmentResult{
@@ -155,14 +162,14 @@ func TestSweepAudiobookStagingRetainsAFreshlyFailedRun(t *testing.T) {
 	}
 	ageRun(t, d, bookID, 1)
 
-	n, err := task.SweepAudiobookStaging(ctx, audiobooks, dataPath)
+	n, err := staging.Sweep(ctx, audiobooks)
 	if err != nil {
-		t.Fatalf("SweepAudiobookStaging: %v", err)
+		t.Fatalf("Staging.Sweep: %v", err)
 	}
 	if n != 0 {
 		t.Fatalf("swept %d runs, want 0 inside the retry window", n)
 	}
-	if !stagingExists(t, dataPath, bookID) {
+	if !stagingExists(t, staging, bookID) {
 		t.Error("a failed run's staging was reclaimed — Retry would have to buy it again")
 	}
 }

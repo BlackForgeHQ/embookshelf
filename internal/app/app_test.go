@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,6 +107,31 @@ func TestBuildLeavesTheQueueUnstarted(t *testing.T) {
 
 	if err := a.enq.Enqueue(context.Background(), nil); !errors.Is(err, jobs.ErrNoQueue) {
 		t.Fatalf("deferred enqueuer resolved during Build: got %v, want %v", err, jobs.ErrNoQueue)
+	}
+}
+
+// The audiobook staging area is a struct value, so the nil walk above
+// cannot see it: a Build that forgot to assign it would hand the workers
+// a zero Staging, which refuses every operation, and narration would stop
+// working with no nil dereference anywhere. Asserted here instead, along
+// with where it points — under the configured data root, absolute, the
+// property the whole DataRoot type exists to guarantee (#207).
+func TestBuildConfiguresTheAudiobookStagingArea(t *testing.T) {
+	a := buildForTest(t)
+
+	if !a.staging.Configured() {
+		t.Fatal("App.staging is unconfigured after Build — every narration would refuse to stage")
+	}
+	dir, err := a.staging.Dir("book-1")
+	if err != nil {
+		t.Fatalf("Staging.Dir: %v", err)
+	}
+	root, err := a.cfg.DataPath.Path()
+	if err != nil {
+		t.Fatalf("DataPath.Path: %v", err)
+	}
+	if !filepath.IsAbs(dir) || !strings.HasPrefix(dir, root+string(filepath.Separator)) {
+		t.Errorf("staging dir = %q, want an absolute path under the data root %q", dir, root)
 	}
 }
 

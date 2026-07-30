@@ -16,7 +16,6 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/audio"
 	"github.com/blackforge/embookshelf/internal/audio/audiotest"
-	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -114,7 +113,7 @@ type finalizeHarness struct {
 	runs      *fakeFinalizeRuns
 	books     *fakeBooks
 	files     *fakeFiles
-	dataPath  config.DataRoot
+	staging   task.Staging
 	published int
 	placed    int
 	placeErr  error
@@ -132,11 +131,11 @@ func newFinalizeHarness(t *testing.T) *finalizeHarness {
 			ID: "b1", LibraryID: "lib1", Title: "Dune", Author: "Frank Herbert", Format: "EPUB",
 			Narrator: "Ada Lovelace",
 		}},
-		files:    &fakeFiles{nextID: "file-1"},
-		dataPath: tempRoot(t),
+		files:   &fakeFiles{nextID: "file-1"},
+		staging: tempStaging(t),
 	}
 
-	dir := stagingDir(t, h.dataPath, "b1")
+	dir := stagingDir(t, h.staging, "b1")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("create staging: %v", err)
 	}
@@ -175,8 +174,8 @@ func newFinalizeHarness(t *testing.T) *finalizeHarness {
 			h.published++
 			return nil
 		},
-		Report:   h.runs,
-		DataPath: h.dataPath,
+		Report:  h.runs,
+		Staging: h.staging,
 	}
 	return h
 }
@@ -186,7 +185,7 @@ func (h *finalizeHarness) run() error {
 }
 
 func (h *finalizeHarness) stagingExists() bool {
-	dir, err := task.StagingDir(h.dataPath, "b1")
+	dir, err := h.staging.Dir("b1")
 	if err != nil {
 		return false
 	}

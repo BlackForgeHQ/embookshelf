@@ -33,8 +33,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -96,16 +94,16 @@ var _ tts.Engine = (*scriptedEngine)(nil)
 // to one Postgres schema, plus the recorders for the three things that
 // leave the process: the queue, the SSE publish, and the staging sweep.
 type narrationPipeline struct {
-	t        *testing.T
-	db       *db.DB
-	runs     *repo.BookAudiobookRepo
-	files    *repo.FileRepo
-	svc      *service.AudiobookService
-	engine   *scriptedEngine
-	deps     task.SegmentDeps
-	book     model.Book
-	dataPath config.DataRoot
-	epub     []byte
+	t       *testing.T
+	db      *db.DB
+	runs    *repo.BookAudiobookRepo
+	files   *repo.FileRepo
+	svc     *service.AudiobookService
+	engine  *scriptedEngine
+	deps    task.SegmentDeps
+	book    model.Book
+	staging task.Staging
+	epub    []byte
 
 	// queued is every job the service handed the queue, in order. Nothing
 	// runs it: each test drives the jobs it wants, in the order it wants,
@@ -154,13 +152,13 @@ func newNarrationPipeline(t *testing.T) *narrationPipeline {
 	}
 
 	p := &narrationPipeline{
-		t:        t,
-		db:       d,
-		runs:     repo.NewBookAudiobookRepo(d),
-		files:    repo.NewFileRepo(d),
-		engine:   &scriptedEngine{},
-		book:     book,
-		dataPath: dataRoot(t),
+		t:       t,
+		db:      d,
+		runs:    repo.NewBookAudiobookRepo(d),
+		files:   repo.NewFileRepo(d),
+		engine:  &scriptedEngine{},
+		book:    book,
+		staging: task.NewStaging(dataRoot(t)),
 		epub: drainSource(t, epubWithChapters(t,
 			"Muad'Dib learned rapidly because his first training was in how to learn.",
 			"A beginning is the time for taking the most delicate care.",
@@ -189,12 +187,12 @@ func newNarrationPipeline(t *testing.T) *narrationPipeline {
 		// the segment worker's write goes through AdvanceAfterSegment into
 		// RecordSegment's locked transaction and comes back out as a
 		// transition applied to this same row.
-		Runs:     p.runs,
-		Advance:  p.svc,
-		Books:    books,
-		Open:     pipelineOpener{p}.Open,
-		Publish:  func(string) { p.workerPublishes++ },
-		DataPath: p.dataPath,
+		Runs:    p.runs,
+		Advance: p.svc,
+		Books:   books,
+		Open:    pipelineOpener{p}.Open,
+		Publish: func(string) { p.workerPublishes++ },
+		Staging: p.staging,
 	}
 	return p
 }
@@ -268,11 +266,11 @@ func (p *narrationPipeline) segment(seq int) model.AudiobookSegment {
 
 func (p *narrationPipeline) stagedExists(seq int) bool {
 	p.t.Helper()
-	dir, err := task.StagingDir(p.dataPath, p.book.ID)
+	path, err := p.staging.SegmentPath(p.book.ID, seq)
 	if err != nil {
-		p.t.Fatalf("StagingDir: %v", err)
+		p.t.Fatalf("Staging.SegmentPath: %v", err)
 	}
-	_, err = os.Stat(filepath.Join(dir, "seg-"+strconv.Itoa(seq)+".mp3"))
+	_, err = os.Stat(path)
 	return err == nil
 }
 
@@ -313,9 +311,9 @@ func (p *narrationPipeline) age(days int) {
 
 func (p *narrationPipeline) sweepStaging() int {
 	p.t.Helper()
-	n, err := task.SweepAudiobookStaging(context.Background(), p.runs, p.dataPath)
+	n, err := p.staging.Sweep(context.Background(), p.runs)
 	if err != nil {
-		p.t.Fatalf("SweepAudiobookStaging: %v", err)
+		p.t.Fatalf("Staging.Sweep: %v", err)
 	}
 	return n
 }

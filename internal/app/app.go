@@ -23,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"sync"
 	"time"
 
@@ -66,6 +65,11 @@ type App struct {
 	cipher          crypto.Cipher
 	hub             *sse.Hub
 	covers          *coverstore.Store
+	// staging is the audiobook staging area, built once from the data
+	// root. The composition root holds the value so the cancel sweep, the
+	// two workers and the hourly loop are the same area rather than three
+	// re-derivations of one path (#251).
+	staging task.Staging
 
 	// Repositories.
 	libRepo              *repo.LibraryRepo
@@ -252,6 +256,15 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 	}
 	covers := coverstore.New(coversDir)
 
+	// Audiobook staging, the other on-disk area for derived bytes. Built
+	// once here and handed to everything that touches it: the workers that
+	// write and read it, the cancel path that discards a run, and the
+	// hourly sweep. This composition root used to delete staging itself
+	// with an inline os.RemoveAll on a path it joined, which bypassed the
+	// unset-root guard and survived only because removing an empty path
+	// returns nil (#251).
+	staging := task.NewStaging(cfg.DataPath)
+
 	// Services.
 	//
 	// One late-bound enqueuer for the whole composition root, created
@@ -422,16 +435,11 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 
 		Settings: appSettingsRepo.GetAudiobook,
 
-		SweepStaging: func(bookID string) {
-			dir, err := task.StagingDir(cfg.DataPath, bookID)
-			if err != nil {
-				slog.Warn("audiobook: sweep staging after cancel", "book", bookID, "err", err)
-				return
-			}
-			if err := os.RemoveAll(dir); err != nil {
-				slog.Warn("audiobook: sweep staging after cancel", "book", bookID, "err", err)
-			}
-		},
+		// Cancel discards the run's staged segments. A method value, not a
+		// closure that deletes: the staging area is the only thing that
+		// knows where its files are, so it is the only thing that removes
+		// them.
+		SweepStaging: staging.Clean,
 
 		// The hash of the book's own file, for provenance and for the
 		// staleness comparison. Injected because it lives on the files row
@@ -487,7 +495,7 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 		Audiobooks:   audiobookRepo,
 		AudiobookSvc: audiobookSvc,
 		Covers:       covers,
-		DataPath:     cfg.DataPath,
+		Staging:      staging,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("queue: %w", err)
@@ -532,6 +540,7 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 		cipher:          secretCipher,
 		hub:             hub,
 		covers:          covers,
+		staging:         staging,
 
 		libRepo:              libRepo,
 		bookRepo:             bookRepo,
@@ -654,7 +663,7 @@ func (a *App) Start(ctx context.Context) error {
 	// a week. Hourly loop, same shape as the missing-file and
 	// orphaned-key sweepers.
 	a.goBackground("audiobook staging sweep", func(ctx context.Context) {
-		task.LoopAudiobookStagingSweep(ctx, a.audiobookRepo, a.cfg.DataPath)
+		a.staging.LoopSweep(ctx, a.audiobookRepo)
 	})
 
 	// Requeue anything still mid-flight from a previous process.

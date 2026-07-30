@@ -16,7 +16,6 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 
-	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/jobs"
@@ -24,6 +23,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sse"
 	"github.com/blackforge/embookshelf/internal/storage"
+	"github.com/blackforge/embookshelf/internal/task"
 )
 
 // queueOf reports where a job runs. Anything that does not declare a
@@ -81,7 +81,12 @@ type Deps struct {
 	// workers report to it instead of deciding for themselves (#190).
 	AudiobookSvc *service.AudiobookService
 	Covers       *coverstore.Store
-	DataPath     config.DataRoot
+	// Staging is the audiobook staging area, built once at the
+	// composition root. Both audiobook workers take the value rather than
+	// the data root it came from: where a run's segments live, what they
+	// are called and when they are removed is one module's business, not
+	// something each worker re-derives from a path (#251).
+	Staging task.Staging
 }
 
 // New constructs the River-backed Client but does not start it. River

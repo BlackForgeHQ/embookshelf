@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/audio"
-	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -75,10 +74,11 @@ type FinalizeDeps struct {
 	// Fail marks the run failed and publishes, through the one module
 	// that owns that transition.
 	Fail func(ctx context.Context, bookID, msg string) error
-	// DataPath roots the staging directory. Per-segment MP3s live on
-	// local disk until finalize, outside storage.Storage, following the
-	// coverstore precedent for derived bytes.
-	DataPath config.DataRoot
+	// Staging is the area holding this run's segments until they are
+	// joined. Taken as the value rather than as the root it was built
+	// from, so the one module that knows where staging lives is also the
+	// one that removes it.
+	Staging Staging
 }
 
 // AudiobookFinalize joins a finished run's staged segments into the one
@@ -98,7 +98,7 @@ func AudiobookFinalize(ctx context.Context, a jobs.AudiobookFinalizeArgs, deps F
 		// Cancelled between the last segment landing and this job being
 		// picked up. Sweep rather than publish — a cancel means the user
 		// does not want the partial, and here the partial is complete.
-		cleanStaging(deps.DataPath, a.BookID)
+		deps.Staging.Clean(a.BookID)
 		return nil
 	}
 	if run.State == model.AudiobookReady {
@@ -172,7 +172,7 @@ func AudiobookFinalize(ctx context.Context, a jobs.AudiobookFinalizeArgs, deps F
 	if err := deps.Report.NarrationAssembled(ctx, a.BookID, fileRow.ID, totalMS); err != nil {
 		return fmt.Errorf("mark ready: %w", err)
 	}
-	cleanStaging(deps.DataPath, a.BookID)
+	deps.Staging.Clean(a.BookID)
 	return nil
 }
 
@@ -342,76 +342,4 @@ func fail(ctx context.Context, deps FinalizeDeps, bookID string, cause error) er
 	}
 	slog.Error("audiobook finalize failed", "book", bookID, "err", cause)
 	return nil
-}
-
-// cleanStaging removes a book's staged segments. No configured root
-// means there is nothing staged to remove.
-func cleanStaging(dataPath config.DataRoot, bookID string) {
-	dir, err := StagingDir(dataPath, bookID)
-	if err != nil {
-		return
-	}
-	if err := os.RemoveAll(dir); err != nil {
-		slog.Warn("audiobook: clean staging", "book", bookID, "err", err)
-	}
-}
-
-// StaleStagingTTL is how long an abandoned failed or cancelled run keeps
-// its staging before the sweeper reclaims it. Long enough that a Retry
-// the next morning is still free; short enough that a run nobody comes
-// back to does not park gigabytes forever.
-const StaleStagingTTL = 7 * 24 * time.Hour
-
-// stagingLister is the one thing a sweep asks of a run store: which runs
-// have been dead weight long enough to reclaim.
-type stagingLister interface {
-	ListStaleStaging(ctx context.Context, olderThanDays int) ([]string, error)
-}
-
-// SweepAudiobookStaging removes staging for runs whose staged segments
-// have been dead weight for longer than StaleStagingTTL. Which runs
-// those are is ListStaleStaging's judgement, not this loop's.
-func SweepAudiobookStaging(ctx context.Context, runs stagingLister, dataPath config.DataRoot) (int, error) {
-	ids, err := runs.ListStaleStaging(ctx, int(StaleStagingTTL/(24*time.Hour)))
-	if err != nil {
-		return 0, err
-	}
-	swept := 0
-	for _, id := range ids {
-		dir, err := StagingDir(dataPath, id)
-		if err != nil {
-			return swept, err
-		}
-		if _, err := os.Stat(dir); err != nil {
-			continue
-		}
-		cleanStaging(dataPath, id)
-		swept++
-	}
-	return swept, nil
-}
-
-// LoopAudiobookStagingSweep runs the sweep hourly, matching the shape of
-// the missing-file and orphaned-key sweepers.
-func LoopAudiobookStagingSweep(ctx context.Context, runs stagingLister, dataPath config.DataRoot) {
-	if !dataPath.IsSet() || runs == nil {
-		return
-	}
-	ticker := time.NewTicker(time.Hour)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			n, err := SweepAudiobookStaging(ctx, runs, dataPath)
-			if err != nil {
-				slog.Warn("audiobook staging sweep", "err", err)
-				continue
-			}
-			if n > 0 {
-				slog.Info("audiobook staging sweep", "swept", n)
-			}
-		}
-	}
 }

@@ -129,25 +129,25 @@ func registry(deps Deps) []registration {
 	// Audiobook generation runs on its own queue, declared by its args
 	// types.
 	segment := task.SegmentDeps{
-		Config:   deps.AppSettings.GetAudiobook,
-		Engine:   repo.AudiobookConfig.SelectEngine,
-		Runs:     deps.Audiobooks,
-		Advance:  deps.AudiobookSvc,
-		Books:    deps.Books,
-		Open:     openBook,
-		DataPath: deps.DataPath,
+		Config:  deps.AppSettings.GetAudiobook,
+		Engine:  repo.AudiobookConfig.SelectEngine,
+		Runs:    deps.Audiobooks,
+		Advance: deps.AudiobookSvc,
+		Books:   deps.Books,
+		Open:    openBook,
+		Staging: deps.Staging,
 	}
 	if deps.Hub != nil {
 		segment.Publish = publishAudiobook
 	}
 
 	finalize := task.FinalizeDeps{
-		Runs:     deps.Audiobooks,
-		Report:   deps.AudiobookSvc,
-		Fail:     deps.AudiobookSvc.FailRun,
-		Books:    deps.Books,
-		Files:    deps.FileRepo,
-		DataPath: deps.DataPath,
+		Runs:    deps.Audiobooks,
+		Report:  deps.AudiobookSvc,
+		Fail:    deps.AudiobookSvc.FailRun,
+		Books:   deps.Books,
+		Files:   deps.FileRepo,
+		Staging: deps.Staging,
 		Place: func(ctx context.Context, book model.Book, srcPath string) (service.PlaceResult, error) {
 			handle, err := deps.LibStore.For(ctx, book.LibraryID)
 			if err != nil {
