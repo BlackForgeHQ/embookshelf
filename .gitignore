@@ -31,3 +31,6 @@ CLAUDE.local.md
 
 # agent worktrees (transient)
 .claude/worktrees/
+
+# Brainstorming visual companion (superpowers)
+.superpowers/
