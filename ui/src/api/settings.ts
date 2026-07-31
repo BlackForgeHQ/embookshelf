@@ -143,15 +143,37 @@ export type ProviderPatch = {
   priorityClear?: boolean
 }
 
+// Connection-pool pressure and round-trip latency. Absent when the
+// server could not probe its database.
+export type InstanceDatabase = {
+  pingMs: number
+  inUse: number
+  idle: number
+  maxConns: number
+}
+
+// What schema_migrations records. Absent when it could not be read.
+export type InstanceSchema = {
+  version: number
+  dirty: boolean
+}
+
 export type InstanceInfo = {
   version: string
+  commit?: string
   goVersion: string
+  /** Process start, RFC3339. Relativized client-side into an uptime. */
+  startedAt: string
   allowedOrigins: Array<string>
   bookDropPath: string
   dataPath: string
   migrateOnStart: boolean
   enrichmentProviders: Array<ProviderInfo>
   counts: { users: number; libraries: number; books: number }
+  /** False means no worker pool: no scan, enrichment or narration runs. */
+  queueAttached: boolean
+  database?: InstanceDatabase
+  schema?: InstanceSchema
 }
 
 export async function fetchInstanceInfo(): Promise<InstanceInfo> {
