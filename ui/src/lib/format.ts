@@ -72,3 +72,24 @@ export function formatCost(usd: number): string {
   if (usd < 0.01) return "<$0.01"
   return `$${usd.toFixed(2)}`
 }
+
+/**
+ * How long ago a timestamp was, in the largest whole unit.
+ *
+ * Lived privately inside ProvidersPanel until the Instance panel needed
+ * the same phrasing three times — for uptime, for how stale the board is,
+ * and for a failing provider's last error.
+ */
+export function relativeTime(ms: number): string {
+  if (!ms) return "—"
+  const diff = Date.now() - ms
+  if (diff < 0) return "in the future"
+  const s = Math.floor(diff / 1000)
+  if (s < 60) return `${s}s ago`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  const d = Math.floor(h / 24)
+  return `${d}d ago`
+}

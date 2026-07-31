@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
-import { formatBytes, formatCost, formatDuration } from "@/lib/format"
+import { formatBytes, formatCost, formatDuration, relativeTime } from "@/lib/format"
 
 // These three were spelled out at their call sites — bytes twice,
 // verbatim except for the one line that mattered, and duration and cost
@@ -98,4 +98,24 @@ describe("formatCost", () => {
       expect(formatCost(input)).toBe(want)
     })
   }
+})
+
+describe("relativeTime", () => {
+  const now = Date.parse("2026-07-31T12:00:00Z")
+
+  it("reports the largest whole unit", () => {
+    vi.setSystemTime(now)
+    expect(relativeTime(now - 5_000)).toBe("5s ago")
+    expect(relativeTime(now - 90_000)).toBe("1m ago")
+    expect(relativeTime(now - 3 * 3_600_000)).toBe("3h ago")
+    expect(relativeTime(now - 2 * 86_400_000)).toBe("2d ago")
+    vi.useRealTimers()
+  })
+
+  it("has an em dash for a missing timestamp and a phrase for a future one", () => {
+    vi.setSystemTime(now)
+    expect(relativeTime(0)).toBe("—")
+    expect(relativeTime(now + 60_000)).toBe("in the future")
+    vi.useRealTimers()
+  })
 })

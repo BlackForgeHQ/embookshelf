@@ -19,6 +19,7 @@ import { NotebookEmpty, QuillMark } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
+import { relativeTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 export function ProvidersPanel() {
@@ -556,20 +557,6 @@ function ProviderHealth({
         : `ok · ${rel}`}
     </div>
   )
-}
-
-function relativeTime(ms: number): string {
-  if (!ms) return "—"
-  const diff = Date.now() - ms
-  if (diff < 0) return "in the future"
-  const s = Math.floor(diff / 1000)
-  if (s < 60) return `${s}s ago`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  const d = Math.floor(h / 24)
-  return `${d}d ago`
 }
 
 function truncate(s: string, n: number): string {
