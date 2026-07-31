@@ -29,6 +29,10 @@ func openTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+
+	// Single connection so SET search_path affects all subsequent queries.
+	sqlDB.SetMaxOpenConns(1)
+
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	return sqlDB
 }
