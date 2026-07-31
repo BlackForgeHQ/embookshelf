@@ -504,7 +504,7 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 	// HTTP. The five required groups are positional — adding a seam to
 	// any of them breaks the build here until it is supplied.
 	h := handler.New(
-		handler.NewPlatformDeps(cfg, staticfs.FS, version, commit, hub),
+		handler.NewPlatformDeps(cfg, staticfs.FS, version, commit, hub, service.NewPlatformService(dbh)),
 		handler.NewLibraryDeps(libSvc, shelfSvc, bookRepo, bdropSvc, progressSvc),
 		handler.NewDiscoveryDeps(
 			enrichSvc, providerCfgSvc, searchSvc,

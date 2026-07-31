@@ -4,6 +4,7 @@ package handler
 
 import (
 	"embed"
+	"time"
 
 	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/config"
@@ -50,6 +51,14 @@ type Handler struct {
 	covers      *coverstore.Store
 	hub         *sse.Hub
 	queue       queue.Client
+	// platform answers the Instance panel's process-health questions and
+	// backs the healthcheck's database ping. nil disables both: the
+	// healthcheck reports unavailable and the panel shows an unknown row.
+	platform platformProbe
+	// startedAt is process start, for the Instance panel's uptime. Set in
+	// New rather than at package init so a test can construct a Handler
+	// with a chosen instant.
+	startedAt time.Time
 	// libStore powers the file-serve path's BookSource decision
 	// (presign vs. local) and any other library-aware lookup. nil on
 	// installs that haven't configured a storage backend — serveBookFile
@@ -96,16 +105,26 @@ type Handler struct {
 // Platform carries process-level facts and the two fan-out primitives
 // every surface can reach for.
 type PlatformDeps struct {
-	cfg     config.Config
-	static  embed.FS
-	version string
-	commit  string
-	hub     *sse.Hub
+	cfg      config.Config
+	static   embed.FS
+	version  string
+	commit   string
+	hub      *sse.Hub
+	platform platformProbe
 }
 
 // NewPlatform builds the platform group.
-func NewPlatformDeps(cfg config.Config, static embed.FS, version, commit string, hub *sse.Hub) PlatformDeps {
-	return PlatformDeps{cfg: cfg, static: static, version: version, commit: commit, hub: hub}
+func NewPlatformDeps(
+	cfg config.Config,
+	static embed.FS,
+	version, commit string,
+	hub *sse.Hub,
+	platform platformProbe,
+) PlatformDeps {
+	return PlatformDeps{
+		cfg: cfg, static: static, version: version, commit: commit,
+		hub: hub, platform: platform,
+	}
 }
 
 // Library carries the book-and-shelf surfaces: the catalog, its
@@ -237,6 +256,7 @@ type Options struct {
 func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailDeps, opts Options) *Handler {
 	return &Handler{
 		cfg: p.cfg, static: p.static, version: p.version, commit: p.commit, hub: p.hub,
+		platform: p.platform, startedAt: time.Now(),
 
 		lib: l.lib, shelf: l.shelf, books: l.books, bookdrop: l.bookdrop, progress: l.progress,
 
