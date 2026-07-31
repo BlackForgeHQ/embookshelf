@@ -44,8 +44,8 @@ vi.mock("@/components/settings/OidcPanel", () => ({
 vi.mock("@/components/settings/ForwardAuthPanel", () => ({
   ForwardAuthPanel: probe("ForwardAuthPanel"),
 }))
-vi.mock("@/components/settings/AboutPanel", () => ({
-  AboutPanel: probe("AboutPanel"),
+vi.mock("@/components/settings/InstancePanel", () => ({
+  InstancePanel: probe("InstancePanel"),
 }))
 
 // Restated by hand rather than derived from SETTINGS_SECTIONS, so a
@@ -63,7 +63,7 @@ const EXPECTED_PANEL: Record<SettingsSectionKey, string> = {
   users: "UsersPanel",
   oidc: "OidcPanel",
   forwardAuth: "ForwardAuthPanel",
-  about: "AboutPanel",
+  instance: "InstancePanel",
 }
 
 function renderSettings(active: SettingsSectionKey, isAdmin: boolean) {

@@ -1,10 +1,10 @@
 import type { SettingsSection } from "@/components/SettingsShared"
 
-import { AboutPanel } from "@/components/settings/AboutPanel"
 import { AudiobooksPanel } from "@/components/settings/AudiobooksPanel"
 import { BookDropPanel } from "@/components/settings/BookDropPanel"
 import { EmailPanel } from "@/components/settings/EmailPanel"
 import { ForwardAuthPanel } from "@/components/settings/ForwardAuthPanel"
+import { InstancePanel } from "@/components/settings/InstancePanel"
 import { InvitesPanel } from "@/components/settings/InvitesPanel"
 import { LibrariesPanel } from "@/components/settings/LibrariesPanel"
 import { OidcPanel } from "@/components/settings/OidcPanel"
@@ -23,7 +23,7 @@ export type SettingsSectionKey =
   | "users"
   | "oidc"
   | "forwardAuth"
-  | "about"
+  | "instance"
 
 // The whole of /settings as data: label, gate, panel — one row per
 // section, in nav order. The route used to hold half of this (the labels
@@ -95,9 +95,9 @@ export const SETTINGS_SECTIONS: ReadonlyArray<
     render: () => <ForwardAuthPanel />,
   },
   {
-    key: "about",
-    label: "About",
+    key: "instance",
+    label: "Instance",
     adminOnly: true,
-    render: () => <AboutPanel />,
+    render: () => <InstancePanel />,
   },
 ]
