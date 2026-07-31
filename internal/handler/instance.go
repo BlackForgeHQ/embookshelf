@@ -25,14 +25,39 @@ func (h *Handler) appVersion() string {
 }
 
 type instanceInfoDTO struct {
-	Version             string            `json:"version"`
-	GoVersion           string            `json:"goVersion"`
+	Version   string `json:"version"`
+	Commit    string `json:"commit,omitempty"`
+	GoVersion string `json:"goVersion"`
+	// StartedAt is process start as RFC3339, so the client relativizes it
+	// into an uptime the same way it does provider health timestamps.
+	StartedAt           string            `json:"startedAt"`
 	AllowedOrigins      []string          `json:"allowedOrigins"`
 	BookDropPath        string            `json:"bookDropPath"`
 	DataPath            string            `json:"dataPath"`
 	MigrateOnStart      bool              `json:"migrateOnStart"`
 	EnrichmentProviders []providerInfoDTO `json:"enrichmentProviders"`
 	Counts              instanceCountsDTO `json:"counts"`
+	// QueueAttached is false when no worker pool was wired, which means
+	// no scan, enrichment or narration job is ever dispatched. Nothing
+	// else in the interface says so — the seam surfaces it only as a 503
+	// on the endpoint that tried.
+	QueueAttached bool `json:"queueAttached"`
+	// Database and Schema are nil when the probe could not answer. The
+	// panel renders an unknown row rather than pretending.
+	Database *instanceDatabaseDTO `json:"database,omitempty"`
+	Schema   *instanceSchemaDTO   `json:"schema,omitempty"`
+}
+
+type instanceDatabaseDTO struct {
+	PingMs   float64 `json:"pingMs"`
+	InUse    int32   `json:"inUse"`
+	Idle     int32   `json:"idle"`
+	MaxConns int32   `json:"maxConns"`
+}
+
+type instanceSchemaDTO struct {
+	Version int  `json:"version"`
+	Dirty   bool `json:"dirty"`
 }
 
 type instanceCountsDTO struct {
@@ -178,34 +203,62 @@ func (h *Handler) InstanceSummary(c *gin.Context) {
 func (h *Handler) InstanceInfo(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	infos, err := h.providerCfg.ListProviders(ctx)
-	if err != nil {
-		slog.Warn("list providers", "err", err)
-	}
-	providers := make([]providerInfoDTO, 0, len(infos))
-	for _, p := range infos {
-		providers = append(providers, toProviderInfoDTO(p))
+	providers := make([]providerInfoDTO, 0)
+	if h.providerCfg != nil {
+		infos, err := h.providerCfg.ListProviders(ctx)
+		if err != nil {
+			slog.Warn("list providers", "err", err)
+		}
+		for _, p := range infos {
+			providers = append(providers, toProviderInfoDTO(p))
+		}
 	}
 
 	counts := instanceCountsDTO{}
-	if libs, err := h.lib.List(ctx); err == nil {
-		counts.Libraries = len(libs)
-		for _, l := range libs {
-			counts.Books += l.BookCount
+	if h.lib != nil {
+		if libs, err := h.lib.List(ctx); err == nil {
+			counts.Libraries = len(libs)
+			for _, l := range libs {
+				counts.Books += l.BookCount
+			}
 		}
 	}
-	if users, err := h.auth.ListUsers(ctx); err == nil {
-		counts.Users = len(users)
+	if h.auth != nil {
+		if users, err := h.auth.ListUsers(ctx); err == nil {
+			counts.Users = len(users)
+		}
 	}
 
-	c.JSON(http.StatusOK, instanceInfoDTO{
+	out := instanceInfoDTO{
 		Version:             h.appVersion(),
+		Commit:              h.commit,
 		GoVersion:           runtime.Version(),
+		StartedAt:           h.startedAt.Format(time.RFC3339),
 		AllowedOrigins:      h.cfg.AllowedOrigins,
 		BookDropPath:        h.cfg.BookDropPath,
 		DataPath:            h.cfg.DataPath.String(),
 		MigrateOnStart:      h.cfg.MigrateOnStart,
 		EnrichmentProviders: providers,
 		Counts:              counts,
-	})
+		QueueAttached:       h.queue != nil,
+	}
+
+	// A probe failure degrades the payload rather than the request: this
+	// endpoint backs the whole Instance panel, and answering 500 because
+	// the pool was busy would blank the version, the paths and the
+	// provider health along with it.
+	if h.platform != nil {
+		if st, err := h.platform.Probe(ctx); err != nil {
+			slog.Warn("platform probe", "err", err)
+		} else {
+			out.Database = &instanceDatabaseDTO{
+				PingMs: st.PingMs, InUse: st.InUse, Idle: st.Idle, MaxConns: st.MaxConns,
+			}
+			if st.Schema != nil {
+				out.Schema = &instanceSchemaDTO{Version: st.Schema.Version, Dirty: st.Schema.Dirty}
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, out)
 }
