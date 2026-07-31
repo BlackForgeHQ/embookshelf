@@ -31,11 +31,17 @@ function reply(status: number, body: unknown) {
   }
 }
 
+// Overridable per test — most tests want the happy instance payload, a
+// couple need the instance endpoint to fail or answer with a different
+// body without hand-rolling a whole new fetch stub.
+let instanceReply: { status: number; body: unknown } = { status: 200, body: instance }
+
 beforeEach(() => {
+  instanceReply = { status: 200, body: instance }
   vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
     const url = String(input)
     if (url === "/api/v1/settings/instance") {
-      return Promise.resolve(reply(200, instance))
+      return Promise.resolve(reply(instanceReply.status, instanceReply.body))
     }
     if (url === "/api/v1/settings/libraries") {
       return Promise.resolve(reply(200, { libraries: [] }))
@@ -81,5 +87,37 @@ describe("InstancePanel", () => {
     renderPanel()
     expect(await screen.findByText("a3f19c2")).toBeTruthy()
     expect(await screen.findByText("1.4.2")).toBeTruthy()
+  })
+
+  it("says why the header is blank when the instance endpoint fails, and still renders the status rows", async () => {
+    instanceReply = {
+      status: 500,
+      body: { error: "database unreachable" },
+    }
+    renderPanel()
+
+    // The same message also lands as evidence on the warn rows below, so
+    // this locates the header block specifically by its lead-in text
+    // rather than matching "database unreachable" wherever it appears.
+    const header = await screen.findByText(
+      /This instance's details could not be read/
+    )
+    expect(header.textContent).toContain("database unreachable")
+
+    for (const key of ["database", "queue", "providers", "libraries", "bookdrop"]) {
+      expect(await screen.findByTestId(`status-row-${key}`)).toBeTruthy()
+    }
+  })
+
+  it("does not render a future startedAt as an uptime", async () => {
+    instanceReply = {
+      status: 200,
+      body: { ...instance, startedAt: "2099-01-01T00:00:00Z" },
+    }
+    renderPanel()
+
+    expect(await screen.findByText("1.4.2")).toBeTruthy()
+    expect(await screen.findByText("unknown")).toBeTruthy()
+    expect(screen.queryByText(/in the future/)).toBeNull()
   })
 })

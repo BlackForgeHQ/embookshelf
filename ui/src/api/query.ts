@@ -93,7 +93,15 @@ export function apiQueryOptions<TData>(
     queryFn: spec.fn,
     staleTime: spec.staleTime,
     gcTime: spec.gcTime,
-    retry: spec.retry,
+    // Omitted rather than set to `undefined` when a spec doesn't declare
+    // one: react-query's client.defaultQueryOptions spreads these options
+    // last, so an explicit `retry: undefined` here would silently beat a
+    // caller's `QueryClient({ defaultOptions: { queries: { retry: false
+    // } } })` and fall through to react-query's own default of 3 retries
+    // with real backoff delay — invisible in production (the app's
+    // client never sets a client-wide retry) but a query that never
+    // settles inside a test's timeout.
+    ...(spec.retry !== undefined ? { retry: spec.retry } : {}),
     ...opts,
   }
 }
