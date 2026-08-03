@@ -18,8 +18,8 @@ require (
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
-	github.com/riverqueue/river v0.41.0
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.41.0
+	github.com/riverqueue/river v0.41.1
+	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.41.1
 	github.com/sony/gobreaker/v2 v2.4.0
 	github.com/wneessen/go-mail v0.8.1
 	go.opentelemetry.io/contrib/bridges/otelslog v0.19.0
@@ -111,9 +111,9 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.61.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/riverqueue/river/riverdriver v0.41.0 // indirect
-	github.com/riverqueue/river/rivershared v0.41.0 // indirect
-	github.com/riverqueue/river/rivertype v0.41.0 // indirect
+	github.com/riverqueue/river/riverdriver v0.41.1 // indirect
+	github.com/riverqueue/river/rivershared v0.41.1 // indirect
+	github.com/riverqueue/river/rivertype v0.41.1
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
