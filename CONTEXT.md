@@ -811,7 +811,7 @@ The markdown produced from a book's file by the [[Converter extension]] — a de
 
 ### Convertible format
 
-The set of formats routed to the [[Converter extension]]: formats embookshelf cannot read natively — PDF, DOCX, RTF, ODT and kin. **EPUB is deliberately not in it**: native extraction (`fileproc`, `textsplit`) already serves EPUB with no sidecar, and routing it through the converter would make an EPUB-only library depend on an optional process it never needed. A third format set beside [[Eligible format]] and Narratable format — never reuse one for another.
+The set of formats routed to the [[Converter extension]]: formats embookshelf can hold but not read natively that anydoc converts — **PDF alone today**, since DOCX/RTF/ODT have no ingest path and MOBI/AZW3/FB2 are outside anydoc's set. Declared once per tier (`model.FormatSpecs.Convertible`, `ui formats.ts CONVERTIBLE_FORMATS`) and held together by a parity test. **EPUB is deliberately not in it**: native extraction (`fileproc`, `textsplit`) already serves EPUB with no sidecar, and routing it through the converter would make an EPUB-only library depend on an optional process it never needed. A third format set beside [[Eligible format]] and Narratable format — never reuse one for another.
 
 ---
 

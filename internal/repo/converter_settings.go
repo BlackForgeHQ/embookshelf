@@ -17,7 +17,7 @@ const SettingConverter = "CONVERTER"
 
 // ConverterConfig is the CONVERTER row. No secrets in v1 — the sidecar
 // binds to the internal network; a bearer token joins here (via a
-// Secrets declaration) if that boundary ever moves.
+// Secrets declaration) if the sidecar is ever exposed beyond it.
 type ConverterConfig struct {
 	// Enabled gates the extension. Off by default — most installs never
 	// deploy the sidecar, and features that need it report "extension

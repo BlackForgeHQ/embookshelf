@@ -18,8 +18,9 @@ const clientFormatFile = "../../ui/src/lib/formats.ts"
 // The anchors are matched exactly, so renaming a constant cannot leave
 // this test parsing something else and reporting success.
 const (
-	clientNarratableAnchor = "export const NARRATABLE_FORMATS = ["
-	clientKindleAnchor     = "export const KINDLE_ELIGIBLE_FORMATS = ["
+	clientNarratableAnchor  = "export const NARRATABLE_FORMATS = ["
+	clientKindleAnchor      = "export const KINDLE_ELIGIBLE_FORMATS = ["
+	clientConvertibleAnchor = "export const CONVERTIBLE_FORMATS = ["
 )
 
 // TestNarratableFormatsMatchClient asserts the two declarations are the
@@ -70,6 +71,29 @@ func TestKindleEligibleFormatsMatchClient(t *testing.T) {
 		if !KindleEligible(format) {
 			t.Errorf("format %q is listed as Kindle-eligible in %s but the server refuses it — "+
 				"the UI offers a send that 415s", format, clientFormatFile)
+		}
+	}
+}
+
+// TestConvertibleFormatsMatchClient guards the third capability set
+// (ADR-0033). Divergence is a convert affordance for a format the
+// server 415s, or a book quietly denied a conversion the sidecar would
+// have done.
+func TestConvertibleFormatsMatchClient(t *testing.T) {
+	t.Parallel()
+
+	client := clientFormatList(t, clientConvertibleAnchor)
+
+	for _, format := range ConvertibleFormats() {
+		if !client[format] {
+			t.Errorf("format %q is convertible server-side but absent from %s — "+
+				"the UI will never offer conversion", format, clientFormatFile)
+		}
+	}
+	for format := range client {
+		if !Convertible(format) {
+			t.Errorf("format %q is listed as convertible in %s but the server refuses it — "+
+				"the UI offers a conversion that 415s", format, clientFormatFile)
 		}
 	}
 }
