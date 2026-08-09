@@ -325,19 +325,19 @@ test.describe('settings · users & roles', () => {
 });
 
 // ---------------------------------------------------------------------------
-// About
+// Instance (formerly About — d609ff1 made it a status board)
 // ---------------------------------------------------------------------------
 
-test.describe('settings · about', () => {
+test.describe('settings · instance', () => {
   test('shows the product version and admin-only runtime details', async ({
     page,
   }) => {
-    await openAdminSettings(page, 'About');
+    await openAdminSettings(page, 'Instance');
 
     const main = page.getByRole('main');
-    await expect(main.getByText('embookshelf', { exact: true })).toBeVisible();
     await expect(main.getByText('Version')).toBeVisible();
     await expect(main.getByText('Runtime')).toBeVisible();
-    await expect(main.getByText('Instance totals')).toBeVisible();
+    await expect(main.getByText('Catalog')).toBeVisible();
+    await expect(main.getByText('Status', { exact: true })).toBeVisible();
   });
 });
