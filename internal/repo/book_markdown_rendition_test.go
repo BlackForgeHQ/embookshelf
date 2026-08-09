@@ -136,3 +136,75 @@ func TestMarkdownRenditionDeletedWithBook(t *testing.T) {
 		t.Fatalf("row survived its book: err = %v", err)
 	}
 }
+
+// TestConversionCandidatesAndCoverage — the two bulk-run queries agree
+// on who counts: convertible books only, absent-or-failed are
+// candidates, ready is left alone.
+func TestConversionCandidatesAndCoverage(t *testing.T) {
+	d := repotest.New(t)
+	libs := repo.NewLibraryRepo(d)
+	books := repo.NewBookRepo(d)
+	r := repo.NewBookMarkdownRenditionRepo(d)
+	ctx := context.Background()
+
+	lib, err := libs.CreateLibrary(ctx, "Bulk", "bulk", "/tmp/bulk", nil)
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	mk := func(title, format string) string {
+		b, err := books.Create(ctx, model.Book{
+			LibraryID: lib.ID, Title: title, Author: "A", Format: format,
+			Path: title + ".bin",
+		})
+		if err != nil {
+			t.Fatalf("create %s: %v", title, err)
+		}
+		return b.ID
+	}
+
+	virgin := mk("Virgin", "PDF")
+	failed := mk("Failed", "PDF")
+	ready := mk("Ready", "PDF")
+	converting := mk("Converting", "PDF")
+	mk("Epub", "EPUB") // never a candidate: not convertible
+
+	if err := r.Start(ctx, failed); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.MarkFailed(ctx, failed, "boom"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Start(ctx, ready); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.MarkRunning(ctx, ready); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.MarkReady(ctx, ready, "A/Ready/Ready.md", 10, []byte{1}, "0.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Start(ctx, converting); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := r.ListConversionCandidates(ctx)
+	if err != nil {
+		t.Fatalf("ListConversionCandidates: %v", err)
+	}
+	ids := map[string]bool{}
+	for _, c := range got {
+		ids[c.BookID] = true
+	}
+	if len(got) != 2 || !ids[virgin] || !ids[failed] {
+		t.Fatalf("candidates = %v, want exactly {virgin, failed}", ids)
+	}
+
+	cov, err := r.CountConversionCoverage(ctx)
+	if err != nil {
+		t.Fatalf("CountConversionCoverage: %v", err)
+	}
+	want := repo.ConversionCoverage{Total: 4, Ready: 1, Converting: 1, Failed: 1, Unconverted: 1}
+	if cov != want {
+		t.Fatalf("coverage = %+v, want %+v", cov, want)
+	}
+}

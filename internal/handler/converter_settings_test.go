@@ -3,13 +3,16 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/service"
 )
 
 func TestSettingsConverterGetRendersTheRow(t *testing.T) {
@@ -136,4 +139,96 @@ func TestSettingsConverterHealth(t *testing.T) {
 			t.Fatal("unreachable must carry the dial error, verbatim")
 		}
 	})
+}
+
+// --- bulk conversion ------------------------------------------------------
+
+type fakeConversionStore struct {
+	coverage   repo.ConversionCoverage
+	candidates []repo.ConversionCandidate
+	started    []string
+}
+
+func (f *fakeConversionStore) ListConversionCandidates(context.Context) ([]repo.ConversionCandidate, error) {
+	return f.candidates, nil
+}
+
+func (f *fakeConversionStore) CountConversionCoverage(context.Context) (repo.ConversionCoverage, error) {
+	return f.coverage, nil
+}
+
+func (f *fakeConversionStore) Start(_ context.Context, bookID string) error {
+	f.started = append(f.started, bookID)
+	return nil
+}
+
+func TestSettingsConverterCoverageDerivesCandidates(t *testing.T) {
+	store := &fakeConversionStore{coverage: repo.ConversionCoverage{
+		Total: 10, Ready: 5, Converting: 2, Failed: 1, Unconverted: 2,
+	}}
+	h := &Handler{conversionRunner: service.NewConversionRunner(store, nil)}
+
+	c, rec := settingsCtx(t, http.MethodGet, "/api/v1/settings/converter/coverage", "")
+	h.SettingsConverterCoverage(c)
+
+	var got converterCoverageDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v (body %s)", err, rec.Body.String())
+	}
+	if got.Candidates != 3 {
+		t.Fatalf("Candidates = %d, want unconverted+failed = 3", got.Candidates)
+	}
+	if got.Converting != 2 || got.Ready != 5 || got.Total != 10 {
+		t.Fatalf("DTO = %+v", got)
+	}
+}
+
+// TestSettingsConverterRunStartsRowsAndEnqueues — every candidate's row
+// goes pending before its job, so the first coverage poll already
+// counts the run as converting.
+func TestSettingsConverterRunStartsRowsAndEnqueues(t *testing.T) {
+	store := &fakeConversionStore{candidates: []repo.ConversionCandidate{
+		{BookID: "b1"}, {BookID: "b2"},
+	}}
+	q := &captureQueue{}
+	h := &Handler{
+		conversionRunner: service.NewConversionRunner(store, q),
+		appSettings: &fakeAppSettings{
+			converter: repo.ConverterConfig{Enabled: true, BaseURL: "http://c"},
+		},
+	}
+
+	c, rec := settingsCtx(t, http.MethodPost, "/api/v1/settings/converter/run", "")
+	h.SettingsConverterRun(c)
+
+	if httpStatus(c, rec) != http.StatusAccepted {
+		t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if len(store.started) != 2 || len(q.enqueued) != 2 {
+		t.Fatalf("started %v, enqueued %d", store.started, len(q.enqueued))
+	}
+	var got struct {
+		Queued int `json:"queued"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.Queued != 2 {
+		t.Fatalf("body = %s (err %v)", rec.Body.String(), err)
+	}
+}
+
+// TestSettingsConverterRunRefusesWhenNotConfigured — same gate as the
+// per-book button: the loud answer beats a thousand failing jobs.
+func TestSettingsConverterRunRefusesWhenNotConfigured(t *testing.T) {
+	h := &Handler{
+		conversionRunner: service.NewConversionRunner(&fakeConversionStore{}, &captureQueue{}),
+		appSettings:      &fakeAppSettings{},
+	}
+	c, rec := settingsCtx(t, http.MethodPost, "/api/v1/settings/converter/run", "")
+	h.SettingsConverterRun(c)
+
+	if httpStatus(c, rec) != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "converter extension is not configured") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
 }

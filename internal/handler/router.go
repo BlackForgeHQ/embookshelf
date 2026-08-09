@@ -232,6 +232,8 @@ func (h *Handler) Engine() *gin.Engine {
 				admin.GET("/converter", h.SettingsConverterGet)
 				admin.PUT("/converter", h.SettingsConverterUpdate)
 				admin.GET("/converter/health", h.SettingsConverterHealth)
+				admin.GET("/converter/coverage", h.SettingsConverterCoverage)
+				admin.POST("/converter/run", h.SettingsConverterRun)
 
 				admin.GET("/forward-auth", h.SettingsForwardAuthGet)
 				admin.PUT("/forward-auth", h.SettingsForwardAuthUpdate)

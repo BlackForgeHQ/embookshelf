@@ -20,22 +20,23 @@ import (
 // Ensure *service.OIDCService satisfies the nil-safe pattern used in the handler.
 
 type Handler struct {
-	cfg         config.Config
-	static      embed.FS
-	version     string
-	commit      string
-	lib         *service.LibraryService
-	shelf       *service.ShelfService
-	auth        *service.AuthService
-	bookdrop    *service.BookDropService
-	progress    *service.ProgressService
-	enrich      *service.EnrichmentService
-	providerCfg *service.ProviderSettingsService
-	annotations *service.AnnotationService
-	guides      *repo.BookReadingGuideRepo
-	guideRunner *service.GuideRunner
-	renditions  markdownRenditionStore
-	audiobooks  *service.AudiobookService
+	cfg              config.Config
+	static           embed.FS
+	version          string
+	commit           string
+	lib              *service.LibraryService
+	shelf            *service.ShelfService
+	auth             *service.AuthService
+	bookdrop         *service.BookDropService
+	progress         *service.ProgressService
+	enrich           *service.EnrichmentService
+	providerCfg      *service.ProviderSettingsService
+	annotations      *service.AnnotationService
+	guides           *repo.BookReadingGuideRepo
+	guideRunner      *service.GuideRunner
+	renditions       markdownRenditionStore
+	conversionRunner *service.ConversionRunner
+	audiobooks       *service.AudiobookService
 	// oidcSettings applies a settings submission as one decision (#195).
 	oidcSettings *service.OIDCSettingsService
 	stats        *service.StatsService
@@ -162,7 +163,8 @@ type DiscoveryDeps struct {
 	guideRunner  *service.GuideRunner
 	// Markdown renditions (ADR-0033): derived from a book like a guide,
 	// so they live in the same group.
-	renditions *repo.BookMarkdownRenditionRepo
+	renditions       *repo.BookMarkdownRenditionRepo
+	conversionRunner *service.ConversionRunner
 	// Audiobook generation (ADR-0025 — ADR-0028). Narration is discovery
 	// in the same sense a reading guide is: derived from a book rather
 	// than stored with it.
@@ -180,13 +182,14 @@ func NewDiscoveryDeps(
 	guides *repo.BookReadingGuideRepo,
 	guideRunner *service.GuideRunner,
 	renditions *repo.BookMarkdownRenditionRepo,
+	conversionRunner *service.ConversionRunner,
 	audiobooks *service.AudiobookService,
 ) DiscoveryDeps {
 	return DiscoveryDeps{
 		enrich: enrich, providerCfg: providerCfg, search: search,
 		stats: stats, readingStats: readingStats, annotations: annotations,
 		guides: guides, guideRunner: guideRunner,
-		renditions: renditions,
+		renditions: renditions, conversionRunner: conversionRunner,
 		audiobooks: audiobooks,
 	}
 }
@@ -269,8 +272,9 @@ func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailD
 		enrich: d.enrich, providerCfg: d.providerCfg, search: d.search,
 		stats: d.stats, readingStats: d.readingStats, annotations: d.annotations,
 		guides: d.guides, guideRunner: d.guideRunner,
-		renditions: newMarkdownRenditionStore(d.renditions),
-		audiobooks: d.audiobooks,
+		renditions:       newMarkdownRenditionStore(d.renditions),
+		conversionRunner: d.conversionRunner,
+		audiobooks:       d.audiobooks,
 
 		auth: a.auth, users: a.users, devices: a.devices,
 		appSettings: newAppSettingsStore(a.appSettings),

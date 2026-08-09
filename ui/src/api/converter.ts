@@ -41,6 +41,40 @@ export const converterHealthQuery = defineQuery({
     api<ConverterHealth>("/api/v1/settings/converter/health"),
 })
 
+// Mirrors converterCoverageDTO: the bulk card's numbers. `candidates`
+// (unconverted + failed) is derived server-side so the card never
+// re-implements the candidate rule; `converting` is the moving part the
+// poll watches.
+export type ConverterCoverage = {
+  total: number
+  ready: number
+  converting: number
+  failed: number
+  unconverted: number
+  candidates: number
+}
+
+export const converterCoverageQueryKey = [
+  "settings",
+  "converter",
+  "coverage",
+] as const
+
+export const converterCoverageQuery = defineQuery({
+  key: converterCoverageQueryKey,
+  fn: (): Promise<ConverterCoverage> =>
+    api<ConverterCoverage>("/api/v1/settings/converter/coverage"),
+})
+
+// startBulkConversion queues every candidate. 202 carries how many went.
+export const startBulkConversion = defineMutation({
+  fn: (): Promise<{ queued: number }> =>
+    api<{ queued: number }>("/api/v1/settings/converter/run", {
+      method: "POST",
+    }),
+  invalidates: [converterCoverageQueryKey],
+})
+
 export const updateConverterSettings = defineMutation({
   fn: (body: ConverterSettings): Promise<ConverterSettings> =>
     api<ConverterSettings>("/api/v1/settings/converter", {

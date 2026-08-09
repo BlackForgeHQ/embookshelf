@@ -2,11 +2,15 @@ import type { FormEvent } from "react"
 
 import type { ConverterSettings } from "@/api/converter"
 import {
+  converterCoverageQuery,
   converterHealthQuery,
   converterSettingsQuery,
+  startBulkConversion,
   updateConverterSettings,
 } from "@/api/converter"
-import { useApiQuery } from "@/api/query"
+import { useApiMutation } from "@/api/mutation"
+import { LIVE_POLL_MS, useApiQuery } from "@/api/query"
+import { ProgressBar } from "@/components/ProgressBar"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
 import {
   Card,
@@ -119,7 +123,94 @@ export function ConverterPanel() {
           </Button>
         </div>
       </form>
+
+      {form.enabled && <BulkConversionCard />}
     </>
+  )
+}
+
+// BulkConversionCard converts every candidate PDF in one click and
+// shows progress. Coverage serves both the pre-flight count and the
+// progress bar, so the bar survives a reload and a run someone started
+// yesterday — same shape as the guide run card. No token estimate:
+// conversion costs sidecar CPU, not a metered API.
+function BulkConversionCard() {
+  const coverage = useApiQuery(converterCoverageQuery, {
+    // Poll only while something is converting; an idle instance is
+    // never polled. Same cadence as the guide and narration panels.
+    refetchInterval: (q) =>
+      (q.state.data?.converting ?? 0) > 0 ? LIVE_POLL_MS : false,
+  })
+
+  const runMut = useApiMutation(startBulkConversion, {
+    successToast: (res: { queued: number }) =>
+      res.queued === 0
+        ? "Every convertible book already has a markdown rendition."
+        : `Queued ${res.queued} book${res.queued === 1 ? "" : "s"} for conversion.`,
+  })
+
+  const cov = coverage.data
+
+  if (!cov) {
+    return (
+      <Card className="mt-6">
+        <h3 className="t-h3 mb-2">Convert the whole library</h3>
+        <p className="t-small">Checking what needs conversion…</p>
+      </Card>
+    )
+  }
+
+  const pct = cov.total > 0 ? Math.round((cov.ready / cov.total) * 100) : 0
+
+  return (
+    <Card className="mt-6">
+      <h3 className="t-h3 mb-2">Convert the whole library</h3>
+
+      {cov.total > 0 && (
+        <div className="mb-4">
+          <div
+            className="mb-1 flex items-baseline justify-between"
+            style={{ gap: 12 }}
+          >
+            <span className="t-small">
+              {cov.ready.toLocaleString()} of {cov.total.toLocaleString()}{" "}
+              convertible books have a markdown rendition
+            </span>
+            <span className="t-small tabular-nums">{pct}%</span>
+          </div>
+          <ProgressBar value={pct / 100} label="Markdown rendition coverage" />
+        </div>
+      )}
+
+      {cov.converting > 0 && (
+        <p className="t-small mb-1">
+          Converting {cov.converting.toLocaleString()} book
+          {cov.converting === 1 ? "" : "s"}…
+        </p>
+      )}
+      {cov.failed > 0 && (
+        <p className="t-small mb-1 text-destructive">
+          {cov.failed.toLocaleString()} conversion
+          {cov.failed === 1 ? "" : "s"} failed — each book's guide tab shows
+          the reason verbatim. Running again retries them.
+        </p>
+      )}
+
+      {cov.total === 0 ? (
+        <p className="t-small">No convertible books in the library (PDF only today).</p>
+      ) : cov.candidates === 0 && cov.converting === 0 ? (
+        <p className="t-small">Every convertible book already has a rendition.</p>
+      ) : (
+        <Button
+          variant="outline"
+          disabled={runMut.isPending || cov.candidates === 0}
+          onClick={() => runMut.mutate(undefined)}
+        >
+          Convert {cov.candidates.toLocaleString()} book
+          {cov.candidates === 1 ? "" : "s"}
+        </Button>
+      )}
+    </Card>
   )
 }
 

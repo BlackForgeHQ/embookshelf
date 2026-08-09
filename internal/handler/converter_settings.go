@@ -44,6 +44,70 @@ func (h *Handler) SettingsConverterUpdate(c *gin.Context) {
 	h.SettingsConverterGet(c)
 }
 
+// converterCoverageDTO is the bulk-conversion card's numbers: the
+// pre-flight ("candidates would convert") and the progress poll are the
+// same answer, so a bar built from it survives reload and restart —
+// the same property the guide run's coverage has.
+type converterCoverageDTO struct {
+	Total       int `json:"total"`
+	Ready       int `json:"ready"`
+	Converting  int `json:"converting"`
+	Failed      int `json:"failed"`
+	Unconverted int `json:"unconverted"`
+	// Candidates is what a run would enqueue right now: unconverted +
+	// failed. Derived server-side so the card never re-implements the
+	// candidate rule.
+	Candidates int `json:"candidates"`
+}
+
+// SettingsConverterCoverage answers the bulk card's counts.
+func (h *Handler) SettingsConverterCoverage(c *gin.Context) {
+	if h.conversionRunner == nil {
+		writeError(c, http.StatusServiceUnavailable, "no conversion runner configured")
+		return
+	}
+	cov, err := h.conversionRunner.Coverage(c.Request.Context())
+	if err != nil {
+		writeServerError(c, "conversion coverage", err)
+		return
+	}
+	c.JSON(http.StatusOK, converterCoverageDTO{
+		Total: cov.Total, Ready: cov.Ready, Converting: cov.Converting,
+		Failed: cov.Failed, Unconverted: cov.Unconverted,
+		Candidates: cov.Unconverted + cov.Failed,
+	})
+}
+
+// SettingsConverterRun starts a bulk conversion of every candidate.
+func (h *Handler) SettingsConverterRun(c *gin.Context) {
+	ctx := c.Request.Context()
+	cfg, err := h.appSettings.GetConverter(ctx)
+	if err != nil {
+		writeServerError(c, "read converter settings", err)
+		return
+	}
+	if !cfg.Enabled || cfg.BaseURL == "" {
+		writeErrorCode(c, http.StatusServiceUnavailable, CodeConverterDisabled,
+			"converter extension is not configured")
+		return
+	}
+	if h.conversionRunner == nil {
+		writeError(c, http.StatusServiceUnavailable, "no conversion runner configured")
+		return
+	}
+	queued, err := h.conversionRunner.Start(ctx)
+	if err != nil {
+		// Partial progress is real: those jobs are running. Report the
+		// count alongside the failure rather than implying nothing began.
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":  "bulk conversion partially queued: " + err.Error(),
+			"queued": queued,
+		})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"queued": queued})
+}
+
 // converterHealthDTO is the admin card's status answer. Status is
 // "not_configured" (disabled or no URL — no probe attempted),
 // "ok" (the sidecar answered /healthz), or "unreachable" (it did not;

@@ -514,6 +514,7 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 			statsSvc, readingStatsSvc, annotationSvc,
 			guideRepo, guideRunner,
 			renditionRepo,
+			service.NewConversionRunner(renditionRepo, enq),
 			audiobookSvc,
 		),
 		handler.NewAccountDeps(authSvc, userRepo, deviceSvc, appSettingsRepo),
