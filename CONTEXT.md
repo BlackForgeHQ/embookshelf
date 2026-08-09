@@ -799,6 +799,22 @@ The set `{epub, pdf}`; the formats Send-to-Kindle accepts. Defined as a constant
 
 ---
 
+## Converter extension (ADR-0033)
+
+### Converter extension
+
+The Rust sidecar in `extensions/converter` (axum over the anydoc library) that turns document bytes into GitHub-Flavored Markdown. `POST /convert` takes raw file bytes and answers raw markdown; `GET /healthz` answers reachability. An **extension**: a separately deployed, optional process — embookshelf works without it, and features that need it say so instead of degrading silently. Configured by the `CONVERTER` `Setting[T]` row (URL + Enabled) in the settings registry. **Distinct** from a Processor (`fileproc`, in-binary metadata extraction) and from a metadata provider (enrichment).
+
+### Markdown rendition
+
+The markdown produced from a book's file by the [[Converter extension]] — a derived artifact in the sense of [[Rendition]], stored as a file through `storage.Storage` beside the book, tracked by a DB row carrying the source [[Content hash]] and converter version. When the recorded hash no longer matches the book's current file, the rendition is stale, labelled, never silently reused as current. Consumed by AI features (reading guides, tagging, future retrieval); the planned markdown → EPUB stage reads it too.
+
+### Convertible format
+
+The set of formats routed to the [[Converter extension]]: formats embookshelf cannot read natively — PDF, DOCX, RTF, ODT and kin. **EPUB is deliberately not in it**: native extraction (`fileproc`, `textsplit`) already serves EPUB with no sidecar, and routing it through the converter would make an EPUB-only library depend on an optional process it never needed. A third format set beside [[Eligible format]] and Narratable format — never reuse one for another.
+
+---
+
 ## Vocabulary discipline
 
 Avoid these substitutes — they drift the meaning:
@@ -808,7 +824,7 @@ Avoid these substitutes — they drift the meaning:
 - "boundary" → say **seam** (boundary is overloaded with DDD bounded contexts).
 - "Storage source" / "BookSource" used interchangeably → no. `storage.Source` = bytes; `service.BookSource` = delivery target.
 - "Provider" alone is ambiguous — say **OIDC provider** (auth, redirect flow) or **metadata provider** (enrichment) or **TTS engine** (narration) or **Forward-auth** (proxy header trust). For statements that span OIDC + forward-auth, say **External identity provider**.
-- "Eligible format" ≠ **Narratable format**. The first is `{epub, pdf}` and belongs to Send-to-Kindle (ADR-0021); the second is `{epub}` and belongs to audiobook generation (ADR-0028). Never reuse one for the other.
+- "Eligible format" ≠ **Narratable format** ≠ **Convertible format**. The first is `{epub, pdf}` and belongs to Send-to-Kindle (ADR-0021); the second is `{epub}` and belongs to audiobook generation (ADR-0028); the third is the non-native set (PDF, DOCX, RTF, ODT…) routed to the Converter extension (ADR-0033). Never reuse one for another.
 - "Audiobook" alone is ambiguous once generation exists — say **ingested audiobook** (an MP3/M4B that arrived through BookDrop, whose `books.format` *is* audio) or **generated audiobook** / **audio Rendition** (synthesized from an EPUB, whose `books.format` stays `EPUB`). [[Audio format]] is the ingest-side predicate and says nothing about origin.
 - "Trusted proxy" alone is ambiguous — say **Trusted proxy CIDR** (the IP allowlist) when discussing the gate; "the upstream proxy" when discussing the deployment.
 - "Email provider" — **don't use**. There is no email-provider abstraction. Say **Sender** (transport seam) or **SMTP config** (the `app_settings.EMAIL` row). ADR-0020.
