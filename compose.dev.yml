@@ -65,6 +65,23 @@ services:
       timeout: 3s
       retries: 20
 
+  # The converter extension (ADR-0033): Rust sidecar wrapping anydoc.
+  # Optional — embookshelf runs without it, and conversion-dependent
+  # features report "extension not configured". Point the CONVERTER
+  # admin setting at http://localhost:6070. Started via `make
+  # converter-up`, same convention as db-up / s3-up: `make up` runs only
+  # backend + Vite.
+  converter:
+    build: ./extensions/converter
+    restart: unless-stopped
+    ports:
+      - "6070:6070"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:6070/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   # grafana/otel-lgtm bundles an OTLP collector (OpenTelemetry Collector),
   # Loki (logs), Grafana Tempo (traces), Grafana Mimir (metrics), and a
   # pre-provisioned Grafana UI. Point the app at 4317 (gRPC) or 4318

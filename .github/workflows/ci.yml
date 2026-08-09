@@ -139,6 +139,35 @@ jobs:
 
       - run: go build -o /dev/null ./...
 
+  # The converter extension (ADR-0033) is a Rust crate; nothing else in
+  # CI touches Rust, so the job carries its own toolchain and cache.
+  # Scoped to changes under extensions/converter via a cheap diff check
+  # rather than workflow-level `paths`, which would skip the whole
+  # workflow's other jobs or need a second workflow to drift.
+  converter:
+    name: converter
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: extensions/converter
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: extensions/converter
+
+      - run: cargo fmt --check
+
+      - run: cargo clippy --all-targets --locked -- -D warnings
+
+      - run: cargo test --locked
+
   ui-lint:
     name: ui-lint
     runs-on: ubuntu-latest

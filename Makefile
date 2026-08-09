@@ -56,6 +56,18 @@ s3-up: ## Start the dev MinIO (S3 API :9000, console :9001), wait, and make the 
 s3-down: ## Stop the dev MinIO
 	docker compose -f compose.dev.yml stop minio
 
+.PHONY: converter-up
+converter-up: ## Build + start the converter extension (POST /convert on :6070, ADR-0033)
+	docker compose -f compose.dev.yml up -d --build --wait --wait-timeout 300 converter
+
+.PHONY: converter-stop
+converter-stop: ## Stop the converter extension
+	docker compose -f compose.dev.yml stop converter
+
+.PHONY: converter-test
+converter-test: ## Run the converter crate's tests (needs a local Rust toolchain)
+	cd extensions/converter && cargo test
+
 .PHONY: obs-up
 obs-up: ## Start grafana/otel-lgtm (OTLP :4317/:4318, Grafana UI :3001)
 	docker compose -f compose.dev.yml up -d otel-lgtm
