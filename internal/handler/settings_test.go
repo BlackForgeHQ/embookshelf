@@ -34,22 +34,24 @@ import (
 // an injectable failure. A fake that re-derived the validation would
 // prove only that the fake agrees with itself.
 type fakeAppSettings struct {
-	bools       map[string]bool
-	email       repo.EmailConfig
-	guide       repo.ReadingGuideConfig
-	audiobook   repo.AudiobookConfig
-	forwardAuth repo.ForwardAuthConfig
-	google      repo.OAuthPresetConfig
-	github      repo.OAuthPresetConfig
-	generic     repo.GenericOIDCConfig
-	autoProvis  repo.OIDCAutoProvisionDetails
-	setEmailErr error
-	setGuideErr error
-	setAudioErr error
-	setFwdErr   error
-	emailWrites int
-	audioWrites int
-	guideWrites int
+	bools           map[string]bool
+	email           repo.EmailConfig
+	guide           repo.ReadingGuideConfig
+	audiobook       repo.AudiobookConfig
+	forwardAuth     repo.ForwardAuthConfig
+	converter       repo.ConverterConfig
+	google          repo.OAuthPresetConfig
+	github          repo.OAuthPresetConfig
+	generic         repo.GenericOIDCConfig
+	autoProvis      repo.OIDCAutoProvisionDetails
+	setEmailErr     error
+	setGuideErr     error
+	setAudioErr     error
+	setFwdErr       error
+	setConverterErr error
+	emailWrites     int
+	audioWrites     int
+	guideWrites     int
 }
 
 func (f *fakeAppSettings) GetBool(_ context.Context, name string) (bool, error) {
@@ -126,6 +128,18 @@ func (f *fakeAppSettings) GetGitHub(context.Context) (repo.OAuthPresetConfig, er
 
 func (f *fakeAppSettings) GetGenericOIDC(context.Context) (repo.GenericOIDCConfig, error) {
 	return f.generic, nil
+}
+
+func (f *fakeAppSettings) GetConverter(context.Context) (repo.ConverterConfig, error) {
+	return f.converter, nil
+}
+
+func (f *fakeAppSettings) SetConverter(_ context.Context, cfg repo.ConverterConfig) error {
+	if f.setConverterErr != nil {
+		return f.setConverterErr
+	}
+	f.converter = cfg
+	return nil
 }
 
 // The fake has to keep satisfying the same seam production does.

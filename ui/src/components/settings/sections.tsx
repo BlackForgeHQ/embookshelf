@@ -2,6 +2,7 @@ import type { SettingsSection } from "@/components/SettingsShared"
 
 import { AudiobooksPanel } from "@/components/settings/AudiobooksPanel"
 import { BookDropPanel } from "@/components/settings/BookDropPanel"
+import { ConverterPanel } from "@/components/settings/ConverterPanel"
 import { EmailPanel } from "@/components/settings/EmailPanel"
 import { ForwardAuthPanel } from "@/components/settings/ForwardAuthPanel"
 import { InstancePanel } from "@/components/settings/InstancePanel"
@@ -19,6 +20,7 @@ export type SettingsSectionKey =
   | "readingGuides"
   | "audiobooks"
   | "email"
+  | "converter"
   | "invites"
   | "users"
   | "oidc"
@@ -69,6 +71,12 @@ export const SETTINGS_SECTIONS: ReadonlyArray<
     label: "Email delivery",
     adminOnly: true,
     render: () => <EmailPanel />,
+  },
+  {
+    key: "converter",
+    label: "Converter",
+    adminOnly: true,
+    render: () => <ConverterPanel />,
   },
   {
     key: "invites",

@@ -52,6 +52,9 @@ type appSettingsStore interface {
 	GetForwardAuth(ctx context.Context) (repo.ForwardAuthConfig, error)
 	SetForwardAuth(ctx context.Context, cfg repo.ForwardAuthConfig) error
 
+	GetConverter(ctx context.Context) (repo.ConverterConfig, error)
+	SetConverter(ctx context.Context, cfg repo.ConverterConfig) error
+
 	GetOIDCAutoProvision(ctx context.Context) (repo.OIDCAutoProvisionDetails, error)
 	GetGoogle(ctx context.Context) (repo.OAuthPresetConfig, error)
 	GetGitHub(ctx context.Context) (repo.OAuthPresetConfig, error)

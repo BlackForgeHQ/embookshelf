@@ -32,6 +32,9 @@ vi.mock("@/components/settings/AudiobooksPanel", () => ({
 vi.mock("@/components/settings/EmailPanel", () => ({
   EmailPanel: probe("EmailPanel"),
 }))
+vi.mock("@/components/settings/ConverterPanel", () => ({
+  ConverterPanel: probe("ConverterPanel"),
+}))
 vi.mock("@/components/settings/InvitesPanel", () => ({
   InvitesPanel: probe("InvitesPanel"),
 }))
@@ -59,6 +62,7 @@ const EXPECTED_PANEL: Record<SettingsSectionKey, string> = {
   readingGuides: "ReadingGuidesPanel",
   audiobooks: "AudiobooksPanel",
   email: "EmailPanel",
+  converter: "ConverterPanel",
   invites: "InvitesPanel",
   users: "UsersPanel",
   oidc: "OidcPanel",

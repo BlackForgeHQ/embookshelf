@@ -382,6 +382,7 @@ func settingsRegistry(r *AppSettingsRepo) []settingSeeder {
 		seedRow(r, readingGuideSetting),
 		seedRow(r, audiobookSetting),
 		seedRow(r, emailSetting),
+		seedRow(r, converterSetting),
 	}
 }
 

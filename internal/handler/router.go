@@ -222,6 +222,10 @@ func (h *Handler) Engine() *gin.Engine {
 				admin.PUT("/oidc", h.SettingsOIDCUpdate)
 				admin.POST("/oidc/test/:slug", h.SettingsOIDCTest)
 
+				admin.GET("/converter", h.SettingsConverterGet)
+				admin.PUT("/converter", h.SettingsConverterUpdate)
+				admin.GET("/converter/health", h.SettingsConverterHealth)
+
 				admin.GET("/forward-auth", h.SettingsForwardAuthGet)
 				admin.PUT("/forward-auth", h.SettingsForwardAuthUpdate)
 
