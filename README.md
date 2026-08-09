@@ -38,6 +38,13 @@ docker compose -f compose.prod.yml up -d
 
 Open http://localhost:6060 and create your admin user.
 
+To also run the optional [converter extension](docs/ops/converter.md)
+(Markdown from PDFs, for AI features):
+
+```bash
+docker compose -f compose.prod.yml --profile converter up -d
+```
+
 To point at an existing Postgres instead, set `DATABASE_URL`:
 
 ```bash
@@ -87,6 +94,9 @@ Prerequisites: **Go 1.25**, **[Bun](https://bun.sh) 1.x**, Docker.
 # One-time
 make db-up           # start Postgres
 make ui-install      # bun install inside ui/
+
+# Optional — the converter extension (Markdown from PDFs, ADR-0033)
+make converter-up    # build + start the sidecar on :6070
 
 # Iteration — one terminal
 make up              # backend (air) + Vite on :6060 and :5173
@@ -286,6 +296,17 @@ Left-nav panels at `/settings`:
   sends one short prompt and shows what came back. Generation never
   happens on its own: it is a button on a book, or an admin run over
   the library that shows a token estimate first.
+- **Converter** — an optional sidecar
+  ([ADR-0033](docs/adr/0033-converter-sidecar-extension.md)) that turns
+  PDFs into Markdown so AI features can read them: with it running, a
+  reading guide for a PDF feeds on the book's actual text instead of
+  metadata alone. Ships as its own image
+  (`ghcr.io/blackforgehq/embookshelf-converter`); enable with
+  `--profile converter` on the prod compose file, then point
+  **Settings → Converter** at `http://converter:6070`. Without it,
+  everything else works and conversion-dependent features say
+  "extension not configured". See
+  [docs/ops/converter.md](docs/ops/converter.md).
 - **Audiobooks** — reads an EPUB aloud with a text-to-speech engine and
   saves the result beside the book as an MP3 with chapter marks
   (ADR-0025 – ADR-0028). **Off by default and configured here, not by
@@ -428,7 +449,7 @@ All env vars are optional unless marked required; sensible defaults
 live in [internal/config/config.go](internal/config/config.go).
 
 Not everything is an env var. Metadata providers, OIDC, email,
-**reading guides** and **audiobooks** are configured in the admin UI and
+**reading guides**, **audiobooks** and the **converter** are configured in the admin UI and
 stored in `app_settings`, so they can be changed without a restart and
 their credentials are encrypted at rest. The only env var either of the
 AI features cares about is `EMBOOKSHELF_SECRET_KEY`, which is what
