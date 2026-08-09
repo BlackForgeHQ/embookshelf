@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.5](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.4...v0.6.5) (2026-08-09)
+
+
+### Features
+
+* **converter:** bulk conversion from the settings card, with progress ([89b7f82](https://github.com/BlackForgeHQ/embookshelf/commit/89b7f82741221a1f0ae5143015da5d422707d9e8))
+
 ## [0.6.4](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.3...v0.6.4) (2026-08-09)
 
 
