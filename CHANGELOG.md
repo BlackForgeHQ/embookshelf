@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.6.4](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.3...v0.6.4) (2026-08-09)
+
+
+### Features
+
+* **converter:** sidecar walking skeleton — POST /convert, bytes to GFM ([735e047](https://github.com/BlackForgeHQ/embookshelf/commit/735e0472f0e4665ae3e91471be1bfe313ef1fd82)), closes [#285](https://github.com/BlackForgeHQ/embookshelf/issues/285)
+* **guides:** reading guides consume Markdown renditions for PDFs ([f7581f7](https://github.com/BlackForgeHQ/embookshelf/commit/f7581f7498792f78abf156bdef982e30577a92b0)), closes [#288](https://github.com/BlackForgeHQ/embookshelf/issues/288)
+* **handler:** ping the database in the healthcheck ([a7bf5cb](https://github.com/BlackForgeHQ/embookshelf/commit/a7bf5cb25e9ec03108999b8ec358178295efeaf7))
+* **handler:** report commit, uptime, pool and schema on /settings/instance ([34a890e](https://github.com/BlackForgeHQ/embookshelf/commit/34a890e4fdf59a88cd3207e10765fb545e3bee0f))
+* **migrator:** read the recorded schema version on demand ([43a2dbf](https://github.com/BlackForgeHQ/embookshelf/commit/43a2dbf75612023b4b35751a040d453f2c65040f))
+* **renditions:** markdown rendition pipeline — job, tracking row, status API ([fb7410a](https://github.com/BlackForgeHQ/embookshelf/commit/fb7410aa59c4f60fb14e1180183fa2038ae8a9df)), closes [#287](https://github.com/BlackForgeHQ/embookshelf/issues/287)
+* **service:** probe pool pressure, latency and schema version ([885c1b6](https://github.com/BlackForgeHQ/embookshelf/commit/885c1b6140cf39bc460d24efb42ccf1fc52f7f25))
+* **settings:** CONVERTER row + admin panel card with live reachability ([adce343](https://github.com/BlackForgeHQ/embookshelf/commit/adce343c7df75196744afc994db8dbb68f7c4536)), closes [#286](https://github.com/BlackForgeHQ/embookshelf/issues/286)
+* **ui:** About becomes an instance status board ([d609ff1](https://github.com/BlackForgeHQ/embookshelf/commit/d609ff18e9bab3cd03de554ce948c6188c4be6fd))
+* **ui:** derive the instance status rows as pure functions ([27385b6](https://github.com/BlackForgeHQ/embookshelf/commit/27385b6446d0b5f78bf70105263c87f1e8c01f28))
+* **ui:** type the new instance platform fields ([4d5121b](https://github.com/BlackForgeHQ/embookshelf/commit/4d5121bf8183347bd6c91bacc1452e4b73034c2a))
+
+
+### Bug Fixes
+
+* **converter:** compose healthcheck probes 127.0.0.1, not localhost ([83d14f6](https://github.com/BlackForgeHQ/embookshelf/commit/83d14f64c96762480a4af250b237328bcfdb3412))
+* **guides:** late conversion failures reach the guide panel; loud hash resolution ([8486f53](https://github.com/BlackForgeHQ/embookshelf/commit/8486f5318222c87005d07e9924584d9948df9ccc))
+* **migrator:** limit test DB connection pool to 1 ([a6298e3](https://github.com/BlackForgeHQ/embookshelf/commit/a6298e33b5992be6c12d92f8e372a11065c89c06))
+* **ui:** Instance panel says why, not just that, the header is blank ([b6dd187](https://github.com/BlackForgeHQ/embookshelf/commit/b6dd18718e26c8d1cf141da251731dffef580921))
+
+
+### Documentation
+
+* ADR-0033 converter sidecar extension + glossary terms ([1422969](https://github.com/BlackForgeHQ/embookshelf/commit/142296923cd4d4a45383d48c1083ded69f386fbe))
+* **converter:** ops guide, README coverage, prod compose service ([dd108d9](https://github.com/BlackForgeHQ/embookshelf/commit/dd108d9ea76904f481a567416d3a57a0e2d39480))
+* plan the instance status panel implementation ([1c5e38d](https://github.com/BlackForgeHQ/embookshelf/commit/1c5e38d53cf648991c10aec593c3e09f591c289c))
+* spec the Settings About panel as an instance status board ([23ba757](https://github.com/BlackForgeHQ/embookshelf/commit/23ba75750e5e3a875dce6fec169832e07e488326))
+
 ## [0.6.3](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.2...v0.6.3) (2026-07-30)
 
 
