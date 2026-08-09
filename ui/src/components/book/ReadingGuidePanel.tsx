@@ -3,9 +3,11 @@ import { useState } from "react"
 import type { ApiError } from "@/api/client"
 import type { ReadingGuide } from "@/api/guides"
 import { bookGuideQuery, generateBookGuide, saveBookGuide } from "@/api/guides"
+import { bookMarkdownQuery } from "@/api/markdown"
 import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
 import { messageForCode, useViewer } from "@/lib/affordance"
+import { isConvertibleFormat } from "@/lib/formats"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/Icon"
 
@@ -34,10 +36,26 @@ function toDraft(g: ReadingGuide): EditDraft {
   }
 }
 
-export function ReadingGuidePanel({ bookId }: { bookId: string }) {
+export function ReadingGuidePanel({
+  bookId,
+  format = "",
+}: {
+  bookId: string
+  format?: string
+}) {
   const viewer = useViewer()
 
   const guide = useApiQuery(bookGuideQuery(bookId))
+
+  // A Convertible-format book's guide feeds on its Markdown rendition
+  // (ADR-0033), so this panel is where a conversion that failed after
+  // the guide was enqueued must surface — the job dies quietly in the
+  // queue, and without this the panel would show "no guide yet" forever
+  // with the reason sitting unread on the rendition row.
+  const convertible = isConvertibleFormat(format)
+  const markdown = useApiQuery(bookMarkdownQuery(bookId), {
+    enabled: convertible,
+  })
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<EditDraft | null>(null)
@@ -65,6 +83,39 @@ export function ReadingGuidePanel({ bookId }: { bookId: string }) {
   }
 
   const g = guide.data
+
+  if (!g && convertible && markdown.data?.state === "failed") {
+    // Verbatim, per the loud-failure rule: the worker's words are the
+    // thing the admin has to act on.
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 640 }}>
+        <p className="t-small" style={{ color: "var(--color-destructive, #b91c1c)" }}>
+          Book text conversion failed: {markdown.data.error ?? "no further detail"}
+        </p>
+        {viewer.isAdmin && (
+          <div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={generateMut.isPending}
+              onClick={() => generateMut.mutate(bookId)}
+            >
+              <Icon name="sparkle" size={14} /> Retry reading guide
+            </Button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  if (!g && convertible && (markdown.data?.state === "pending" || markdown.data?.state === "running")) {
+    return (
+      <p className="t-small">
+        Converting the book's text for guide generation — this can take a
+        moment.
+      </p>
+    )
+  }
 
   if (!g) {
     if (!viewer.isAdmin) {

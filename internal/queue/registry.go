@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 
 	"github.com/riverqueue/river"
 
@@ -106,9 +107,14 @@ func registry(deps Deps) []registration {
 	// primaryHash answers "which bytes is this book, right now" — the
 	// provenance side of every derived artifact. Shared by the rendition
 	// worker (records it) and the guide's markdown feed (compares it).
+	// An unresolvable library degrades to "no hash" (the callers'
+	// documented empty-hash tolerance) but says so — silently absorbing
+	// an infrastructure failure into "reads as fresh" is the quiet
+	// failure ADR-0033 §5 exists to refuse.
 	primaryHash := func(ctx context.Context, book model.Book) []byte {
 		handle, err := deps.LibStore.For(ctx, book.LibraryID)
 		if err != nil {
+			slog.Warn("primary hash: resolve library", "book", book.ID, "err", err)
 			return nil
 		}
 		return handle.PrimaryContentHash(ctx, book)

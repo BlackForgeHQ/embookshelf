@@ -112,9 +112,13 @@ func (h *Handler) guidePreflightConvertible(c *gin.Context, s bookScope) bool {
 		return false
 	}
 	rendition, err := h.renditions.GetByBookID(c.Request.Context(), s.Book.ID)
-	if err != nil {
-		// Missing row included: the job requests the conversion itself.
+	if errors.Is(err, repo.ErrNotFound) {
+		// No row is fine: the guide job requests the conversion itself.
 		return true
+	}
+	if err != nil {
+		writeServerError(c, "read markdown rendition", err)
+		return false
 	}
 	if rendition.State == model.MarkdownRenditionFailed {
 		writeError(c, http.StatusBadGateway, rendition.Error)

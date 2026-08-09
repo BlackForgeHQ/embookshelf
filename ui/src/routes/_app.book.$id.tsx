@@ -357,7 +357,7 @@ function BookDetail() {
             </TabsContent>
 
             <TabsContent value="guide">
-              <ReadingGuidePanel bookId={id} />
+              <ReadingGuidePanel bookId={id} format={b.format} />
             </TabsContent>
 
             <TabsContent value="narration">
