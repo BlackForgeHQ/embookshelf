@@ -149,3 +149,98 @@ func TestBookMarkdownGenerateStartsRowAndEnqueues(t *testing.T) {
 		t.Fatalf("enqueued %T", q.enqueued[0])
 	}
 }
+
+// --- guide pre-flight over renditions (ADR-0033, #288) -------------------
+
+// TestBookGuideGenerateSurfacesConversionStateAtTheButton — a PDF whose
+// conversion already failed, or whose converter is off, is refused at
+// enqueue time with the same words the rendition row holds. The guide
+// UI shows the server message raw, so the verbatim string is the
+// feature.
+func TestBookGuideGenerateSurfacesConversionStateAtTheButton(t *testing.T) {
+	guideOn := func(f *fakeAppSettings) *fakeAppSettings {
+		f.guide = repo.ReadingGuideConfig{Enabled: true, BaseURL: "https://llm/v1", Model: "m"}
+		return f
+	}
+
+	t.Run("converter not configured", func(t *testing.T) {
+		h := &Handler{
+			renditions:  &fakeRenditions{missing: true},
+			appSettings: guideOn(&fakeAppSettings{}),
+			queue:       &captureQueue{},
+		}
+		c, rec := settingsCtx(t, http.MethodPost, "/api/v1/books/b1/guide", "")
+		h.BookGuideGenerate(c, pdfScope())
+
+		if httpStatus(c, rec) != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "converter extension is not configured") {
+			t.Fatalf("body = %s", rec.Body.String())
+		}
+	})
+
+	t.Run("conversion failed, verbatim", func(t *testing.T) {
+		h := &Handler{
+			renditions: &fakeRenditions{row: model.MarkdownRendition{
+				State: model.MarkdownRenditionFailed,
+				Error: "PDF has no extractable text (Scanned, 1 pages): OCR is required",
+			}},
+			appSettings: guideOn(&fakeAppSettings{
+				converter: repo.ConverterConfig{Enabled: true, BaseURL: "http://c"},
+			}),
+			queue: &captureQueue{},
+		}
+		c, rec := settingsCtx(t, http.MethodPost, "/api/v1/books/b1/guide", "")
+		h.BookGuideGenerate(c, pdfScope())
+
+		if httpStatus(c, rec) != http.StatusBadGateway {
+			t.Fatalf("status = %d, want 502 (body %s)", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "OCR is required") {
+			t.Fatalf("body = %s", rec.Body.String())
+		}
+	})
+
+	t.Run("missing rendition still enqueues the guide", func(t *testing.T) {
+		q := &captureQueue{}
+		h := &Handler{
+			renditions: &fakeRenditions{missing: true},
+			appSettings: guideOn(&fakeAppSettings{
+				converter: repo.ConverterConfig{Enabled: true, BaseURL: "http://c"},
+			}),
+			queue: q,
+		}
+		c, rec := settingsCtx(t, http.MethodPost, "/api/v1/books/b1/guide", "")
+		h.BookGuideGenerate(c, pdfScope())
+
+		if httpStatus(c, rec) != http.StatusAccepted {
+			t.Fatalf("status = %d, want 202 (body %s)", rec.Code, rec.Body.String())
+		}
+		if len(q.enqueued) != 1 {
+			t.Fatalf("enqueued %d, want the guide job", len(q.enqueued))
+		}
+	})
+
+	t.Run("EPUB skips the converter entirely", func(t *testing.T) {
+		q := &captureQueue{}
+		h := &Handler{
+			// No renditions store consulted, no converter config needed:
+			// the EPUB path must not depend on either.
+			renditions:  &fakeRenditions{missing: true},
+			appSettings: guideOn(&fakeAppSettings{}),
+			queue:       q,
+		}
+		s := pdfScope()
+		s.Book.Format = "EPUB"
+		c, rec := settingsCtx(t, http.MethodPost, "/api/v1/books/b1/guide", "")
+		h.BookGuideGenerate(c, s)
+
+		if httpStatus(c, rec) != http.StatusAccepted {
+			t.Fatalf("status = %d, want 202 (body %s)", rec.Code, rec.Body.String())
+		}
+		if len(q.enqueued) != 1 {
+			t.Fatalf("enqueued %d, want 1", len(q.enqueued))
+		}
+	})
+}

@@ -49,6 +49,8 @@ var allowedDivergence = map[string]bool{
 	"book_audiobooks":         true, // PG-only, post-freeze (ADR-0023, ADR-0025)
 	"book_audiobook_segments": true, // PG-only, post-freeze (ADR-0023, ADR-0028)
 
+	"book_markdown_renditions": true, // PG-only, post-freeze (ADR-0023, ADR-0033)
+
 	// PG-only column on a table that predates the freeze, so it needs a
 	// column-level entry rather than a table-level one. A second resume
 	// position, for the narration Rendition (#200).

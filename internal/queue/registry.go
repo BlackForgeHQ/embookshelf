@@ -103,6 +103,17 @@ func registry(deps Deps) []registration {
 	// wired once here rather than constructed per job.
 	openBook := service.NewLibraryBookOpener(deps.LibStore).Open
 
+	// primaryHash answers "which bytes is this book, right now" — the
+	// provenance side of every derived artifact. Shared by the rendition
+	// worker (records it) and the guide's markdown feed (compares it).
+	primaryHash := func(ctx context.Context, book model.Book) []byte {
+		handle, err := deps.LibStore.For(ctx, book.LibraryID)
+		if err != nil {
+			return nil
+		}
+		return handle.PrimaryContentHash(ctx, book)
+	}
+
 	// Settings is read per job so an admin can change model, language or
 	// cap without a restart. Registered unconditionally, like the email
 	// jobs: the worker itself refuses when the feature is disabled.
@@ -127,6 +138,36 @@ func registry(deps Deps) []registration {
 			_ = deps.Hub.Publish(sse.ReadingGuideUpdated{BookID: bookID})
 		}
 	}
+	// The guide consumes Markdown renditions when the pieces are wired
+	// (ADR-0033). Nil otherwise — the guide then behaves exactly as
+	// before the converter existed.
+	if deps.Renditions != nil && deps.Enqueuer != nil {
+		readingGuide.Markdown = &service.MarkdownFeed{
+			Renditions: deps.Renditions,
+			IsMissing:  func(err error) bool { return errors.Is(err, repo.ErrNotFound) },
+			Open: func(ctx context.Context, book model.Book, location string) (io.ReadCloser, error) {
+				handle, err := deps.LibStore.For(ctx, book.LibraryID)
+				if err != nil {
+					return nil, fmt.Errorf("resolve library: %w", err)
+				}
+				src, err := handle.Open(ctx, location)
+				if err != nil {
+					return nil, err
+				}
+				return struct {
+					io.Reader
+					io.Closer
+				}{io.NewSectionReader(src, 0, src.Size()), src}, nil
+			},
+			CurrentHash: primaryHash,
+			Request: func(ctx context.Context, bookID string) error {
+				if err := deps.Renditions.Start(ctx, bookID); err != nil {
+					return err
+				}
+				return deps.Enqueuer.Enqueue(ctx, jobs.MarkdownRenditionArgs{BookID: bookID})
+			},
+		}
+	}
 
 	// Markdown renditions (ADR-0033). Config per job for the same
 	// hot-reload reason as the guide; the library-touching steps are
@@ -142,14 +183,8 @@ func registry(deps Deps) []registration {
 			}
 			return handle.OpenBook(ctx, book)
 		},
-		SourceHash: func(ctx context.Context, book model.Book) []byte {
-			handle, err := deps.LibStore.For(ctx, book.LibraryID)
-			if err != nil {
-				return nil
-			}
-			return handle.PrimaryContentHash(ctx, book)
-		},
-		Convert: (&service.ConverterClient{}).Convert,
+		SourceHash: primaryHash,
+		Convert:    (&service.ConverterClient{}).Convert,
 		Place: func(ctx context.Context, book model.Book, srcPath string) (service.PlaceResult, error) {
 			handle, err := deps.LibStore.For(ctx, book.LibraryID)
 			if err != nil {

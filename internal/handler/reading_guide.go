@@ -76,6 +76,9 @@ func (h *Handler) BookGuideGenerate(c *gin.Context, s bookScope) {
 			"reading guides are not configured by the admin")
 		return
 	}
+	if !h.guidePreflightConvertible(c, s) {
+		return
+	}
 	q, ok := h.requireQueue(c)
 	if !ok {
 		return
@@ -85,6 +88,39 @@ func (h *Handler) BookGuideGenerate(c *gin.Context, s bookScope) {
 		return
 	}
 	c.Status(http.StatusAccepted)
+}
+
+// guidePreflightConvertible refuses at the button what the guide job
+// would only discover in thirty seconds (ADR-0033 §5): a Convertible
+// book whose text depends on an unconfigured converter, or on a
+// conversion that already failed — whose message travels verbatim,
+// because it is the thing the admin has to act on. Everything else —
+// missing, stale, converting — is the job's to handle; the guide's
+// retry is the wait.
+func (h *Handler) guidePreflightConvertible(c *gin.Context, s bookScope) bool {
+	if !model.Convertible(s.Book.Format) || h.renditions == nil {
+		return true
+	}
+	cfg, err := h.appSettings.GetConverter(c.Request.Context())
+	if err != nil {
+		writeServerError(c, "read converter settings", err)
+		return false
+	}
+	if !cfg.Enabled || cfg.BaseURL == "" {
+		writeErrorCode(c, http.StatusServiceUnavailable, CodeConverterDisabled,
+			"converter extension is not configured")
+		return false
+	}
+	rendition, err := h.renditions.GetByBookID(c.Request.Context(), s.Book.ID)
+	if err != nil {
+		// Missing row included: the job requests the conversion itself.
+		return true
+	}
+	if rendition.State == model.MarkdownRenditionFailed {
+		writeError(c, http.StatusBadGateway, rendition.Error)
+		return false
+	}
+	return true
 }
 
 type readingGuideEditReq struct {

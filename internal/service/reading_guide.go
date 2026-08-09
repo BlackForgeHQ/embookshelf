@@ -59,16 +59,22 @@ const DefaultGuideTextCap = 48_000
 // ReadingGuideService writes reading guides (ADR-0024). Single entry
 // point: Generate.
 type ReadingGuideService struct {
-	guides readingGuideStore
-	books  bookSourceOpener
-	llm    GuideCompleter
-	opts   ReadingGuideOptions
+	guides   readingGuideStore
+	books    bookSourceOpener
+	llm      GuideCompleter
+	markdown *MarkdownFeed
+	opts     ReadingGuideOptions
 }
 
+// NewReadingGuideService builds the generator. markdown may be nil —
+// an instance without the converter extension wired generates exactly
+// as before ADR-0033: EPUB from its own text, everything else from
+// metadata.
 func NewReadingGuideService(
 	guides readingGuideStore,
 	books bookSourceOpener,
 	completer GuideCompleter,
+	markdown *MarkdownFeed,
 	opts ReadingGuideOptions,
 ) *ReadingGuideService {
 	if opts.TextCap <= 0 {
@@ -77,7 +83,9 @@ func NewReadingGuideService(
 	if strings.TrimSpace(opts.Language) == "" {
 		opts.Language = "en"
 	}
-	return &ReadingGuideService{guides: guides, books: books, llm: completer, opts: opts}
+	return &ReadingGuideService{
+		guides: guides, books: books, llm: completer, markdown: markdown, opts: opts,
+	}
 }
 
 // ErrEmptyGuide is returned when the model answered in the right shape
@@ -92,7 +100,10 @@ var ErrEmptyGuide = errors.New("model returned an empty reading guide")
 // metadata-only guide rather than no guide, with SourceKind recording
 // which happened so the reader knows how much the model actually saw.
 func (s *ReadingGuideService) Generate(ctx context.Context, book model.Book) (model.ReadingGuide, error) {
-	text, kind := s.readSource(ctx, book)
+	text, kind, err := s.readSource(ctx, book)
+	if err != nil {
+		return model.ReadingGuide{}, err
+	}
 
 	var reply guideReply
 	if err := s.llm.ChatJSON(ctx, s.buildPrompt(book, text, kind), &reply); err != nil {
@@ -117,21 +128,39 @@ func (s *ReadingGuideService) Generate(ctx context.Context, book model.Book) (mo
 }
 
 // readSource returns the book text to prompt with and what it represents.
-// Never fails: an unreadable book degrades to a metadata-only guide,
-// because the alternative is a library where some books simply have no
-// guide and the user cannot tell why.
-func (s *ReadingGuideService) readSource(ctx context.Context, book model.Book) (string, model.GuideSource) {
-	if !strings.EqualFold(book.Format, "EPUB") {
-		// Not attempted rather than attempted-and-failed: PDF needs a
-		// dependency that still loses on scans, CBZ would need OCR and
-		// audio transcription. Opening the bytes to rediscover that would
-		// cost a full download per book on an S3-backed library.
-		return "", model.GuideSourceMetadata
+//
+// The EPUB path never fails: an unreadable EPUB degrades to a
+// metadata-only guide, because the alternative is a library where some
+// books simply have no guide and the user cannot tell why. The
+// Convertible path (ADR-0033) is the opposite by design: text is one
+// conversion away, so degrading silently to metadata is exactly the
+// quiet failure the loud-failure rule refuses. It errors instead —
+// pending while the rendition converts, or the conversion's own message
+// verbatim.
+func (s *ReadingGuideService) readSource(ctx context.Context, book model.Book) (string, model.GuideSource, error) {
+	if strings.EqualFold(book.Format, "EPUB") {
+		return s.readEPUBSource(ctx, book)
 	}
+	if s.markdown != nil && model.Convertible(book.Format) {
+		text, err := s.markdown.Text(ctx, book, s.opts.TextCap)
+		if err != nil {
+			return "", "", err
+		}
+		return text, model.GuideSourceFullText, nil
+	}
+	// Not attempted rather than attempted-and-failed: CBZ would need
+	// OCR, audio transcription; and with no converter wired a PDF is in
+	// the same place it was before ADR-0033. Opening the bytes to
+	// rediscover that would cost a full download per book on an
+	// S3-backed library.
+	return "", model.GuideSourceMetadata, nil
+}
+
+func (s *ReadingGuideService) readEPUBSource(ctx context.Context, book model.Book) (string, model.GuideSource, error) {
 	src, err := s.books.Open(ctx, book)
 	if err != nil {
 		slog.Warn("reading guide: open book", "book", book.ID, "err", err)
-		return "", model.GuideSourceMetadata
+		return "", model.GuideSourceMetadata, nil
 	}
 	defer func() { _ = src.Close() }()
 
@@ -140,12 +169,12 @@ func (s *ReadingGuideService) readSource(ctx context.Context, book model.Book) (
 		// Includes ErrNoReadableText — a picture book, or an archive we
 		// cannot parse. Both are metadata guides.
 		slog.Warn("reading guide: extract text", "book", book.ID, "err", err)
-		return "", model.GuideSourceMetadata
+		return "", model.GuideSourceMetadata, nil
 	}
 	if truncated {
 		slog.Debug("reading guide: text truncated", "book", book.ID, "cap", s.opts.TextCap)
 	}
-	return text, model.GuideSourceFullText
+	return text, model.GuideSourceFullText, nil
 }
 
 // guideReply is the JSON contract the prompt asks for. Field names are

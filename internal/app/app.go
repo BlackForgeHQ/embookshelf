@@ -488,6 +488,7 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 		AppSettings:  appSettingsRepo,
 		Guides:       guideRepo,
 		Renditions:   renditionRepo,
+		Enqueuer:     enq,
 		Audiobooks:   audiobookRepo,
 		AudiobookSvc: audiobookSvc,
 		Covers:       covers,

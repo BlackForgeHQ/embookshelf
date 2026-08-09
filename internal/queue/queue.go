@@ -77,6 +77,11 @@ type Deps struct {
 	Guides      *repo.BookReadingGuideRepo
 	// Markdown renditions (ADR-0033).
 	Renditions *repo.BookMarkdownRenditionRepo
+	// Enqueuer lets one worker request another's work — the guide job
+	// asking for a conversion. The late-bound Deferred from the
+	// composition root, resolved before Start, same as every other
+	// enqueue seam.
+	Enqueuer jobs.Enqueuer
 	// Audiobook generation (ADR-0025 — ADR-0028).
 	Audiobooks *repo.BookAudiobookRepo
 	// AudiobookSvc owns what a run does next. The segment and finalize

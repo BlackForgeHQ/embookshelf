@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -124,7 +125,7 @@ func newGuideHarness(t *testing.T, src storage.Source) *guideHarness {
 		}},
 		opener: &fakeBookOpener{src: src},
 	}
-	h.svc = NewReadingGuideService(h.store, h.opener, h.llm, ReadingGuideOptions{
+	h.svc = NewReadingGuideService(h.store, h.opener, h.llm, nil, ReadingGuideOptions{
 		Language: "en", TextCap: 48_000, Model: "test-model",
 	})
 	return h
@@ -324,5 +325,81 @@ func TestGuideSurfacesStoreFailure(t *testing.T) {
 
 	if _, err := h.svc.Generate(context.Background(), epubBook()); err == nil {
 		t.Fatal("Generate returned nil despite the write failing")
+	}
+}
+
+// --- markdown rendition consumption (ADR-0033, #288) ---------------------
+
+// TestGuideUsesMarkdownRenditionForPDF — a Convertible-format book with a
+// fresh rendition generates a full-text guide from the markdown, without
+// touching the book's own bytes.
+func TestGuideUsesMarkdownRenditionForPDF(t *testing.T) {
+	h := newGuideHarness(t, nil)
+	h.svc.markdown = &MarkdownFeed{
+		Renditions: &fakeRenditionReader{row: model.MarkdownRendition{
+			State: model.MarkdownRenditionReady, Location: "A/T/T.md",
+		}},
+		Open: func(context.Context, model.Book, string) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader("# Sand and spice, in markdown.")), nil
+		},
+	}
+	b := epubBook()
+	b.Format = "PDF"
+
+	got, err := h.svc.Generate(context.Background(), b)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if got.SourceKind != model.GuideSourceFullText {
+		t.Fatalf("SourceKind = %q, want full_text", got.SourceKind)
+	}
+	if !strings.Contains(h.llm.prompt(), "Sand and spice") {
+		t.Error("the rendition's markdown never reached the prompt")
+	}
+	if h.opener.opens != 0 {
+		t.Error("opened the PDF's own bytes despite a rendition being available")
+	}
+}
+
+// TestGuideSurfacesRenditionFailureVerbatim — never a silently degraded
+// metadata guide when text was one conversion away (ADR-0033 §5): the
+// conversion's own message is the error.
+func TestGuideSurfacesRenditionFailureVerbatim(t *testing.T) {
+	h := newGuideHarness(t, nil)
+	h.svc.markdown = &MarkdownFeed{
+		Renditions: &fakeRenditionReader{row: model.MarkdownRendition{
+			State: model.MarkdownRenditionFailed,
+			Error: "converter extension is not configured",
+		}},
+	}
+	b := epubBook()
+	b.Format = "PDF"
+
+	_, err := h.svc.Generate(context.Background(), b)
+	var failed *RenditionFailedError
+	if !errors.As(err, &failed) {
+		t.Fatalf("err = %v, want RenditionFailedError", err)
+	}
+	if failed.Msg != "converter extension is not configured" {
+		t.Fatalf("Msg = %q, want verbatim", failed.Msg)
+	}
+	if len(h.store.saved) != 0 {
+		t.Fatal("a guide row was written despite the failure")
+	}
+}
+
+// TestGuideWithoutFeedKeepsPreConverterBehaviour — no feed wired means
+// exactly the old world: PDF degrades to a metadata guide.
+func TestGuideWithoutFeedKeepsPreConverterBehaviour(t *testing.T) {
+	h := newGuideHarness(t, nil)
+	b := epubBook()
+	b.Format = "PDF"
+
+	got, err := h.svc.Generate(context.Background(), b)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if got.SourceKind != model.GuideSourceMetadata {
+		t.Fatalf("SourceKind = %q, want metadata", got.SourceKind)
 	}
 }

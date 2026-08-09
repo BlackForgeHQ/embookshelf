@@ -4,6 +4,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -32,8 +33,13 @@ type ReadingGuideDeps struct {
 	Books     bookReader
 	// Open yields the book's bytes through the library handle, which is
 	// what keeps guide generation working on S3-backed libraries.
-	Open    func(context.Context, model.Book) (storage.Source, error)
-	Publish func(bookID string)
+	Open func(context.Context, model.Book) (storage.Source, error)
+	// Markdown feeds a Convertible-format book's text from its rendition
+	// (ADR-0033). Nil when the converter extension is not wired — the
+	// guide then behaves exactly as before: EPUB from text, the rest
+	// from metadata.
+	Markdown *service.MarkdownFeed
+	Publish  func(bookID string)
 }
 
 // publish emits the guide's completion event. See SegmentDeps.publish
@@ -86,6 +92,7 @@ func ReadingGuide(ctx context.Context, a jobs.ReadingGuideArgs, deps ReadingGuid
 		deps.Guides,
 		bookOpenerFunc(deps.Open),
 		completer,
+		deps.Markdown,
 		service.ReadingGuideOptions{
 			Language: cfg.Language,
 			TextCap:  cfg.TextCap,
@@ -93,6 +100,14 @@ func ReadingGuide(ctx context.Context, a jobs.ReadingGuideArgs, deps ReadingGuid
 		},
 	)
 	if _, err := svc.Generate(ctx, book); err != nil {
+		// A failed conversion is permanent from here: retrying the guide
+		// cannot fix it, and the verbatim message is already on the
+		// rendition row for the admin. Pending stays retryable — River's
+		// backoff is the wait for the conversion to land.
+		var renditionFailed *service.RenditionFailedError
+		if errors.As(err, &renditionFailed) {
+			return fmt.Errorf("generate guide for %s: %w (%w)", a.BookID, err, jobs.ErrDoNotRetry)
+		}
 		return fmt.Errorf("generate guide for %s: %w", a.BookID, err)
 	}
 
