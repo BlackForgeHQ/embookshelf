@@ -3,7 +3,9 @@ name: Image
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    # v* is the app; embookshelf-converter-v* is the converter
+    # extension, released as its own package by release-please.
+    tags: ["v*", "embookshelf-converter-v*"]
   workflow_dispatch:
 
 permissions:
@@ -21,6 +23,9 @@ env:
 jobs:
   docker:
     name: build-push
+    # Not on converter tags: an embookshelf-converter-v* release changes
+    # nothing in the app image.
+    if: ${{ !startsWith(github.ref, 'refs/tags/embookshelf-converter-v') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -123,3 +128,60 @@ jobs:
             gh release create "$GITHUB_REF_NAME" "$SBOM_FILE" \
               --generate-notes
           fi
+
+  # The converter extension ships as its own image (ADR-0033): a
+  # separately deployed sidecar wants a separately versioned artifact,
+  # released by release-please as the embookshelf-converter component
+  # (tags embookshelf-converter-v*). Skipped on app tags — a v* release
+  # changes nothing in the sidecar.
+  converter:
+    name: build-push-converter
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      packages: write        # push to GHCR
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Component tags carry the package name, so the semver types can't
+      # parse them; each match entry extracts one tag shape instead.
+      - name: Compute tags & labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-converter
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-,format=short
+            type=match,pattern=embookshelf-converter-v(.*),group=1
+            type=match,pattern=embookshelf-converter-v(\d+\.\d+),group=1
+            type=match,pattern=embookshelf-converter-v(\d+),group=1
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/embookshelf-converter-v') && !contains(github.ref_name, '-') }}
+          labels: |
+            org.opencontainers.image.title=embookshelf-converter
+            org.opencontainers.image.description=embookshelf converter extension — document bytes in, GitHub-Flavored Markdown out (ADR-0033)
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build & push
+        uses: docker/build-push-action@v7
+        with:
+          context: ./extensions/converter
+          file: ./extensions/converter/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=converter
+          cache-to: type=gha,mode=max,scope=converter
