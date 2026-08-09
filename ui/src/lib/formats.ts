@@ -28,6 +28,16 @@ export const KINDLE_ELIGIBLE_FORMATS = [
   "PDF",
 ] as const
 
+/**
+ * The formats the converter extension turns into Markdown renditions
+ * (ADR-0033): what anydoc converts minus what native extraction already
+ * serves. EPUB is deliberately absent — routing it through an optional
+ * sidecar would be the regression ADR-0033 §2 rejects.
+ */
+export const CONVERTIBLE_FORMATS = [
+  "PDF",
+] as const
+
 /** Which reading surface opens a format. */
 export type ReaderKind = "text" | "comic" | "audio"
 
@@ -91,6 +101,21 @@ export function isKindleEligibleFormat(format: string): boolean {
 /** "EPUB and PDF", for the sentence explaining why the button is off. */
 export function kindleEligibleFormatList(): string {
   return formatList([...KINDLE_ELIGIBLE_FORMATS])
+}
+
+/**
+ * Whether the converter extension accepts this book's format. The first
+ * of the Convertible format's three gates — the handler and the worker
+ * hold the other two.
+ */
+export function isConvertibleFormat(format: string): boolean {
+  const want = format.trim().toUpperCase()
+  return CONVERTIBLE_FORMATS.some((f) => f === want)
+}
+
+/** "PDF", for the sentence explaining why conversion is refused. */
+export function convertibleFormatList(): string {
+  return formatList([...CONVERTIBLE_FORMATS])
 }
 
 function formatList(names: Array<string>): string {

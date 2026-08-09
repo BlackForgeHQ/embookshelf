@@ -412,6 +412,7 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 		AppSettings: appSettingsRepo,
 	})
 	guideRepo := repo.NewBookReadingGuideRepo(dbh)
+	renditionRepo := repo.NewBookMarkdownRenditionRepo(dbh)
 	// Reading guide bulk runs dispatch one job per book. Text cap comes
 	// from the settings row at start time via the job; the runner only
 	// needs it to size the estimate. Same absent-row reasoning as
@@ -486,6 +487,7 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 		Hub:          hub,
 		AppSettings:  appSettingsRepo,
 		Guides:       guideRepo,
+		Renditions:   renditionRepo,
 		Audiobooks:   audiobookRepo,
 		AudiobookSvc: audiobookSvc,
 		Covers:       covers,
@@ -510,6 +512,7 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 			enrichSvc, providerCfgSvc, searchSvc,
 			statsSvc, readingStatsSvc, annotationSvc,
 			guideRepo, guideRunner,
+			renditionRepo,
 			audiobookSvc,
 		),
 		handler.NewAccountDeps(authSvc, userRepo, deviceSvc, appSettingsRepo),

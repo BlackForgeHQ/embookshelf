@@ -65,6 +65,7 @@ func TestRegistryCoversEveryJobKindExactlyOnce(t *testing.T) {
 		jobs.LibraryScanArgs{}.Kind(),
 		jobs.SendToKindleArgs{}.Kind(),
 		jobs.ReadingGuideArgs{}.Kind(),
+		jobs.MarkdownRenditionArgs{}.Kind(),
 		jobs.AudiobookSegmentArgs{}.Kind(),
 		jobs.AudiobookFinalizeArgs{}.Kind(),
 	}
@@ -103,6 +104,7 @@ func TestRegistryRecordsEachJobsQueue(t *testing.T) {
 		jobs.LibraryScanArgs{}.Kind():        "default",
 		jobs.SendToKindleArgs{}.Kind():       "default",
 		jobs.ReadingGuideArgs{}.Kind():       "default",
+		jobs.MarkdownRenditionArgs{}.Kind():  "default",
 		jobs.AudiobookSegmentArgs{}.Kind():   jobs.AudiobookQueue,
 		jobs.AudiobookFinalizeArgs{}.Kind():  jobs.AudiobookQueue,
 	}

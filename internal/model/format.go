@@ -61,6 +61,13 @@ type FormatSpec struct {
 	// and a single set standing for both would silently make PDF
 	// narratable the day Amazon changed its mind.
 	KindleEligible bool
+	// Convertible is whether the converter extension can turn the format
+	// into a Markdown rendition (ADR-0033): the intersection of what
+	// anydoc converts and what embookshelf can hold but not read
+	// natively. PDF alone today. EPUB is deliberately excluded — native
+	// extraction serves it with no sidecar (gap-filler routing, ADR-0033
+	// §2) — and MOBI/AZW3/FB2 are outside anydoc's set.
+	Convertible bool
 }
 
 // FormatSpecs is every format the library can hold. The client keeps one
@@ -74,7 +81,10 @@ var FormatSpecs = []FormatSpec{
 		Format: "EPUB", Ext: ".epub", MIME: "application/epub+zip", Reader: ReaderText,
 		Narratable: true, KindleEligible: true,
 	},
-	{Format: "PDF", Ext: ".pdf", MIME: "application/pdf", Reader: ReaderText, KindleEligible: true},
+	{
+		Format: "PDF", Ext: ".pdf", MIME: "application/pdf", Reader: ReaderText,
+		KindleEligible: true, Convertible: true,
+	},
 	{Format: "CBZ", Ext: ".cbz", MIME: "application/vnd.comicbook+zip", Reader: ReaderComic},
 	{Format: "MP3", Ext: ".mp3", MIME: "audio/mpeg", Reader: ReaderAudio},
 	// Apple uses audio/mp4; the m4b container is identical to m4a.
@@ -142,6 +152,19 @@ func KindleEligible(format string) bool {
 	return ok && s.KindleEligible
 }
 
+// Convertible reports whether the converter extension can produce a
+// Markdown rendition from a book's format (ADR-0033).
+func Convertible(format string) bool {
+	s, ok := LookupFormat(format)
+	return ok && s.Convertible
+}
+
+// ConvertibleFormats lists the formats the converter extension accepts,
+// in table order.
+func ConvertibleFormats() []string {
+	return formatsWhere(func(s FormatSpec) bool { return s.Convertible })
+}
+
 // NarratableFormats lists the formats that can be read aloud, in table
 // order.
 func NarratableFormats() []string {
@@ -167,6 +190,12 @@ func NarratableFormatList() string {
 // tooltip each spelled out.
 func KindleEligibleFormatList() string {
 	return formatList(KindleEligibleFormats())
+}
+
+// ConvertibleFormatList does the same for the converter extension's
+// refusal message (ADR-0033).
+func ConvertibleFormatList() string {
+	return formatList(ConvertibleFormats())
 }
 
 func formatsWhere(pred func(FormatSpec) bool) []string {

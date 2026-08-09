@@ -150,6 +150,13 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.PUT("/books/:id/guide",
 				auth.RequireRole(model.RoleAdmin), h.bookScoped(h.BookGuideEdit))
 
+			// Markdown renditions (ADR-0033). Same read/spend split as
+			// the guide: any signed-in user may look, converting spends
+			// sidecar CPU and is the admin's call.
+			authed.GET("/books/:id/markdown", h.bookScoped(h.BookMarkdownGet))
+			authed.POST("/books/:id/markdown",
+				auth.RequireRole(model.RoleAdmin), h.bookScoped(h.BookMarkdownGenerate))
+
 			// Generated narration (ADR-0025 — ADR-0028). Reading the
 			// status is open to any signed-in user, because anyone can
 			// play a finished audiobook; everything that spends money is

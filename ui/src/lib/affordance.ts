@@ -3,7 +3,11 @@ import { meQuery } from "@/api/auth"
 import type { ApiErrorCode } from "@/api/client"
 import { useApiQuery } from "@/api/query"
 import type { SettingsSectionKey } from "@/components/settings/sections"
-import { kindleEligibleFormatList, narratableFormatList } from "@/lib/formats"
+import {
+  convertibleFormatList,
+  kindleEligibleFormatList,
+  narratableFormatList,
+} from "@/lib/formats"
 
 /**
  * Every code the server declares, mirroring handler.AllErrorCodes.
@@ -22,6 +26,8 @@ export const ALL_ERROR_CODES = [
   "GUIDES_DISABLED",
   "AUDIOBOOKS_DISABLED",
   "FORMAT_NOT_NARRATABLE",
+  "CONVERTER_DISABLED",
+  "FORMAT_NOT_CONVERTIBLE",
 ] as const satisfies ReadonlyArray<ApiErrorCode>
 
 /** Who is looking, which is what decides what an obstacle looks like. */
@@ -153,6 +159,20 @@ export function affordanceFor(
           "Reading guides are not configured. Point them at an LLM endpoint to enable them.",
         label: "Configure reading guides",
       })
+
+    case "CONVERTER_DISABLED":
+      return instanceWide(viewer, {
+        panel: "converter",
+        adminReason:
+          "The converter extension is not configured. Point it at the sidecar to enable Markdown conversion.",
+        label: "Configure converter",
+      })
+
+    case "FORMAT_NOT_CONVERTIBLE":
+      return {
+        kind: "explain",
+        reason: `Only ${convertibleFormatList()} books can be converted to Markdown`,
+      }
 
     // One branch, three causes: the admin has generation switched off,
     // narration is not wired into this deployment at all, and the

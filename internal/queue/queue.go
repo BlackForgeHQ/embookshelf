@@ -75,6 +75,8 @@ type Deps struct {
 	// changes take effect without a restart.
 	AppSettings *repo.AppSettingsRepo
 	Guides      *repo.BookReadingGuideRepo
+	// Markdown renditions (ADR-0033).
+	Renditions *repo.BookMarkdownRenditionRepo
 	// Audiobook generation (ADR-0025 — ADR-0028).
 	Audiobooks *repo.BookAudiobookRepo
 	// AudiobookSvc owns what a run does next. The segment and finalize

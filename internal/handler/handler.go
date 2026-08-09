@@ -34,6 +34,7 @@ type Handler struct {
 	annotations *service.AnnotationService
 	guides      *repo.BookReadingGuideRepo
 	guideRunner *service.GuideRunner
+	renditions  markdownRenditionStore
 	audiobooks  *service.AudiobookService
 	// oidcSettings applies a settings submission as one decision (#195).
 	oidcSettings *service.OIDCSettingsService
@@ -159,6 +160,9 @@ type DiscoveryDeps struct {
 	annotations  *service.AnnotationService
 	guides       *repo.BookReadingGuideRepo
 	guideRunner  *service.GuideRunner
+	// Markdown renditions (ADR-0033): derived from a book like a guide,
+	// so they live in the same group.
+	renditions *repo.BookMarkdownRenditionRepo
 	// Audiobook generation (ADR-0025 — ADR-0028). Narration is discovery
 	// in the same sense a reading guide is: derived from a book rather
 	// than stored with it.
@@ -175,12 +179,14 @@ func NewDiscoveryDeps(
 	annotations *service.AnnotationService,
 	guides *repo.BookReadingGuideRepo,
 	guideRunner *service.GuideRunner,
+	renditions *repo.BookMarkdownRenditionRepo,
 	audiobooks *service.AudiobookService,
 ) DiscoveryDeps {
 	return DiscoveryDeps{
 		enrich: enrich, providerCfg: providerCfg, search: search,
 		stats: stats, readingStats: readingStats, annotations: annotations,
 		guides: guides, guideRunner: guideRunner,
+		renditions: renditions,
 		audiobooks: audiobooks,
 	}
 }
@@ -263,6 +269,7 @@ func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailD
 		enrich: d.enrich, providerCfg: d.providerCfg, search: d.search,
 		stats: d.stats, readingStats: d.readingStats, annotations: d.annotations,
 		guides: d.guides, guideRunner: d.guideRunner,
+		renditions: newMarkdownRenditionStore(d.renditions),
 		audiobooks: d.audiobooks,
 
 		auth: a.auth, users: a.users, devices: a.devices,

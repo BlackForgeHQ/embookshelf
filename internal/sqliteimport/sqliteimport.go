@@ -73,12 +73,13 @@ const jobsTable = "jobs"
 // considered omission from a forgotten one, which is exactly the
 // ambiguity that makes a hand-maintained tableOrder risky.
 var excludedTables = map[string]string{
-	"book_reading_guides":     "added after ADR-0023 froze SQLite, so no source database can contain it; reading guides are regenerated, not migrated",
-	"book_audiobooks":         "added after ADR-0023 froze SQLite, so no source database can contain it; a narration is regenerated from the book, not migrated",
-	"book_audiobook_segments": "child of book_audiobooks, excluded for the same reason",
-	jobsTable:                 "SQLite-only polling queue; River owns its own tables on Postgres, so queued work cannot transfer",
-	"schema_migrations":       "the migrator's own bookkeeping, rebuilt by migrating the target",
-	"library_paths":           "dropped by migration 000018; libraries.path replaced it",
+	"book_reading_guides":      "added after ADR-0023 froze SQLite, so no source database can contain it; reading guides are regenerated, not migrated",
+	"book_audiobooks":          "added after ADR-0023 froze SQLite, so no source database can contain it; a narration is regenerated from the book, not migrated",
+	"book_audiobook_segments":  "child of book_audiobooks, excluded for the same reason",
+	"book_markdown_renditions": "added after ADR-0023 froze SQLite, so no source database can contain it; a Markdown rendition is regenerated from the book, not migrated",
+	jobsTable:                  "SQLite-only polling queue; River owns its own tables on Postgres, so queued work cannot transfer",
+	"schema_migrations":        "the migrator's own bookkeeping, rebuilt by migrating the target",
+	"library_paths":            "dropped by migration 000018; libraries.path replaced it",
 }
 
 // excludedPrefixes covers table families owned by a dependency rather

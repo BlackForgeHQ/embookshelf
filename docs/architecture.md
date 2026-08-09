@@ -469,6 +469,10 @@ exists.
   its own prefix (ADR-0030).
 - `kindle.send` — mails one book to a device address (ADR-0021).
 - `guide.generate` — the LLM call behind a reading guide (ADR-0024).
+- `markdown.render` — converts a Convertible-format book (PDF) into its
+  Markdown rendition through the converter extension: open the bytes,
+  POST them to the sidecar, place the answer in the book's folder,
+  record provenance on `book_markdown_renditions` (ADR-0033).
 - `audiobook.segment` — one engine call's worth of narration: extract,
   synthesize, stage the MP3, report the result to `AudiobookService`,
   which owns what the run does next (ADR-0028).

@@ -145,6 +145,18 @@ type ReadingGuideArgs struct {
 // Kind is the stable job name.
 func (ReadingGuideArgs) Kind() string { return "guide.generate" }
 
+// MarkdownRenditionArgs is the payload for converting one book's file
+// into a Markdown rendition (ADR-0033). BookID only, for the same
+// reason as ReadingGuideArgs: the worker re-reads the row, so a
+// re-import between enqueue and dispatch is reflected rather than baked
+// into the payload.
+type MarkdownRenditionArgs struct {
+	BookID string `json:"book_id"`
+}
+
+// Kind is the stable job name.
+func (MarkdownRenditionArgs) Kind() string { return "markdown.render" }
+
 // AudiobookSegmentArgs addresses one unit of synthesis.
 //
 // Book and seq rather than the segment's own id, because that pair is

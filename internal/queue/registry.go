@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/riverqueue/river"
 
@@ -127,6 +128,37 @@ func registry(deps Deps) []registration {
 		}
 	}
 
+	// Markdown renditions (ADR-0033). Config per job for the same
+	// hot-reload reason as the guide; the library-touching steps are
+	// per-op closures so the worker holds no LibraryStore.
+	markdownRendition := task.MarkdownRenditionDeps{
+		Config:     deps.AppSettings.GetConverter,
+		Renditions: deps.Renditions,
+		Books:      deps.Books,
+		Open: func(ctx context.Context, book model.Book) (io.Reader, int64, io.Closer, error) {
+			handle, err := deps.LibStore.For(ctx, book.LibraryID)
+			if err != nil {
+				return nil, 0, nil, fmt.Errorf("resolve library: %w", err)
+			}
+			return handle.OpenBook(ctx, book)
+		},
+		SourceHash: func(ctx context.Context, book model.Book) []byte {
+			handle, err := deps.LibStore.For(ctx, book.LibraryID)
+			if err != nil {
+				return nil
+			}
+			return handle.PrimaryContentHash(ctx, book)
+		},
+		Convert: (&service.ConverterClient{}).Convert,
+		Place: func(ctx context.Context, book model.Book, srcPath string) (service.PlaceResult, error) {
+			handle, err := deps.LibStore.For(ctx, book.LibraryID)
+			if err != nil {
+				return service.PlaceResult{}, fmt.Errorf("resolve library: %w", err)
+			}
+			return handle.PlaceMarkdown(ctx, book, srcPath)
+		},
+	}
+
 	// publishAudiobook is the SSE side of every audiobook state change —
 	// segment progress and finalize both report on the same topic.
 	publishAudiobook := func(bookID string) {
@@ -190,6 +222,9 @@ func registry(deps Deps) []registration {
 		}),
 		register(func(ctx context.Context, a jobs.ReadingGuideArgs, _ jobs.Attempt) error {
 			return task.ReadingGuide(ctx, a, readingGuide)
+		}),
+		register(func(ctx context.Context, a jobs.MarkdownRenditionArgs, _ jobs.Attempt) error {
+			return task.MarkdownRendition(ctx, a, markdownRendition)
 		}),
 		register(func(ctx context.Context, a jobs.AudiobookSegmentArgs, at jobs.Attempt) error {
 			return task.AudiobookSegment(ctx, a, at, segment)

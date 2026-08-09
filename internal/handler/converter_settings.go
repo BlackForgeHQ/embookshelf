@@ -82,7 +82,7 @@ func (h *Handler) SettingsConverterHealth(c *gin.Context) {
 		c.JSON(http.StatusOK, converterHealthDTO{Status: "unreachable", Error: err.Error()})
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
 	if resp.StatusCode != http.StatusOK {
 		c.JSON(http.StatusOK, converterHealthDTO{
