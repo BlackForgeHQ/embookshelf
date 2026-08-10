@@ -809,6 +809,10 @@ The Rust sidecar in `extensions/converter` (axum over the anydoc library) that t
 
 The markdown produced from a book's file by the [[Converter extension]] — a derived artifact in the sense of [[Rendition]], stored as a file through `storage.Storage` beside the book, tracked by a DB row carrying the source [[Content hash]] and converter version. When the recorded hash no longer matches the book's current file, the rendition is stale, labelled, never silently reused as current. Consumed by AI features (reading guides, tagging, future retrieval); the planned markdown → EPUB stage reads it too.
 
+### Generated EPUB
+
+The EPUB rendered from a PDF book's [[Markdown rendition]] by the [[Converter extension]] (`POST /render/epub`, ADR-0034). A `files` row on the same Book — the ADR-0025 answer reapplied: a user deliverable, not machine feed — tracked by `book_epub_renditions` (state, verbatim error, `file_id` pointer, PDF-hash provenance). `books.format` deliberately stays `PDF`: nothing recomputes primary format, the reader keeps opening the PDF, and in-app reading of the generated EPUB is a deferred rendition-dispatch feature. One per book; regeneration overwrites. **Distinct** from an ingested EPUB (arrived through BookDrop) and from the [[Markdown rendition]] it is rendered from.
+
 ### Convertible format
 
 The set of formats routed to the [[Converter extension]]: formats embookshelf can hold but not read natively that anydoc converts — **PDF alone today**, since DOCX/RTF/ODT have no ingest path and MOBI/AZW3/FB2 are outside anydoc's set. Declared once per tier (`model.FormatSpecs.Convertible`, `ui formats.ts CONVERTIBLE_FORMATS`) and held together by a parity test. **EPUB is deliberately not in it**: native extraction (`fileproc`, `textsplit`) already serves EPUB with no sidecar, and routing it through the converter would make an EPUB-only library depend on an optional process it never needed. A third format set beside [[Eligible format]] and Narratable format — never reuse one for another.

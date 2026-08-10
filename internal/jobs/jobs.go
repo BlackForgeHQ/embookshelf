@@ -157,6 +157,16 @@ type MarkdownRenditionArgs struct {
 // Kind is the stable job name.
 func (MarkdownRenditionArgs) Kind() string { return "markdown.render" }
 
+// EpubRenderArgs is the payload for rendering one book's generated
+// EPUB from its Markdown rendition (ADR-0034). BookID only, same
+// re-read reasoning as the other derived-artifact jobs.
+type EpubRenderArgs struct {
+	BookID string `json:"book_id"`
+}
+
+// Kind is the stable job name.
+func (EpubRenderArgs) Kind() string { return "epub.render" }
+
 // AudiobookSegmentArgs addresses one unit of synthesis.
 //
 // Book and seq rather than the segment's own id, because that pair is

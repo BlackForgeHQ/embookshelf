@@ -155,6 +155,12 @@ func (h *Handler) Engine() *gin.Engine {
 			// sidecar CPU and is the admin's call.
 			authed.GET("/books/:id/markdown", h.bookScoped(h.BookMarkdownGet))
 			authed.GET("/books/:id/markdown/file", h.bookScoped(h.BookMarkdownDownload))
+
+			// Generated EPUBs (ADR-0034). Download rides BookFile's
+			// ?rendition=epub selector, beside the audio one.
+			authed.GET("/books/:id/epub", h.bookScoped(h.BookEpubGet))
+			authed.POST("/books/:id/epub",
+				auth.RequireRole(model.RoleAdmin), h.bookScoped(h.BookEpubGenerate))
 			authed.POST("/books/:id/markdown",
 				auth.RequireRole(model.RoleAdmin), h.bookScoped(h.BookMarkdownGenerate))
 

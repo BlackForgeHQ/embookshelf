@@ -473,6 +473,11 @@ exists.
   Markdown rendition through the converter extension: open the bytes,
   POST them to the sidecar, place the answer in the book's folder,
   record provenance on `book_markdown_renditions` (ADR-0033).
+- `epub.render` — renders a PDF book's generated EPUB from its Markdown
+  rendition via the sidecar's `/render/epub`, places it as a `files`
+  row on the same book, records provenance on `book_epub_renditions`
+  (ADR-0034). Chains through the markdown rendition's request-and-wait
+  pattern when the markdown is missing or stale.
 - `audiobook.segment` — one engine call's worth of narration: extract,
   synthesize, stage the MP3, report the result to `AudiobookService`,
   which owns what the run does next (ADR-0028).

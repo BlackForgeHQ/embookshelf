@@ -413,6 +413,7 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 	})
 	guideRepo := repo.NewBookReadingGuideRepo(dbh)
 	renditionRepo := repo.NewBookMarkdownRenditionRepo(dbh)
+	epubRenditionRepo := repo.NewBookEpubRenditionRepo(dbh)
 	// Reading guide bulk runs dispatch one job per book. Text cap comes
 	// from the settings row at start time via the job; the runner only
 	// needs it to size the estimate. Same absent-row reasoning as
@@ -475,24 +476,25 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 	// Background queue, backed by River. Constructed, not started —
 	// Start owns that, together with resolving enq.
 	q, err := queue.New(ctx, dbh, queue.Deps{
-		BookDropSvc:  bdropSvc,
-		Enrich:       enrichSvc,
-		LibSvc:       libSvc,
-		Resolver:     storageResolver,
-		LibStore:     libStore,
-		FileRepo:     fileRepo,
-		Books:        bookRepo,
-		Users:        userRepo,
-		Notifier:     notifier,
-		Hub:          hub,
-		AppSettings:  appSettingsRepo,
-		Guides:       guideRepo,
-		Renditions:   renditionRepo,
-		Enqueuer:     enq,
-		Audiobooks:   audiobookRepo,
-		AudiobookSvc: audiobookSvc,
-		Covers:       covers,
-		Staging:      staging,
+		BookDropSvc:    bdropSvc,
+		Enrich:         enrichSvc,
+		LibSvc:         libSvc,
+		Resolver:       storageResolver,
+		LibStore:       libStore,
+		FileRepo:       fileRepo,
+		Books:          bookRepo,
+		Users:          userRepo,
+		Notifier:       notifier,
+		Hub:            hub,
+		AppSettings:    appSettingsRepo,
+		Guides:         guideRepo,
+		Renditions:     renditionRepo,
+		EpubRenditions: epubRenditionRepo,
+		Enqueuer:       enq,
+		Audiobooks:     audiobookRepo,
+		AudiobookSvc:   audiobookSvc,
+		Covers:         covers,
+		Staging:        staging,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("queue: %w", err)
@@ -514,6 +516,7 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 			statsSvc, readingStatsSvc, annotationSvc,
 			guideRepo, guideRunner,
 			renditionRepo,
+			epubRenditionRepo,
 			service.NewConversionRunner(renditionRepo, enq),
 			audiobookSvc,
 		),

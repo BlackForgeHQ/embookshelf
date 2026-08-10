@@ -50,6 +50,7 @@ var allowedDivergence = map[string]bool{
 	"book_audiobook_segments": true, // PG-only, post-freeze (ADR-0023, ADR-0028)
 
 	"book_markdown_renditions": true, // PG-only, post-freeze (ADR-0023, ADR-0033)
+	"book_epub_renditions":     true, // PG-only, post-freeze (ADR-0023, ADR-0034)
 
 	// PG-only column on a table that predates the freeze, so it needs a
 	// column-level entry rather than a table-level one. A second resume

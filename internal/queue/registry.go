@@ -144,11 +144,13 @@ func registry(deps Deps) []registration {
 			_ = deps.Hub.Publish(sse.ReadingGuideUpdated{BookID: bookID})
 		}
 	}
-	// The guide consumes Markdown renditions when the pieces are wired
-	// (ADR-0033). Nil otherwise — the guide then behaves exactly as
-	// before the converter existed.
+	// The markdown feed is the shared consumer seam (ADR-0033): the
+	// guide reads through it, and the EPUB render chains through it
+	// (ADR-0034 §5). Built once when the pieces are wired; nil
+	// otherwise — consumers then behave as before the converter existed.
+	var markdownFeed *service.MarkdownFeed
 	if deps.Renditions != nil && deps.Enqueuer != nil {
-		readingGuide.Markdown = &service.MarkdownFeed{
+		markdownFeed = &service.MarkdownFeed{
 			Renditions: deps.Renditions,
 			IsMissing:  func(err error) bool { return errors.Is(err, repo.ErrNotFound) },
 			Open: func(ctx context.Context, book model.Book, location string) (io.ReadCloser, error) {
@@ -177,6 +179,7 @@ func registry(deps Deps) []registration {
 			},
 		}
 	}
+	readingGuide.Markdown = markdownFeed
 
 	// Markdown renditions (ADR-0033). Config per job for the same
 	// hot-reload reason as the guide; the library-touching steps are
@@ -201,6 +204,25 @@ func registry(deps Deps) []registration {
 			}
 			return handle.PlaceMarkdown(ctx, book, srcPath)
 		},
+	}
+
+	// Generated EPUBs (ADR-0034): the second converter stage, chained
+	// through the same markdown feed the guide consumes.
+	epubRender := task.EpubRenderDeps{
+		Config:     deps.AppSettings.GetConverter,
+		Renditions: deps.EpubRenditions,
+		Books:      deps.Books,
+		Markdown:   markdownFeed,
+		SourceHash: primaryHash,
+		Render:     (&service.ConverterClient{}).RenderEPUB,
+		Place: func(ctx context.Context, book model.Book, srcPath string) (service.PlaceResult, error) {
+			handle, err := deps.LibStore.For(ctx, book.LibraryID)
+			if err != nil {
+				return service.PlaceResult{}, fmt.Errorf("resolve library: %w", err)
+			}
+			return handle.PlaceEPUB(ctx, book, srcPath)
+		},
+		Files: deps.FileRepo,
 	}
 
 	// publishAudiobook is the SSE side of every audiobook state change —
@@ -269,6 +291,9 @@ func registry(deps Deps) []registration {
 		}),
 		register(func(ctx context.Context, a jobs.MarkdownRenditionArgs, _ jobs.Attempt) error {
 			return task.MarkdownRendition(ctx, a, markdownRendition)
+		}),
+		register(func(ctx context.Context, a jobs.EpubRenderArgs, _ jobs.Attempt) error {
+			return task.EpubRender(ctx, a, epubRender)
 		}),
 		register(func(ctx context.Context, a jobs.AudiobookSegmentArgs, at jobs.Attempt) error {
 			return task.AudiobookSegment(ctx, a, at, segment)

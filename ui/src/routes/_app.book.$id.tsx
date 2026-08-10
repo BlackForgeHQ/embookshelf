@@ -384,7 +384,12 @@ function BookDetail() {
                   gap: 24,
                 }}
               >
-                <VersionRows bookId={id} title={b.title} format={b.format} />
+                <VersionRows
+                  bookId={id}
+                  title={b.title}
+                  format={b.format}
+                  isAdmin={viewer.isAdmin}
+                />
 
                 {viewer.isAdmin && (
                   <div

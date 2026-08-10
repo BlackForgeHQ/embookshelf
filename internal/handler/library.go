@@ -503,6 +503,10 @@ func (h *Handler) BookFile(c *gin.Context, s bookScope) {
 		h.serveNarrationRendition(c, book)
 		return
 	}
+	if c.Query("rendition") == renditionEpub {
+		h.serveEpubRendition(c, book)
+		return
+	}
 
 	if book.Path == "" {
 		writeError(c, http.StatusNotFound, "no file on disk for this book")

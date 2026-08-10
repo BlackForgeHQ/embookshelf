@@ -3,6 +3,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -113,4 +114,71 @@ func convertErrorMessage(resp *http.Response) string {
 		return parsed.Error
 	}
 	return string(raw)
+}
+
+// EpubRenderRequest is /render/epub's JSON body (ADR-0034 §3): the
+// markdown plus the metadata the OPF needs.
+type EpubRenderRequest struct {
+	Markdown string `json:"markdown"`
+	Title    string `json:"title"`
+	Author   string `json:"author"`
+	Language string `json:"language"`
+}
+
+// RenderEPUB posts markdown to the sidecar and stages the EPUB answer
+// in a temp file. Error mapping mirrors Convert: 422 is the document's
+// fault and permanent, everything else is the wire's and retried.
+func (c *ConverterClient) RenderEPUB(ctx context.Context, baseURL string, req EpubRenderRequest) (ConvertResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, convertTimeout)
+	defer cancel()
+
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return ConvertResult{}, fmt.Errorf("encode render request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/render/epub", bytes.NewReader(payload))
+	if err != nil {
+		return ConvertResult{}, fmt.Errorf("build render request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := c.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return ConvertResult{}, fmt.Errorf("converter: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// fall through below
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		return ConvertResult{}, &ConvertRejectedError{
+			Status:  resp.StatusCode,
+			Message: convertErrorMessage(resp),
+		}
+	default:
+		return ConvertResult{}, fmt.Errorf("converter answered %s: %s", resp.Status, convertErrorMessage(resp))
+	}
+
+	f, err := os.CreateTemp("", "embookshelf-epub-*.epub")
+	if err != nil {
+		return ConvertResult{}, fmt.Errorf("stage epub: %w", err)
+	}
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return ConvertResult{}, fmt.Errorf("read converter response: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return ConvertResult{}, fmt.Errorf("stage epub: %w", err)
+	}
+	return ConvertResult{
+		Path:    f.Name(),
+		Version: resp.Header.Get("X-Converter-Version"),
+	}, nil
 }

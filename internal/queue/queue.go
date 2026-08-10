@@ -77,6 +77,8 @@ type Deps struct {
 	Guides      *repo.BookReadingGuideRepo
 	// Markdown renditions (ADR-0033).
 	Renditions *repo.BookMarkdownRenditionRepo
+	// Generated EPUBs (ADR-0034).
+	EpubRenditions *repo.BookEpubRenditionRepo
 	// Enqueuer lets one worker request another's work — the guide job
 	// asking for a conversion. The late-bound Deferred from the
 	// composition root, resolved before Start, same as every other

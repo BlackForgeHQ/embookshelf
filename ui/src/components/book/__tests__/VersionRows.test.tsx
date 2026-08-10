@@ -16,12 +16,18 @@ function reply(status: number, body: unknown) {
 }
 
 let markdownReply: unknown = { state: "none", stale: false }
+let epubReply: unknown = { state: "none", stale: false }
 
 beforeEach(() => {
+  markdownReply = { state: "none", stale: false }
+  epubReply = { state: "none", stale: false }
   vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
     const url = String(input)
     if (url === "/api/v1/books/b1/markdown") {
       return Promise.resolve(reply(200, markdownReply))
+    }
+    if (url === "/api/v1/books/b1/epub") {
+      return Promise.resolve(reply(200, epubReply))
     }
     return Promise.reject(new Error(`unexpected fetch: ${url}`))
   })
@@ -32,13 +38,18 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function renderRows() {
+function renderRows(opts: { isAdmin?: boolean; format?: string } = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
   return render(
     <QueryClientProvider client={client}>
-      <VersionRows bookId="b1" title="Dune" format="PDF" />
+      <VersionRows
+        bookId="b1"
+        title="Dune"
+        format={opts.format ?? "PDF"}
+        isAdmin={opts.isAdmin ?? false}
+      />
     </QueryClientProvider>
   )
 }
@@ -84,4 +95,63 @@ it("hides the markdown row for every non-ready state", async () => {
   })
   expect(screen.queryByText("Dune.md")).toBeNull()
   expect(screen.getAllByRole("link", { name: /download/i })).toHaveLength(1)
+})
+
+it("shows a downloadable generated EPUB row when ready", async () => {
+  epubReply = { state: "ready", stale: false, converterVersion: "0.2.0" }
+  renderRows()
+  await waitFor(() => {
+    expect(screen.getByText("Dune.epub")).toBeTruthy()
+  })
+  const links = screen.getAllByRole("link", { name: /download/i })
+  expect(
+    links.some(
+      (l) =>
+        l.getAttribute("href") ===
+        "/api/v1/books/b1/file?rendition=epub&download=1"
+    )
+  ).toBe(true)
+})
+
+it("offers Generate EPUB to admins on a convertible book without one", async () => {
+  renderRows({ isAdmin: true })
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: /Generate EPUB/ })).toBeTruthy()
+  })
+})
+
+it("never offers the button to non-admins or for EPUB books", async () => {
+  renderRows({ isAdmin: false })
+  await waitFor(() => {
+    expect(screen.getByText("Dune.pdf")).toBeTruthy()
+  })
+  expect(screen.queryByRole("button", { name: /Generate EPUB/ })).toBeNull()
+
+  cleanup()
+  renderRows({ isAdmin: true, format: "EPUB" })
+  await waitFor(() => {
+    expect(screen.getByText("Dune.epub")).toBeTruthy()
+  })
+  expect(screen.queryByRole("button", { name: /Generate EPUB/ })).toBeNull()
+})
+
+it("surfaces a failed render verbatim with a retry", async () => {
+  epubReply = {
+    state: "failed",
+    stale: false,
+    error: "PDF has no extractable text (Scanned, 1 pages): OCR is required",
+  }
+  renderRows({ isAdmin: true })
+  await waitFor(() => {
+    expect(screen.getByText(/OCR is required/)).toBeTruthy()
+  })
+  expect(screen.getByRole("button", { name: /Regenerate EPUB/ })).toBeTruthy()
+})
+
+it("shows generating state while the chain runs", async () => {
+  epubReply = { state: "running", stale: false }
+  renderRows()
+  await waitFor(() => {
+    expect(screen.getByText(/Generating EPUB/)).toBeTruthy()
+  })
 })

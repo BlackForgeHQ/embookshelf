@@ -57,3 +57,23 @@ func (h *LibraryHandle) OpenMarkdown(ctx context.Context, location string) (stor
 func (h *LibraryHandle) PlaceMarkdown(ctx context.Context, book model.Book, srcPath string) (PlaceResult, error) {
 	return h.PlaceAt(ctx, h.MarkdownKey(book), srcPath, "MD")
 }
+
+// EpubKey is where a book's generated EPUB belongs: the book's own
+// folder, named after the book — the NarrationKey derivation with the
+// .epub extension (ADR-0034 §1: another file of the same book).
+func (h *LibraryHandle) EpubKey(book model.Book) string {
+	folder := ""
+	if book.FolderPath != nil {
+		folder = strings.Trim(*book.FolderPath, "/")
+	}
+	if folder == "" {
+		folder = path.Join(layout.SanitizeAuthor(book.Author), layout.SanitizeTitle(book.Title))
+	}
+	return path.Join(folder, layout.SanitizeTitle(book.Title)+".epub")
+}
+
+// PlaceEPUB moves a rendered EPUB from a local temp file into the
+// book's own folder, overwriting any previous generation.
+func (h *LibraryHandle) PlaceEPUB(ctx context.Context, book model.Book, srcPath string) (PlaceResult, error) {
+	return h.PlaceAt(ctx, h.EpubKey(book), srcPath, "EPUB")
+}
