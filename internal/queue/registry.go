@@ -156,7 +156,10 @@ func registry(deps Deps) []registration {
 				if err != nil {
 					return nil, fmt.Errorf("resolve library: %w", err)
 				}
-				src, err := handle.Open(ctx, location)
+				// OpenMarkdown, not Open: the row stores the
+				// library-relative location, and the local backend is
+				// "/"-rooted (ADR-0030) — the bare location misses.
+				src, err := handle.OpenMarkdown(ctx, location)
 				if err != nil {
 					return nil, err
 				}

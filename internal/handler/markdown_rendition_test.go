@@ -6,12 +6,16 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/storage/local"
 )
 
 type fakeRenditions struct {
@@ -243,4 +247,88 @@ func TestBookGuideGenerateSurfacesConversionStateAtTheButton(t *testing.T) {
 			t.Fatalf("enqueued %d, want 1", len(q.enqueued))
 		}
 	})
+}
+
+// --- download (Versions tab) ---------------------------------------------
+
+type fakeLibStore struct{ handle *service.LibraryHandle }
+
+func (f fakeLibStore) For(context.Context, string) (*service.LibraryHandle, error) {
+	return f.handle, nil
+}
+
+// TestBookMarkdownDownloadStreamsTheRendition — end to end against a
+// real local backend: the bytes PlaceMarkdown wrote come back as an
+// attachment, resolved through StorageKey (the "/"-rooted local backend
+// would miss on the bare location).
+func TestBookMarkdownDownloadStreamsTheRendition(t *testing.T) {
+	root := t.TempDir()
+	rootedAtSlash, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	handle := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", Root: &root},
+		Storage: rootedAtSlash,
+	}
+
+	book := model.Book{ID: "b1", LibraryID: "lib1", Title: "Dune", Author: "A", Format: "PDF"}
+	tmp := filepath.Join(t.TempDir(), "staged.md")
+	if err := os.WriteFile(tmp, []byte("# markdown body\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	placed, err := handle.PlaceMarkdown(context.Background(), book, tmp)
+	if err != nil {
+		t.Fatalf("PlaceMarkdown: %v", err)
+	}
+
+	h := &Handler{
+		renditions: &fakeRenditions{row: model.MarkdownRendition{
+			BookID: "b1", State: model.MarkdownRenditionReady, Location: placed.Location,
+		}},
+		libStore: fakeLibStore{handle: handle},
+	}
+	c, rec := settingsCtx(t, http.MethodGet, "/api/v1/books/b1/markdown/file", "")
+	h.BookMarkdownDownload(c, bookScope{UserID: "u1", Book: book})
+
+	if httpStatus(c, rec) != http.StatusOK {
+		t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); got != "# markdown body\n" {
+		t.Fatalf("body = %q", got)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/markdown") {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	if cd := rec.Header().Get("Content-Disposition"); !strings.Contains(cd, `filename="Dune.md"`) {
+		t.Fatalf("Content-Disposition = %q", cd)
+	}
+}
+
+// TestBookMarkdownDownloadAnswers404ForEveryNonReadyState — the row is
+// only offered when ready; a direct URL hit on anything else is
+// not-found, not a half-truth.
+func TestBookMarkdownDownloadAnswers404ForEveryNonReadyState(t *testing.T) {
+	cases := map[string]*fakeRenditions{
+		"no row":  {missing: true},
+		"failed":  {row: model.MarkdownRendition{State: model.MarkdownRenditionFailed, Error: "x"}},
+		"running": {row: model.MarkdownRendition{State: model.MarkdownRenditionRunning}},
+		"ready but no location": {row: model.MarkdownRendition{
+			State: model.MarkdownRenditionReady,
+		}},
+	}
+	for name, store := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := &Handler{
+				renditions: store,
+				libStore:   fakeLibStore{handle: &service.LibraryHandle{}},
+			}
+			c, rec := settingsCtx(t, http.MethodGet, "/api/v1/books/b1/markdown/file", "")
+			h.BookMarkdownDownload(c, pdfScope())
+
+			if httpStatus(c, rec) != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
+			}
+		})
+	}
 }

@@ -44,6 +44,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { AudiobookPanel } from "@/components/book/AudiobookPanel"
 import { ReadingGuidePanel } from "@/components/book/ReadingGuidePanel"
+import { VersionRows } from "@/components/book/VersionRows"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   DropdownMenu,
@@ -383,29 +384,7 @@ function BookDetail() {
                   gap: 24,
                 }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 16,
-                    padding: "10px 12px",
-                    border: "1px solid var(--color-rule-soft)",
-                    background: "var(--color-paper-0)",
-                  }}
-                >
-                  <Icon name="book" size={16} />
-                  <div className="grow">
-                    <div className="t-item-title">
-                      {b.title}.{b.format.toLowerCase()}
-                    </div>
-                    <div
-                      className="mono"
-                      style={{ fontSize: 11, color: "var(--color-ink-3)" }}
-                    >
-                      Primary · {b.format}
-                    </div>
-                  </div>
-                </div>
+                <VersionRows bookId={id} title={b.title} format={b.format} />
 
                 {viewer.isAdmin && (
                   <div

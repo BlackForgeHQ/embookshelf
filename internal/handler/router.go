@@ -154,6 +154,7 @@ func (h *Handler) Engine() *gin.Engine {
 			// the guide: any signed-in user may look, converting spends
 			// sidecar CPU and is the admin's call.
 			authed.GET("/books/:id/markdown", h.bookScoped(h.BookMarkdownGet))
+			authed.GET("/books/:id/markdown/file", h.bookScoped(h.BookMarkdownDownload))
 			authed.POST("/books/:id/markdown",
 				auth.RequireRole(model.RoleAdmin), h.bookScoped(h.BookMarkdownGenerate))
 

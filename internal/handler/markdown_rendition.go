@@ -6,12 +6,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/blackforge/embookshelf/internal/jobs"
+	"github.com/blackforge/embookshelf/internal/layout"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 )
@@ -95,6 +99,53 @@ func (h *Handler) renditionStale(c *gin.Context, book model.Book, r model.Markdo
 		return false
 	}
 	return !bytes.Equal(current, r.SourceContentHash)
+}
+
+// BookMarkdownDownload streams the rendition as an attachment.
+//
+// Always through the app, never presigned: BookSource exists for
+// multi-hundred-megabyte books, and markdown is megabytes of text at
+// worst — dragging the rendition into that machinery buys nothing and
+// adds a consumer to vocabulary scoped to files rows.
+//
+// 404 for every non-ready state: the Versions row is only offered when
+// the rendition is ready, so a direct URL hit on a pending or failed
+// one answers not-found rather than a half-truth.
+func (h *Handler) BookMarkdownDownload(c *gin.Context, s bookScope) {
+	ctx := c.Request.Context()
+	if h.renditions == nil || h.libStore == nil {
+		writeError(c, http.StatusServiceUnavailable, "markdown renditions are unavailable")
+		return
+	}
+	rendition, err := h.renditions.GetByBookID(ctx, s.Book.ID)
+	if errors.Is(err, repo.ErrNotFound) ||
+		(err == nil && (rendition.State != model.MarkdownRenditionReady || rendition.Location == "")) {
+		writeError(c, http.StatusNotFound, "this book has no markdown rendition")
+		return
+	}
+	if err != nil {
+		writeServerError(c, "read markdown rendition", err)
+		return
+	}
+
+	handle, err := h.libStore.For(ctx, s.Book.LibraryID)
+	if err != nil {
+		writeServerError(c, "resolve library", err)
+		return
+	}
+	src, err := handle.OpenMarkdown(ctx, rendition.Location)
+	if err != nil {
+		writeServerError(c, "open markdown rendition", err)
+		return
+	}
+	defer func() { _ = src.Close() }()
+
+	filename := layout.SanitizeTitle(s.Book.Title) + ".md"
+	c.Header("Content-Disposition",
+		fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`,
+			asciiFallback(filename), url.PathEscape(filename)))
+	c.DataFromReader(http.StatusOK, src.Size(), "text/markdown; charset=utf-8",
+		io.NewSectionReader(src, 0, src.Size()), nil)
 }
 
 // BookMarkdownGenerate enqueues a conversion. Admin-gated at the route:
