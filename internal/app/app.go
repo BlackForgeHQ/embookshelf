@@ -48,6 +48,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/sse"
 	"github.com/blackforge/embookshelf/internal/staticfs"
 	"github.com/blackforge/embookshelf/internal/storage"
+	s3storage "github.com/blackforge/embookshelf/internal/storage/s3"
 	"github.com/blackforge/embookshelf/internal/storageloader"
 	"github.com/blackforge/embookshelf/internal/task"
 )
@@ -116,6 +117,8 @@ type App struct {
 
 	// Bookdrop watcher; constructed here, run by Start.
 	watcher *ingest.Watcher
+	// s3Watcher pulls the S3 drop zone; nil when not configured.
+	s3Watcher *ingest.S3Watcher
 
 	handler *handler.Handler
 	engine  *gin.Engine
@@ -506,6 +509,58 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 		Svc:      bdropSvc,
 	}
 
+	// S3 BookDrop: a drop zone inside the shared bucket, pulled through
+	// the same Accept seam uploads use. Built only when both the bucket
+	// and the prefix are configured, and refused loudly when the prefix
+	// would overlap a library's own prefix in the same bucket — the
+	// self-eating loop where the watcher ingests library files as drops.
+	// Always constructed; Run self-disables when Store stays nil —
+	// the local watcher's own empty-path pattern, and what lets the
+	// wiring parity test hold every App field non-nil.
+	s3Watcher := &ingest.S3Watcher{
+		Prefix:   cfg.SharedS3.BookDropPrefix,
+		Interval: cfg.SharedS3.BookDropInterval,
+		Accept:   bdropSvc.Accept,
+	}
+	if cfg.SharedS3.Configured() && cfg.SharedS3.BookDropPrefix != "" {
+		collision := ""
+		if backendRows, err := backendRepo.List(ctx); err == nil {
+			for _, row := range backendRows {
+				if row.Kind != "s3" {
+					continue
+				}
+				bucket, _ := row.Config["bucket"].(string)
+				prefix, _ := row.Config["prefix"].(string)
+				if bucket == cfg.SharedS3.Bucket && ingest.DropPrefixCollides(cfg.SharedS3.BookDropPrefix, prefix) {
+					collision = prefix
+					break
+				}
+			}
+		}
+		if collision != "" {
+			slog.Error("s3 bookdrop watcher refused: drop prefix overlaps a library prefix in the same bucket",
+				"drop_prefix", cfg.SharedS3.BookDropPrefix, "library_prefix", collision)
+		} else {
+			// Rooted at the bucket, not the drop prefix: the watcher
+			// passes the prefix to List and works with full keys, so
+			// the log lines name the real object paths.
+			dropStore, err := s3storage.New(ctx, s3storage.Config{
+				Endpoint:        cfg.SharedS3.Endpoint,
+				Region:          cfg.SharedS3.Region,
+				Bucket:          cfg.SharedS3.Bucket,
+				AccessKeyID:     cfg.SharedS3.AccessKeyID,
+				SecretAccessKey: cfg.SharedS3.SecretAccessKey,
+				ForcePathStyle:  cfg.SharedS3.ForcePathStyle,
+				SkipValidation:  true,
+			})
+			if err != nil {
+				slog.Error("s3 bookdrop watcher disabled: backend construction failed", "err", err)
+			} else {
+				s3Watcher.Store = dropStore
+			}
+		}
+	}
+
 	// HTTP. The five required groups are positional — adding a seam to
 	// any of them breaks the build here until it is supplied.
 	h := handler.New(
@@ -582,7 +637,7 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 
 		queue:   q,
 		enq:     enq,
-		watcher: watcher,
+		watcher: watcher, s3Watcher: s3Watcher,
 
 		handler: h,
 		engine:  h.Engine(),
@@ -714,6 +769,7 @@ func (a *App) Start(ctx context.Context) error {
 
 	// File watcher goroutine.
 	a.goBackground("bookdrop watcher", a.watcher.Run)
+	a.goBackground("s3 bookdrop watcher", a.s3Watcher.Run)
 
 	return nil
 }

@@ -73,6 +73,10 @@ services:
       EMBOOKSHELF_S3_ACCESS_KEY_ID: ${EMBOOKSHELF_S3_ACCESS_KEY_ID:-}
       EMBOOKSHELF_S3_SECRET_ACCESS_KEY: ${EMBOOKSHELF_S3_SECRET_ACCESS_KEY:-}
       EMBOOKSHELF_S3_FORCE_PATH_STYLE: ${EMBOOKSHELF_S3_FORCE_PATH_STYLE:-false}
+      # S3 BookDrop (optional): drop files into this prefix of the shared
+      # bucket and they are ingested like local BookDrop drops.
+      EMBOOKSHELF_S3_BOOKDROP_PREFIX: ${EMBOOKSHELF_S3_BOOKDROP_PREFIX:-}
+      EMBOOKSHELF_S3_BOOKDROP_INTERVAL_SECONDS: ${EMBOOKSHELF_S3_BOOKDROP_INTERVAL_SECONDS:-60}
       # Presigned URL TTL for S3-backed downloads. Set PRESIGN_FALLBACK=stream
       # to proxy bytes through the app instead of redirecting clients.
       EMBOOKSHELF_PRESIGN_TTL: ${EMBOOKSHELF_PRESIGN_TTL:-10m}

@@ -22,6 +22,15 @@ type SharedS3Config struct {
 	AccessKeyID     string
 	SecretAccessKey string
 	ForcePathStyle  bool
+	// BookDropPrefix is the S3 drop zone inside the shared bucket:
+	// objects under it are pulled into the local BookDrop staging area
+	// and deleted from the bucket once staged. Empty disables the S3
+	// watcher.
+	BookDropPrefix string
+	// BookDropInterval is the S3 watcher's poll cadence. Deliberately
+	// slower than the local watcher's default — every tick is a billable
+	// LIST.
+	BookDropInterval time.Duration
 }
 
 // Configured reports whether the shared bucket is set. Used by the
@@ -126,6 +135,9 @@ func Load() (Config, error) {
 			AccessKeyID:     envStr("EMBOOKSHELF_S3_ACCESS_KEY_ID", ""),
 			SecretAccessKey: envStr("EMBOOKSHELF_S3_SECRET_ACCESS_KEY", ""),
 			ForcePathStyle:  envBool("EMBOOKSHELF_S3_FORCE_PATH_STYLE", false),
+			BookDropPrefix:  strings.Trim(envStr("EMBOOKSHELF_S3_BOOKDROP_PREFIX", ""), "/"),
+			BookDropInterval: time.Duration(
+				envInt("EMBOOKSHELF_S3_BOOKDROP_INTERVAL_SECONDS", 60)) * time.Second,
 		},
 
 		PresignTTL:      envDuration("EMBOOKSHELF_PRESIGN_TTL", 10*time.Minute),

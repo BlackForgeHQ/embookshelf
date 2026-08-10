@@ -249,6 +249,10 @@ Both hold the wipe read-lock across the *whole* sequence, which is the invariant
 
 A client-supplied filename is a suggestion only — reduced to its base, de-dotted, and stamped — so the bytes always land directly in the staging directory whatever the name contains.
 
+### S3 BookDrop
+
+The S3 drop zone: objects under `EMBOOKSHELF_S3_BOOKDROP_PREFIX` in the shared bucket are pulled into the local [[BookDrop]] staging area through the same `Accept` seam uploads use, then deleted from the bucket — delete strictly after the bytes are staged and the row committed, so a crash duplicates rather than loses. Unsupported objects are left in place, the local watcher's rule. Refuses to start when the drop prefix overlaps an S3 library's prefix in the same bucket (the self-eating loop). Env-only config beside the S3 family; own poll interval (default 60s — every tick is a billable LIST).
+
 ### Files row
 
 One entry in the `files` table per physical artifact tied to a `book_id`. Carries `location` (relative to `library.root`), `size`, `mtime`, `etag`, `content_hash` (sha256), `format`.

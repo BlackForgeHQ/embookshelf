@@ -484,6 +484,8 @@ encrypts the LLM and text-to-speech keys you paste into the panels.
 | `EMBOOKSHELF_S3_ENDPOINT` | _(unset)_ | Custom endpoint (MinIO, R2, B2). Auto-prepends `https://` if scheme-less. |
 | `EMBOOKSHELF_S3_ACCESS_KEY_ID` | _(unset)_ | Static credentials |
 | `EMBOOKSHELF_S3_SECRET_ACCESS_KEY` | _(unset)_ | Static credentials |
+| `EMBOOKSHELF_S3_BOOKDROP_PREFIX` | _(unset)_ | S3 drop zone inside the shared bucket: objects under this prefix are pulled into BookDrop staging and deleted from the bucket once staged. Unset = off. Refuses to start if it overlaps an S3 library's prefix |
+| `EMBOOKSHELF_S3_BOOKDROP_INTERVAL_SECONDS` | `60` | S3 drop-zone poll cadence. Slower than the local watcher on purpose — every tick is a billable LIST |
 | `EMBOOKSHELF_S3_FORCE_PATH_STYLE` | `false` | Path-style addressing (required by MinIO + some R2 setups) |
 | `EMBOOKSHELF_PRESIGN_TTL` | `10m` | Presigned URL lifetime |
 | `EMBOOKSHELF_PRESIGN_FALLBACK` | `""` (= stream) | `presign` to opt into 302 redirects for book delivery; otherwise the server streams bytes. **Presign requires bucket-side CORS** for the SPA origin. |
