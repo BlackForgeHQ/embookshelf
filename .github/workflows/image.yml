@@ -155,6 +155,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The app job's latest-gate expression (`!contains(ref_name, '-')`)
+      # cannot be reused here: a component tag's name contains dashes by
+      # construction (embookshelf-converter-v0.1.0), so that check is
+      # false on every converter release and latest was never applied.
+      # Strip the component prefix first and test only the version part,
+      # which needs a shell step — GitHub expressions have no replace.
+      - name: Detect stable release tag
+        id: rel
+        env:
+          REF: ${{ github.ref }}
+          NAME: ${{ github.ref_name }}
+        run: |
+          stable=false
+          case "$REF" in
+            refs/tags/embookshelf-converter-v*)
+              version="${NAME#embookshelf-converter-v}"
+              case "$version" in
+                *-*) ;;                # prerelease (0.2.0-rc1) — no latest
+                *) stable=true ;;
+              esac
+              ;;
+          esac
+          echo "stable=$stable" >> "$GITHUB_OUTPUT"
+
       # Component tags carry the package name, so the semver types can't
       # parse them; each match entry extracts one tag shape instead.
       - name: Compute tags & labels
@@ -168,7 +192,7 @@ jobs:
             type=match,pattern=embookshelf-converter-v(.*),group=1
             type=match,pattern=embookshelf-converter-v(\d+\.\d+),group=1
             type=match,pattern=embookshelf-converter-v(\d+),group=1
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/embookshelf-converter-v') && !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ steps.rel.outputs.stable }}
           labels: |
             org.opencontainers.image.title=embookshelf-converter
             org.opencontainers.image.description=embookshelf converter extension — document bytes in, GitHub-Flavored Markdown out (ADR-0033)
