@@ -87,3 +87,48 @@ func TestConverterClientServerErrorIsTransient(t *testing.T) {
 		t.Fatalf("500 typed permanent — the queue would never retry a sidecar restart")
 	}
 }
+
+// TestConverterClientHealth — the probe is the adapter's, not the
+// handler's (#300): reachable answers the version header, a non-200
+// or a dead listener is an error carrying why, verbatim.
+func TestConverterClientHealth(t *testing.T) {
+	t.Run("reachable reports the version", func(t *testing.T) {
+		sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != "/healthz" {
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+			w.Header().Set("X-Converter-Version", "0.1.0")
+			_, _ = w.Write([]byte("ok"))
+		}))
+		defer sidecar.Close()
+
+		version, err := (&ConverterClient{}).Health(context.Background(), sidecar.URL)
+		if err != nil {
+			t.Fatalf("Health: %v", err)
+		}
+		if version != "0.1.0" {
+			t.Fatalf("version = %q", version)
+		}
+	})
+
+	t.Run("non-200 is an error naming the status", func(t *testing.T) {
+		sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		defer sidecar.Close()
+
+		if _, err := (&ConverterClient{}).Health(context.Background(), sidecar.URL); err == nil ||
+			!strings.Contains(err.Error(), "healthz answered") {
+			t.Fatalf("err = %v, want a healthz-answered error", err)
+		}
+	})
+
+	t.Run("dead listener is an error", func(t *testing.T) {
+		sidecar := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		sidecar.Close()
+
+		if _, err := (&ConverterClient{}).Health(context.Background(), sidecar.URL); err == nil {
+			t.Fatal("err = nil against a dead listener")
+		}
+	})
+}
