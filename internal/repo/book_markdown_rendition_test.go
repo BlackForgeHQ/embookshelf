@@ -134,4 +134,10 @@ func TestConversionCandidatesAndCoverage(t *testing.T) {
 	if cov != want {
 		t.Fatalf("coverage = %+v, want %+v", cov, want)
 	}
+
+	// Candidates() is the counting side of ListConversionCandidates —
+	// the two must agree on who a bulk run would touch (#301).
+	if cov.Candidates() != len(got) {
+		t.Fatalf("Candidates() = %d, ListConversionCandidates found %d", cov.Candidates(), len(got))
+	}
 }

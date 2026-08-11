@@ -15,7 +15,6 @@ import (
 // decision, not this package's — same split as the guide runner.
 type conversionCandidateStore interface {
 	ListConversionCandidates(ctx context.Context) ([]repo.ConversionCandidate, error)
-	CountConversionCoverage(ctx context.Context) (repo.ConversionCoverage, error)
 	Start(ctx context.Context, bookID string) error
 }
 
@@ -30,12 +29,6 @@ type ConversionRunner struct {
 
 func NewConversionRunner(renditions conversionCandidateStore, enq jobs.Enqueuer) *ConversionRunner {
 	return &ConversionRunner{renditions: renditions, enq: enq}
-}
-
-// Coverage answers the settings card's numbers — the same call serves
-// the pre-flight ("N books would convert") and the progress poll.
-func (r *ConversionRunner) Coverage(ctx context.Context) (repo.ConversionCoverage, error) {
-	return r.renditions.CountConversionCoverage(ctx)
 }
 
 // Start queues one conversion per candidate and reports how many went.

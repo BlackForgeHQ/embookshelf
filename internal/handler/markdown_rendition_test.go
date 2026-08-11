@@ -19,9 +19,10 @@ import (
 )
 
 type fakeRenditions struct {
-	row     model.MarkdownRendition
-	missing bool
-	started bool
+	row      model.MarkdownRendition
+	missing  bool
+	started  bool
+	coverage repo.ConversionCoverage
 }
 
 func (f *fakeRenditions) Start(context.Context, string) error {
@@ -34,6 +35,10 @@ func (f *fakeRenditions) GetByBookID(context.Context, string) (model.MarkdownRen
 		return model.MarkdownRendition{}, repo.ErrNotFound
 	}
 	return f.row, nil
+}
+
+func (f *fakeRenditions) CountConversionCoverage(context.Context) (repo.ConversionCoverage, error) {
+	return f.coverage, nil
 }
 
 type captureQueue struct {

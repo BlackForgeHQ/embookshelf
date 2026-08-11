@@ -144,7 +144,6 @@ func TestSettingsConverterHealth(t *testing.T) {
 // --- bulk conversion ------------------------------------------------------
 
 type fakeConversionStore struct {
-	coverage   repo.ConversionCoverage
 	candidates []repo.ConversionCandidate
 	started    []string
 }
@@ -153,20 +152,15 @@ func (f *fakeConversionStore) ListConversionCandidates(context.Context) ([]repo.
 	return f.candidates, nil
 }
 
-func (f *fakeConversionStore) CountConversionCoverage(context.Context) (repo.ConversionCoverage, error) {
-	return f.coverage, nil
-}
-
 func (f *fakeConversionStore) Start(_ context.Context, bookID string) error {
 	f.started = append(f.started, bookID)
 	return nil
 }
 
 func TestSettingsConverterCoverageDerivesCandidates(t *testing.T) {
-	store := &fakeConversionStore{coverage: repo.ConversionCoverage{
+	h := &Handler{renditions: &fakeRenditions{coverage: repo.ConversionCoverage{
 		Total: 10, Ready: 5, Converting: 2, Failed: 1, Unconverted: 2,
-	}}
-	h := &Handler{conversionRunner: service.NewConversionRunner(store, nil)}
+	}}}
 
 	c, rec := settingsCtx(t, http.MethodGet, "/api/v1/settings/converter/coverage", "")
 	h.SettingsConverterCoverage(c)

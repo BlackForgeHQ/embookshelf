@@ -77,19 +77,19 @@ type converterCoverageDTO struct {
 	Converting  int `json:"converting"`
 	Failed      int `json:"failed"`
 	Unconverted int `json:"unconverted"`
-	// Candidates is what a run would enqueue right now: unconverted +
-	// failed. Derived server-side so the card never re-implements the
-	// candidate rule.
+	// Candidates is what a run would enqueue right now, answered by the
+	// repo's own Candidates() — the counting side of the candidate
+	// query, so the card never re-implements the rule.
 	Candidates int `json:"candidates"`
 }
 
 // SettingsConverterCoverage answers the bulk card's counts.
 func (h *Handler) SettingsConverterCoverage(c *gin.Context) {
-	if h.conversionRunner == nil {
-		writeError(c, http.StatusServiceUnavailable, "no conversion runner configured")
+	if h.renditions == nil {
+		writeError(c, http.StatusServiceUnavailable, "markdown renditions are unavailable")
 		return
 	}
-	cov, err := h.conversionRunner.Coverage(c.Request.Context())
+	cov, err := h.renditions.CountConversionCoverage(c.Request.Context())
 	if err != nil {
 		writeServerError(c, "conversion coverage", err)
 		return
@@ -97,7 +97,7 @@ func (h *Handler) SettingsConverterCoverage(c *gin.Context) {
 	c.JSON(http.StatusOK, converterCoverageDTO{
 		Total: cov.Total, Ready: cov.Ready, Converting: cov.Converting,
 		Failed: cov.Failed, Unconverted: cov.Unconverted,
-		Candidates: cov.Unconverted + cov.Failed,
+		Candidates: cov.Candidates(),
 	})
 }
 

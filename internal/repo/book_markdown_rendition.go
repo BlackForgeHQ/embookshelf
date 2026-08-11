@@ -111,6 +111,15 @@ type ConversionCoverage struct {
 	Unconverted int
 }
 
+// Candidates is what a bulk run would enqueue right now: the counting
+// side of ListConversionCandidates' predicate (no row, or failed), kept
+// beside the query that defines the rule so the two cannot drift. The
+// settings handler used to re-derive this one tier up — directly under
+// a comment claiming that could never happen (#301).
+func (c ConversionCoverage) Candidates() int {
+	return c.Unconverted + c.Failed
+}
+
 // CountConversionCoverage answers all five numbers from one query so a
 // poll cannot read them a moment apart and disagree mid-run.
 func (r *BookMarkdownRenditionRepo) CountConversionCoverage(ctx context.Context) (ConversionCoverage, error) {

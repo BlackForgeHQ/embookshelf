@@ -26,6 +26,7 @@ import (
 type markdownRenditionStore interface {
 	Start(ctx context.Context, bookID string) error
 	GetByBookID(ctx context.Context, bookID string) (model.MarkdownRendition, error)
+	CountConversionCoverage(ctx context.Context) (repo.ConversionCoverage, error)
 }
 
 // newMarkdownRenditionStore keeps a missing repo nil across the
