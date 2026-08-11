@@ -537,8 +537,8 @@ func TestANarrationCanBeRegeneratedAfterItIsDeleted(t *testing.T) {
 	}
 
 	// What the freed key was, and where the next run will write.
-	if len(store.deleted) != 1 || store.deleted[0] != handle.NarrationKey(book) {
-		t.Fatalf("deleted %v, want the key regeneration reuses (%q)", store.deleted, handle.NarrationKey(book))
+	if len(store.deleted) != 1 || store.deleted[0] != handle.DerivedKey(book, DerivedNarration) {
+		t.Fatalf("deleted %v, want the key regeneration reuses (%q)", store.deleted, handle.DerivedKey(book, DerivedNarration))
 	}
 	if err := svc.Generate(context.Background(), book, GenerateOverride{}); err != nil {
 		t.Fatalf("Generate after delete: %v", err)

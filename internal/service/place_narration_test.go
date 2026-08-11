@@ -89,9 +89,9 @@ func TestPlaceNarrationWritesIntoTheBooksOwnFolder(t *testing.T) {
 	}
 
 	handle := &LibraryHandle{Library: model.Library{ID: "lib1", Root: &root}, Storage: slashRootedFS(t)}
-	got, err := handle.PlaceNarration(context.Background(), narratedBook(folder), tempMP3(t, "mp3-bytes"))
+	got, err := handle.PlaceDerived(context.Background(), narratedBook(folder), tempMP3(t, "mp3-bytes"), DerivedNarration)
 	if err != nil {
-		t.Fatalf("PlaceNarration: %v", err)
+		t.Fatalf("PlaceDerived: %v", err)
 	}
 
 	want := filepath.Join(folder, "Woman in the Dunes.mp3")
@@ -132,9 +132,9 @@ func TestPlaceNarrationOverwritesAPreviousRendition(t *testing.T) {
 	}
 
 	handle := &LibraryHandle{Library: model.Library{ID: "lib1", Root: &root}, Storage: slashRootedFS(t)}
-	got, err := handle.PlaceNarration(context.Background(), narratedBook(folder), tempMP3(t, "new-narration"))
+	got, err := handle.PlaceDerived(context.Background(), narratedBook(folder), tempMP3(t, "new-narration"), DerivedNarration)
 	if err != nil {
-		t.Fatalf("PlaceNarration: %v", err)
+		t.Fatalf("PlaceDerived: %v", err)
 	}
 	if got.Location != filepath.Join(folder, "Woman in the Dunes.mp3") {
 		t.Errorf("Location = %q, want the same key as before", got.Location)
@@ -156,9 +156,9 @@ func TestPlaceNarrationFallsBackToAuthorTitleWithoutAFolderPath(t *testing.T) {
 	root := t.TempDir()
 	handle := &LibraryHandle{Library: model.Library{ID: "lib1", Root: &root}, Storage: slashRootedFS(t)}
 
-	got, err := handle.PlaceNarration(context.Background(), narratedBook(""), tempMP3(t, "mp3"))
+	got, err := handle.PlaceDerived(context.Background(), narratedBook(""), tempMP3(t, "mp3"), DerivedNarration)
 	if err != nil {
-		t.Fatalf("PlaceNarration: %v", err)
+		t.Fatalf("PlaceDerived: %v", err)
 	}
 	want := filepath.Join("Kōbō Abe", "Woman in the Dunes", "Woman in the Dunes.mp3")
 	if got.Location != want {
@@ -177,9 +177,9 @@ func TestPlaceNarrationUploadsToTheBooksKeyOnABackend(t *testing.T) {
 	}
 
 	src := tempMP3(t, "mp3-bytes")
-	got, err := handle.PlaceNarration(context.Background(), narratedBook("Kōbō Abe/Woman in the Dunes"), src)
+	got, err := handle.PlaceDerived(context.Background(), narratedBook("Kōbō Abe/Woman in the Dunes"), src, DerivedNarration)
 	if err != nil {
-		t.Fatalf("PlaceNarration: %v", err)
+		t.Fatalf("PlaceDerived: %v", err)
 	}
 
 	want := "Kōbō Abe/Woman in the Dunes/Woman in the Dunes.mp3"

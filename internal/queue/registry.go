@@ -5,13 +5,10 @@ package queue
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
 
 	"github.com/riverqueue/river"
 
 	"github.com/blackforge/embookshelf/internal/jobs"
-	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/sse"
@@ -103,11 +100,11 @@ func registry(deps Deps) []registration {
 	// wired once here rather than constructed per job.
 	openBook := service.NewLibraryBookOpener(deps.LibStore).Open
 
-	// primaryHash answers "which bytes is this book, right now" — the
-	// provenance side of every derived artifact. Shared by the rendition
-	// worker (records it) and the guide's markdown feed (compares it),
-	// through the one warn-and-degrade constructor every tier uses.
-	primaryHash := service.NewPrimaryHash(deps.LibStore)
+	// bookOps is the book-operations seam every derived-artifact job
+	// shares (#299): open the book, read its provenance hash, open its
+	// markdown, place a derived file. The registry declares which job
+	// gets which operation; the library plumbing lives in the module.
+	bookOps := service.NewBookOps(deps.LibStore)
 
 	// Settings is read per job so an admin can change model, language or
 	// cap without a restart. Registered unconditionally, like the email
@@ -140,26 +137,10 @@ func registry(deps Deps) []registration {
 	var markdownFeed *service.MarkdownFeed
 	if deps.Renditions != nil && deps.Enqueuer != nil {
 		markdownFeed = &service.MarkdownFeed{
-			Renditions: deps.Renditions,
-			IsMissing:  func(err error) bool { return errors.Is(err, repo.ErrNotFound) },
-			Open: func(ctx context.Context, book model.Book, location string) (io.ReadCloser, error) {
-				handle, err := deps.LibStore.For(ctx, book.LibraryID)
-				if err != nil {
-					return nil, fmt.Errorf("resolve library: %w", err)
-				}
-				// OpenMarkdown, not Open: the row stores the
-				// library-relative location, and the local backend is
-				// "/"-rooted (ADR-0030) — the bare location misses.
-				src, err := handle.OpenMarkdown(ctx, location)
-				if err != nil {
-					return nil, err
-				}
-				return struct {
-					io.Reader
-					io.Closer
-				}{io.NewSectionReader(src, 0, src.Size()), src}, nil
-			},
-			CurrentHash: primaryHash,
+			Renditions:  deps.Renditions,
+			IsMissing:   func(err error) bool { return errors.Is(err, repo.ErrNotFound) },
+			Open:        bookOps.OpenMarkdown,
+			CurrentHash: bookOps.PrimaryHash,
 			Request: func(ctx context.Context, bookID string) error {
 				if err := deps.Renditions.Start(ctx, bookID); err != nil {
 					return err
@@ -171,28 +152,16 @@ func registry(deps Deps) []registration {
 	readingGuide.Markdown = markdownFeed
 
 	// Markdown renditions (ADR-0033). Config per job for the same
-	// hot-reload reason as the guide; the library-touching steps are
-	// per-op closures so the worker holds no LibraryStore.
+	// hot-reload reason as the guide; the library-touching steps come
+	// from bookOps so the worker holds no LibraryStore.
 	markdownRendition := task.MarkdownRenditionDeps{
 		Config:     deps.AppSettings.GetConverter,
 		Renditions: deps.Renditions,
 		Books:      deps.Books,
-		Open: func(ctx context.Context, book model.Book) (io.Reader, int64, io.Closer, error) {
-			handle, err := deps.LibStore.For(ctx, book.LibraryID)
-			if err != nil {
-				return nil, 0, nil, fmt.Errorf("resolve library: %w", err)
-			}
-			return handle.OpenBook(ctx, book)
-		},
-		SourceHash: primaryHash,
+		Open:       bookOps.Open,
+		SourceHash: bookOps.PrimaryHash,
 		Convert:    (&service.ConverterClient{}).Convert,
-		Place: func(ctx context.Context, book model.Book, srcPath string) (service.PlaceResult, error) {
-			handle, err := deps.LibStore.For(ctx, book.LibraryID)
-			if err != nil {
-				return service.PlaceResult{}, fmt.Errorf("resolve library: %w", err)
-			}
-			return handle.PlaceMarkdown(ctx, book, srcPath)
-		},
+		Place:      bookOps.Placer(service.DerivedMarkdown),
 	}
 
 	// Generated EPUBs (ADR-0034): the second converter stage, chained
@@ -202,16 +171,10 @@ func registry(deps Deps) []registration {
 		Renditions: deps.EpubRenditions,
 		Books:      deps.Books,
 		Markdown:   markdownFeed,
-		SourceHash: primaryHash,
+		SourceHash: bookOps.PrimaryHash,
 		Render:     (&service.ConverterClient{}).RenderEPUB,
-		Place: func(ctx context.Context, book model.Book, srcPath string) (service.PlaceResult, error) {
-			handle, err := deps.LibStore.For(ctx, book.LibraryID)
-			if err != nil {
-				return service.PlaceResult{}, fmt.Errorf("resolve library: %w", err)
-			}
-			return handle.PlaceEPUB(ctx, book, srcPath)
-		},
-		Files: deps.FileRepo,
+		Place:      bookOps.Placer(service.DerivedEPUB),
+		Files:      deps.FileRepo,
 	}
 
 	// publishAudiobook is the SSE side of every audiobook state change —
@@ -242,17 +205,11 @@ func registry(deps Deps) []registration {
 		Books:   deps.Books,
 		Files:   deps.FileRepo,
 		Staging: deps.Staging,
-		Place: func(ctx context.Context, book model.Book, srcPath string) (service.PlaceResult, error) {
-			handle, err := deps.LibStore.For(ctx, book.LibraryID)
-			if err != nil {
-				return service.PlaceResult{}, fmt.Errorf("resolve library: %w", err)
-			}
-			// Deliberately PlaceNarration rather than the generic Placer:
-			// the book's folder already exists, and Placer would answer
-			// that with a "Title (2)" sibling — a second leaf that scan
-			// reads as a second book.
-			return handle.PlaceNarration(ctx, book, srcPath)
-		},
+		// Deliberately the derived placement rather than the generic
+		// Placer: the book's folder already exists, and Placer would
+		// answer that with a "Title (2)" sibling — a second leaf that
+		// scan reads as a second book.
+		Place: bookOps.Placer(service.DerivedNarration),
 	}
 	if deps.Covers != nil {
 		finalize.Cover = deps.Covers.Open

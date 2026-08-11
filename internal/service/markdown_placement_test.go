@@ -13,7 +13,7 @@ import (
 )
 
 // TestOpenMarkdownResolvesThePlacedKey — the rendition row stores the
-// library-relative location PlaceMarkdown returned; OpenMarkdown must
+// library-relative location PlaceDerived returned; OpenMarkdown must
 // find those bytes again on both backend shapes. The local arm is the
 // regression: the local backend is "/"-rooted (ADR-0030), so opening
 // the bare location instead of StorageKey(location) reads relative to
@@ -38,9 +38,9 @@ func TestOpenMarkdownResolvesThePlacedKey(t *testing.T) {
 			Storage: rootedAtSlash,
 		}
 
-		placed, err := h.PlaceMarkdown(context.Background(), book, tempSource(t, body))
+		placed, err := h.PlaceDerived(context.Background(), book, tempSource(t, body), service.DerivedMarkdown)
 		if err != nil {
-			t.Fatalf("PlaceMarkdown: %v", err)
+			t.Fatalf("PlaceDerived: %v", err)
 		}
 
 		src, err := h.OpenMarkdown(context.Background(), placed.Location)
@@ -75,9 +75,9 @@ func TestOpenMarkdownResolvesThePlacedKey(t *testing.T) {
 			Storage: objectStoreFS{fs},
 		}
 
-		placed, err := h.PlaceMarkdown(context.Background(), book, tempSource(t, body))
+		placed, err := h.PlaceDerived(context.Background(), book, tempSource(t, body), service.DerivedMarkdown)
 		if err != nil {
-			t.Fatalf("PlaceMarkdown: %v", err)
+			t.Fatalf("PlaceDerived: %v", err)
 		}
 		src, err := h.OpenMarkdown(context.Background(), placed.Location)
 		if err != nil {

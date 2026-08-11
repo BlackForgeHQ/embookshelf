@@ -277,9 +277,9 @@ func TestBookMarkdownDownloadStreamsTheRendition(t *testing.T) {
 	if err := os.WriteFile(tmp, []byte("# markdown body\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	placed, err := handle.PlaceMarkdown(context.Background(), book, tmp)
+	placed, err := handle.PlaceDerived(context.Background(), book, tmp, service.DerivedMarkdown)
 	if err != nil {
-		t.Fatalf("PlaceMarkdown: %v", err)
+		t.Fatalf("PlaceDerived: %v", err)
 	}
 
 	h := &Handler{

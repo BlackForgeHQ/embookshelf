@@ -63,8 +63,8 @@ type FinalizeDeps struct {
 	// Place moves the assembled file into the book's own folder.
 	// Narrower than a LibraryStore on purpose: handing over the whole
 	// store would let a later edit reach more than placing one file
-	// needs. Why the closure that builds this field must call
-	// PlaceNarration rather than the generic Placer is that closure's
+	// needs. Why the wiring behind this field must use the derived
+	// placement rather than the generic Placer is that wiring's
 	// decision to explain, not this worker's — see the registry.
 	Place func(ctx context.Context, book model.Book, srcPath string) (service.PlaceResult, error)
 	// Cover supplies the art embedded in the finished file. Nil-able and
