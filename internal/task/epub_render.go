@@ -50,101 +50,122 @@ type EpubRenderDeps struct {
 }
 
 // EpubRender renders one book's generated EPUB and records the outcome
-// on the tracking row. Failure semantics mirror the markdown worker:
-// every failure path writes the row before returning, permanent
-// failures wrap ErrDoNotRetry, and a pending markdown rendition is a
-// plain error so River's retry becomes the wait.
+// on the tracking row. A sequence of renditionRun steps, sharing the
+// markdown worker's loud-failure choreography: the wrapper writes the
+// row before any failure returns, permanent verdicts wrap
+// ErrDoNotRetry, and a pending markdown rendition is a plain error so
+// River's retry becomes the wait.
 func EpubRender(ctx context.Context, a jobs.EpubRenderArgs, deps EpubRenderDeps) error {
-	book, err := deps.Books.GetByID(ctx, "", a.BookID)
-	if err != nil {
-		return fmt.Errorf("load book %s: %w (%w)", a.BookID, err, jobs.ErrDoNotRetry)
-	}
-
-	if !model.Convertible(book.Format) {
-		msg := fmt.Sprintf("format %s cannot become a generated EPUB — the chain starts from %v", book.Format, model.ConvertibleFormats())
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, msg)
-		return fmt.Errorf("%s: %w", msg, jobs.ErrDoNotRetry)
-	}
-
-	cfg, err := deps.Config(ctx)
-	if err != nil {
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, "read converter settings: "+err.Error())
-		return fmt.Errorf("read converter settings: %w", err)
-	}
-	if !cfg.Configured() {
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, repo.MsgConverterNotConfigured)
-		return ErrConverterNotConfigured
-	}
-	if deps.Markdown == nil {
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, "markdown feed is not wired")
-		return fmt.Errorf("markdown feed is not wired: %w", jobs.ErrDoNotRetry)
-	}
-
-	if err := deps.Renditions.MarkRunning(ctx, a.BookID); err != nil {
-		return fmt.Errorf("mark running: %w", err)
-	}
-
-	markdown, err := deps.Markdown.Text(ctx, book, epubTextCap)
-	if err != nil {
-		var failed *service.RenditionFailedError
-		switch {
-		case errors.As(err, &failed):
-			// The chained stage's message, verbatim (ADR-0034 §5).
-			_ = deps.Renditions.MarkFailed(ctx, a.BookID, failed.Msg)
-			return fmt.Errorf("markdown rendition failed: %w (%w)", err, jobs.ErrDoNotRetry)
-		case errors.Is(err, service.ErrRenditionPending):
-			// Loud but transient: the poll sees "waiting for the
-			// markdown rendition", and the retry is the wait.
-			_ = deps.Renditions.MarkFailed(ctx, a.BookID, "waiting for the markdown rendition")
-			return err
-		default:
-			_ = deps.Renditions.MarkFailed(ctx, a.BookID, "read markdown rendition: "+err.Error())
-			return err
+	var (
+		book     model.Book
+		cfg      repo.ConverterConfig
+		markdown string
+		result   service.ConvertResult
+	)
+	defer func() {
+		if result.Path != "" {
+			_ = os.Remove(result.Path)
 		}
-	}
+	}()
 
-	result, err := deps.Render(ctx, cfg.BaseURL, service.EpubRenderRequest{
-		Markdown: markdown,
-		Title:    book.Title,
-		Author:   book.Author,
-		Language: "en",
-	})
-	if err != nil {
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, err.Error())
-		var rejected *service.ConvertRejectedError
-		if errors.As(err, &rejected) {
-			return fmt.Errorf("%w (%w)", err, jobs.ErrDoNotRetry)
-		}
-		return err
-	}
-	defer func() { _ = os.Remove(result.Path) }()
+	return renditionRun(ctx, deps.Renditions, a.BookID,
+		func(ctx context.Context) (string, bool, error) {
+			var err error
+			book, err = deps.Books.GetByID(ctx, "", a.BookID)
+			if err != nil {
+				return "", true, fmt.Errorf("load book %s: %w", a.BookID, err)
+			}
+			return "", false, nil
+		},
+		func(context.Context) (string, bool, error) {
+			if model.Convertible(book.Format) {
+				return "", false, nil
+			}
+			msg := fmt.Sprintf("format %s cannot become a generated EPUB — the chain starts from %v", book.Format, model.ConvertibleFormats())
+			return msg, true, errors.New(msg)
+		},
+		func(ctx context.Context) (string, bool, error) {
+			var err error
+			cfg, err = deps.Config(ctx)
+			if err != nil {
+				return "read converter settings: " + err.Error(), false, fmt.Errorf("read converter settings: %w", err)
+			}
+			if !cfg.Configured() {
+				return repo.MsgConverterNotConfigured, true, ErrConverterNotConfigured
+			}
+			if deps.Markdown == nil {
+				return "markdown feed is not wired", true, errors.New("markdown feed is not wired")
+			}
+			return "", false, nil
+		},
+		func(ctx context.Context) (string, bool, error) {
+			if err := deps.Renditions.MarkRunning(ctx, a.BookID); err != nil {
+				return "", false, fmt.Errorf("mark running: %w", err)
+			}
+			return "", false, nil
+		},
+		// The chained stage (ADR-0034 §5): the same feed the guide
+		// consumes, so a missing or stale rendition is requested and
+		// waited for identically.
+		func(ctx context.Context) (string, bool, error) {
+			var err error
+			markdown, err = deps.Markdown.Text(ctx, book, epubTextCap)
+			if err == nil {
+				return "", false, nil
+			}
+			var failed *service.RenditionFailedError
+			switch {
+			case errors.As(err, &failed):
+				// The chained stage's message, verbatim (ADR-0034 §5).
+				return failed.Msg, true, fmt.Errorf("markdown rendition failed: %w", err)
+			case errors.Is(err, service.ErrRenditionPending):
+				// Loud but transient: the poll sees "waiting for the
+				// markdown rendition", and the retry is the wait.
+				return "waiting for the markdown rendition", false, err
+			default:
+				return "read markdown rendition: " + err.Error(), false, err
+			}
+		},
+		func(ctx context.Context) (string, bool, error) {
+			var err error
+			result, err = deps.Render(ctx, cfg.BaseURL, service.EpubRenderRequest{
+				Markdown: markdown,
+				Title:    book.Title,
+				Author:   book.Author,
+				Language: "en",
+			})
+			if err != nil {
+				var rejected *service.ConvertRejectedError
+				return err.Error(), errors.As(err, &rejected), err
+			}
+			return "", false, nil
+		},
+		func(ctx context.Context) (string, bool, error) {
+			// Hash before placing — placement consumes the staged file, and
+			// the files row's content_hash is the identity scan's rename
+			// safety net keys on (same order as audiobook finalize).
+			epubHash, err := hashFile(ctx, result.Path)
+			if err != nil {
+				return "hash epub: " + err.Error(), false, fmt.Errorf("hash epub for %s: %w", a.BookID, err)
+			}
+			sourceHash := deps.SourceHash(ctx, book)
 
-	// Hash before placing — placement consumes the staged file, and the
-	// files row's content_hash is the identity scan's rename safety net
-	// keys on (same order as audiobook finalize).
-	epubHash, err := hashFile(ctx, result.Path)
-	if err != nil {
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, "hash epub: "+err.Error())
-		return fmt.Errorf("hash epub for %s: %w", a.BookID, err)
-	}
-	sourceHash := deps.SourceHash(ctx, book)
+			placed, err := deps.Place(ctx, book, result.Path)
+			if err != nil {
+				return "place epub: " + err.Error(), false, fmt.Errorf("place epub for %s: %w", a.BookID, err)
+			}
 
-	placed, err := deps.Place(ctx, book, result.Path)
-	if err != nil {
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, "place epub: "+err.Error())
-		return fmt.Errorf("place epub for %s: %w", a.BookID, err)
-	}
+			fileID, err := upsertEpubFile(ctx, deps.Files, book, placed, epubHash)
+			if err != nil {
+				return "record files row: " + err.Error(), false, fmt.Errorf("record files row for %s: %w", a.BookID, err)
+			}
 
-	fileID, err := upsertEpubFile(ctx, deps.Files, book, placed, epubHash)
-	if err != nil {
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, "record files row: "+err.Error())
-		return fmt.Errorf("record files row for %s: %w", a.BookID, err)
-	}
-
-	if err := deps.Renditions.MarkReady(ctx, a.BookID, fileID, sourceHash, result.Version); err != nil {
-		return fmt.Errorf("mark ready: %w", err)
-	}
-	return nil
+			if err := deps.Renditions.MarkReady(ctx, a.BookID, fileID, sourceHash, result.Version); err != nil {
+				return "", false, fmt.Errorf("mark ready: %w", err)
+			}
+			return "", false, nil
+		},
+	)
 }
 
 // upsertEpubFile lands the generated EPUB in files without violating

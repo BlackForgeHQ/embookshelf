@@ -53,66 +53,85 @@ type MarkdownRenditionDeps struct {
 var ErrConverterNotConfigured = fmt.Errorf(repo.MsgConverterNotConfigured+": %w", jobs.ErrDoNotRetry)
 
 // MarkdownRendition converts one book's file into markdown and records
-// the outcome on the tracking row. Every failure path writes the row
-// before returning, so the status API always has the loud answer — what
-// lands in the row is surfaced verbatim.
+// the outcome on the tracking row. A sequence of renditionRun steps:
+// the wrapper owns writing the row before any failure returns (ADR-0033
+// §5) and mapping permanent verdicts onto ErrDoNotRetry — what lands in
+// the row is surfaced verbatim.
 func MarkdownRendition(ctx context.Context, a jobs.MarkdownRenditionArgs, deps MarkdownRenditionDeps) error {
-	book, err := deps.Books.GetByID(ctx, "", a.BookID)
-	if err != nil {
-		// A deleted book cascades its rendition row; nothing to record.
-		return fmt.Errorf("load book %s: %w (%w)", a.BookID, err, jobs.ErrDoNotRetry)
-	}
-
-	if !model.Convertible(book.Format) {
-		msg := fmt.Sprintf("format %s is not convertible — the converter accepts %v", book.Format, model.ConvertibleFormats())
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, msg)
-		return fmt.Errorf("%s: %w", msg, jobs.ErrDoNotRetry)
-	}
-
-	cfg, err := deps.Config(ctx)
-	if err != nil {
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, "read converter settings: "+err.Error())
-		return fmt.Errorf("read converter settings: %w", err)
-	}
-	if !cfg.Configured() {
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, repo.MsgConverterNotConfigured)
-		return ErrConverterNotConfigured
-	}
-
-	if err := deps.Renditions.MarkRunning(ctx, a.BookID); err != nil {
-		return fmt.Errorf("mark running: %w", err)
-	}
-
-	body, _, closer, err := deps.Open(ctx, book)
-	if err != nil {
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, "open book file: "+err.Error())
-		return fmt.Errorf("open book %s: %w", a.BookID, err)
-	}
-	result, convertErr := deps.Convert(ctx, cfg.BaseURL, body)
-	_ = closer.Close()
-	if convertErr != nil {
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, convertErr.Error())
-		var rejected *service.ConvertRejectedError
-		if errors.As(convertErr, &rejected) {
-			// The document itself is refused — same bytes, same answer.
-			return fmt.Errorf("%w (%w)", convertErr, jobs.ErrDoNotRetry)
+	var (
+		book   model.Book
+		cfg    repo.ConverterConfig
+		result service.ConvertResult
+	)
+	defer func() {
+		if result.Path != "" {
+			_ = os.Remove(result.Path)
 		}
-		return convertErr
-	}
-	defer func() { _ = os.Remove(result.Path) }()
+	}()
 
-	// Hash before placing: placement consumes the staged file, and the
-	// hash is what answers "is this rendition still current" later.
-	sourceHash := deps.SourceHash(ctx, book)
+	return renditionRun(ctx, deps.Renditions, a.BookID,
+		func(ctx context.Context) (string, bool, error) {
+			var err error
+			book, err = deps.Books.GetByID(ctx, "", a.BookID)
+			if err != nil {
+				// A deleted book cascades its rendition row; nothing to record.
+				return "", true, fmt.Errorf("load book %s: %w", a.BookID, err)
+			}
+			return "", false, nil
+		},
+		func(context.Context) (string, bool, error) {
+			if model.Convertible(book.Format) {
+				return "", false, nil
+			}
+			msg := fmt.Sprintf("format %s is not convertible — the converter accepts %v", book.Format, model.ConvertibleFormats())
+			return msg, true, errors.New(msg)
+		},
+		func(ctx context.Context) (string, bool, error) {
+			var err error
+			cfg, err = deps.Config(ctx)
+			if err != nil {
+				return "read converter settings: " + err.Error(), false, fmt.Errorf("read converter settings: %w", err)
+			}
+			if !cfg.Configured() {
+				return repo.MsgConverterNotConfigured, true, ErrConverterNotConfigured
+			}
+			return "", false, nil
+		},
+		func(ctx context.Context) (string, bool, error) {
+			if err := deps.Renditions.MarkRunning(ctx, a.BookID); err != nil {
+				return "", false, fmt.Errorf("mark running: %w", err)
+			}
+			return "", false, nil
+		},
+		func(ctx context.Context) (string, bool, error) {
+			body, _, closer, err := deps.Open(ctx, book)
+			if err != nil {
+				return "open book file: " + err.Error(), false, fmt.Errorf("open book %s: %w", a.BookID, err)
+			}
+			var convertErr error
+			result, convertErr = deps.Convert(ctx, cfg.BaseURL, body)
+			_ = closer.Close()
+			if convertErr != nil {
+				var rejected *service.ConvertRejectedError
+				// A rejection is the document itself refused — same bytes,
+				// same answer — so it is permanent.
+				return convertErr.Error(), errors.As(convertErr, &rejected), convertErr
+			}
+			return "", false, nil
+		},
+		func(ctx context.Context) (string, bool, error) {
+			// Hash before placing: placement consumes the staged file, and
+			// the hash is what answers "is this rendition still current".
+			sourceHash := deps.SourceHash(ctx, book)
 
-	placed, err := deps.Place(ctx, book, result.Path)
-	if err != nil {
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, "place markdown: "+err.Error())
-		return fmt.Errorf("place markdown for %s: %w", a.BookID, err)
-	}
-
-	if err := deps.Renditions.MarkReady(ctx, a.BookID, placed.Location, placed.Size, sourceHash, result.Version); err != nil {
-		return fmt.Errorf("mark ready: %w", err)
-	}
-	return nil
+			placed, err := deps.Place(ctx, book, result.Path)
+			if err != nil {
+				return "place markdown: " + err.Error(), false, fmt.Errorf("place markdown for %s: %w", a.BookID, err)
+			}
+			if err := deps.Renditions.MarkReady(ctx, a.BookID, placed.Location, placed.Size, sourceHash, result.Version); err != nil {
+				return "", false, fmt.Errorf("mark ready: %w", err)
+			}
+			return "", false, nil
+		},
+	)
 }

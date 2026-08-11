@@ -197,18 +197,8 @@ func TestEpubRenderPropagatesMarkdownFailureVerbatim(t *testing.T) {
 	}
 }
 
-func TestEpubRenderNotConfiguredIsLoudAndPermanent(t *testing.T) {
-	store := &fakeEpubStore{}
-	deps := epubDeps(store, &fakeEpubFiles{})
-	deps.Config = func(context.Context) (repo.ConverterConfig, error) {
-		return repo.ConverterConfig{}, nil
-	}
-
-	err := EpubRender(context.Background(), jobs.EpubRenderArgs{BookID: "b1"}, deps)
-	if !errors.Is(err, jobs.ErrDoNotRetry) {
-		t.Fatalf("err = %v, want ErrDoNotRetry", err)
-	}
-	if store.failed != "converter extension is not configured" {
-		t.Fatalf("row error = %q", store.failed)
-	}
-}
+// The shared failure arms (not configured, rejection, transient,
+// non-convertible) are TestMarkdownRenditionFailureArms' table plus the
+// renditionRun choreography test — what stays here is the EPUB
+// worker's own: the markdown chain (wait + verbatim propagation above)
+// and the files-row upsert.
