@@ -126,16 +126,38 @@ func newExchangeFixture(t *testing.T, provision repo.OIDCAutoProvisionDetails) *
 	// Stub the one operation that would otherwise talk to an IdP. The
 	// registry is the service's only dispatch point, so registering a
 	// slug here exercises Exchange exactly as a real provider would.
-	f.svc.providers[testIdPSlug] = oidcProvider{
-		callback: func(context.Context, string, stateEntry, string) (resolvedClaims, string, error) {
+	f.svc.providers = append(f.svc.providers, registeredProvider{testIdPSlug, stubOIDCProvider{
+		callbackFn: func(context.Context, string, stateEntry, string) (resolvedClaims, string, error) {
 			f.callbacks++
 			if f.callbackErr != nil {
 				return resolvedClaims{}, "", f.callbackErr
 			}
 			return f.claims, testIssuer, nil
 		},
-	}
+	}})
 	return f
+}
+
+// stubOIDCProvider is a registrable fake: only the callback matters to
+// Exchange, the rest of the interface answers with zero values.
+type stubOIDCProvider struct {
+	callbackFn func(context.Context, string, stateEntry, string) (resolvedClaims, string, error)
+}
+
+func (p stubOIDCProvider) public(context.Context) (PublicProvider, bool, error) {
+	return PublicProvider{}, false, nil
+}
+
+func (p stubOIDCProvider) authURL(context.Context, string, string, string) (string, error) {
+	return "", nil
+}
+
+func (p stubOIDCProvider) callback(ctx context.Context, code string, entry stateEntry, redirect string) (resolvedClaims, string, error) {
+	return p.callbackFn(ctx, code, entry, redirect)
+}
+
+func (p stubOIDCProvider) test(context.Context, []byte) (TestResult, error) {
+	return TestResult{}, nil
 }
 
 // seedState mints a state as an authorize redirect would have, and

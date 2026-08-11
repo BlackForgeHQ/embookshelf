@@ -53,18 +53,31 @@ func (t *TestResult) add(name string, status CheckStatus, msg string) {
 	t.Checks = append(t.Checks, TestCheck{Name: name, Status: status, Message: msg})
 }
 
-// TestGeneric runs the discovery-based checks.
-func (s *OIDCService) TestGeneric(ctx context.Context, cfg repo.GenericOIDCConfig) TestResult {
+// TestProvider runs one provider's connection diagnostic. The slug
+// resolves against the same registry as the login flow, and the raw
+// request body is handed to the adapter, which owns its override shape
+// and the blank-submission fallback (#258). This is the whole test
+// endpoint: a lookup plus one call.
+func (s *OIDCService) TestProvider(ctx context.Context, slug string, body []byte) (TestResult, error) {
+	p, ok := s.provider(slug)
+	if !ok {
+		return TestResult{}, ErrOIDCUnknownProvider
+	}
+	return p.test(ctx, body)
+}
+
+// testGeneric runs the discovery-based checks.
+func testGeneric(ctx context.Context, cfg repo.GenericOIDCConfig) TestResult {
 	return testOIDCIssuer(ctx, cfg.IssuerURI, cfg.ClientID)
 }
 
-// TestGoogle reuses the generic path after filling in Google's issuer.
-func (s *OIDCService) TestGoogle(ctx context.Context, cfg repo.OAuthPresetConfig) TestResult {
+// testGoogle reuses the generic path after filling in Google's issuer.
+func testGoogle(ctx context.Context, cfg repo.OAuthPresetConfig) TestResult {
 	return testOIDCIssuer(ctx, "https://accounts.google.com", cfg.ClientID)
 }
 
-// TestGitHub pings the fixed GitHub endpoints (no discovery doc).
-func (s *OIDCService) TestGitHub(ctx context.Context, cfg repo.OAuthPresetConfig) TestResult {
+// testGitHub pings the fixed GitHub endpoints (no discovery doc).
+func testGitHub(ctx context.Context, cfg repo.OAuthPresetConfig) TestResult {
 	out := TestResult{}
 	if cfg.ClientID == "" {
 		out.add("Client ID", CheckFail, "client id is empty")

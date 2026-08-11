@@ -4,6 +4,8 @@ package handler
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -174,80 +176,26 @@ func (h *Handler) SettingsOIDCGet(c *gin.Context) { settingsGet(c, h, oidcSettin
 // row plus the shared flags.
 func (h *Handler) SettingsOIDCUpdate(c *gin.Context) { settingsPut(c, h, oidcSettings) }
 
-// SettingsOIDCTest runs TestConnection for one provider at a time. The
-// slug is supplied in the URL; the body carries an optional override
-// config (useful when testing before saving).
+// SettingsOIDCTest runs the connection diagnostic for one provider at a
+// time. The slug is supplied in the URL; the body carries an optional
+// override config (useful when testing before saving). The service owns
+// the provider registry, the override shapes, and the blank-submission
+// fallback, so this endpoint is a lookup plus one call (#258).
 func (h *Handler) SettingsOIDCTest(c *gin.Context) {
 	if h.oidc == nil {
 		writeError(c, http.StatusServiceUnavailable, "oidc service unavailable")
 		return
 	}
 	slug := c.Param("slug")
-	ctx := c.Request.Context()
-
-	switch slug {
-	case repo.ProviderSlugGoogle:
-		var body struct {
-			Google oauthPresetDTO `json:"google"`
-		}
-		_ = c.ShouldBindJSON(&body)
-		cfg := repo.OAuthPresetConfig{
-			ClientID:     body.Google.ClientID,
-			ClientSecret: body.Google.ClientSecret,
-		}
-		if cfg.ClientID == "" {
-			stored, err := h.appSettings.GetGoogle(ctx)
-			if err != nil {
-				writeServerError(c, "oidc test google", err)
-				return
-			}
-			cfg = stored
-		}
-		c.JSON(http.StatusOK, h.oidc.TestGoogle(ctx, cfg))
-
-	case repo.ProviderSlugGitHub:
-		var body struct {
-			GitHub oauthPresetDTO `json:"github"`
-		}
-		_ = c.ShouldBindJSON(&body)
-		cfg := repo.OAuthPresetConfig{
-			ClientID:     body.GitHub.ClientID,
-			ClientSecret: body.GitHub.ClientSecret,
-		}
-		if cfg.ClientID == "" {
-			stored, err := h.appSettings.GetGitHub(ctx)
-			if err != nil {
-				writeServerError(c, "oidc test github", err)
-				return
-			}
-			cfg = stored
-		}
-		c.JSON(http.StatusOK, h.oidc.TestGitHub(ctx, cfg))
-
-	case repo.ProviderSlugGeneric:
-		var body struct {
-			Generic genericOIDCDTO `json:"generic"`
-		}
-		_ = c.ShouldBindJSON(&body)
-		cfg := repo.GenericOIDCConfig{
-			ClientID:     body.Generic.ClientID,
-			ClientSecret: body.Generic.ClientSecret,
-			IssuerURI:    body.Generic.IssuerURI,
-			Scopes:       body.Generic.Scopes,
-			ClaimMapping: body.Generic.ClaimMapping,
-		}
-		if cfg.ClientID == "" || cfg.IssuerURI == "" {
-			stored, err := h.appSettings.GetGenericOIDC(ctx)
-			if err != nil {
-				writeServerError(c, "oidc test generic", err)
-				return
-			}
-			cfg = stored
-		}
-		c.JSON(http.StatusOK, h.oidc.TestGeneric(ctx, cfg))
-
-	default:
+	body, _ := io.ReadAll(c.Request.Body)
+	res, err := h.oidc.TestProvider(c.Request.Context(), slug, body)
+	switch {
+	case errors.Is(err, service.ErrOIDCUnknownProvider):
 		writeError(c, http.StatusNotFound, "unknown provider")
+	case err != nil:
+		writeServerError(c, "oidc test "+slug, err)
+	default:
+		c.JSON(http.StatusOK, res)
 	}
 }
 

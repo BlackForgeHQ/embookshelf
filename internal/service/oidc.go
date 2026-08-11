@@ -68,20 +68,6 @@ const (
 	githubIssuer = "https://github.com"
 )
 
-// oidcProvider is one login provider's two operations. Both the
-// authorize-URL builder and the callback exchange dispatch on the same
-// slug, so they are declared together and looked up once rather than
-// switched on in two places that must stay in step.
-//
-// Shaped as a struct of funcs rather than an interface for the same
-// reason queue/registry.go is: the per-provider work already lives as
-// methods, so a registration is a pair of method values and no bodies
-// have to move. Adding a provider is one entry in newProviderRegistry.
-type oidcProvider struct {
-	authURL  func(ctx context.Context, redirect, intent, linkUserID string) (string, error)
-	callback func(ctx context.Context, code string, entry stateEntry, redirect string) (resolvedClaims, string, error)
-}
-
 // OIDCService is the multi-provider OIDC/OAuth login service.
 // Google, GitHub, and a custom OIDC provider each have their own
 // settings row and can be enabled in parallel.
@@ -141,9 +127,10 @@ type OIDCService struct {
 
 	states *stateStore
 
-	// providers is the slug → operations registry. Built once at
-	// construction; the two dispatch sites are map lookups.
-	providers map[string]oidcProvider
+	// providers is the ordered provider registry (oidc_providers.go).
+	// Built once at construction; every dispatch site — auth URL,
+	// callback, public listing, connection test — resolves against it.
+	providers []registeredProvider
 
 	// Discovery cache for the generic OIDC provider only. Google runs
 	// through the same path but its issuer is fixed so we'd still hit
@@ -175,25 +162,6 @@ func NewOIDCService(settings oidcSettingsStore, users oidcUserProfileStore, sess
 	}
 	svc.providers = svc.newProviderRegistry()
 	return svc
-}
-
-// newProviderRegistry declares every login provider this binary supports.
-// One entry per slug; nothing else in the file switches on a slug.
-func (s *OIDCService) newProviderRegistry() map[string]oidcProvider {
-	return map[string]oidcProvider{
-		repo.ProviderSlugGoogle: {
-			authURL:  s.authURLGoogleWithIntent,
-			callback: s.callbackGoogle,
-		},
-		repo.ProviderSlugGitHub: {
-			authURL:  s.authURLGitHubWithIntent,
-			callback: s.callbackGitHub,
-		},
-		repo.ProviderSlugGeneric: {
-			authURL:  s.authURLGenericWithIntent,
-			callback: s.callbackGeneric,
-		},
-	}
 }
 
 // -----------------------------------------------------------------------------
@@ -241,47 +209,21 @@ func (s *OIDCService) Enabled(ctx context.Context) (bool, error) {
 	return len(ps) > 0, nil
 }
 
+// publicProviders walks the registry in order; each adapter's public()
+// is both the usable gate and the listing entry, so what the login page
+// offers is exactly what the registry declares.
 func (s *OIDCService) publicProviders(ctx context.Context) ([]PublicProvider, error) {
 	var out []PublicProvider
-	if g, err := s.settings.GetGoogle(ctx); err != nil {
-		return nil, err
-	} else if googleUsable(g) {
-		out = append(out, PublicProvider{
-			Slug: repo.ProviderSlugGoogle, Name: "Google", Kind: "google",
-			LoginURL: "/api/v1/auth/oidc/" + repo.ProviderSlugGoogle,
-		})
-	}
-	if g, err := s.settings.GetGitHub(ctx); err != nil {
-		return nil, err
-	} else if githubUsable(g) {
-		out = append(out, PublicProvider{
-			Slug: repo.ProviderSlugGitHub, Name: "GitHub", Kind: "github",
-			LoginURL: "/api/v1/auth/oidc/" + repo.ProviderSlugGitHub,
-		})
-	}
-	if g, err := s.settings.GetGenericOIDC(ctx); err != nil {
-		return nil, err
-	} else if genericUsable(g) {
-		name := g.ProviderName
-		if name == "" {
-			name = "SSO"
+	for _, e := range s.providers {
+		p, ok, err := e.public(ctx)
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, PublicProvider{
-			Slug: repo.ProviderSlugGeneric, Name: name, Kind: "oidc",
-			LoginURL: "/api/v1/auth/oidc/" + repo.ProviderSlugGeneric,
-		})
+		if ok {
+			out = append(out, p)
+		}
 	}
 	return out, nil
-}
-
-func googleUsable(c repo.OAuthPresetConfig) bool {
-	return c.Enabled && c.ClientID != "" && c.ClientSecret != ""
-}
-func githubUsable(c repo.OAuthPresetConfig) bool {
-	return c.Enabled && c.ClientID != "" && c.ClientSecret != ""
-}
-func genericUsable(c repo.GenericOIDCConfig) bool {
-	return c.Enabled && c.ClientID != "" && c.IssuerURI != ""
 }
 
 // ValidateForceOnlyTransition refuses to enable force-only mode when no
@@ -472,53 +414,11 @@ func refuseLogin(res ProvisionResult) (ExchangeOutcome, error) {
 // resolveCallback runs the provider-specific OAuth/OIDC token exchange
 // and returns the resolved claims + canonical issuer for the request.
 func (s *OIDCService) resolveCallback(ctx context.Context, code string, entry stateEntry, redirect string) (resolvedClaims, string, error) {
-	p, ok := s.providers[entry.ProviderSlug]
+	p, ok := s.provider(entry.ProviderSlug)
 	if !ok {
 		return resolvedClaims{}, "", ErrOIDCUnknownProvider
 	}
 	return p.callback(ctx, code, entry, redirect)
-}
-
-// callbackGoogle exchanges the code against Google's OIDC endpoints.
-func (s *OIDCService) callbackGoogle(ctx context.Context, code string, entry stateEntry, redirect string) (resolvedClaims, string, error) {
-	cfg, err := s.settings.GetGoogle(ctx)
-	if err != nil {
-		return resolvedClaims{}, "", err
-	}
-	if !googleUsable(cfg) {
-		return resolvedClaims{}, "", ErrOIDCDisabled
-	}
-	return s.oidcCallback(ctx, code, entry, googleOIDCConfig(cfg), redirect)
-}
-
-// callbackGitHub exchanges the code against GitHub's REST API. GitHub is
-// not an OIDC provider — no discovery document, no ID token — so the
-// issuer is a constant rather than something discovery reports.
-func (s *OIDCService) callbackGitHub(ctx context.Context, code string, entry stateEntry, redirect string) (resolvedClaims, string, error) {
-	cfg, err := s.settings.GetGitHub(ctx)
-	if err != nil {
-		return resolvedClaims{}, "", err
-	}
-	if !githubUsable(cfg) {
-		return resolvedClaims{}, "", ErrOIDCDisabled
-	}
-	claims, err := s.githubCallback(ctx, code, entry, cfg, redirect)
-	if err != nil {
-		return resolvedClaims{}, "", err
-	}
-	return claims, githubIssuer, nil
-}
-
-// callbackGeneric exchanges the code against the admin-configured issuer.
-func (s *OIDCService) callbackGeneric(ctx context.Context, code string, entry stateEntry, redirect string) (resolvedClaims, string, error) {
-	cfg, err := s.settings.GetGenericOIDC(ctx)
-	if err != nil {
-		return resolvedClaims{}, "", err
-	}
-	if !genericUsable(cfg) {
-		return resolvedClaims{}, "", ErrOIDCDisabled
-	}
-	return s.oidcCallback(ctx, code, entry, cfg, redirect)
 }
 
 // AuthURLForLink builds an authorize URL whose state carries
@@ -539,7 +439,7 @@ func (s *OIDCService) AuthURLForLink(ctx context.Context, slug, baseURL, userID 
 // authURLForSlug is the shared dispatch used by both AuthURL and
 // AuthURLForLink — same builders, same state minting, same redirect.
 func (s *OIDCService) authURLForSlug(ctx context.Context, slug, redirect, intent, linkUserID string) (string, error) {
-	p, ok := s.providers[slug]
+	p, ok := s.provider(slug)
 	if !ok {
 		return "", ErrOIDCUnknownProvider
 	}
@@ -549,28 +449,6 @@ func (s *OIDCService) authURLForSlug(ctx context.Context, slug, redirect, intent
 // -----------------------------------------------------------------------------
 // AuthURL builders
 // -----------------------------------------------------------------------------
-
-func (s *OIDCService) authURLGoogleWithIntent(ctx context.Context, redirect, intent, linkUserID string) (string, error) {
-	cfg, err := s.settings.GetGoogle(ctx)
-	if err != nil {
-		return "", err
-	}
-	if !googleUsable(cfg) {
-		return "", ErrOIDCDisabled
-	}
-	return s.authURLOIDC(ctx, repo.ProviderSlugGoogle, googleOIDCConfig(cfg), redirect, intent, linkUserID)
-}
-
-func (s *OIDCService) authURLGenericWithIntent(ctx context.Context, redirect, intent, linkUserID string) (string, error) {
-	cfg, err := s.settings.GetGenericOIDC(ctx)
-	if err != nil {
-		return "", err
-	}
-	if !genericUsable(cfg) {
-		return "", ErrOIDCDisabled
-	}
-	return s.authURLOIDC(ctx, repo.ProviderSlugGeneric, cfg, redirect, intent, linkUserID)
-}
 
 func (s *OIDCService) authURLOIDC(ctx context.Context, slug string, cfg repo.GenericOIDCConfig, redirect, intent, linkUserID string) (string, error) {
 	disc, err := s.getDiscovery(ctx, cfg)
@@ -591,14 +469,9 @@ func (s *OIDCService) authURLOIDC(ctx context.Context, slug string, cfg repo.Gen
 	return u, nil
 }
 
-func (s *OIDCService) authURLGitHubWithIntent(ctx context.Context, redirect, intent, linkUserID string) (string, error) {
-	cfg, err := s.settings.GetGitHub(ctx)
-	if err != nil {
-		return "", err
-	}
-	if !githubUsable(cfg) {
-		return "", ErrOIDCDisabled
-	}
+// authURLGitHub hand-builds GitHub's authorize URL — no discovery
+// document exists to derive it from. The usable gate ran in the adapter.
+func (s *OIDCService) authURLGitHub(cfg repo.OAuthPresetConfig, redirect, intent, linkUserID string) (string, error) {
 	state, _, verifier, err := s.issueStateWithIntent(repo.ProviderSlugGitHub, redirect, intent, linkUserID)
 	if err != nil {
 		return "", err
@@ -883,25 +756,6 @@ func oidcOAuthConfig(cfg repo.GenericOIDCConfig, provider *oidc.Provider, redire
 		RedirectURL:  redirect,
 		Endpoint:     provider.Endpoint(),
 		Scopes:       splitScopes(cfg.Scopes),
-	}
-}
-
-// googleOIDCConfig widens Google's tiny preset config into the generic
-// OIDC shape the discovery path consumes. Issuer + scopes + claim
-// mapping are all baked in — admins only supply credentials.
-func googleOIDCConfig(c repo.OAuthPresetConfig) repo.GenericOIDCConfig {
-	return repo.GenericOIDCConfig{
-		Enabled:      c.Enabled,
-		ProviderName: "Google",
-		ClientID:     c.ClientID,
-		ClientSecret: c.ClientSecret,
-		IssuerURI:    "https://accounts.google.com",
-		Scopes:       "openid profile email",
-		ClaimMapping: repo.ClaimMapping{
-			Username: "email",
-			Email:    "email",
-			Name:     "name",
-		},
 	}
 }
 
