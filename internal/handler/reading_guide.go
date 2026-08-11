@@ -120,7 +120,7 @@ func (h *Handler) guidePreflightConvertible(c *gin.Context, s bookScope) bool {
 		writeServerError(c, "read markdown rendition", err)
 		return false
 	}
-	if rendition.State == model.MarkdownRenditionFailed {
+	if rendition.State == model.RenditionFailed {
 		writeError(c, http.StatusBadGateway, rendition.Error)
 		return false
 	}

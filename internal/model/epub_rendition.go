@@ -10,9 +10,9 @@ import "time"
 // FileID is the pointer that says which one.
 type EpubRendition struct {
 	BookID string
-	// State reuses the markdown rendition's four-state lifecycle — one
-	// HTTP call, no cancel, no segments.
-	State MarkdownRenditionState
+	// State is the shared rendition lifecycle — one HTTP call, no
+	// cancel, no segments.
+	State RenditionState
 	// Error is the loud-failure channel, surfaced verbatim — including
 	// a chained markdown-conversion failure.
 	Error string

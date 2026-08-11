@@ -72,7 +72,7 @@ func (h *Handler) BookEpubGet(c *gin.Context, s bookScope) {
 	}
 	// A ready row whose file has since gone missing (purged after a
 	// scan) is offered as regenerable, not downloadable.
-	if rendition.State == model.MarkdownRenditionReady && rendition.FileID == nil {
+	if rendition.State == model.RenditionReady && rendition.FileID == nil {
 		dto.State = "none"
 	}
 	dto.Stale = h.epubStale(c, s.Book, rendition)
@@ -80,7 +80,7 @@ func (h *Handler) BookEpubGet(c *gin.Context, s bookScope) {
 }
 
 func (h *Handler) epubStale(c *gin.Context, book model.Book, r model.EpubRendition) bool {
-	if r.State != model.MarkdownRenditionReady || len(r.SourceContentHash) == 0 || h.libStore == nil {
+	if r.State != model.RenditionReady || len(r.SourceContentHash) == 0 || h.libStore == nil {
 		return false
 	}
 	handle, err := h.libStore.For(c.Request.Context(), book.LibraryID)
@@ -145,7 +145,7 @@ func (h *Handler) serveEpubRendition(c *gin.Context, book model.Book) {
 	ctx := c.Request.Context()
 
 	rendition, err := h.epubRenditions.GetByBookID(ctx, book.ID)
-	if err != nil || rendition.State != model.MarkdownRenditionReady || rendition.FileID == nil {
+	if err != nil || rendition.State != model.RenditionReady || rendition.FileID == nil {
 		writeError(c, http.StatusNotFound, "this book has no generated EPUB")
 		return
 	}

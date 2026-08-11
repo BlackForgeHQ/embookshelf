@@ -87,7 +87,7 @@ func (h *Handler) BookMarkdownGet(c *gin.Context, s bookScope) {
 // primary file. Answerable only when both hashes exist and the library
 // resolves; anything else reads as not-stale rather than a scare label.
 func (h *Handler) renditionStale(c *gin.Context, book model.Book, r model.MarkdownRendition) bool {
-	if r.State != model.MarkdownRenditionReady || len(r.SourceContentHash) == 0 || h.libStore == nil {
+	if r.State != model.RenditionReady || len(r.SourceContentHash) == 0 || h.libStore == nil {
 		return false
 	}
 	handle, err := h.libStore.For(c.Request.Context(), book.LibraryID)
@@ -119,7 +119,7 @@ func (h *Handler) BookMarkdownDownload(c *gin.Context, s bookScope) {
 	}
 	rendition, err := h.renditions.GetByBookID(ctx, s.Book.ID)
 	if errors.Is(err, repo.ErrNotFound) ||
-		(err == nil && (rendition.State != model.MarkdownRenditionReady || rendition.Location == "")) {
+		(err == nil && (rendition.State != model.RenditionReady || rendition.Location == "")) {
 		writeError(c, http.StatusNotFound, "this book has no markdown rendition")
 		return
 	}

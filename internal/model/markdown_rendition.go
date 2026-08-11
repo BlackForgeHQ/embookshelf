@@ -4,24 +4,12 @@ package model
 
 import "time"
 
-// MarkdownRenditionState is the lifecycle of one book's Markdown
-// rendition (ADR-0033). Far simpler than the audiobook's: conversion is
-// one HTTP call, so there is no cancel, no seal, no segment machinery.
-type MarkdownRenditionState string
-
-const (
-	MarkdownRenditionPending MarkdownRenditionState = "pending"
-	MarkdownRenditionRunning MarkdownRenditionState = "running"
-	MarkdownRenditionReady   MarkdownRenditionState = "ready"
-	MarkdownRenditionFailed  MarkdownRenditionState = "failed"
-)
-
 // MarkdownRendition mirrors one book_markdown_renditions row: the
 // tracking record for the markdown produced from a Convertible-format
 // book by the converter extension.
 type MarkdownRendition struct {
 	BookID string
-	State  MarkdownRenditionState
+	State  RenditionState
 	// Error is the loud-failure channel, surfaced verbatim. Empty while
 	// nothing is wrong.
 	Error string

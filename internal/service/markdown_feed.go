@@ -71,9 +71,9 @@ func (f *MarkdownFeed) Text(ctx context.Context, book model.Book, textCap int64)
 	}
 
 	switch rendition.State {
-	case model.MarkdownRenditionFailed:
+	case model.RenditionFailed:
 		return "", &RenditionFailedError{Msg: rendition.Error}
-	case model.MarkdownRenditionPending, model.MarkdownRenditionRunning:
+	case model.RenditionPending, model.RenditionRunning:
 		return "", ErrRenditionPending
 	}
 

@@ -51,7 +51,7 @@ func TestBookEpubGetAnswersNoneForAVirginBook(t *testing.T) {
 // that 404s.
 func TestBookEpubGetReadyWithoutFileReadsAsNone(t *testing.T) {
 	h := &Handler{epubRenditions: &fakeEpubRenditions{row: model.EpubRendition{
-		State: model.MarkdownRenditionReady, FileID: nil,
+		State: model.RenditionReady, FileID: nil,
 	}}}
 	c, rec := settingsCtx(t, http.MethodGet, "/api/v1/books/b1/epub", "")
 	h.BookEpubGet(c, pdfScope())

@@ -5,7 +5,6 @@ package repo_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/model"
@@ -13,7 +12,12 @@ import (
 	"github.com/blackforge/embookshelf/internal/repo/repotest"
 )
 
-func TestEpubRenditionLifecycle(t *testing.T) {
+// The shared lifecycle (states, guards, loud failure) is covered by the
+// suite in book_rendition_test.go over both artifact shapes. What is
+// tested here is the EPUB's own artifact projection: the file_id
+// pointer and what happens when the files row it names goes away.
+
+func TestEpubRenditionArtifactProjection(t *testing.T) {
 	d := repotest.New(t)
 	ctx := context.Background()
 	libs := repo.NewLibraryRepo(d)
@@ -55,7 +59,7 @@ func TestEpubRenditionLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByBookID: %v", err)
 	}
-	if got.State != model.MarkdownRenditionReady || got.FileID == nil || *got.FileID != f.ID {
+	if got.State != model.RenditionReady || got.FileID == nil || *got.FileID != f.ID {
 		t.Fatalf("row = %+v", got)
 	}
 	if !bytes.Equal(got.SourceContentHash, hash) || got.ConverterVersion != "0.2.0" {
@@ -73,20 +77,5 @@ func TestEpubRenditionLifecycle(t *testing.T) {
 	}
 	if got.FileID != nil {
 		t.Fatalf("FileID = %v, want nil after the files row went", *got.FileID)
-	}
-
-	// Failure is verbatim, and the book cascade takes the row with it.
-	if err := r.MarkFailed(ctx, b.ID, "markdown is empty: nothing to render"); err != nil {
-		t.Fatalf("MarkFailed: %v", err)
-	}
-	got, _ = r.GetByBookID(ctx, b.ID)
-	if got.State != model.MarkdownRenditionFailed || got.Error != "markdown is empty: nothing to render" {
-		t.Fatalf("row = %+v", got)
-	}
-	if _, err := d.PG.Exec(ctx, "DELETE FROM books WHERE id = $1", b.ID); err != nil {
-		t.Fatalf("delete book: %v", err)
-	}
-	if _, err := r.GetByBookID(ctx, b.ID); !errors.Is(err, repo.ErrNotFound) {
-		t.Fatalf("row survived its book: %v", err)
 	}
 }

@@ -46,7 +46,7 @@ func feedBook() model.Book { return model.Book{ID: "b1", Format: "PDF"} }
 func TestMarkdownFeedReadsAFreshRendition(t *testing.T) {
 	var requested []string
 	feed := feedWith(&fakeRenditionReader{row: model.MarkdownRendition{
-		State: model.MarkdownRenditionReady, Location: "A/T/T.md",
+		State: model.RenditionReady, Location: "A/T/T.md",
 		SourceContentHash: []byte{0x01},
 	}}, &requested)
 
@@ -83,7 +83,7 @@ func TestMarkdownFeedRequestsWhatIsMissing(t *testing.T) {
 func TestMarkdownFeedRequestsWhatIsStale(t *testing.T) {
 	var requested []string
 	feed := feedWith(&fakeRenditionReader{row: model.MarkdownRendition{
-		State: model.MarkdownRenditionReady, Location: "A/T/T.md",
+		State: model.RenditionReady, Location: "A/T/T.md",
 		SourceContentHash: []byte{0xff},
 	}}, &requested)
 
@@ -101,7 +101,7 @@ func TestMarkdownFeedRequestsWhatIsStale(t *testing.T) {
 func TestMarkdownFeedFailureIsVerbatim(t *testing.T) {
 	var requested []string
 	feed := feedWith(&fakeRenditionReader{row: model.MarkdownRendition{
-		State: model.MarkdownRenditionFailed,
+		State: model.RenditionFailed,
 		Error: "converter extension is not configured",
 	}}, &requested)
 
@@ -121,7 +121,7 @@ func TestMarkdownFeedFailureIsVerbatim(t *testing.T) {
 func TestMarkdownFeedPendingWhileConverting(t *testing.T) {
 	var requested []string
 	feed := feedWith(&fakeRenditionReader{row: model.MarkdownRendition{
-		State: model.MarkdownRenditionRunning,
+		State: model.RenditionRunning,
 	}}, &requested)
 
 	_, err := feed.Text(context.Background(), feedBook(), 48_000)
@@ -138,7 +138,7 @@ func TestMarkdownFeedPendingWhileConverting(t *testing.T) {
 func TestMarkdownFeedCapsText(t *testing.T) {
 	var requested []string
 	feed := feedWith(&fakeRenditionReader{row: model.MarkdownRendition{
-		State: model.MarkdownRenditionReady, Location: "A/T/T.md",
+		State: model.RenditionReady, Location: "A/T/T.md",
 		SourceContentHash: []byte{0x01},
 	}}, &requested)
 

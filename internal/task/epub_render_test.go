@@ -65,7 +65,7 @@ func (f *fakeEpubFiles) Insert(_ context.Context, row model.File) (model.File, e
 func readyFeed(text string) *service.MarkdownFeed {
 	return &service.MarkdownFeed{
 		Renditions: renditionRowFake{row: model.MarkdownRendition{
-			State: model.MarkdownRenditionReady, Location: "A/S/S.md",
+			State: model.RenditionReady, Location: "A/S/S.md",
 		}},
 		Open: func(context.Context, model.Book, string) (io.ReadCloser, error) {
 			return io.NopCloser(strings.NewReader(text)), nil
@@ -159,7 +159,7 @@ func TestEpubRenderWaitsForTheMarkdownRendition(t *testing.T) {
 	requested := 0
 	deps.Markdown = &service.MarkdownFeed{
 		Renditions: renditionRowFake{row: model.MarkdownRendition{
-			State: model.MarkdownRenditionRunning,
+			State: model.RenditionRunning,
 		}},
 		Request: func(context.Context, string) error { requested++; return nil },
 	}
@@ -183,7 +183,7 @@ func TestEpubRenderPropagatesMarkdownFailureVerbatim(t *testing.T) {
 	deps := epubDeps(store, &fakeEpubFiles{})
 	deps.Markdown = &service.MarkdownFeed{
 		Renditions: renditionRowFake{row: model.MarkdownRendition{
-			State: model.MarkdownRenditionFailed,
+			State: model.RenditionFailed,
 			Error: "PDF has no extractable text (Scanned, 1 pages): OCR is required",
 		}},
 	}

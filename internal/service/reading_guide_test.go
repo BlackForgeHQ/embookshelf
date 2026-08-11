@@ -337,7 +337,7 @@ func TestGuideUsesMarkdownRenditionForPDF(t *testing.T) {
 	h := newGuideHarness(t, nil)
 	h.svc.markdown = &MarkdownFeed{
 		Renditions: &fakeRenditionReader{row: model.MarkdownRendition{
-			State: model.MarkdownRenditionReady, Location: "A/T/T.md",
+			State: model.RenditionReady, Location: "A/T/T.md",
 		}},
 		Open: func(context.Context, model.Book, string) (io.ReadCloser, error) {
 			return io.NopCloser(strings.NewReader("# Sand and spice, in markdown.")), nil
@@ -368,7 +368,7 @@ func TestGuideSurfacesRenditionFailureVerbatim(t *testing.T) {
 	h := newGuideHarness(t, nil)
 	h.svc.markdown = &MarkdownFeed{
 		Renditions: &fakeRenditionReader{row: model.MarkdownRendition{
-			State: model.MarkdownRenditionFailed,
+			State: model.RenditionFailed,
 			Error: "converter extension is not configured",
 		}},
 	}

@@ -813,6 +813,10 @@ The Rust sidecar in `extensions/converter` (axum over the anydoc library) that t
 
 The markdown produced from a book's file by the [[Converter extension]] — a derived artifact in the sense of [[Rendition]], stored as a file through `storage.Storage` beside the book, tracked by a DB row carrying the source [[Content hash]] and converter version. When the recorded hash no longer matches the book's current file, the rendition is stale, labelled, never silently reused as current. Consumed by AI features (reading guides, tagging, future retrieval); the planned markdown → EPUB stage reads it too.
 
+### Rendition lifecycle
+
+`model.RenditionState` + `repo.renditionLifecycle`; the four-state tracking lifecycle (`pending → running → ready | failed`) shared by the [[Markdown rendition]] and [[Generated EPUB]] rows. One implementation over both tables; per-artifact code is a projection (which columns `MarkReady` writes, how the row scans), never a copy. Every state write carries a from-state guard rendered from `model.RenditionWrite` — the `book_audiobooks` Transition shape — and **ready is sealed**: a late `MarkFailed`/`MarkRunning` from a superseded job is a refused no-op, and only `Start` (the user asking for a regeneration) reopens a concluded row. Far simpler than the [[Audiobook run]]'s lifecycle on purpose: one HTTP call, no cancel, no segments, no generation counter.
+
 ### Generated EPUB
 
 The EPUB rendered from a PDF book's [[Markdown rendition]] by the [[Converter extension]] (`POST /render/epub`, ADR-0034). A `files` row on the same Book — the ADR-0025 answer reapplied: a user deliverable, not machine feed — tracked by `book_epub_renditions` (state, verbatim error, `file_id` pointer, PDF-hash provenance). `books.format` deliberately stays `PDF`: nothing recomputes primary format, the reader keeps opening the PDF, and in-app reading of the generated EPUB is a deferred rendition-dispatch feature. One per book; regeneration overwrites. **Distinct** from an ingested EPUB (arrived through BookDrop) and from the [[Markdown rendition]] it is rendered from.

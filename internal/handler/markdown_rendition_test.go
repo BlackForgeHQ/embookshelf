@@ -69,7 +69,7 @@ func TestBookMarkdownGetAnswersNoneForAVirginBook(t *testing.T) {
 func TestBookMarkdownGetSurfacesTheRowVerbatim(t *testing.T) {
 	h := &Handler{renditions: &fakeRenditions{row: model.MarkdownRendition{
 		BookID: "b1",
-		State:  model.MarkdownRenditionFailed,
+		State:  model.RenditionFailed,
 		Error:  "converter extension is not configured",
 	}}}
 	c, rec := settingsCtx(t, http.MethodGet, "/api/v1/books/b1/markdown", "")
@@ -187,7 +187,7 @@ func TestBookGuideGenerateSurfacesConversionStateAtTheButton(t *testing.T) {
 	t.Run("conversion failed, verbatim", func(t *testing.T) {
 		h := &Handler{
 			renditions: &fakeRenditions{row: model.MarkdownRendition{
-				State: model.MarkdownRenditionFailed,
+				State: model.RenditionFailed,
 				Error: "PDF has no extractable text (Scanned, 1 pages): OCR is required",
 			}},
 			appSettings: guideOn(&fakeAppSettings{
@@ -284,7 +284,7 @@ func TestBookMarkdownDownloadStreamsTheRendition(t *testing.T) {
 
 	h := &Handler{
 		renditions: &fakeRenditions{row: model.MarkdownRendition{
-			BookID: "b1", State: model.MarkdownRenditionReady, Location: placed.Location,
+			BookID: "b1", State: model.RenditionReady, Location: placed.Location,
 		}},
 		libStore: fakeLibStore{handle: handle},
 	}
@@ -311,10 +311,10 @@ func TestBookMarkdownDownloadStreamsTheRendition(t *testing.T) {
 func TestBookMarkdownDownloadAnswers404ForEveryNonReadyState(t *testing.T) {
 	cases := map[string]*fakeRenditions{
 		"no row":  {missing: true},
-		"failed":  {row: model.MarkdownRendition{State: model.MarkdownRenditionFailed, Error: "x"}},
-		"running": {row: model.MarkdownRendition{State: model.MarkdownRenditionRunning}},
+		"failed":  {row: model.MarkdownRendition{State: model.RenditionFailed, Error: "x"}},
+		"running": {row: model.MarkdownRendition{State: model.RenditionRunning}},
 		"ready but no location": {row: model.MarkdownRendition{
-			State: model.MarkdownRenditionReady,
+			State: model.RenditionReady,
 		}},
 	}
 	for name, store := range cases {
