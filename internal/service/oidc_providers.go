@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/blackforge/embookshelf/internal/repo"
 )
@@ -91,6 +92,15 @@ func genericUsable(c repo.GenericOIDCConfig) bool {
 	return c.Enabled && c.ClientID != "" && c.IssuerURI != ""
 }
 
+// ignoreDisabled maps ErrOIDCDisabled to nil for public(): a disabled
+// provider is simply not listed, while a store failure still surfaces.
+func ignoreDisabled(err error) error {
+	if errors.Is(err, ErrOIDCDisabled) {
+		return nil
+	}
+	return err
+}
+
 // testWithStoredFallback is the blank-submission rule, stated once: the
 // panel tests what is on screen, and a submission missing its required
 // fields means "test what is stored instead". A failure to read that
@@ -133,10 +143,22 @@ func presetBlank(c repo.OAuthPresetConfig) bool { return c.ClientID == "" }
 
 type googleProvider struct{ s *OIDCService }
 
-func (p googleProvider) public(ctx context.Context) (PublicProvider, bool, error) {
+// usableConfig is Google's usable gate, stated once: the stored row,
+// or ErrOIDCDisabled when it isn't fit to serve a login.
+func (p googleProvider) usableConfig(ctx context.Context) (repo.OAuthPresetConfig, error) {
 	cfg, err := p.s.settings.GetGoogle(ctx)
-	if err != nil || !presetUsable(cfg) {
-		return PublicProvider{}, false, err
+	if err != nil {
+		return cfg, err
+	}
+	if !presetUsable(cfg) {
+		return cfg, ErrOIDCDisabled
+	}
+	return cfg, nil
+}
+
+func (p googleProvider) public(ctx context.Context) (PublicProvider, bool, error) {
+	if _, err := p.usableConfig(ctx); err != nil {
+		return PublicProvider{}, false, ignoreDisabled(err)
 	}
 	return PublicProvider{
 		Slug: repo.ProviderSlugGoogle, Name: "Google", Kind: "google",
@@ -145,23 +167,17 @@ func (p googleProvider) public(ctx context.Context) (PublicProvider, bool, error
 }
 
 func (p googleProvider) authURL(ctx context.Context, redirect, intent, linkUserID string) (string, error) {
-	cfg, err := p.s.settings.GetGoogle(ctx)
+	cfg, err := p.usableConfig(ctx)
 	if err != nil {
 		return "", err
-	}
-	if !presetUsable(cfg) {
-		return "", ErrOIDCDisabled
 	}
 	return p.s.authURLOIDC(ctx, repo.ProviderSlugGoogle, googleOIDCConfig(cfg), redirect, intent, linkUserID)
 }
 
 func (p googleProvider) callback(ctx context.Context, code string, entry stateEntry, redirect string) (resolvedClaims, string, error) {
-	cfg, err := p.s.settings.GetGoogle(ctx)
+	cfg, err := p.usableConfig(ctx)
 	if err != nil {
 		return resolvedClaims{}, "", err
-	}
-	if !presetUsable(cfg) {
-		return resolvedClaims{}, "", ErrOIDCDisabled
 	}
 	return p.s.oidcCallback(ctx, code, entry, googleOIDCConfig(cfg), redirect)
 }
@@ -199,10 +215,22 @@ func googleOIDCConfig(c repo.OAuthPresetConfig) repo.GenericOIDCConfig {
 
 type githubProvider struct{ s *OIDCService }
 
-func (p githubProvider) public(ctx context.Context) (PublicProvider, bool, error) {
+// usableConfig is GitHub's usable gate, stated once — same preset rule
+// as Google's.
+func (p githubProvider) usableConfig(ctx context.Context) (repo.OAuthPresetConfig, error) {
 	cfg, err := p.s.settings.GetGitHub(ctx)
-	if err != nil || !presetUsable(cfg) {
-		return PublicProvider{}, false, err
+	if err != nil {
+		return cfg, err
+	}
+	if !presetUsable(cfg) {
+		return cfg, ErrOIDCDisabled
+	}
+	return cfg, nil
+}
+
+func (p githubProvider) public(ctx context.Context) (PublicProvider, bool, error) {
+	if _, err := p.usableConfig(ctx); err != nil {
+		return PublicProvider{}, false, ignoreDisabled(err)
 	}
 	return PublicProvider{
 		Slug: repo.ProviderSlugGitHub, Name: "GitHub", Kind: "github",
@@ -211,23 +239,17 @@ func (p githubProvider) public(ctx context.Context) (PublicProvider, bool, error
 }
 
 func (p githubProvider) authURL(ctx context.Context, redirect, intent, linkUserID string) (string, error) {
-	cfg, err := p.s.settings.GetGitHub(ctx)
+	cfg, err := p.usableConfig(ctx)
 	if err != nil {
 		return "", err
-	}
-	if !presetUsable(cfg) {
-		return "", ErrOIDCDisabled
 	}
 	return p.s.authURLGitHub(cfg, redirect, intent, linkUserID)
 }
 
 func (p githubProvider) callback(ctx context.Context, code string, entry stateEntry, redirect string) (resolvedClaims, string, error) {
-	cfg, err := p.s.settings.GetGitHub(ctx)
+	cfg, err := p.usableConfig(ctx)
 	if err != nil {
 		return resolvedClaims{}, "", err
-	}
-	if !presetUsable(cfg) {
-		return resolvedClaims{}, "", ErrOIDCDisabled
 	}
 	claims, err := p.s.githubCallback(ctx, code, entry, cfg, redirect)
 	if err != nil {
@@ -250,10 +272,23 @@ func (p githubProvider) test(ctx context.Context, body []byte) (TestResult, erro
 
 type genericProvider struct{ s *OIDCService }
 
-func (p genericProvider) public(ctx context.Context) (PublicProvider, bool, error) {
+// usableConfig is the generic provider's usable gate, stated once —
+// issuer instead of secret, because public clients are legitimate.
+func (p genericProvider) usableConfig(ctx context.Context) (repo.GenericOIDCConfig, error) {
 	cfg, err := p.s.settings.GetGenericOIDC(ctx)
-	if err != nil || !genericUsable(cfg) {
-		return PublicProvider{}, false, err
+	if err != nil {
+		return cfg, err
+	}
+	if !genericUsable(cfg) {
+		return cfg, ErrOIDCDisabled
+	}
+	return cfg, nil
+}
+
+func (p genericProvider) public(ctx context.Context) (PublicProvider, bool, error) {
+	cfg, err := p.usableConfig(ctx)
+	if err != nil {
+		return PublicProvider{}, false, ignoreDisabled(err)
 	}
 	name := cfg.ProviderName
 	if name == "" {
@@ -266,23 +301,17 @@ func (p genericProvider) public(ctx context.Context) (PublicProvider, bool, erro
 }
 
 func (p genericProvider) authURL(ctx context.Context, redirect, intent, linkUserID string) (string, error) {
-	cfg, err := p.s.settings.GetGenericOIDC(ctx)
+	cfg, err := p.usableConfig(ctx)
 	if err != nil {
 		return "", err
-	}
-	if !genericUsable(cfg) {
-		return "", ErrOIDCDisabled
 	}
 	return p.s.authURLOIDC(ctx, repo.ProviderSlugGeneric, cfg, redirect, intent, linkUserID)
 }
 
 func (p genericProvider) callback(ctx context.Context, code string, entry stateEntry, redirect string) (resolvedClaims, string, error) {
-	cfg, err := p.s.settings.GetGenericOIDC(ctx)
+	cfg, err := p.usableConfig(ctx)
 	if err != nil {
 		return resolvedClaims{}, "", err
-	}
-	if !genericUsable(cfg) {
-		return resolvedClaims{}, "", ErrOIDCDisabled
 	}
 	return p.s.oidcCallback(ctx, code, entry, cfg, redirect)
 }

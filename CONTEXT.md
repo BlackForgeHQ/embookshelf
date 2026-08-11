@@ -44,7 +44,7 @@ Guarded by a parity test that parses the package's own sources (package-level va
 
 `handler.settingsDomain[Cfg, DTO]`; the handler-tier declaration of one admin settings panel's get/put pair, the third layer over [[Setting]] and the [[Settings registry]]. The HTTP pipeline — nil-store 503, bind, load-current, merge, secret resolution, save, error split, reload, side effect, respond — is written once in `settingsGet`/`settingsPut`; a domain declares only its wire shape, its tri-state secret slots, which save refusal is the admin's 400, and its post-save side effect (SMTP hot-reload, forward-auth runtime publish). `resolveSecret` runs in exactly one place, the adapter's loop over declared slots, so a new panel cannot restate the keep-versus-clear rule — only declare where it applies.
 
-Exists because five surfaces restated that pipeline and had already diverged three ways (#249). Six declarations today: EMAIL, READING_GUIDE, AUDIOBOOK, FORWARD_AUTH, CONVERTER, and OIDC — whose config aggregates five rows and whose save is the transactional `OIDCSettingsService.Apply`, not a store write. `METADATA_AUTO_ENRICH` stays outside for the same reason it skips the registry: no typed row, no pipeline. Probe/test endpoints (SMTP test-send, TTS probe, OIDC connection test) are not part of the shape — they stay hand-written.
+Exists because five surfaces restated that pipeline and had already diverged three ways (#249). Six declarations today: EMAIL, READING_GUIDE, AUDIOBOOK, FORWARD_AUTH, CONVERTER, and OIDC — whose config aggregates five rows and whose save is the transactional `OIDCSettingsService.Apply`, not a store write. `METADATA_AUTO_ENRICH` stays outside for the same reason it skips the registry: no typed row, no pipeline. Probe/test endpoints (SMTP test-send, TTS probe, OIDC connection test) are not part of the shape; since #258 the OIDC one dispatches through the [[OIDC provider registry]] rather than a hand-written slug switch, but it still lives outside the settings pipeline.
 
 ---
 
@@ -97,9 +97,9 @@ The policy has a single implementation: `service.Provisioner` (identity match �
 
 ### OIDC provider registry
 
-`OIDCService.providers`; the slug → operations map built once at construction. Each entry pairs a provider's authorize-URL builder with its callback exchange, because both dispatch on the same slug and previously did so in separate `switch` statements that had to stay in step by hand. Adding a provider is one entry in `newProviderRegistry`; nothing else in the file switches on a slug.
+`OIDCService.providers`; the ordered slice of slug → adapter entries built once at construction (`oidc_providers.go`). Each adapter satisfies the `oidcProvider` interface — usable gate + public listing (one `public()` call, merged because "usable" exists so the login page never offers a button that 500s), auth URL, callback, and connection test — because all five previously dispatched on the same slug across four service sites plus a hand-written switch in the handler (#258). Adding a provider is one entry in `newProviderRegistry`; nothing else switches on a slug, pinned by a test that enumerates the registry. A slice rather than a map so the login page lists providers in a stable order.
 
-Shaped as a struct of funcs rather than an interface, matching the [[Job registry]]: the per-provider work already exists as methods, so a registration is a pair of method values and no bodies move. GitHub is the odd one — not an OIDC provider at all, so it has no discovery document and its issuer is the `githubIssuer` constant rather than something the exchange reports.
+Reshaped from a struct of funcs to an interface at #258, when the surface grew from two operations to five: the adapters own their provider-shaped differences (fixed issuers vs generic, GitHub's no-discovery `githubIssuer` constant, each connection test's override wire shape), while the shared machinery — discovery cache, state minting, the OAuth exchanges — stays on `OIDCService`. The connection test's blank-submission fallback ("a blank submission tests the stored row instead") is stated once, in `testWithStoredFallback`.
 
 ### OIDC state
 

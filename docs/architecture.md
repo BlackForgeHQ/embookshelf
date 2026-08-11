@@ -346,7 +346,11 @@ Handler → Service → Repository → PostgreSQL
   `bookdropDTO`, `enrichMatchDTO`, `deviceDTO`, `annotationDTO`,
   `identityDTO`, `oidcConfigDTO` + pointer-field PATCH types).
   camelCase on the wire; matching TS types under
-  [ui/src/api/](../ui/src/api/).
+  [ui/src/api/](../ui/src/api/). One deliberate exception (#258): the
+  OIDC connection-test override shapes live with their provider
+  adapters in `internal/service/oidc_providers.go`, because each
+  provider owns its test submission and the handler forwards the raw
+  body without interpreting it.
 
 ### 4.2 Concurrency Model
 
