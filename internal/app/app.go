@@ -3,13 +3,15 @@
 // Package app is the composition root. Everything the process needs is
 // wired here, in three phases that are deliberately separate:
 //
-//   - Build constructs. It opens the database, applies migrations and
-//     assembles every repo, service, the queue and the HTTP handler. It
-//     performs no startup side effect: nothing is seeded, no goroutine is
-//     launched, the queue is not started. Failure is a returned error, so
-//     a test can call Build and inspect the wiring without booting.
-//   - Start runs the side effects — seeds, the reloads that read them,
-//     the queue, and the background sweepers.
+//   - Build prepares, then constructs. The prepare stage writes what the
+//     constructors read back — schema migrations, the storage_v2
+//     backfill, the shared-S3 backend reconcile — and every other stage
+//     only assembles: no seed, no goroutine, no queue start. Failure is
+//     a returned error, so a test can call Build and inspect the wiring
+//     without booting — knowing that Build has migrated the database it
+//     was pointed at.
+//   - Start runs the runtime side effects — seeds, the reloads that read
+//     them, the queue, and the background sweepers.
 //   - Close shuts the whole thing down along one path.
 //
 // The split exists because construction and side effects used to
@@ -28,91 +30,40 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/config"
-	"github.com/blackforge/embookshelf/internal/coverstore"
-	"github.com/blackforge/embookshelf/internal/crypto"
 	"github.com/blackforge/embookshelf/internal/db"
-	"github.com/blackforge/embookshelf/internal/email"
 	"github.com/blackforge/embookshelf/internal/handler"
 	"github.com/blackforge/embookshelf/internal/ingest"
-	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/migrator"
 	"github.com/blackforge/embookshelf/internal/provider"
 	"github.com/blackforge/embookshelf/internal/queue"
-	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/sse"
-	"github.com/blackforge/embookshelf/internal/storage"
-	"github.com/blackforge/embookshelf/internal/storageloader"
 	"github.com/blackforge/embookshelf/internal/task"
 )
 
-// App holds the wired process. Every field is assigned by Build; Start
+// App holds the wired process as the stage bundles that built it. Start
 // and Close read them, and so does the boot test, which is the point —
-// a seam that Build forgets is a failing assertion rather than a
-// production nil dereference.
+// a seam a stage forgets is a failing assertion rather than a
+// production nil dereference. The bundles are named fields rather than
+// embedded because repos and services deliberately reuse names (r.lib
+// the repo, s.lib the service), which embedding would turn into
+// ambiguous selectors.
 type App struct {
-	cfg config.Config
-	db  *db.DB
+	// w carries the process-level primitives every stage shares,
+	// including the config, the pool, and the late-bound enqueuer —
+	// see wiring in build.go.
+	w wiring
+	// r is the repository tier; s the service tier over it. The seam
+	// walk in the boot test descends into all three bundles.
+	r repos
+	s services
 
-	// Process-level primitives shared by everything downstream.
-	storageResolver storage.Resolver
-	cipher          crypto.Cipher
-	hub             *sse.Hub
-	covers          *coverstore.Store
-	// staging is the audiobook staging area, built once from the data
-	// root. The composition root holds the value so the cancel sweep, the
-	// two workers and the hourly loop are the same area rather than three
-	// re-derivations of one path (#251).
-	staging task.Staging
-
-	// Repositories.
-	libRepo              *repo.LibraryRepo
-	bookRepo             *repo.BookRepo
-	userRepo             *repo.UserRepo
-	fileRepo             *repo.FileRepo
-	bdropRepo            *repo.BookDropRepo
-	appSettingsRepo      *repo.AppSettingsRepo
-	providerSettingsRepo *repo.ProviderSettingsRepo
-	identityRepo         *repo.IdentityRepo
-	inviteRepo           *repo.UserInviteRepo
-	guideRepo            *repo.BookReadingGuideRepo
-	audiobookRepo        *repo.BookAudiobookRepo
-	pendingOrphansRepo   *repo.PendingOrphanRepo
-
-	// Services.
-	libStore        service.LibraryStore
-	metadataWriter  *service.MetadataWriter
-	libSvc          *service.LibraryService
-	shelfSvc        *service.ShelfService
-	searchSvc       *service.SearchService
-	authSvc         *service.AuthService
-	bdropSvc        *service.BookDropService
-	progressSvc     *service.ProgressService
-	annotationSvc   *service.AnnotationService
-	statsSvc        *service.StatsService
-	readingStatsSvc *service.ReadingSessionService
-	enrichSvc       *service.EnrichmentService
-	providerCfgSvc  *service.ProviderSettingsService
-	deviceSvc       *service.DeviceService
-	oidcSvc         *service.OIDCService
-	fwdAuthHolder   *auth.ForwardAuthHolder
-	fwdAuthSvc      *service.ForwardAuthService
-	notifier        *service.Notifier
-	resetSvc        *service.PasswordResetService
-	guideRunner     *service.GuideRunner
-	audiobookSvc    *service.AudiobookService
-	emailTpl        *email.Templates
-
-	// Background queue and the late-bound enqueuer the services holding
-	// it were built with. They are started together — see startQueue.
+	// Background queue. Started by Start together with resolving
+	// w.enq — see startQueue.
 	queue queue.Client
-	enq   *jobs.Deferred
 
-	// Bookdrop watcher; constructed here, run by Start.
-	watcher *ingest.Watcher
-	// s3Watcher pulls the S3 drop zone; nil when not configured.
+	// Bookdrop watchers; constructed by buildWatchers, run by Start.
+	// Both are always non-nil — Run self-disables when unconfigured.
+	watcher   *ingest.Watcher
 	s3Watcher *ingest.S3Watcher
 
 	handler *handler.Handler
@@ -162,11 +113,10 @@ func (a *App) goBackground(name string, fn func(context.Context)) {
 
 // Build wires the process and returns it unstarted.
 //
-// Nothing here has a startup side effect: no seed, no reload, no
-// goroutine, no queue start. The only writes are the ones that must
-// precede reads of the same data — schema migrations, the storage_v2
-// backfill and the shared-S3 backend reconcile, all of which the
-// constructors below read back.
+// The first stage, prepare, writes what the constructors read back —
+// schema migrations, the storage_v2 backfill, the shared-S3 backend
+// reconcile. Every stage after it only assembles: no seed, no reload,
+// no goroutine, no queue start.
 func Build(ctx context.Context, cfg config.Config, version, commit string) (*App, error) {
 	dbh, err := db.Open(ctx, cfg)
 	if err != nil {
@@ -181,52 +131,19 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 		}
 	}()
 
-	// Apply app schema migrations before any repo runs queries. River's own
-	// migrations are applied separately inside queue.New().
-	if cfg.MigrateOnStart {
-		if err := RunMigrations(dbh); err != nil {
-			return nil, fmt.Errorf("migrate: %w", err)
-		}
-		if err := migrator.BackfillStorageV2(ctx, dbh); err != nil {
-			return nil, fmt.Errorf("storage_v2 backfill: %w", err)
-		}
-	}
-
-	// Not a Start-phase reconcile even though it writes: the resolver
-	// built from these rows is a constructor argument to half the service
-	// tier, so the rows have to be right before anything is built.
-	bootBackendRepo := repo.NewStorageBackendRepo(dbh)
-	if n, err := storageloader.ReconcileSharedS3(ctx, bootBackendRepo, cfg.SharedS3); err != nil {
-		return nil, fmt.Errorf("reconcile shared s3 backends: %w", err)
-	} else if n > 0 {
-		slog.Info("storage backends reconciled from env", "updated", n)
-	}
-	storageResolver, err := storageloader.LoadStorageBackends(ctx, bootBackendRepo)
-	if err != nil {
-		return nil, fmt.Errorf("storage backends: %w", err)
-	}
-
-	r, err := buildRepos(dbh, cfg)
+	p, err := prepare(ctx, dbh, cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	// Cover image store (files on disk under ${DATA_PATH}/covers/). The
-	// root derives the location; joining it here is how a deployment with
-	// no data root ended up caching covers into ./covers under whatever
-	// the working directory happened to be. Staging (#251) is the other
-	// on-disk area for derived bytes, built once and handed to everything
-	// that touches it.
-	coversDir, err := cfg.DataPath.Covers()
+	r, err := buildRepos(p, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("cover store: %w", err)
+		return nil, err
 	}
-	w := wiring{
-		cfg: cfg, dbh: dbh, resolver: storageResolver,
-		hub:     sse.NewHub(),
-		covers:  coverstore.New(coversDir),
-		staging: task.NewStaging(cfg.DataPath),
-		enq:     &jobs.Deferred{},
+
+	w, err := buildWiring(p, cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	s, err := buildServices(ctx, w, r)
@@ -243,34 +160,9 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 
 	built = true
 	return &App{
-		cfg: cfg,
-		db:  dbh,
-
-		storageResolver: storageResolver,
-		cipher:          r.cipher,
-		hub:             w.hub,
-		covers:          w.covers,
-		staging:         w.staging,
-
-		libRepo: r.lib, bookRepo: r.book, userRepo: r.user, fileRepo: r.file,
-		bdropRepo: r.bdrop, appSettingsRepo: r.appSettings,
-		providerSettingsRepo: s.providerSettingsRepo,
-		identityRepo:         r.identity, inviteRepo: r.invite, guideRepo: r.guide,
-		audiobookRepo: r.audiobook, pendingOrphansRepo: r.pendingOrphans,
-
-		libStore: s.libStore, metadataWriter: s.metadataWriter,
-		libSvc: s.lib, shelfSvc: s.shelf, searchSvc: s.search, authSvc: s.auth,
-		bdropSvc: s.bdrop, progressSvc: s.progress, annotationSvc: s.annotation,
-		statsSvc: s.stats, readingStatsSvc: s.readingStats,
-		enrichSvc: s.enrich, providerCfgSvc: s.providerCfg, deviceSvc: s.device,
-		oidcSvc: s.oidc, fwdAuthHolder: s.fwdAuthHolder, fwdAuthSvc: s.fwdAuth,
-		notifier: s.notifier, resetSvc: s.reset, guideRunner: s.guideRunner,
-		audiobookSvc: s.audiobook, emailTpl: s.emailTpl,
-
+		w: w, r: r, s: s,
 		queue:   q,
-		enq:     w.enq,
 		watcher: watcher, s3Watcher: s3Watcher,
-
 		handler: h,
 		engine:  h.Engine(),
 	}, nil
@@ -301,13 +193,13 @@ func (a *App) Start(ctx context.Context) error {
 	for _, c := range provider.Catalog {
 		defaults[string(c.ID)] = c.DefaultEnabled
 	}
-	if err := a.providerSettingsRepo.SeedIfAbsent(ctx, defaults); err != nil {
+	if err := a.s.providerSettingsRepo.SeedIfAbsent(ctx, defaults); err != nil {
 		slog.Warn("seed provider settings", "err", err)
 	}
 	// Push stored per-provider config (API keys, language, …) into the
 	// running provider instances. Failure here is non-fatal — providers
 	// fall back to their no-config defaults.
-	if err := a.providerCfgSvc.LoadConfigs(ctx); err != nil {
+	if err := a.s.providerCfg.LoadConfigs(ctx); err != nil {
 		slog.Warn("load provider configs", "err", err)
 	}
 
@@ -317,11 +209,11 @@ func (a *App) Start(ctx context.Context) error {
 	// the wrong place to keep a list of domains — a new one that forgot
 	// to be added here cost nothing at runtime and an empty settings
 	// panel to notice (#237).
-	if err := a.appSettingsRepo.SeedAll(ctx); err != nil {
+	if err := a.r.appSettings.SeedAll(ctx); err != nil {
 		slog.Warn("seed settings", "err", err)
 	}
 
-	if n, err := a.authSvc.PurgeExpiredSessions(ctx); err != nil {
+	if n, err := a.s.auth.PurgeExpiredSessions(ctx); err != nil {
 		slog.Warn("purge sessions", "err", err)
 	} else if n > 0 {
 		slog.Info("purged expired sessions", "count", n)
@@ -329,9 +221,9 @@ func (a *App) Start(ctx context.Context) error {
 
 	// Reload after the seed so the notifier picks up the persisted EMAIL
 	// row rather than the state it was constructed with. ADR-0020.
-	if err := a.notifier.Reload(ctx); err != nil {
+	if err := a.s.notifier.Reload(ctx); err != nil {
 		slog.Warn("email subsystem disabled — reload failed", "err", err)
-	} else if !a.notifier.Enabled() {
+	} else if !a.s.notifier.Enabled() {
 		slog.Info("email subsystem disabled — configure under admin settings to enable")
 	}
 
@@ -343,11 +235,11 @@ func (a *App) Start(ctx context.Context) error {
 	// a week. Hourly loop, same shape as the missing-file and
 	// orphaned-key sweepers.
 	a.goBackground("audiobook staging sweep", func(ctx context.Context) {
-		a.staging.LoopSweep(ctx, a.audiobookRepo)
+		a.w.staging.LoopSweep(ctx, a.r.audiobook)
 	})
 
 	// Requeue anything still mid-flight from a previous process.
-	ingest.DiscoverOnStartup(ctx, a.bdropRepo, a.queue)
+	ingest.DiscoverOnStartup(ctx, a.r.bdrop, a.queue)
 
 	// Boot-time files backfill: hash any files rows that are still missing a
 	// content_hash. Runs in the background so it doesn't block startup.
@@ -360,8 +252,8 @@ func (a *App) Start(ctx context.Context) error {
 		backfillCtx, cancel := context.WithTimeout(ctx, 1*time.Hour)
 		defer cancel()
 		if err := task.RunFilesBackfill(backfillCtx, task.FilesBackfillDeps{
-			Files:    a.fileRepo,
-			LibStore: a.libStore,
+			Files:    a.r.file,
+			LibStore: a.s.libStore,
 		}); err != nil {
 			slog.Warn("files backfill", "err", err)
 		}
@@ -374,8 +266,8 @@ func (a *App) Start(ctx context.Context) error {
 		backfillCoversCtx, cancel := context.WithTimeout(ctx, 1*time.Hour)
 		defer cancel()
 		if err := task.RunCoversBackfill(backfillCoversCtx, task.CoversBackfillDeps{
-			Books:  a.bookRepo,
-			Covers: a.covers,
+			Books:  a.r.book,
+			Covers: a.w.covers,
 		}); err != nil {
 			slog.Warn("covers backfill", "err", err)
 		}
@@ -384,7 +276,7 @@ func (a *App) Start(ctx context.Context) error {
 	// Missing-files purge sweeper: deletes files rows whose missing_since
 	// is older than 24h. Runs hourly until the application shuts down.
 	a.goBackground("missing purge", func(ctx context.Context) {
-		task.LoopMissingPurge(ctx, a.fileRepo, time.Hour)
+		task.LoopMissingPurge(ctx, a.r.file, time.Hour)
 	})
 
 	// Orphaned-keys sweeper: drains pending_orphans rows whose grace
@@ -393,9 +285,9 @@ func (a *App) Start(ctx context.Context) error {
 	// new keys (RenameRollbackGrace). ADR-0005.
 	a.goBackground("orphaned keys", func(ctx context.Context) {
 		task.LoopOrphanedKeys(ctx, task.OrphanedKeysDeps{
-			Orphans:  a.pendingOrphansRepo,
-			Libs:     a.libRepo,
-			Resolver: a.storageResolver,
+			Orphans:  a.r.pendingOrphans,
+			Libs:     a.r.lib,
+			Resolver: a.w.resolver,
 		}, time.Hour)
 	})
 
@@ -416,7 +308,7 @@ func (a *App) Start(ctx context.Context) error {
 // calls in one method is what keeps a later edit from putting anything
 // between them.
 func (a *App) startQueue(ctx context.Context) error {
-	a.enq.Resolve(a.queue)
+	a.w.enq.Resolve(a.queue)
 	if err := a.queue.Start(ctx); err != nil {
 		return fmt.Errorf("queue start: %w", err)
 	}
@@ -480,7 +372,7 @@ func (a *App) Close(ctx context.Context) error {
 		errs = append(errs, fmt.Errorf("queue stop: %w", err))
 	}
 
-	if err := a.db.Close(); err != nil {
+	if err := a.w.dbh.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("db close: %w", err))
 	}
 

@@ -18,6 +18,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/handler"
 	"github.com/blackforge/embookshelf/internal/ingest"
 	"github.com/blackforge/embookshelf/internal/jobs"
+	"github.com/blackforge/embookshelf/internal/migrator"
 	"github.com/blackforge/embookshelf/internal/provider"
 	"github.com/blackforge/embookshelf/internal/queue"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -27,23 +28,53 @@ import (
 	"github.com/blackforge/embookshelf/internal/staticfs"
 	"github.com/blackforge/embookshelf/internal/storage"
 	s3storage "github.com/blackforge/embookshelf/internal/storage/s3"
+	"github.com/blackforge/embookshelf/internal/storageloader"
 	"github.com/blackforge/embookshelf/internal/task"
 )
 
-// The four build stages (#304). Build delegates to them in order —
-// repos → services → queue → watchers — each returning a small bundle
-// the later stages and the App literal read. The split is mechanical:
-// no dependency edge differs from the single-function Build it
-// replaces, which is what lets the wiring parity tests hold it.
+// The build stages (#304, #254). Build delegates to them in order —
+// prepare → repos → wiring → services → queue → watchers — each taking
+// the bundles of the stages before it and returning its own, which the
+// App holds. A stage that needs a value cannot be called before the
+// stage producing it: the ordering constraints that used to live in
+// comments are arguments now, and violating one is a compile error.
+//
+// Ordering constraints. This is the one place they are listed (#254).
+// Enforced by stage signatures — misordering fails to compile:
+//
+//   - migrations, the storage_v2 backfill and the shared-S3 reconcile
+//     before any repo query: buildRepos takes the prepared bundle.
+//   - the cipher before the two settings repos: both take r.cipher.
+//   - the enqueuer before its three consumers (bdrop, guide runner,
+//     audiobook): all take w.enq.
+//   - the library store before the library service, and the metadata
+//     writer before the library and enrichment services: constructor
+//     arguments inside buildServices.
+//   - the built providers before the provider-settings repo: the
+//     secret-slot lookup is derived from them.
+//   - the audiobook service before the queue: buildQueue takes s.
+//   - everything before the handler: buildHTTP takes every bundle.
+//
+// Still prose, because types cannot see inside a function:
+//
+//   - within prepare: migrations, then the storage_v2 backfill over the
+//     migrated schema, then the shared-S3 reconcile, then the resolver
+//     load over the reconciled rows. One function, four sequential
+//     statements — swap the reconcile and the load and the S3 backends
+//     build from stale rows, silently.
+//   - the enqueuer resolve immediately before the queue start: held in
+//     one method, startQueue — see its comment (#184).
 
-// wiring carries the process-level primitives every stage shares.
+// wiring carries the process-level primitives every stage shares. It
+// embeds prepared rather than holding the pool directly, so the only
+// way to give a stage a database is through the bundle prepare
+// returned — w.dbh and w.resolver are the promoted fields.
 type wiring struct {
-	cfg      config.Config
-	dbh      *db.DB
-	resolver storage.Resolver
-	hub      *sse.Hub
-	covers   *coverstore.Store
-	staging  task.Staging
+	prepared
+	cfg     config.Config
+	hub     *sse.Hub
+	covers  *coverstore.Store
+	staging task.Staging
 	// enq is the one late-bound enqueuer for the whole composition root,
 	// created before any of its consumers. bdropSvc, guideRunner and
 	// audiobookSvc all take it as an ordinary argument; the queue's own
@@ -52,6 +83,82 @@ type wiring struct {
 	// first. jobs.Deferred holds that knot alone, and Resolve closes it
 	// once the queue exists — see startQueue.
 	enq *jobs.Deferred
+}
+
+// prepared is the proof the database is ready to be read: the schema is
+// migrated, storage_v2 rows are backfilled, the shared-S3 backend rows
+// are reconciled with the environment, and the resolver is built from
+// those reconciled rows. It is the only carrier of the pool past
+// prepare — buildRepos takes it directly, every other stage reaches it
+// through the wiring that embeds it — which is what makes "migrations
+// before any repo query" a compile error rather than a comment.
+type prepared struct {
+	dbh      *db.DB
+	resolver storage.Resolver
+}
+
+// prepare runs the writes construction depends on. These are the only
+// side effects in the build phase, and they exist because the
+// constructors read the data back: repos query the migrated schema, and
+// the resolver is built from the reconciled backend rows. Startup side
+// effects that nothing in Build reads — seeds, reloads, the queue —
+// belong to Start.
+//
+// The four statements are order-load-bearing; see the ordering list at
+// the top of this file.
+func prepare(ctx context.Context, dbh *db.DB, cfg config.Config) (prepared, error) {
+	// App schema migrations before any repo runs queries. River's own
+	// migrations are applied separately inside queue.New().
+	if cfg.MigrateOnStart {
+		if err := RunMigrations(dbh); err != nil {
+			return prepared{}, fmt.Errorf("migrate: %w", err)
+		}
+		if err := migrator.BackfillStorageV2(ctx, dbh); err != nil {
+			return prepared{}, fmt.Errorf("storage_v2 backfill: %w", err)
+		}
+	}
+
+	// Reconcile before load: a kind=s3 row records the bucket, endpoint
+	// and credentials it was created with, and after a rotation the row
+	// is stale until this brings it in line with the environment. The
+	// resolver is a constructor argument to half the service tier, so
+	// the rows have to be right before anything is built.
+	bootBackendRepo := repo.NewStorageBackendRepo(dbh)
+	if n, err := storageloader.ReconcileSharedS3(ctx, bootBackendRepo, cfg.SharedS3); err != nil {
+		return prepared{}, fmt.Errorf("reconcile shared s3 backends: %w", err)
+	} else if n > 0 {
+		slog.Info("storage backends reconciled from env", "updated", n)
+	}
+	resolver, err := storageloader.LoadStorageBackends(ctx, bootBackendRepo)
+	if err != nil {
+		return prepared{}, fmt.Errorf("storage backends: %w", err)
+	}
+
+	return prepared{dbh: dbh, resolver: resolver}, nil
+}
+
+// buildWiring assembles the process-level primitives over the prepared
+// database. Its own construction can only fail on a data root that
+// cannot yield a covers directory.
+func buildWiring(p prepared, cfg config.Config) (wiring, error) {
+	// Cover image store (files on disk under ${DATA_PATH}/covers/). The
+	// root derives the location; joining it here is how a deployment with
+	// no data root ended up caching covers into ./covers under whatever
+	// the working directory happened to be. Staging (#251) is the other
+	// on-disk area for derived bytes, built once and handed to everything
+	// that touches it.
+	coversDir, err := cfg.DataPath.Covers()
+	if err != nil {
+		return wiring{}, fmt.Errorf("cover store: %w", err)
+	}
+	return wiring{
+		prepared: p,
+		cfg:      cfg,
+		hub:      sse.NewHub(),
+		covers:   coverstore.New(coversDir),
+		staging:  task.NewStaging(cfg.DataPath),
+		enq:      &jobs.Deferred{},
+	}, nil
 }
 
 // repos is every repository over the pool, plus the at-rest cipher the
@@ -82,8 +189,11 @@ type repos struct {
 	audiobook      *repo.BookAudiobookRepo
 }
 
-// buildRepos constructs the repository tier.
-func buildRepos(dbh *db.DB, cfg config.Config) (repos, error) {
+// buildRepos constructs the repository tier. It takes prepared, not the
+// raw pool: a repo constructed before the schema it queries exists is
+// the misordering this signature forbids.
+func buildRepos(p prepared, cfg config.Config) (repos, error) {
+	dbh := p.dbh
 	// At-rest cipher for secrets in settings rows (SMTP password, OIDC
 	// client secrets, metadata provider keys). Unset KEK falls back to
 	// passthrough with a loud warning — secrets on disk stay plaintext

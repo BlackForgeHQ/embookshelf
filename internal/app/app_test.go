@@ -13,16 +13,18 @@ import (
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/config"
+	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/jobs"
 )
 
-// buildForTest wires a real App against TEST_DATABASE_URL and hands it
-// back unstarted. Nothing here serves HTTP or calls Start — the point of
-// the split is that construction can be inspected on its own.
+// configForTest is the config every boot test builds against:
+// TEST_DATABASE_URL and a throwaway data root. MigrateOnStart is on, so
+// anything built from it migrates the database it points at — that is
+// the prepare stage doing its job, not a hidden side effect (#254).
 //
 // A missing TEST_DATABASE_URL fails rather than skips, for the reason
 // repotest gives: a skipped integration test is an unrun one.
-func buildForTest(t *testing.T) *App {
+func configForTest(t *testing.T) config.Config {
 	t.Helper()
 
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -41,7 +43,7 @@ yourself and export the DSN:
 	if err != nil {
 		t.Fatalf("NewDataRoot(%q): %v", dataPath, err)
 	}
-	cfg := config.Config{
+	return config.Config{
 		DatabaseURL:      dsn,
 		DatabaseMaxConns: 4,
 		DatabaseMinConns: 0,
@@ -52,8 +54,15 @@ yourself and export the DSN:
 		PresignTTL:       10 * time.Minute,
 		AllowedOrigins:   []string{"*"},
 	}
+}
 
-	a, err := Build(context.Background(), cfg, "test", "test")
+// buildForTest wires a real App and hands it back unstarted. Nothing
+// here serves HTTP or calls Start — the point of the split is that
+// construction can be inspected on its own.
+func buildForTest(t *testing.T) *App {
+	t.Helper()
+
+	a, err := Build(context.Background(), configForTest(t), "test", "test")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -66,17 +75,43 @@ yourself and export the DSN:
 }
 
 // TestBuildWiresEverySeam is the check that used to require booting the
-// process: a seam Build forgets to assign is a nil field, and the first
-// request that touches it panics. Asserting on the built value catches
-// that here instead.
+// process: a seam a stage forgets to assign is a nil field, and the
+// first request that touches it panics. Asserting on the built value
+// catches that here instead. The App holds its seams as stage bundles
+// (#254), so the walk descends into them — a field added to wiring,
+// repos or services is covered the moment it is declared, exactly as a
+// field added to App is.
 func TestBuildWiresEverySeam(t *testing.T) {
 	a := buildForTest(t)
 
-	v := reflect.ValueOf(a).Elem()
+	walkNilSeams(t, "App", reflect.ValueOf(a).Elem())
+}
+
+// seamBundles are the struct types walkNilSeams descends into. Other
+// struct fields (config.Config, the background registry, task.Staging)
+// are not seam containers — bg in particular holds a context that is
+// correctly nil before Start.
+var seamBundles = map[reflect.Type]bool{
+	reflect.TypeOf(prepared{}): true,
+	reflect.TypeOf(wiring{}):   true,
+	reflect.TypeOf(repos{}):    true,
+	reflect.TypeOf(services{}): true,
+}
+
+// walkNilSeams reports every nil seam under v, descending into the
+// stage bundles.
+func walkNilSeams(t *testing.T, path string, v reflect.Value) {
+	t.Helper()
+
 	for i := range v.NumField() {
-		name := v.Type().Field(i).Name
-		if isNilValue(v.Field(i)) {
-			t.Errorf("App.%s is nil after Build", name)
+		f := v.Field(i)
+		name := path + "." + v.Type().Field(i).Name
+		if seamBundles[f.Type()] {
+			walkNilSeams(t, name, f)
+			continue
+		}
+		if isNilValue(f) {
+			t.Errorf("%s is nil after Build", name)
 		}
 	}
 }
@@ -98,6 +133,66 @@ func TestBuildWiresHandlerDependencies(t *testing.T) {
 	}
 }
 
+// TestStagesConstructIndependently pins the #254 criterion that each
+// stage is callable on its own, outside Build: a test that wants only
+// the repo tier runs prepare and buildRepos and stops there. Each
+// bundle is walked for nil seams as it is produced, so a stage that
+// forgets one fails here with the stage's name on it. The database
+// mutation is explicit — it is the prepare call.
+func TestStagesConstructIndependently(t *testing.T) {
+	ctx := context.Background()
+	cfg := configForTest(t)
+
+	dbh, err := db.Open(ctx, cfg)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = dbh.Close() })
+
+	p, err := prepare(ctx, dbh, cfg)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if p.resolver == nil {
+		t.Fatal("prepare returned a nil resolver")
+	}
+
+	r, err := buildRepos(p, cfg)
+	if err != nil {
+		t.Fatalf("buildRepos: %v", err)
+	}
+	walkNilSeams(t, "repos", reflect.ValueOf(r))
+
+	w, err := buildWiring(p, cfg)
+	if err != nil {
+		t.Fatalf("buildWiring: %v", err)
+	}
+	walkNilSeams(t, "wiring", reflect.ValueOf(w))
+
+	s, err := buildServices(ctx, w, r)
+	if err != nil {
+		t.Fatalf("buildServices: %v", err)
+	}
+	walkNilSeams(t, "services", reflect.ValueOf(s))
+
+	q, err := buildQueue(ctx, w, r, s)
+	if err != nil {
+		t.Fatalf("buildQueue: %v", err)
+	}
+	// Stop tolerates a never-started client; registered before dbh's
+	// cleanup so the queue goes down ahead of the pool.
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+
+	watcher, s3Watcher := buildWatchers(ctx, w, r, s)
+	if watcher == nil || s3Watcher == nil {
+		t.Fatal("buildWatchers returned a nil watcher")
+	}
+
+	if h := buildHTTP(w, r, s, q, "test", "test"); h == nil {
+		t.Fatal("buildHTTP returned a nil handler")
+	}
+}
+
 // TestBuildLeavesTheQueueUnstarted pins the half of the contract that a
 // field check cannot see: Build constructs, it does not run. An enqueuer
 // resolved by Build would mean the queue was started there too, and the
@@ -105,7 +200,7 @@ func TestBuildWiresHandlerDependencies(t *testing.T) {
 func TestBuildLeavesTheQueueUnstarted(t *testing.T) {
 	a := buildForTest(t)
 
-	if err := a.enq.Enqueue(context.Background(), nil); !errors.Is(err, jobs.ErrNoQueue) {
+	if err := a.w.enq.Enqueue(context.Background(), nil); !errors.Is(err, jobs.ErrNoQueue) {
 		t.Fatalf("deferred enqueuer resolved during Build: got %v, want %v", err, jobs.ErrNoQueue)
 	}
 }
@@ -119,14 +214,14 @@ func TestBuildLeavesTheQueueUnstarted(t *testing.T) {
 func TestBuildConfiguresTheAudiobookStagingArea(t *testing.T) {
 	a := buildForTest(t)
 
-	if !a.staging.Configured() {
-		t.Fatal("App.staging is unconfigured after Build — every narration would refuse to stage")
+	if !a.w.staging.Configured() {
+		t.Fatal("App.w.staging is unconfigured after Build — every narration would refuse to stage")
 	}
-	dir, err := a.staging.Dir("book-1")
+	dir, err := a.w.staging.Dir("book-1")
 	if err != nil {
 		t.Fatalf("Staging.Dir: %v", err)
 	}
-	root, err := a.cfg.DataPath.Path()
+	root, err := a.w.cfg.DataPath.Path()
 	if err != nil {
 		t.Fatalf("DataPath.Path: %v", err)
 	}
