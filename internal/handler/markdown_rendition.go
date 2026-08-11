@@ -55,33 +55,26 @@ type markdownRenditionDTO struct {
 	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
 }
 
-// BookMarkdownGet answers the rendition's state for the book page.
+// BookMarkdownGet answers the rendition's state for the book page —
+// the shared status shape with markdown's projector.
 func (h *Handler) BookMarkdownGet(c *gin.Context, s bookScope) {
-	ctx := c.Request.Context()
-	if h.renditions == nil {
-		writeError(c, http.StatusServiceUnavailable, "markdown renditions are unavailable")
-		return
-	}
-	rendition, err := h.renditions.GetByBookID(ctx, s.Book.ID)
-	if errors.Is(err, repo.ErrNotFound) {
-		c.JSON(http.StatusOK, markdownRenditionDTO{State: "none"})
-		return
-	}
-	if err != nil {
-		writeServerError(c, "read markdown rendition", err)
-		return
-	}
-
-	dto := markdownRenditionDTO{
-		State:            string(rendition.State),
-		Error:            rendition.Error,
-		Location:         rendition.Location,
-		SizeBytes:        rendition.SizeBytes,
-		ConverterVersion: rendition.ConverterVersion,
-		UpdatedAt:        &rendition.UpdatedAt,
-	}
-	dto.Stale = h.sourceStale(ctx, s.Book, rendition.State, rendition.SourceContentHash)
-	c.JSON(http.StatusOK, dto)
+	h.renditionStatus(c, h.renditions != nil, "markdown renditions are unavailable", "read markdown rendition",
+		func(ctx context.Context) (any, error) {
+			rendition, err := h.renditions.GetByBookID(ctx, s.Book.ID)
+			if err != nil {
+				return nil, err
+			}
+			return markdownRenditionDTO{
+				State:            string(rendition.State),
+				Error:            rendition.Error,
+				Location:         rendition.Location,
+				SizeBytes:        rendition.SizeBytes,
+				ConverterVersion: rendition.ConverterVersion,
+				UpdatedAt:        &rendition.UpdatedAt,
+				Stale:            h.sourceStale(ctx, s.Book, rendition.State, rendition.SourceContentHash),
+			}, nil
+		},
+		markdownRenditionDTO{State: "none"})
 }
 
 // sourceStale answers a rendition badge's staleness for both artifact
@@ -153,40 +146,18 @@ func (h *Handler) BookMarkdownDownload(c *gin.Context, s bookScope) {
 		io.NewSectionReader(src, 0, src.Size()), nil)
 }
 
-// BookMarkdownGenerate enqueues a conversion. Admin-gated at the route:
-// the sidecar spends CPU somebody pays for.
+// BookMarkdownGenerate enqueues a conversion — the shared gate chain
+// with markdown's configuration. Admin-gated at the route: the sidecar
+// spends CPU somebody pays for.
 func (h *Handler) BookMarkdownGenerate(c *gin.Context, s bookScope) {
-	ctx := c.Request.Context()
-	if h.renditions == nil {
-		writeError(c, http.StatusServiceUnavailable, "markdown renditions are unavailable")
-		return
-	}
-
-	if !model.Convertible(s.Book.Format) {
-		writeErrorCode(c, http.StatusUnsupportedMediaType, CodeFormatNotConvertible,
-			"only "+model.ConvertibleFormatList()+" books can be converted — "+
-				s.Book.Format+" is served natively or not supported")
-		return
-	}
-
-	if _, ok := h.requireConverter(c); !ok {
-		return
-	}
-
-	q, ok := h.requireQueue(c)
-	if !ok {
-		return
-	}
-	// The row goes pending before the enqueue so the status endpoint has
-	// an answer the moment the button is pressed; a failed enqueue is
-	// recorded on it rather than leaving a phantom pending.
-	if err := h.renditions.Start(ctx, s.Book.ID); err != nil {
-		writeServerError(c, "start markdown rendition", err)
-		return
-	}
-	if err := q.Enqueue(ctx, jobs.MarkdownRenditionArgs{BookID: s.Book.ID}); err != nil {
-		writeServerError(c, "queue markdown conversion", err)
-		return
-	}
-	c.Status(http.StatusAccepted)
+	h.renditionGenerate(c, s, renditionRouteSpec{
+		available:      h.renditions != nil,
+		unavailableMsg: "markdown renditions are unavailable",
+		notConvertibleMsg: "only " + model.ConvertibleFormatList() + " books can be converted — " +
+			s.Book.Format + " is served natively or not supported",
+		startOp: "start markdown rendition",
+		queueOp: "queue markdown conversion",
+		start:   func(ctx context.Context, bookID string) error { return h.renditions.Start(ctx, bookID) },
+		args:    jobs.MarkdownRenditionArgs{BookID: s.Book.ID},
+	})
 }

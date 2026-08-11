@@ -91,73 +91,9 @@ func TestBookMarkdownGetSurfacesTheRowVerbatim(t *testing.T) {
 
 // TestBookMarkdownGenerateRefusesNonConvertible — EPUB never reaches the
 // queue: gap-filler routing (ADR-0033 §2) enforced at the gate.
-func TestBookMarkdownGenerateRefusesNonConvertible(t *testing.T) {
-	q := &captureQueue{}
-	h := &Handler{
-		renditions:  &fakeRenditions{},
-		appSettings: &fakeAppSettings{converter: repo.ConverterConfig{Enabled: true, BaseURL: "http://c"}},
-		queue:       q,
-	}
-	s := pdfScope()
-	s.Book.Format = "EPUB"
-
-	c, rec := settingsCtx(t, http.MethodPost, "/api/v1/books/b1/markdown", "")
-	h.BookMarkdownGenerate(c, s)
-
-	if httpStatus(c, rec) != http.StatusUnsupportedMediaType {
-		t.Fatalf("status = %d, want 415 (body %s)", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), CodeFormatNotConvertible) {
-		t.Fatalf("body = %s", rec.Body.String())
-	}
-	if len(q.enqueued) != 0 {
-		t.Fatal("an EPUB reached the queue")
-	}
-}
-
-// TestBookMarkdownGenerateRefusesWhenNotConfigured — the enqueue gate
-// answers immediately rather than letting a job fail in thirty seconds.
-func TestBookMarkdownGenerateRefusesWhenNotConfigured(t *testing.T) {
-	h := &Handler{
-		renditions:  &fakeRenditions{},
-		appSettings: &fakeAppSettings{},
-		queue:       &captureQueue{},
-	}
-	c, rec := settingsCtx(t, http.MethodPost, "/api/v1/books/b1/markdown", "")
-	h.BookMarkdownGenerate(c, pdfScope())
-
-	if httpStatus(c, rec) != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "converter extension is not configured") {
-		t.Fatalf("body = %s", rec.Body.String())
-	}
-}
-
-func TestBookMarkdownGenerateStartsRowAndEnqueues(t *testing.T) {
-	q := &captureQueue{}
-	store := &fakeRenditions{}
-	h := &Handler{
-		renditions:  store,
-		appSettings: &fakeAppSettings{converter: repo.ConverterConfig{Enabled: true, BaseURL: "http://c"}},
-		queue:       q,
-	}
-	c, rec := settingsCtx(t, http.MethodPost, "/api/v1/books/b1/markdown", "")
-	h.BookMarkdownGenerate(c, pdfScope())
-
-	if httpStatus(c, rec) != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202 (body %s)", rec.Code, rec.Body.String())
-	}
-	if !store.started {
-		t.Fatal("row was not started")
-	}
-	if len(q.enqueued) != 1 {
-		t.Fatalf("enqueued %d jobs, want 1", len(q.enqueued))
-	}
-	if _, ok := q.enqueued[0].(jobs.MarkdownRenditionArgs); !ok {
-		t.Fatalf("enqueued %T", q.enqueued[0])
-	}
-}
+// The generate gate chain (nil store, non-convertible, not-configured,
+// no queue, happy path) is TestRenditionGenerateGateChain's suite,
+// run over both artifacts.
 
 // --- guide pre-flight over renditions (ADR-0033, #288) -------------------
 

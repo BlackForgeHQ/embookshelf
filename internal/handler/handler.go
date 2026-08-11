@@ -169,15 +169,23 @@ type DiscoveryDeps struct {
 	annotations  *service.AnnotationService
 	guides       *repo.BookReadingGuideRepo
 	guideRunner  *service.GuideRunner
-	// Markdown renditions (ADR-0033): derived from a book like a guide,
-	// so they live in the same group.
-	renditions       *repo.BookMarkdownRenditionRepo
-	epubRenditions   *repo.BookEpubRenditionRepo
-	conversionRunner *service.ConversionRunner
+	// Renditions is the converter subsystem's group (ADR-0033/0034):
+	// derived from a book like a guide, so it lives with discovery.
+	renditions RenditionDeps
 	// Audiobook generation (ADR-0025 — ADR-0028). Narration is discovery
 	// in the same sense a reading guide is: derived from a book rather
 	// than stored with it.
 	audiobooks *service.AudiobookService
+}
+
+// RenditionDeps groups the converter subsystem's handler seams — the
+// two tracking repos and the bulk runner travel together, so they are
+// one argument to NewDiscoveryDeps rather than three positional slots
+// free to be shuffled (#303).
+type RenditionDeps struct {
+	Markdown *repo.BookMarkdownRenditionRepo
+	Epub     *repo.BookEpubRenditionRepo
+	Runner   *service.ConversionRunner
 }
 
 // NewDiscovery builds the discovery group.
@@ -190,18 +198,15 @@ func NewDiscoveryDeps(
 	annotations *service.AnnotationService,
 	guides *repo.BookReadingGuideRepo,
 	guideRunner *service.GuideRunner,
-	renditions *repo.BookMarkdownRenditionRepo,
-	epubRenditions *repo.BookEpubRenditionRepo,
-	conversionRunner *service.ConversionRunner,
+	renditions RenditionDeps,
 	audiobooks *service.AudiobookService,
 ) DiscoveryDeps {
 	return DiscoveryDeps{
 		enrich: enrich, providerCfg: providerCfg, search: search,
 		stats: stats, readingStats: readingStats, annotations: annotations,
 		guides: guides, guideRunner: guideRunner,
-		renditions: renditions, epubRenditions: epubRenditions,
-		conversionRunner: conversionRunner,
-		audiobooks:       audiobooks,
+		renditions: renditions,
+		audiobooks: audiobooks,
 	}
 }
 
@@ -283,9 +288,9 @@ func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailD
 		enrich: d.enrich, providerCfg: d.providerCfg, search: d.search,
 		stats: d.stats, readingStats: d.readingStats, annotations: d.annotations,
 		guides: d.guides, guideRunner: d.guideRunner,
-		renditions:       newMarkdownRenditionStore(d.renditions),
-		epubRenditions:   newEpubRenditionStore(d.epubRenditions),
-		conversionRunner: d.conversionRunner,
+		renditions:       newMarkdownRenditionStore(d.renditions.Markdown),
+		epubRenditions:   newEpubRenditionStore(d.renditions.Epub),
+		conversionRunner: d.renditions.Runner,
 		audiobooks:       d.audiobooks,
 
 		auth: a.auth, users: a.users, devices: a.devices,

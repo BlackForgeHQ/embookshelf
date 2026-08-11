@@ -4,7 +4,6 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -47,67 +46,44 @@ type epubRenditionDTO struct {
 	UpdatedAt        *time.Time `json:"updatedAt,omitempty"`
 }
 
-// BookEpubGet answers the generated EPUB's state for the Versions tab.
+// BookEpubGet answers the generated EPUB's state for the Versions tab —
+// the shared status shape with the EPUB's projector.
 func (h *Handler) BookEpubGet(c *gin.Context, s bookScope) {
-	ctx := c.Request.Context()
-	if h.epubRenditions == nil {
-		writeError(c, http.StatusServiceUnavailable, "generated EPUBs are unavailable")
-		return
-	}
-	rendition, err := h.epubRenditions.GetByBookID(ctx, s.Book.ID)
-	if errors.Is(err, repo.ErrNotFound) {
-		c.JSON(http.StatusOK, epubRenditionDTO{State: "none"})
-		return
-	}
-	if err != nil {
-		writeServerError(c, "read epub rendition", err)
-		return
-	}
-	dto := epubRenditionDTO{
-		State:            string(rendition.State),
-		Error:            rendition.Error,
-		ConverterVersion: rendition.ConverterVersion,
-		UpdatedAt:        &rendition.UpdatedAt,
-	}
-	// A ready row whose file has since gone missing (purged after a
-	// scan) is offered as regenerable, not downloadable.
-	if rendition.State == model.RenditionReady && rendition.FileID == nil {
-		dto.State = "none"
-	}
-	dto.Stale = h.sourceStale(ctx, s.Book, rendition.State, rendition.SourceContentHash)
-	c.JSON(http.StatusOK, dto)
+	h.renditionStatus(c, h.epubRenditions != nil, "generated EPUBs are unavailable", "read epub rendition",
+		func(ctx context.Context) (any, error) {
+			rendition, err := h.epubRenditions.GetByBookID(ctx, s.Book.ID)
+			if err != nil {
+				return nil, err
+			}
+			dto := epubRenditionDTO{
+				State:            string(rendition.State),
+				Error:            rendition.Error,
+				ConverterVersion: rendition.ConverterVersion,
+				UpdatedAt:        &rendition.UpdatedAt,
+			}
+			// A ready row whose file has since gone missing (purged after a
+			// scan) is offered as regenerable, not downloadable.
+			if rendition.State == model.RenditionReady && rendition.FileID == nil {
+				dto.State = "none"
+			}
+			dto.Stale = h.sourceStale(ctx, s.Book, rendition.State, rendition.SourceContentHash)
+			return dto, nil
+		},
+		epubRenditionDTO{State: "none"})
 }
 
-// BookEpubGenerate enqueues a render. Admin-gated at the route, same
-// gates as the markdown button — plus the same instant refusals, so
-// the click answers now rather than a job failing in thirty seconds.
+// BookEpubGenerate enqueues a render — the shared gate chain with the
+// EPUB's configuration. Admin-gated at the route.
 func (h *Handler) BookEpubGenerate(c *gin.Context, s bookScope) {
-	ctx := c.Request.Context()
-	if h.epubRenditions == nil {
-		writeError(c, http.StatusServiceUnavailable, "generated EPUBs are unavailable")
-		return
-	}
-	if !model.Convertible(s.Book.Format) {
-		writeErrorCode(c, http.StatusUnsupportedMediaType, CodeFormatNotConvertible,
-			"only "+model.ConvertibleFormatList()+" books can become a generated EPUB")
-		return
-	}
-	if _, ok := h.requireConverter(c); !ok {
-		return
-	}
-	q, ok := h.requireQueue(c)
-	if !ok {
-		return
-	}
-	if err := h.epubRenditions.Start(ctx, s.Book.ID); err != nil {
-		writeServerError(c, "start epub rendition", err)
-		return
-	}
-	if err := q.Enqueue(ctx, jobs.EpubRenderArgs{BookID: s.Book.ID}); err != nil {
-		writeServerError(c, "queue epub render", err)
-		return
-	}
-	c.Status(http.StatusAccepted)
+	h.renditionGenerate(c, s, renditionRouteSpec{
+		available:         h.epubRenditions != nil,
+		unavailableMsg:    "generated EPUBs are unavailable",
+		notConvertibleMsg: "only " + model.ConvertibleFormatList() + " books can become a generated EPUB",
+		startOp:           "start epub rendition",
+		queueOp:           "queue epub render",
+		start:             func(ctx context.Context, bookID string) error { return h.epubRenditions.Start(ctx, bookID) },
+		args:              jobs.EpubRenderArgs{BookID: s.Book.ID},
+	})
 }
 
 // serveEpubRendition streams a book's generated EPUB — BookFile's
