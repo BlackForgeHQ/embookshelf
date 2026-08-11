@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.6](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.5...v0.6.6) (2026-08-11)
+
+
+### Features
+
+* **bookdrop:** S3 drop zone pulled through the local intake seam ([f48e917](https://github.com/BlackForgeHQ/embookshelf/commit/f48e9174dcc9173d11de5d49e381ac0da22fcb5f))
+* **epub:** generate an EPUB from a PDF through the converter chain ([43f5383](https://github.com/BlackForgeHQ/embookshelf/commit/43f53834530b87b039af7df4c452b783e97186c5))
+* **versions:** markdown rendition joins the Versions tab, downloadable ([070db5e](https://github.com/BlackForgeHQ/embookshelf/commit/070db5eaba208ad16201cf58f5b260f727839c2c))
+
+
+### Bug Fixes
+
+* **ci:** converter latest tag gate tests the version, not the tag name ([42db257](https://github.com/BlackForgeHQ/embookshelf/commit/42db25795c67a6a98d832447be3b677e8e704821))
+
+
+### Documentation
+
+* **context:** glossary entries for the [#254](https://github.com/BlackForgeHQ/embookshelf/issues/254) build stages ([a40cbad](https://github.com/BlackForgeHQ/embookshelf/commit/a40cbad8af83897dab230a1ba33b3b3f14e2d82c))
+* **context:** glossary entries for the [#296](https://github.com/BlackForgeHQ/embookshelf/issues/296)–[#304](https://github.com/BlackForgeHQ/embookshelf/issues/304) seams ([81d3658](https://github.com/BlackForgeHQ/embookshelf/commit/81d365884c76bd19aac665f2c1a24ee5dd5f5230))
+
 ## [0.6.5](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.4...v0.6.5) (2026-08-09)
 
 
