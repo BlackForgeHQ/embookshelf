@@ -185,14 +185,6 @@ func (r *BookRepo) Search(ctx context.Context, userID, librarySlug string, p mod
 		JOIN libraries l ON l.id = b.library_id
 		WHERE ` + strings.Join(where, " AND ")
 
-	// Counted separately from the window read: a page past the end still
-	// owes the caller the total, and the projection's carefully guarded
-	// column/scan pairing stays untouched by a window function.
-	var total int
-	if err := r.db.SQL.QueryRowContext(ctx, `SELECT COUNT(*) `+fromWhere, args...).Scan(&total); err != nil {
-		return nil, 0, err
-	}
-
 	limit, offset := p.Limit, p.Offset
 	if limit <= 0 {
 		limit = 500
@@ -200,7 +192,7 @@ func (r *BookRepo) Search(ctx context.Context, userID, librarySlug string, p mod
 	if offset < 0 {
 		offset = 0
 	}
-	args = append(args, limit, offset)
+	windowArgs := append(append([]any{}, args...), limit, offset)
 
 	// b.id breaks ties so a paged walk never repeats or skips a row
 	// whose sort key it shares with a page-boundary neighbour.
@@ -208,15 +200,30 @@ func (r *BookRepo) Search(ctx context.Context, userID, librarySlug string, p mod
 		SELECT ` + bookCols + `
 		` + fromWhere + `
 		ORDER BY ` + orderBy + `, b.id ASC
-		LIMIT $` + strconv.Itoa(len(args)-1) + ` OFFSET $` + strconv.Itoa(len(args)) + `
+		LIMIT $` + strconv.Itoa(len(windowArgs)-1) + ` OFFSET $` + strconv.Itoa(len(windowArgs)) + `
 	`
-	rows, err := r.db.SQL.QueryContext(ctx, query, args...)
+	rows, err := r.db.SQL.QueryContext(ctx, query, windowArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
 	books, err := collect(rows, nil, scanBook)
 	if err != nil {
 		return nil, 0, err
+	}
+
+	// The window itself answers the total whenever it wasn't clipped: an
+	// unclipped page ends where the matches end. Only a full window (the
+	// limit may have cut matches off) or an empty page behind a positive
+	// offset (nothing seen at all) needs the separate COUNT — so the
+	// unpaged JSON API read never pays for a count it discards, and a
+	// past-the-end OPDS page still owes its caller the real total. The
+	// count stays a separate query rather than a window function so the
+	// projection's carefully guarded column/scan pairing stays untouched.
+	total := offset + len(books)
+	if len(books) == limit || (len(books) == 0 && offset > 0) {
+		if err := r.db.SQL.QueryRowContext(ctx, `SELECT COUNT(*) `+fromWhere, args...).Scan(&total); err != nil {
+			return nil, 0, err
+		}
 	}
 	return books, total, nil
 }
