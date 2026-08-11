@@ -43,12 +43,28 @@ type S3Watcher struct {
 	// Accept is BookDropService.Accept — the bytes-arriving-over-HTTP
 	// seam, reused verbatim.
 	Accept func(ctx context.Context, filename string, src io.Reader) (model.BookDropItem, error)
+
+	// disabledReason is why the wiring decided this watcher must not
+	// run — a prefix collision, a failed backend construction. Set via
+	// Disable so the cause reaches Run's own "disabled" line instead of
+	// living only in a log written hundreds of lines away (#304).
+	disabledReason string
 }
+
+// Disable records why the watcher will not run. Run still starts and
+// still logs its "disabled" line — carrying this reason — which is what
+// lets the wiring always construct the watcher and keep the wiring
+// parity test's every-field-non-nil property.
+func (w *S3Watcher) Disable(reason string) { w.disabledReason = reason }
 
 // Run blocks until ctx is canceled.
 func (w *S3Watcher) Run(ctx context.Context) {
+	if w.disabledReason != "" {
+		slog.Info("s3 bookdrop watcher disabled", "reason", w.disabledReason)
+		return
+	}
 	if w.Prefix == "" || w.Store == nil || w.Accept == nil {
-		slog.Info("s3 bookdrop watcher disabled")
+		slog.Info("s3 bookdrop watcher disabled", "reason", "not configured")
 		return
 	}
 	if w.Interval <= 0 {

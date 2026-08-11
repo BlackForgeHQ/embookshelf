@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/model"
@@ -140,4 +142,36 @@ func TestDropPrefixCollides(t *testing.T) {
 			t.Errorf("DropPrefixCollides(%q, %q) = %v, want %v", tc.drop, tc.lib, got, tc.want)
 		}
 	}
+}
+
+// TestS3WatcherDisabledLineCarriesTheReason — why the watcher is off
+// (not configured vs prefix collision vs backend failure) is decided at
+// wiring time, hundreds of lines from Run's "disabled" log line; Disable
+// carries it across so the operator reads the cause, not just the fact
+// (#304).
+func TestS3WatcherDisabledLineCarriesTheReason(t *testing.T) {
+	capture := func(w *S3Watcher) string {
+		var buf bytes.Buffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+		defer slog.SetDefault(prev)
+		w.Run(context.Background())
+		return buf.String()
+	}
+
+	t.Run("a wired-in reason is logged", func(t *testing.T) {
+		w := &S3Watcher{Prefix: "drop/"}
+		w.Disable(`drop prefix "drop/" overlaps library prefix "" in the same bucket`)
+		out := capture(w)
+		if !strings.Contains(out, "disabled") || !strings.Contains(out, "overlaps library prefix") {
+			t.Fatalf("log = %q, want the disabled line to carry the collision reason", out)
+		}
+	})
+
+	t.Run("unconfigured says so", func(t *testing.T) {
+		out := capture(&S3Watcher{})
+		if !strings.Contains(out, "disabled") || !strings.Contains(out, "not configured") {
+			t.Fatalf("log = %q, want the disabled line to say not configured", out)
+		}
+	})
 }

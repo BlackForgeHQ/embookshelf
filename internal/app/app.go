@@ -34,7 +34,6 @@ import (
 	"github.com/blackforge/embookshelf/internal/crypto"
 	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/email"
-	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/handler"
 	"github.com/blackforge/embookshelf/internal/ingest"
 	"github.com/blackforge/embookshelf/internal/jobs"
@@ -43,11 +42,8 @@ import (
 	"github.com/blackforge/embookshelf/internal/queue"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/sidecar"
 	"github.com/blackforge/embookshelf/internal/sse"
-	"github.com/blackforge/embookshelf/internal/staticfs"
 	"github.com/blackforge/embookshelf/internal/storage"
-	s3storage "github.com/blackforge/embookshelf/internal/storage/s3"
 	"github.com/blackforge/embookshelf/internal/storageloader"
 	"github.com/blackforge/embookshelf/internal/task"
 )
@@ -205,384 +201,45 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 	} else if n > 0 {
 		slog.Info("storage backends reconciled from env", "updated", n)
 	}
-
 	storageResolver, err := storageloader.LoadStorageBackends(ctx, bootBackendRepo)
 	if err != nil {
 		return nil, fmt.Errorf("storage backends: %w", err)
 	}
 
-	// At-rest cipher for secrets in settings rows (SMTP password, OIDC
-	// client secrets, metadata provider keys). Unset KEK falls back to
-	// passthrough with a loud warning — secrets on disk stay plaintext
-	// but the server still boots. A malformed key is fatal so admins
-	// don't think encryption is on when it isn't. ADR-0010.
-	var secretCipher crypto.Cipher
-	if cfg.SecretKey != "" {
-		ac, err := crypto.NewAESGCM(cfg.SecretKey)
-		if err != nil {
-			return nil, fmt.Errorf("EMBOOKSHELF_SECRET_KEY invalid — refusing to boot: %w", err)
-		}
-		secretCipher = ac
-		slog.Info("secrets encryption enabled (AES-256-GCM)")
-	} else {
-		secretCipher = crypto.Noop{}
-		slog.Warn("EMBOOKSHELF_SECRET_KEY unset — settings secrets stored in plaintext. " +
-			"Set a base64-encoded 32-byte key for at-rest encryption.")
+	r, err := buildRepos(dbh, cfg)
+	if err != nil {
+		return nil, err
 	}
 
-	// Repositories.
-	libRepo := repo.NewLibraryRepo(dbh)
-	bookRepo := repo.NewBookRepo(dbh)
-	shelfRepo := repo.NewShelfRepo(dbh)
-	userRepo := repo.NewUserRepo(dbh)
-	sessionRepo := repo.NewSessionRepo(dbh)
-	bdropRepo := repo.NewBookDropRepo(dbh)
-	progressRepo := repo.NewProgressRepo(dbh)
-	annotationRepo := repo.NewAnnotationRepo(dbh)
-	statsRepo := repo.NewStatsRepo(dbh)
-	readingSessionRepo := repo.NewReadingSessionRepo(dbh)
-	deviceRepo := repo.NewDeviceRepo(dbh)
-	appSettingsRepo := repo.NewAppSettingsRepo(dbh, secretCipher)
-	fileRepo := repo.NewFileRepo(dbh)
-
-	// SSE hub — shared between services that broadcast and the handler that serves /events.
-	hub := sse.NewHub()
-
-	// Cover image store (files on disk under ${DATA_PATH}/covers/).
-	// The root derives the location; joining it here is how a deployment
-	// with no data root ended up caching covers into ./covers under
-	// whatever the working directory happened to be.
+	// Cover image store (files on disk under ${DATA_PATH}/covers/). The
+	// root derives the location; joining it here is how a deployment with
+	// no data root ended up caching covers into ./covers under whatever
+	// the working directory happened to be. Staging (#251) is the other
+	// on-disk area for derived bytes, built once and handed to everything
+	// that touches it.
 	coversDir, err := cfg.DataPath.Covers()
 	if err != nil {
 		return nil, fmt.Errorf("cover store: %w", err)
 	}
-	covers := coverstore.New(coversDir)
-
-	// Audiobook staging, the other on-disk area for derived bytes. Built
-	// once here and handed to everything that touches it: the workers that
-	// write and read it, the cancel path that discards a run, and the
-	// hourly sweep. This composition root used to delete staging itself
-	// with an inline os.RemoveAll on a path it joined, which bypassed the
-	// unset-root guard and survived only because removing an empty path
-	// returns nil (#251).
-	staging := task.NewStaging(cfg.DataPath)
-
-	// Services.
-	//
-	// One late-bound enqueuer for the whole composition root, created
-	// before any of its consumers. bdropSvc, guideRunner and audiobookSvc
-	// all take it as an ordinary argument; the queue's own worker
-	// registry is assembled inside queue.New out of those very services,
-	// so neither the queue nor its consumers can be built first.
-	// jobs.Deferred holds that knot alone, and Resolve closes it once the
-	// queue exists — see startQueue.
-	enq := &jobs.Deferred{}
-	backendRepo := repo.NewStorageBackendRepo(dbh)
-	pendingOrphansRepo := repo.NewPendingOrphanRepo(dbh)
-	// Built before LibraryService: book deletion needs a LibraryHandle to
-	// find the bytes a book owned, and the handle has to exist before the
-	// row it describes is gone.
-	libStore := service.NewLibraryStore(service.LibraryStoreDeps{
-		Libs:            libRepo,
-		Resolver:        storageResolver,
-		NewPlacer:       service.DefaultPlacerBuilder(storageResolver),
-		Files:           fileRepo,
-		Orphans:         pendingOrphansRepo,
-		PresignTTL:      cfg.PresignTTL,
-		PresignFallback: cfg.PresignFallback,
-	})
-	// MetadataWriter coordinates the ADR-0001 edit-side pipeline —
-	// DB → in-file embed → sidecar → folder rename — for metadata edits.
-	// It is built here, ahead of every service that performs an edit,
-	// because LibraryService and EnrichmentService both take it as a
-	// constructor argument: an edit that reaches only the books row is a
-	// half-written edit, so there is no wiring in which they should run
-	// without it. The auto-enrich background path passes
-	// TriggerAutoEnrichment to skip the side-effect steps and only
-	// persist the DB row.
-	sidecarWriter := sidecar.NewWriter()
-	renameGrace := cfg.S3RenameGrace
-	if renameGrace <= 0 {
-		// ADR-0005: 2× PresignTTL covers any URL the client could
-		// still hold. Floor at 1h so very short PresignTTL (manual
-		// override) doesn't make the sweeper too aggressive.
-		renameGrace = max(2*cfg.PresignTTL, time.Hour)
+	w := wiring{
+		cfg: cfg, dbh: dbh, resolver: storageResolver,
+		hub:     sse.NewHub(),
+		covers:  coverstore.New(coversDir),
+		staging: task.NewStaging(cfg.DataPath),
+		enq:     &jobs.Deferred{},
 	}
-	metadataWriter := service.NewMetadataWriter(service.MetadataWriterDeps{
-		Books:       bookRepo,
-		LibStore:    libStore,
-		Sidecar:     sidecarWriter,
-		Dispatch:    fileproc.DispatchEmbedder,
-		Files:       fileRepo,
-		Orphans:     pendingOrphansRepo,
-		RenameGrace: renameGrace,
-	})
-	libSvc := service.NewLibraryService(libRepo, bookRepo, service.LibraryServiceDeps{
-		Backends:     backendRepo,
-		SharedS3:     cfg.SharedS3,
-		Resolver:     storageResolver,
-		DataPath:     cfg.DataPath,
-		LibStore:     libStore,
-		Covers:       covers,
-		BookDropPath: cfg.BookDropPath,
-	}, metadataWriter)
-	shelfSvc := service.NewShelfService(shelfRepo, hub)
-	searchSvc := service.NewSearchService(libRepo, bookRepo, shelfRepo)
-	authSvc := service.NewAuthService(userRepo, sessionRepo, hub)
-	bdropSvc := service.NewBookDropService(bdropRepo, libRepo, bookRepo, covers, hub, fileRepo, enq).
-		WithLibraryStore(libStore).
-		WithBookDropPath(cfg.BookDropPath).
-		WithAutoEnrichPolicy(appSettingsRepo)
-	progressSvc := service.NewProgressService(progressRepo, readingSessionRepo)
-	annotationSvc := service.NewAnnotationService(annotationRepo)
-	statsSvc := service.NewStatsService(statsRepo)
-	readingStatsSvc := service.NewReadingSessionService(readingSessionRepo)
-	// Build every provider in the static catalog so the service can
-	// dispatch to any of them at runtime. Which subset is actually
-	// queried per request is decided by provider_settings (DB).
-	providers := make([]provider.Provider, 0, len(provider.Catalog))
-	for _, c := range provider.Catalog {
-		p := provider.Build(c.ID)
-		if p == nil {
-			slog.Warn("catalog provider has no Build() — skipping", "id", c.ID)
-			continue
-		}
-		providers = append(providers, p)
-	}
-	// The repo owns provider-config encryption (ADR-0010 §4), so it needs
-	// the Cipher and a way to find each provider's secret slots. The
-	// lookup is derived from the built providers' schemas here, at the
-	// composition root, so the repo stays free of the provider catalog.
-	providerSettingsRepo := repo.NewProviderSettingsRepo(
-		dbh, secretCipher, provider.SecretKeyLookup(providers))
-	enrichSvc := service.NewEnrichmentService(
-		providers, providerSettingsRepo, bookRepo, covers, metadataWriter)
-	providerCfgSvc := service.NewProviderSettingsService(providers, providerSettingsRepo)
-	deviceSvc := service.NewDeviceService(
-		deviceRepo, bookRepo, libStore,
-		service.NewRemarkableDriver(),
-	)
 
-	// OIDC — settings live in app_settings so three providers
-	// (Google, GitHub, generic OIDC) can be toggled independently
-	// without a restart. The rows are seeded by Start.
-	identityRepo := repo.NewIdentityRepo(dbh)
-	oidcSvc := service.NewOIDCService(appSettingsRepo, userRepo, sessionRepo, identityRepo, cfg.AppURL)
-
-	// Forward-auth — reverse-proxy header trust (ADR-0022). Boot refuses
-	// to start if the persisted row is inconsistent (Enabled=true with no
-	// CIDR), mirroring Cipher's bad-key behavior from ADR-0010. Read
-	// before Start seeds the row: a missing FORWARD_AUTH row reads back as
-	// the disabled default, which is exactly what the seed writes, so the
-	// runtime config is the same on first boot as on every later one.
-	fwdAuthCfgRow, err := appSettingsRepo.GetForwardAuth(ctx)
+	s, err := buildServices(ctx, w, r)
 	if err != nil {
-		return nil, fmt.Errorf("load forward_auth settings: %w", err)
+		return nil, err
 	}
-	if err := repo.ValidateForwardAuth(fwdAuthCfgRow); err != nil {
-		return nil, fmt.Errorf("forward_auth config invalid — refusing to start: %w", err)
-	}
-	fwdAuthRuntime, err := service.NewForwardAuthRuntime(fwdAuthCfgRow)
-	if err != nil {
-		return nil, fmt.Errorf("forward_auth runtime config: %w", err)
-	}
-	fwdAuthHolder := auth.NewForwardAuthHolder(fwdAuthRuntime)
-	fwdAuthSvc := service.NewForwardAuthService(appSettingsRepo, userRepo, identityRepo)
-	if fwdAuthCfgRow.Enabled {
-		slog.Info("forward_auth enabled",
-			"trustedCIDRs", fwdAuthCfgRow.TrustedProxyCIDRs,
-			"userHeader", fwdAuthCfgRow.Headers.User,
-		)
-	}
-
-	// Email subsystem (ADR-0020). Notifier is always built; its runtime
-	// sender is hot-reloadable via Notifier.Reload so admins can flip
-	// the EMAIL row from the settings UI without restarting the
-	// process. Start's Reload applies the persisted state.
-	emailTpl, err := email.NewTemplates()
-	if err != nil {
-		return nil, fmt.Errorf("email templates: %w", err)
-	}
-	resetRepo := repo.NewPasswordResetTokenRepo(dbh)
-	inviteRepo := repo.NewUserInviteRepo(dbh)
-	notifier := service.NewNotifier(service.NotifierDeps{
-		Templates:   emailTpl,
-		Resets:      resetRepo,
-		Invites:     inviteRepo,
-		Users:       userRepo,
-		LibStore:    libStore,
-		AppSettings: appSettingsRepo,
-	})
-	guideRepo := repo.NewBookReadingGuideRepo(dbh)
-	renditionRepo := repo.NewBookMarkdownRenditionRepo(dbh)
-	epubRenditionRepo := repo.NewBookEpubRenditionRepo(dbh)
-	// Reading guide bulk runs dispatch one job per book. Text cap comes
-	// from the settings row at start time via the job; the runner only
-	// needs it to size the estimate. Same absent-row reasoning as
-	// forward-auth above: unseeded reads back as the seeded default.
-	guideCfg, err := appSettingsRepo.GetReadingGuide(ctx)
-	if err != nil {
-		slog.Warn("read reading guide settings", "err", err)
-	}
-	guideRunner := service.NewGuideRunner(guideRepo, enq, guideCfg.TextCap)
-	audiobookRepo := repo.NewBookAudiobookRepo(dbh)
-	resetSvc := service.NewPasswordResetService(userRepo, resetRepo, sessionRepo, notifier)
-
-	// Built before the queue: the workers advance a run through this
-	// service rather than switching on the transition themselves (#190),
-	// so the registry needs it. Its enqueuer is the deferred one, which
-	// is what makes that ordering possible at all.
-	audiobookDeps := service.AudiobookDeps{
-		Store:   audiobookRepo,
-		Books:   service.NewLibraryBookOpener(libStore),
-		Enqueue: enq,
-
-		Settings: appSettingsRepo.GetAudiobook,
-
-		// Cancel discards the run's staged segments. A method value, not a
-		// closure that deletes: the staging area is the only thing that
-		// knows where its files are, so it is the only thing that removes
-		// them.
-		SweepStaging: staging.Clean,
-
-		// The hash of the book's own file, for provenance and for the
-		// staleness comparison. Injected because it lives on the files row
-		// behind a library handle, which the service deliberately cannot
-		// reach (#191). The shared constructor warns on an unresolvable
-		// library instead of silently reading fresh (#297).
-		ContentHash: service.NewPrimaryHash(libStore),
-
-		Artifacts: service.RepoNarrationArtifacts{Files: fileRepo, Books: bookRepo},
-
-		// The row delete and the byte delete are one operation, so there is
-		// nothing left here to sequence — only the library handle to resolve,
-		// which is all this adapter does. The closure that used to stand here
-		// composed the order itself and got it wrong: it asked the handle for
-		// the book's file after Artifacts had deleted that row, was told "not
-		// found", and returned nil, so every deleted narration kept its bytes
-		// (#267).
-		NarrationBytes: service.NewLibraryNarrationBytes(libStore),
-	}
-	if hub != nil {
-		audiobookDeps.Publish = func(bookID string) {
-			_ = hub.Publish(sse.AudiobookUpdated{BookID: bookID})
-		}
-	}
-	audiobookSvc := service.NewAudiobookService(audiobookDeps)
-
-	// Background queue, backed by River. Constructed, not started —
-	// Start owns that, together with resolving enq.
-	q, err := queue.New(ctx, dbh, queue.Deps{
-		BookDropSvc:    bdropSvc,
-		Enrich:         enrichSvc,
-		LibSvc:         libSvc,
-		Resolver:       storageResolver,
-		LibStore:       libStore,
-		FileRepo:       fileRepo,
-		Books:          bookRepo,
-		Users:          userRepo,
-		Notifier:       notifier,
-		Hub:            hub,
-		AppSettings:    appSettingsRepo,
-		Guides:         guideRepo,
-		Renditions:     renditionRepo,
-		EpubRenditions: epubRenditionRepo,
-		Enqueuer:       enq,
-		Audiobooks:     audiobookRepo,
-		AudiobookSvc:   audiobookSvc,
-		Covers:         covers,
-		Staging:        staging,
-	})
+	q, err := buildQueue(ctx, w, r, s)
 	if err != nil {
 		return nil, fmt.Errorf("queue: %w", err)
 	}
+	watcher, s3Watcher := buildWatchers(ctx, w, r, s)
 
-	watcher := &ingest.Watcher{
-		Path:     cfg.BookDropPath,
-		Interval: cfg.BookDropInterval,
-		Svc:      bdropSvc,
-	}
-
-	// S3 BookDrop: a drop zone inside the shared bucket, pulled through
-	// the same Accept seam uploads use. Built only when both the bucket
-	// and the prefix are configured, and refused loudly when the prefix
-	// would overlap a library's own prefix in the same bucket — the
-	// self-eating loop where the watcher ingests library files as drops.
-	// Always constructed; Run self-disables when Store stays nil —
-	// the local watcher's own empty-path pattern, and what lets the
-	// wiring parity test hold every App field non-nil.
-	s3Watcher := &ingest.S3Watcher{
-		Prefix:   cfg.SharedS3.BookDropPrefix,
-		Interval: cfg.SharedS3.BookDropInterval,
-		Accept:   bdropSvc.Accept,
-	}
-	if cfg.SharedS3.Configured() && cfg.SharedS3.BookDropPrefix != "" {
-		collision := ""
-		if backendRows, err := backendRepo.List(ctx); err == nil {
-			for _, row := range backendRows {
-				if row.Kind != "s3" {
-					continue
-				}
-				bucket, _ := row.Config["bucket"].(string)
-				prefix, _ := row.Config["prefix"].(string)
-				if bucket == cfg.SharedS3.Bucket && ingest.DropPrefixCollides(cfg.SharedS3.BookDropPrefix, prefix) {
-					collision = prefix
-					break
-				}
-			}
-		}
-		if collision != "" {
-			slog.Error("s3 bookdrop watcher refused: drop prefix overlaps a library prefix in the same bucket",
-				"drop_prefix", cfg.SharedS3.BookDropPrefix, "library_prefix", collision)
-		} else {
-			// Rooted at the bucket, not the drop prefix: the watcher
-			// passes the prefix to List and works with full keys, so
-			// the log lines name the real object paths.
-			dropStore, err := s3storage.New(ctx, s3storage.Config{
-				Endpoint:        cfg.SharedS3.Endpoint,
-				Region:          cfg.SharedS3.Region,
-				Bucket:          cfg.SharedS3.Bucket,
-				AccessKeyID:     cfg.SharedS3.AccessKeyID,
-				SecretAccessKey: cfg.SharedS3.SecretAccessKey,
-				ForcePathStyle:  cfg.SharedS3.ForcePathStyle,
-				SkipValidation:  true,
-			})
-			if err != nil {
-				slog.Error("s3 bookdrop watcher disabled: backend construction failed", "err", err)
-			} else {
-				s3Watcher.Store = dropStore
-			}
-		}
-	}
-
-	// HTTP. The five required groups are positional — adding a seam to
-	// any of them breaks the build here until it is supplied.
-	h := handler.New(
-		handler.NewPlatformDeps(cfg, staticfs.FS, version, commit, hub, service.NewPlatformService(dbh)),
-		handler.NewLibraryDeps(libSvc, shelfSvc, bookRepo, bdropSvc, progressSvc),
-		handler.NewDiscoveryDeps(
-			enrichSvc, providerCfgSvc, searchSvc,
-			statsSvc, readingStatsSvc, annotationSvc,
-			guideRepo, guideRunner,
-			handler.RenditionDeps{
-				Markdown: renditionRepo,
-				Epub:     epubRenditionRepo,
-				Runner:   service.NewConversionRunner(renditionRepo, enq),
-			},
-			audiobookSvc,
-		),
-		handler.NewAccountDeps(authSvc, userRepo, deviceSvc, appSettingsRepo),
-		handler.NewEmailDeps(notifier, resetSvc, inviteRepo, secretCipher, emailTpl),
-		handler.Options{
-			LibStore:      libStore,
-			OIDC:          oidcSvc,
-			Identities:    identityRepo,
-			Covers:        covers,
-			Queue:         q,
-			FwdAuthHolder: fwdAuthHolder,
-			FwdAuth:       fwdAuthSvc,
-		},
-	)
+	h := buildHTTP(w, r, s, q, version, commit)
 
 	built = true
 	return &App{
@@ -590,49 +247,28 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 		db:  dbh,
 
 		storageResolver: storageResolver,
-		cipher:          secretCipher,
-		hub:             hub,
-		covers:          covers,
-		staging:         staging,
+		cipher:          r.cipher,
+		hub:             w.hub,
+		covers:          w.covers,
+		staging:         w.staging,
 
-		libRepo:              libRepo,
-		bookRepo:             bookRepo,
-		userRepo:             userRepo,
-		fileRepo:             fileRepo,
-		bdropRepo:            bdropRepo,
-		appSettingsRepo:      appSettingsRepo,
-		providerSettingsRepo: providerSettingsRepo,
-		identityRepo:         identityRepo,
-		inviteRepo:           inviteRepo,
-		guideRepo:            guideRepo,
-		audiobookRepo:        audiobookRepo,
-		pendingOrphansRepo:   pendingOrphansRepo,
+		libRepo: r.lib, bookRepo: r.book, userRepo: r.user, fileRepo: r.file,
+		bdropRepo: r.bdrop, appSettingsRepo: r.appSettings,
+		providerSettingsRepo: s.providerSettingsRepo,
+		identityRepo:         r.identity, inviteRepo: r.invite, guideRepo: r.guide,
+		audiobookRepo: r.audiobook, pendingOrphansRepo: r.pendingOrphans,
 
-		libStore:        libStore,
-		metadataWriter:  metadataWriter,
-		libSvc:          libSvc,
-		shelfSvc:        shelfSvc,
-		searchSvc:       searchSvc,
-		authSvc:         authSvc,
-		bdropSvc:        bdropSvc,
-		progressSvc:     progressSvc,
-		annotationSvc:   annotationSvc,
-		statsSvc:        statsSvc,
-		readingStatsSvc: readingStatsSvc,
-		enrichSvc:       enrichSvc,
-		providerCfgSvc:  providerCfgSvc,
-		deviceSvc:       deviceSvc,
-		oidcSvc:         oidcSvc,
-		fwdAuthHolder:   fwdAuthHolder,
-		fwdAuthSvc:      fwdAuthSvc,
-		notifier:        notifier,
-		resetSvc:        resetSvc,
-		guideRunner:     guideRunner,
-		audiobookSvc:    audiobookSvc,
-		emailTpl:        emailTpl,
+		libStore: s.libStore, metadataWriter: s.metadataWriter,
+		libSvc: s.lib, shelfSvc: s.shelf, searchSvc: s.search, authSvc: s.auth,
+		bdropSvc: s.bdrop, progressSvc: s.progress, annotationSvc: s.annotation,
+		statsSvc: s.stats, readingStatsSvc: s.readingStats,
+		enrichSvc: s.enrich, providerCfgSvc: s.providerCfg, deviceSvc: s.device,
+		oidcSvc: s.oidc, fwdAuthHolder: s.fwdAuthHolder, fwdAuthSvc: s.fwdAuth,
+		notifier: s.notifier, resetSvc: s.reset, guideRunner: s.guideRunner,
+		audiobookSvc: s.audiobook, emailTpl: s.emailTpl,
 
 		queue:   q,
-		enq:     enq,
+		enq:     w.enq,
 		watcher: watcher, s3Watcher: s3Watcher,
 
 		handler: h,
