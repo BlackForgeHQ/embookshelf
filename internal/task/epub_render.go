@@ -71,8 +71,8 @@ func EpubRender(ctx context.Context, a jobs.EpubRenderArgs, deps EpubRenderDeps)
 		_ = deps.Renditions.MarkFailed(ctx, a.BookID, "read converter settings: "+err.Error())
 		return fmt.Errorf("read converter settings: %w", err)
 	}
-	if !cfg.Enabled || cfg.BaseURL == "" {
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, "converter extension is not configured")
+	if !cfg.Configured() {
+		_ = deps.Renditions.MarkFailed(ctx, a.BookID, repo.MsgConverterNotConfigured)
 		return ErrConverterNotConfigured
 	}
 	if deps.Markdown == nil {

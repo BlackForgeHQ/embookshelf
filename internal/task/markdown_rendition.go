@@ -50,7 +50,7 @@ type MarkdownRenditionDeps struct {
 // answer (ADR-0033 §5) — distinct from a conversion that failed. Wraps
 // ErrDoNotRetry: a disabled extension will still be disabled in thirty
 // seconds.
-var ErrConverterNotConfigured = fmt.Errorf("converter extension is not configured: %w", jobs.ErrDoNotRetry)
+var ErrConverterNotConfigured = fmt.Errorf(repo.MsgConverterNotConfigured+": %w", jobs.ErrDoNotRetry)
 
 // MarkdownRendition converts one book's file into markdown and records
 // the outcome on the tracking row. Every failure path writes the row
@@ -74,8 +74,8 @@ func MarkdownRendition(ctx context.Context, a jobs.MarkdownRenditionArgs, deps M
 		_ = deps.Renditions.MarkFailed(ctx, a.BookID, "read converter settings: "+err.Error())
 		return fmt.Errorf("read converter settings: %w", err)
 	}
-	if !cfg.Enabled || cfg.BaseURL == "" {
-		_ = deps.Renditions.MarkFailed(ctx, a.BookID, "converter extension is not configured")
+	if !cfg.Configured() {
+		_ = deps.Renditions.MarkFailed(ctx, a.BookID, repo.MsgConverterNotConfigured)
 		return ErrConverterNotConfigured
 	}
 

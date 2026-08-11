@@ -168,14 +168,7 @@ func (h *Handler) BookMarkdownGenerate(c *gin.Context, s bookScope) {
 		return
 	}
 
-	cfg, err := h.appSettings.GetConverter(ctx)
-	if err != nil {
-		writeServerError(c, "read converter settings", err)
-		return
-	}
-	if !cfg.Enabled || cfg.BaseURL == "" {
-		writeErrorCode(c, http.StatusServiceUnavailable, CodeConverterDisabled,
-			"converter extension is not configured")
+	if _, ok := h.requireConverter(c); !ok {
 		return
 	}
 

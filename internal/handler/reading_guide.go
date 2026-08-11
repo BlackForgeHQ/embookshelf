@@ -101,14 +101,7 @@ func (h *Handler) guidePreflightConvertible(c *gin.Context, s bookScope) bool {
 	if !model.Convertible(s.Book.Format) || h.renditions == nil {
 		return true
 	}
-	cfg, err := h.appSettings.GetConverter(c.Request.Context())
-	if err != nil {
-		writeServerError(c, "read converter settings", err)
-		return false
-	}
-	if !cfg.Enabled || cfg.BaseURL == "" {
-		writeErrorCode(c, http.StatusServiceUnavailable, CodeConverterDisabled,
-			"converter extension is not configured")
+	if _, ok := h.requireConverter(c); !ok {
 		return false
 	}
 	rendition, err := h.renditions.GetByBookID(c.Request.Context(), s.Book.ID)

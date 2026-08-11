@@ -232,3 +232,55 @@ func TestSettingsConverterRunRefusesWhenNotConfigured(t *testing.T) {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
 }
+
+// TestRequireConverter — the converter gate mirrors requireQueue: one
+// place owns the 503 + code + refusal string, so a route cannot restate
+// the predicate and drift (#298 — the drift that once nil-dereferenced
+// Send-to-Kindle on the queue seam).
+func TestRequireConverter(t *testing.T) {
+	t.Run("configured passes the config through", func(t *testing.T) {
+		h := &Handler{appSettings: &fakeAppSettings{
+			converter: repo.ConverterConfig{Enabled: true, BaseURL: "http://converter:6070"},
+		}}
+		c, rec := settingsCtx(t, http.MethodPost, "/x", "")
+		cfg, ok := h.requireConverter(c)
+		if !ok || cfg.BaseURL != "http://converter:6070" {
+			t.Fatalf("cfg = %+v ok = %v, want the configured row", cfg, ok)
+		}
+		if rec.Body.Len() != 0 {
+			t.Fatalf("wrote %s on the success path", rec.Body.String())
+		}
+	})
+
+	t.Run("not configured owns the refusal", func(t *testing.T) {
+		h := &Handler{appSettings: &fakeAppSettings{}}
+		c, rec := settingsCtx(t, http.MethodPost, "/x", "")
+		if _, ok := h.requireConverter(c); ok {
+			t.Fatal("ok = true for an unconfigured converter")
+		}
+		if httpStatus(c, rec) != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, want 503", rec.Code)
+		}
+		var body struct {
+			Error string `json:"error"`
+			Code  string `json:"code"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body.Code != CodeConverterDisabled || body.Error != "converter extension is not configured" {
+			t.Fatalf("body = %+v", body)
+		}
+	})
+
+	t.Run("settings read failure is a 500", func(t *testing.T) {
+		h := &Handler{appSettings: &fakeAppSettings{converterErr: errors.New("db down")}}
+		c, rec := settingsCtx(t, http.MethodPost, "/x", "")
+		if _, ok := h.requireConverter(c); ok {
+			t.Fatal("ok = true on a settings read failure")
+		}
+		if httpStatus(c, rec) != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want 500", rec.Code)
+		}
+	})
+}

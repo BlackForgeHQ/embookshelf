@@ -40,6 +40,7 @@ type fakeAppSettings struct {
 	audiobook       repo.AudiobookConfig
 	forwardAuth     repo.ForwardAuthConfig
 	converter       repo.ConverterConfig
+	converterErr    error
 	google          repo.OAuthPresetConfig
 	github          repo.OAuthPresetConfig
 	generic         repo.GenericOIDCConfig
@@ -131,7 +132,7 @@ func (f *fakeAppSettings) GetGenericOIDC(context.Context) (repo.GenericOIDCConfi
 }
 
 func (f *fakeAppSettings) GetConverter(context.Context) (repo.ConverterConfig, error) {
-	return f.converter, nil
+	return f.converter, f.converterErr
 }
 
 func (f *fakeAppSettings) SetConverter(_ context.Context, cfg repo.ConverterConfig) error {

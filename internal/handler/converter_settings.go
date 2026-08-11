@@ -13,6 +13,29 @@ import (
 	"github.com/blackforge/embookshelf/internal/repo"
 )
 
+// requireConverter resolves the converter gate for a route whose work
+// needs the extension, mirroring requireQueue: one place owns the 503 +
+// CodeConverterDisabled + refusal string, because restating the
+// predicate per call site is how exactly this drift once
+// nil-dereferenced Send-to-Kindle on the queue seam (#223, #298).
+//
+// A caller gets the config it can dial or false and a response already
+// written. Not for SettingsConverterHealth, whose not-configured answer
+// is a 200 status card, not a refusal.
+func (h *Handler) requireConverter(c *gin.Context) (repo.ConverterConfig, bool) {
+	cfg, err := h.appSettings.GetConverter(c.Request.Context())
+	if err != nil {
+		writeServerError(c, "read converter settings", err)
+		return repo.ConverterConfig{}, false
+	}
+	if !cfg.Configured() {
+		writeErrorCode(c, http.StatusServiceUnavailable, CodeConverterDisabled,
+			repo.MsgConverterNotConfigured)
+		return repo.ConverterConfig{}, false
+	}
+	return cfg, true
+}
+
 // converterSettingsDTO is the CONVERTER row on the wire. No secrets, so
 // no tri-state — the whole row travels both ways.
 type converterSettingsDTO struct {
@@ -81,14 +104,7 @@ func (h *Handler) SettingsConverterCoverage(c *gin.Context) {
 // SettingsConverterRun starts a bulk conversion of every candidate.
 func (h *Handler) SettingsConverterRun(c *gin.Context) {
 	ctx := c.Request.Context()
-	cfg, err := h.appSettings.GetConverter(ctx)
-	if err != nil {
-		writeServerError(c, "read converter settings", err)
-		return
-	}
-	if !cfg.Enabled || cfg.BaseURL == "" {
-		writeErrorCode(c, http.StatusServiceUnavailable, CodeConverterDisabled,
-			"converter extension is not configured")
+	if _, ok := h.requireConverter(c); !ok {
 		return
 	}
 	if h.conversionRunner == nil {
@@ -129,7 +145,7 @@ func (h *Handler) SettingsConverterHealth(c *gin.Context) {
 		writeServerError(c, "read converter settings", err)
 		return
 	}
-	if !cfg.Enabled || cfg.BaseURL == "" {
+	if !cfg.Configured() {
 		c.JSON(http.StatusOK, converterHealthDTO{Status: "not_configured"})
 		return
 	}

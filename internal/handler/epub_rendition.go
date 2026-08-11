@@ -92,14 +92,7 @@ func (h *Handler) BookEpubGenerate(c *gin.Context, s bookScope) {
 			"only "+model.ConvertibleFormatList()+" books can become a generated EPUB")
 		return
 	}
-	cfg, err := h.appSettings.GetConverter(ctx)
-	if err != nil {
-		writeServerError(c, "read converter settings", err)
-		return
-	}
-	if !cfg.Enabled || cfg.BaseURL == "" {
-		writeErrorCode(c, http.StatusServiceUnavailable, CodeConverterDisabled,
-			"converter extension is not configured")
+	if _, ok := h.requireConverter(c); !ok {
 		return
 	}
 	q, ok := h.requireQueue(c)

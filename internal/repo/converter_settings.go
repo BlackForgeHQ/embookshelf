@@ -32,6 +32,19 @@ func DefaultConverterConfig() ConverterConfig {
 	return ConverterConfig{}
 }
 
+// MsgConverterNotConfigured is the one refusal phrase for a converter
+// that is not Configured() — what handlers answer and what workers
+// record on the rendition row (ADR-0033 §5 surfaces it verbatim).
+const MsgConverterNotConfigured = "converter extension is not configured"
+
+// Configured reports whether the extension is usable: enabled and
+// pointing somewhere. The one statement of the predicate — task workers
+// consult it and handlers go through requireConverter, instead of the
+// seven inline restatements this replaces (#298).
+func (c ConverterConfig) Configured() bool {
+	return c.Enabled && c.BaseURL != ""
+}
+
 var converterSetting = Setting[ConverterConfig]{
 	Key:     SettingConverter,
 	Default: DefaultConverterConfig,

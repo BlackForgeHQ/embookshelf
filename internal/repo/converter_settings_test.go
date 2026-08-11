@@ -99,3 +99,23 @@ func TestConverterAllowsIncompleteWhileDisabled(t *testing.T) {
 		t.Fatalf("SetConverter: %v", err)
 	}
 }
+
+// TestConverterConfigured — the one statement of "is the extension
+// usable": enabled with a URL. Everything that used to restate
+// `!cfg.Enabled || cfg.BaseURL == ""` inline consults this (#298).
+func TestConverterConfigured(t *testing.T) {
+	cases := map[string]struct {
+		cfg  repo.ConverterConfig
+		want bool
+	}{
+		"enabled with URL":    {repo.ConverterConfig{Enabled: true, BaseURL: "http://converter:6070"}, true},
+		"disabled with URL":   {repo.ConverterConfig{Enabled: false, BaseURL: "http://converter:6070"}, false},
+		"enabled without URL": {repo.ConverterConfig{Enabled: true}, false},
+		"zero value":          {repo.ConverterConfig{}, false},
+	}
+	for name, tc := range cases {
+		if got := tc.cfg.Configured(); got != tc.want {
+			t.Errorf("%s: Configured() = %v, want %v", name, got, tc.want)
+		}
+	}
+}
