@@ -3,8 +3,7 @@
 package handler
 
 import (
-	"errors"
-	"net/http"
+	"context"
 
 	"github.com/gin-gonic/gin"
 
@@ -24,80 +23,62 @@ type forwardAuthSettingsDTO struct {
 	HideLocalLogin    bool                    `json:"hideLocalLogin"`
 }
 
-// SettingsForwardAuthGet returns the persisted FORWARD_AUTH row.
-func (h *Handler) SettingsForwardAuthGet(c *gin.Context) {
-	if h.appSettings == nil {
-		writeError(c, http.StatusServiceUnavailable, "settings repo unavailable")
-		return
-	}
-	cfg, err := h.appSettings.GetForwardAuth(c.Request.Context())
-	if err != nil {
-		writeServerError(c, "forward_auth settings get", err)
-		return
-	}
-	c.JSON(http.StatusOK, forwardAuthSettingsDTO{
-		Enabled:           cfg.Enabled,
-		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
-		Headers:           cfg.Headers,
-		LogoutURL:         cfg.LogoutURL,
-		HideLocalLogin:    cfg.HideLocalLogin,
-	})
-}
-
-// SettingsForwardAuthUpdate validates + persists the row, then hot-
-// swaps the runtime middleware config. Validation surfaces specific
-// 400s for the two failure modes admins are most likely to hit:
-// enabling without a CIDR, or pasting a malformed CIDR.
-func (h *Handler) SettingsForwardAuthUpdate(c *gin.Context) {
-	if h.appSettings == nil {
-		writeError(c, http.StatusServiceUnavailable, "settings repo unavailable")
-		return
-	}
-	var body forwardAuthSettingsDTO
-	if !bindJSON(c, &body) {
-		return
-	}
-	cfg := repo.ForwardAuthConfig{
-		Enabled:           body.Enabled,
-		TrustedProxyCIDRs: body.TrustedProxyCIDRs,
-		Headers:           body.Headers,
-		LogoutURL:         body.LogoutURL,
-		HideLocalLogin:    body.HideLocalLogin,
-	}
-	if err := h.appSettings.SetForwardAuth(c.Request.Context(), cfg); err != nil {
-		switch {
-		case errors.Is(err, repo.ErrForwardAuthEnabledWithoutCIDR):
-			writeError(c, http.StatusBadRequest, err.Error())
-		case errors.Is(err, repo.ErrForwardAuthInvalidCIDR),
-			errors.Is(err, repo.ErrForwardAuthInvalidHeader),
-			errors.Is(err, repo.ErrForwardAuthInvalidLogoutURL):
-			writeError(c, http.StatusBadRequest, err.Error())
-		default:
-			writeServerError(c, "forward_auth settings update", err)
+// forwardAuthSettings declares the FORWARD_AUTH surface. Validation
+// surfaces specific 400s for the failure modes admins are most likely
+// to hit: enabling without a CIDR, or pasting a malformed CIDR. After a
+// save the runtime middleware config is hot-swapped from the re-read
+// (normalized) row.
+var forwardAuthSettings = settingsDomain[repo.ForwardAuthConfig, forwardAuthSettingsDTO]{
+	name: "forward_auth settings",
+	get: func(ctx context.Context, h *Handler) (repo.ForwardAuthConfig, error) {
+		return h.appSettings.GetForwardAuth(ctx)
+	},
+	save: func(ctx context.Context, h *Handler, cfg repo.ForwardAuthConfig) error {
+		return h.appSettings.SetForwardAuth(ctx, cfg)
+	},
+	toDTO: func(_ *Handler, _ *gin.Context, cfg repo.ForwardAuthConfig) forwardAuthSettingsDTO {
+		return forwardAuthSettingsDTO{
+			Enabled:           cfg.Enabled,
+			TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
+			Headers:           cfg.Headers,
+			LogoutURL:         cfg.LogoutURL,
+			HideLocalLogin:    cfg.HideLocalLogin,
 		}
-		return
-	}
-
-	// Re-read to get the normalised values (trimmed, defaults
-	// applied) before publishing to the runtime holder.
-	saved, err := h.appSettings.GetForwardAuth(c.Request.Context())
-	if err != nil {
-		writeServerError(c, "forward_auth settings reload", err)
-		return
-	}
-	if h.fwdAuthHolder != nil {
-		runtime, rerr := service.NewForwardAuthRuntime(saved)
-		if rerr != nil {
-			writeServerError(c, "forward_auth runtime rebuild", rerr)
-			return
+	},
+	merge: func(dto forwardAuthSettingsDTO, _ repo.ForwardAuthConfig) repo.ForwardAuthConfig {
+		return repo.ForwardAuthConfig{
+			Enabled:           dto.Enabled,
+			TrustedProxyCIDRs: dto.TrustedProxyCIDRs,
+			Headers:           dto.Headers,
+			LogoutURL:         dto.LogoutURL,
+			HideLocalLogin:    dto.HideLocalLogin,
+		}
+	},
+	badRequest: func(err error) bool {
+		return errIsOneOf(err,
+			repo.ErrForwardAuthEnabledWithoutCIDR,
+			repo.ErrForwardAuthInvalidCIDR,
+			repo.ErrForwardAuthInvalidHeader,
+			repo.ErrForwardAuthInvalidLogoutURL)
+	},
+	afterSave: func(h *Handler, c *gin.Context, saved repo.ForwardAuthConfig) bool {
+		if h.fwdAuthHolder == nil {
+			return true
+		}
+		runtime, err := service.NewForwardAuthRuntime(saved)
+		if err != nil {
+			writeServerError(c, "forward_auth runtime rebuild", err)
+			return false
 		}
 		h.fwdAuthHolder.Set(runtime)
-	}
-	c.JSON(http.StatusOK, forwardAuthSettingsDTO{
-		Enabled:           saved.Enabled,
-		TrustedProxyCIDRs: saved.TrustedProxyCIDRs,
-		Headers:           saved.Headers,
-		LogoutURL:         saved.LogoutURL,
-		HideLocalLogin:    saved.HideLocalLogin,
-	})
+		return true
+	},
+}
+
+func (h *Handler) SettingsForwardAuthGet(c *gin.Context) {
+	settingsGet(c, h, forwardAuthSettings)
+}
+
+func (h *Handler) SettingsForwardAuthUpdate(c *gin.Context) {
+	settingsPut(c, h, forwardAuthSettings)
 }

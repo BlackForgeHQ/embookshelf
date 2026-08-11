@@ -3,6 +3,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -180,49 +181,53 @@ type readingGuideSettingsDTO struct {
 	RequestJSONMode bool   `json:"requestJsonMode"`
 }
 
+// readingGuideSettings declares the READING_GUIDE surface. Every save
+// refusal maps to a 400: the row's failures are validation, and the
+// cipher/database cases were already reported this way before the
+// adapter — kept verbatim rather than silently reclassified.
+var readingGuideSettings = settingsDomain[repo.ReadingGuideConfig, readingGuideSettingsDTO]{
+	name: "read guide settings",
+	get: func(ctx context.Context, h *Handler) (repo.ReadingGuideConfig, error) {
+		return h.appSettings.GetReadingGuide(ctx)
+	},
+	save: func(ctx context.Context, h *Handler, cfg repo.ReadingGuideConfig) error {
+		return h.appSettings.SetReadingGuide(ctx, cfg)
+	},
+	toDTO: func(_ *Handler, _ *gin.Context, cfg repo.ReadingGuideConfig) readingGuideSettingsDTO {
+		return readingGuideSettingsDTO{
+			Enabled: cfg.Enabled, BaseURL: cfg.BaseURL, Model: cfg.Model,
+			KeySet: cfg.APIKey != "", AuthStyle: cfg.AuthStyle, Language: cfg.Language,
+			TextCap: cfg.TextCap, RequestJSONMode: cfg.RequestJSONMode,
+		}
+	},
+	merge: func(dto readingGuideSettingsDTO, _ repo.ReadingGuideConfig) repo.ReadingGuideConfig {
+		return repo.ReadingGuideConfig{
+			Enabled:         dto.Enabled,
+			BaseURL:         dto.BaseURL,
+			Model:           dto.Model,
+			AuthStyle:       dto.AuthStyle,
+			Language:        dto.Language,
+			TextCap:         dto.TextCap,
+			RequestJSONMode: dto.RequestJSONMode,
+		}
+	},
+	secrets: func(dto *readingGuideSettingsDTO, next, current *repo.ReadingGuideConfig) []settingsSecret {
+		return []settingsSecret{{
+			incoming: strings.TrimSpace(dto.APIKey),
+			set:      dto.KeySet,
+			stored:   current.APIKey,
+			slot:     &next.APIKey,
+		}}
+	},
+	badRequest: anySaveRefusalIsA400,
+}
+
 func (h *Handler) SettingsReadingGuideGet(c *gin.Context) {
-	cfg, err := h.appSettings.GetReadingGuide(c.Request.Context())
-	if err != nil {
-		writeServerError(c, "read guide settings", err)
-		return
-	}
-	c.JSON(http.StatusOK, readingGuideSettingsDTO{
-		Enabled: cfg.Enabled, BaseURL: cfg.BaseURL, Model: cfg.Model,
-		KeySet: cfg.APIKey != "", AuthStyle: cfg.AuthStyle, Language: cfg.Language,
-		TextCap: cfg.TextCap, RequestJSONMode: cfg.RequestJSONMode,
-	})
+	settingsGet(c, h, readingGuideSettings)
 }
 
 func (h *Handler) SettingsReadingGuideUpdate(c *gin.Context) {
-	var body readingGuideSettingsDTO
-	if !bindJSON(c, &body) {
-		return
-	}
-	ctx := c.Request.Context()
-	current, err := h.appSettings.GetReadingGuide(ctx)
-	if err != nil {
-		writeServerError(c, "read guide settings", err)
-		return
-	}
-
-	next := repo.ReadingGuideConfig{
-		Enabled:         body.Enabled,
-		BaseURL:         body.BaseURL,
-		Model:           body.Model,
-		APIKey:          resolveSecret(strings.TrimSpace(body.APIKey), body.KeySet, current.APIKey),
-		AuthStyle:       body.AuthStyle,
-		Language:        body.Language,
-		TextCap:         body.TextCap,
-		RequestJSONMode: body.RequestJSONMode,
-	}
-
-	if err := h.appSettings.SetReadingGuide(ctx, next); err != nil {
-		// Validation refuses enabling without an endpoint; that is the
-		// admin's mistake to see, not a 500.
-		writeError(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	h.SettingsReadingGuideGet(c)
+	settingsPut(c, h, readingGuideSettings)
 }
 
 // SettingsReadingGuideEstimate sizes a bulk run before anything is spent.

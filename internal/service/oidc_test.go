@@ -257,12 +257,10 @@ func TestProviderUsableGates(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if got := googleUsable(tc.cfg); got != tc.want {
-				t.Errorf("googleUsable = %v, want %v", got, tc.want)
-			}
-			// GitHub takes the same shape and the same rule.
-			if got := githubUsable(tc.cfg); got != tc.want {
-				t.Errorf("githubUsable = %v, want %v", got, tc.want)
+			// One gate for both preset providers — Google and GitHub
+			// take the same shape and the same rule.
+			if got := presetUsable(tc.cfg); got != tc.want {
+				t.Errorf("presetUsable = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -483,8 +481,7 @@ func TestDiagnosticsPassAgainstAConformingIssuer(t *testing.T) {
 		_, _ = w.Write([]byte(`{"keys":[{"kty":"RSA","kid":"k1"}]}`))
 	})
 
-	svc := oidcForTest(t, &fakeOIDCSettings{})
-	res := svc.TestGeneric(context.Background(), repo.GenericOIDCConfig{IssuerURI: srv.URL, ClientID: "cid"})
+	res := testGeneric(context.Background(), repo.GenericOIDCConfig{IssuerURI: srv.URL, ClientID: "cid"})
 
 	if !res.Success {
 		t.Fatalf("a conforming issuer failed: %+v", res.Checks)
@@ -526,8 +523,7 @@ func TestDiagnosticsGradeMissingCapabilities(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	svc := oidcForTest(t, &fakeOIDCSettings{})
-	res := svc.TestGeneric(context.Background(), repo.GenericOIDCConfig{IssuerURI: srv.URL, ClientID: "cid"})
+	res := testGeneric(context.Background(), repo.GenericOIDCConfig{IssuerURI: srv.URL, ClientID: "cid"})
 
 	if res.Success {
 		t.Fatal("an issuer without the authorization-code flow was reported as usable")
@@ -556,8 +552,7 @@ func TestDiagnosticsReportUnreachableIssuer(t *testing.T) {
 	url := srv.URL
 	srv.Close() // nothing is listening now
 
-	svc := oidcForTest(t, &fakeOIDCSettings{})
-	res := svc.TestGeneric(context.Background(), repo.GenericOIDCConfig{IssuerURI: url, ClientID: "cid"})
+	res := testGeneric(context.Background(), repo.GenericOIDCConfig{IssuerURI: url, ClientID: "cid"})
 
 	if res.Success || len(res.Checks) != 1 || res.Checks[0].Status != CheckFail {
 		t.Fatalf("checks = %+v, want a single FAIL on discovery", res.Checks)
@@ -569,18 +564,16 @@ func TestDiagnosticsReportUnreachableIssuer(t *testing.T) {
 func TestDiagnosticsRefuseEmptyConfig(t *testing.T) {
 	t.Parallel()
 
-	svc := oidcForTest(t, &fakeOIDCSettings{})
-
-	if res := svc.TestGeneric(context.Background(), repo.GenericOIDCConfig{ClientID: "cid"}); res.Success ||
+	if res := testGeneric(context.Background(), repo.GenericOIDCConfig{ClientID: "cid"}); res.Success ||
 		len(res.Checks) != 1 || res.Checks[0].Name != "Issuer URI" {
 		t.Errorf("empty issuer: checks = %+v, want a single Issuer URI failure", res.Checks)
 	}
-	if res := svc.TestGeneric(context.Background(), repo.GenericOIDCConfig{IssuerURI: "https://idp.test"}); res.Success ||
+	if res := testGeneric(context.Background(), repo.GenericOIDCConfig{IssuerURI: "https://idp.test"}); res.Success ||
 		len(res.Checks) != 1 || res.Checks[0].Name != "Client ID" {
 		t.Errorf("empty client id: checks = %+v, want a single Client ID failure", res.Checks)
 	}
 	// GitHub has no discovery document, so its guard is its own.
-	if res := svc.TestGitHub(context.Background(), repo.OAuthPresetConfig{}); res.Success ||
+	if res := testGitHub(context.Background(), repo.OAuthPresetConfig{}); res.Success ||
 		len(res.Checks) != 1 || res.Checks[0].Name != "Client ID" {
 		t.Errorf("github: checks = %+v, want a single Client ID failure", res.Checks)
 	}

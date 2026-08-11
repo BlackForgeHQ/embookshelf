@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -220,4 +222,29 @@ func TestBuildRedirectURIEdges(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSettingsOIDCTestIsARegistryLookup pins the endpoint's shape after
+// #258: no per-slug switch, so an unknown slug is the service's refusal
+// mapped to 404, and a missing service is a 503 before any dispatch.
+func TestSettingsOIDCTestIsARegistryLookup(t *testing.T) {
+	t.Run("unknown slug is a 404", func(t *testing.T) {
+		h := &Handler{oidc: service.NewOIDCService(nil, nil, nil, nil, "")}
+		c, rec := settingsCtx(t, http.MethodPost, "/api/v1/settings/oidc/test/myspace", "{}")
+		c.Params = gin.Params{{Key: "slug", Value: "myspace"}}
+		h.SettingsOIDCTest(c)
+		if got := httpStatus(c, rec); got != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", got)
+		}
+	})
+
+	t.Run("no service is a 503", func(t *testing.T) {
+		h := &Handler{}
+		c, rec := settingsCtx(t, http.MethodPost, "/api/v1/settings/oidc/test/google", "{}")
+		c.Params = gin.Params{{Key: "slug", Value: "google"}}
+		h.SettingsOIDCTest(c)
+		if got := httpStatus(c, rec); got != http.StatusServiceUnavailable {
+			t.Errorf("status = %d, want 503", got)
+		}
+	})
 }

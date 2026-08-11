@@ -85,9 +85,9 @@ func TestSettingsAudiobookUpdateKeepsAKeyNotRetyped(t *testing.T) {
 			store := &fakeAppSettings{audiobook: storedAudiobook()}
 			h := &Handler{appSettings: store}
 
-			req := audiobookSettingsRequest{
+			req := audiobookSettingsDTO{
 				Enabled: true, Engine: string(tts.EngineOpenAI),
-				Engines: []audiobookEngineRequest{{
+				Engines: []audiobookEngineDTO{{
 					ID: string(tts.EngineOpenAI), Enabled: true,
 					DefaultVoice: "nova",
 					APIKey:       tc.apiKey, KeySet: tc.keySet,
