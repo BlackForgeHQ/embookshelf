@@ -47,8 +47,8 @@ func (f *fakeBookStore) GetByID(_ context.Context, userID, id string) (model.Boo
 	return f.book, nil
 }
 
-func (f *fakeBookStore) Search(context.Context, string, string, model.SearchParams) ([]model.Book, error) {
-	return nil, nil
+func (f *fakeBookStore) Search(context.Context, string, string, model.SearchParams) ([]model.Book, int, error) {
+	return nil, 0, nil
 }
 
 // scopeRequest drives one wrapped handler. withUser mirrors what

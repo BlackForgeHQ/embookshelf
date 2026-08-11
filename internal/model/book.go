@@ -162,6 +162,16 @@ type SearchParams struct {
 	Format    []string // filter by format (empty = all)
 	Sort      string   // one of: title, author, recent, year, rating
 	Unshelved bool     // restrict to books not on any of the user's regular non-system shelves
+
+	// Limit/Offset page the result window; Limit 0 keeps the unpaged
+	// read (capped at the repo's safety ceiling). The reported total is
+	// always the whole match count, so a pager can derive next/previous
+	// without fetching everything.
+	Limit  int
+	Offset int
+	// Downloadable restricts to books with a file on disk — the OPDS
+	// acquisition surface, where an entry without bytes is a dead link.
+	Downloadable bool
 }
 
 // Formats exposes the formats supported in the UI filter chips.

@@ -125,7 +125,7 @@ func TestUnshelvedFilter(t *testing.T) {
 		t.Fatalf("add to bob shelf: %v", err)
 	}
 
-	gotBooks, err := br.Search(ctx, alice.ID, "", model.SearchParams{Unshelved: true})
+	gotBooks, _, err := br.Search(ctx, alice.ID, "", model.SearchParams{Unshelved: true})
 	if err != nil {
 		t.Fatalf("Search unshelved: %v", err)
 	}

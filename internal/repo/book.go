@@ -119,12 +119,13 @@ func NewBookRepo(d *db.DB) *BookRepo {
 	return &BookRepo{db: d}
 }
 
-// Search lists books scoped to a specific user's progress. An empty
-// librarySlug means "across all libraries"; passing a slug filters down.
-// Always capped at 500 rows today — the Library UI renders them all
-// client-side. Server-side pagination is a future slice when library
-// sizes demand it.
-func (r *BookRepo) Search(ctx context.Context, userID, librarySlug string, p model.SearchParams) ([]model.Book, error) {
+// Search lists books scoped to a specific user's progress and reports
+// the total match count. An empty librarySlug means "across all
+// libraries"; passing a slug filters down. p.Limit/p.Offset select the
+// window (Limit 0 keeps the unpaged read, capped at 500 rows — the
+// Library UI renders them all client-side); the total is counted before
+// the window so pagers can derive next/previous links from it.
+func (r *BookRepo) Search(ctx context.Context, userID, librarySlug string, p model.SearchParams) ([]model.Book, int, error) {
 	// arg[0] is always the user id (driven by the LEFT JOIN on user_book_progress).
 	var (
 		where = []string{"b.deleted_at IS NULL"}
@@ -154,6 +155,9 @@ func (r *BookRepo) Search(ctx context.Context, userID, librarySlug string, p mod
 			  AND s.slug NOT IN ('reading','finished')
 		)`, len(args)))
 	}
+	if p.Downloadable {
+		where = append(where, "b.path <> ''")
+	}
 
 	// Unshelved is a triage view — newest imports float to the top by
 	// default so the user shelves them first. Explicit p.Sort overrides.
@@ -177,24 +181,50 @@ func (r *BookRepo) Search(ctx context.Context, userID, librarySlug string, p mod
 		}
 	}
 
+	fromWhere := bookFromPG + `
+		JOIN libraries l ON l.id = b.library_id
+		WHERE ` + strings.Join(where, " AND ")
+
+	// Counted separately from the window read: a page past the end still
+	// owes the caller the total, and the projection's carefully guarded
+	// column/scan pairing stays untouched by a window function.
+	var total int
+	if err := r.db.SQL.QueryRowContext(ctx, `SELECT COUNT(*) `+fromWhere, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	limit, offset := p.Limit, p.Offset
+	if limit <= 0 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	args = append(args, limit, offset)
+
+	// b.id breaks ties so a paged walk never repeats or skips a row
+	// whose sort key it shares with a page-boundary neighbour.
 	query := `
 		SELECT ` + bookCols + `
-		` + bookFromPG + `
-		JOIN libraries l ON l.id = b.library_id
-		WHERE ` + strings.Join(where, " AND ") + `
-		ORDER BY ` + orderBy + `
-		LIMIT 500
+		` + fromWhere + `
+		ORDER BY ` + orderBy + `, b.id ASC
+		LIMIT $` + strconv.Itoa(len(args)-1) + ` OFFSET $` + strconv.Itoa(len(args)) + `
 	`
 	rows, err := r.db.SQL.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return collect(rows, nil, scanBook)
+	books, err := collect(rows, nil, scanBook)
+	if err != nil {
+		return nil, 0, err
+	}
+	return books, total, nil
 }
 
 // BooksByLibrarySlug is retained for the home dashboard's simple count.
 func (r *BookRepo) BooksByLibrarySlug(ctx context.Context, userID, slug string) ([]model.Book, error) {
-	return r.Search(ctx, userID, slug, model.SearchParams{})
+	books, _, err := r.Search(ctx, userID, slug, model.SearchParams{})
+	return books, err
 }
 
 // bookCreateQuery inserts a row and reads it back through the same

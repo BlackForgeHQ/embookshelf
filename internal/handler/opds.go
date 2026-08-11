@@ -76,110 +76,74 @@ func (h *Handler) OPDSRoot(c *gin.Context) {
 	writeFeed(c, feed, opds.MimeNavigation)
 }
 
-// OPDSAll serves the complete library as a paged acquisition feed.
+// OPDSAll serves the complete catalog as a paged acquisition feed.
 func (h *Handler) OPDSAll(c *gin.Context) {
-	userID := opdsUserID(c)
-	if userID == "" {
-		return
-	}
-
-	libs, err := h.lib.List(c.Request.Context())
-	if err != nil {
-		c.String(http.StatusInternalServerError, "failed")
-		return
-	}
-
-	var books []model.Book
-	for _, lib := range libs {
-		part, err := h.books.Search(c.Request.Context(), userID, lib.Slug, model.SearchParams{Sort: "recent"})
-		if err != nil {
-			slog.Error("opds all: search", "lib", lib.Slug, "err", err)
-			continue
-		}
-		books = append(books, part...)
-	}
-
-	h.writeAcquisition(c, opdsAcquisitionContext{
+	h.serveCatalogFeed(c, opdsAcquisitionContext{
 		ID:       opds.InstanceID + ":opds:all",
 		Title:    "All books",
 		SelfPath: "/opds/all",
-	}, books)
+	}, "", model.SearchParams{Sort: "recent"})
 }
 
 // OPDSLibrary serves one library's books as a paged acquisition feed.
 func (h *Handler) OPDSLibrary(c *gin.Context) {
-	userID := opdsUserID(c)
-	if userID == "" {
-		return
-	}
 	slug := c.Param("slug")
-	books, err := h.books.Search(c.Request.Context(), userID, slug, model.SearchParams{})
-	if err != nil {
-		slog.Error("opds library", "slug", slug, "err", err)
-		c.String(http.StatusInternalServerError, "failed")
-		return
-	}
-	h.writeAcquisition(c, opdsAcquisitionContext{
+	h.serveCatalogFeed(c, opdsAcquisitionContext{
 		ID:       opds.InstanceID + ":opds:library:" + slug,
 		Title:    "Library · " + slug,
 		SelfPath: "/opds/library/" + url.PathEscape(slug),
-	}, books)
+	}, slug, model.SearchParams{})
 }
 
 // OPDSRecent shows newly-added books first, across all libraries.
 func (h *Handler) OPDSRecent(c *gin.Context) {
-	userID := opdsUserID(c)
-	if userID == "" {
-		return
-	}
-	libs, err := h.lib.List(c.Request.Context())
-	if err != nil {
-		c.String(http.StatusInternalServerError, "failed")
-		return
-	}
-	var books []model.Book
-	for _, lib := range libs {
-		part, err := h.books.Search(c.Request.Context(), userID, lib.Slug, model.SearchParams{Sort: "recent"})
-		if err != nil {
-			continue
-		}
-		books = append(books, part...)
-	}
-	h.writeAcquisition(c, opdsAcquisitionContext{
+	h.serveCatalogFeed(c, opdsAcquisitionContext{
 		ID:       opds.InstanceID + ":opds:recent",
 		Title:    "Recently added",
 		SelfPath: "/opds/recent",
-	}, books)
+	}, "", model.SearchParams{Sort: "recent"})
 }
 
-// OPDSSearch serves the free-text search acquisition feed.
+// OPDSSearch serves the free-text search acquisition feed. An empty
+// query renders an empty feed without asking the catalog.
 func (h *Handler) OPDSSearch(c *gin.Context) {
+	q := strings.TrimSpace(c.Query("q"))
+	feedCtx := opdsAcquisitionContext{
+		ID:       opds.InstanceID + ":opds:search:" + q,
+		Title:    "Search: " + q,
+		SelfPath: "/opds/search?q=" + url.QueryEscape(q),
+	}
+	if q == "" {
+		if opdsUserID(c) == "" {
+			return
+		}
+		h.writeAcquisition(c, feedCtx, nil, 0, 1)
+		return
+	}
+	h.serveCatalogFeed(c, feedCtx, "", model.SearchParams{Query: q})
+}
+
+// serveCatalogFeed asks the catalog for one page of one feed and renders
+// it. Aggregation across libraries, the downloadable filter and the
+// total all belong to the catalog; a failed read is a 500, never a
+// silently shorter feed.
+func (h *Handler) serveCatalogFeed(c *gin.Context, feedCtx opdsAcquisitionContext, slug string, p model.SearchParams) {
 	userID := opdsUserID(c)
 	if userID == "" {
 		return
 	}
-	q := strings.TrimSpace(c.Query("q"))
-	libs, err := h.lib.List(c.Request.Context())
+	page := clampInt(parseIntOr(c.Query("page"), 1), 1, 1_000_000)
+	p.Limit = opdsPageSize
+	p.Offset = (page - 1) * opdsPageSize
+	p.Downloadable = true
+
+	books, total, err := h.books.Search(c.Request.Context(), userID, slug, p)
 	if err != nil {
+		slog.Error("opds feed: search", "feed", feedCtx.SelfPath, "err", err)
 		c.String(http.StatusInternalServerError, "failed")
 		return
 	}
-
-	var books []model.Book
-	if q != "" {
-		for _, lib := range libs {
-			part, err := h.books.Search(c.Request.Context(), userID, lib.Slug, model.SearchParams{Query: q})
-			if err != nil {
-				continue
-			}
-			books = append(books, part...)
-		}
-	}
-	h.writeAcquisition(c, opdsAcquisitionContext{
-		ID:       opds.InstanceID + ":opds:search:" + q,
-		Title:    "Search: " + q,
-		SelfPath: "/opds/search?q=" + url.QueryEscape(q),
-	}, books)
+	h.writeAcquisition(c, feedCtx, books, total, page)
 }
 
 // OPDSSearchDescription serves the OpenSearch description XML.
@@ -264,32 +228,11 @@ type opdsAcquisitionContext struct {
 	SelfPath string
 }
 
-// writeAcquisition serializes a paged OPDS acquisition feed. Pagination is
-// driven by ?page=N (1-indexed); rel=next / rel=previous links are emitted
-// when additional pages exist.
-func (h *Handler) writeAcquisition(c *gin.Context, ctx opdsAcquisitionContext, books []model.Book) {
-	page := clampInt(parseIntOr(c.Query("page"), 1), 1, 1_000_000)
-
-	// Drop books without downloadable paths.
-	filtered := books[:0]
-	for _, b := range books {
-		if b.Path != "" {
-			filtered = append(filtered, b)
-		}
-	}
-	books = filtered
-	total := len(books)
-
-	start := (page - 1) * opdsPageSize
-	if start >= total {
-		start = total
-	}
-	end := start + opdsPageSize
-	if end > total {
-		end = total
-	}
-	pageBooks := books[start:end]
-
+// writeAcquisition serializes one page of an OPDS acquisition feed.
+// books is the page window the catalog returned and total its full match
+// count; rel=next / rel=previous links are derived from those, not from
+// slicing a full list in memory.
+func (h *Handler) writeAcquisition(c *gin.Context, ctx opdsAcquisitionContext, books []model.Book, total, page int) {
 	base := opdsBase(c)
 	selfHREF := base + ctx.SelfPath
 	if page > 1 {
@@ -309,17 +252,17 @@ func (h *Handler) writeAcquisition(c *gin.Context, ctx opdsAcquisitionContext, b
 			{Rel: opds.RelUp, Href: base + "/opds/", Type: opds.MimeNavigation},
 		},
 	}
-	if start > 0 {
+	if page > 1 {
 		feed.Links = append(feed.Links, opds.Link{
 			Rel: opds.RelPrevious, Href: appendPage(base+ctx.SelfPath, page-1), Type: opds.MimeAcquisition,
 		})
 	}
-	if end < total {
+	if (page-1)*opdsPageSize+len(books) < total {
 		feed.Links = append(feed.Links, opds.Link{
 			Rel: opds.RelNext, Href: appendPage(base+ctx.SelfPath, page+1), Type: opds.MimeAcquisition,
 		})
 	}
-	for _, b := range pageBooks {
+	for _, b := range books {
 		links := opds.BookLinks{
 			Download:     base + "/opds/book/" + b.ID + "/download",
 			DownloadMime: mimeForFormat(b.Format),

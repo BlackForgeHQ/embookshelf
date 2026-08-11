@@ -23,7 +23,10 @@ import (
 // every body began by talking to a real database.
 type bookStore interface {
 	GetByID(ctx context.Context, userID, id string) (model.Book, error)
-	Search(ctx context.Context, userID, librarySlug string, p model.SearchParams) ([]model.Book, error)
+	// Search returns one window of the catalog plus the total match
+	// count — paging and cross-library aggregation are the catalog's
+	// answer, not the caller's arithmetic (#241).
+	Search(ctx context.Context, userID, librarySlug string, p model.SearchParams) ([]model.Book, int, error)
 }
 
 // bookScope is what the book-scoped seam resolves before a handler body

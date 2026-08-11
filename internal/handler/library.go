@@ -259,7 +259,7 @@ func (h *Handler) Books(c *gin.Context) {
 	}
 	library := strings.TrimSpace(c.Query("library"))
 
-	books, err := h.books.Search(c.Request.Context(), userID, library, params)
+	books, _, err := h.books.Search(c.Request.Context(), userID, library, params)
 	if err != nil {
 		writeServerError(c, "books search", err)
 		return
