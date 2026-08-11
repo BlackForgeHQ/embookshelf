@@ -413,6 +413,14 @@ The worker pipeline that takes a staged file path, computes its hash, dispatches
 
 The split exists because a 31-field `Deps` struct made every seam optional by construction, and one of them — the provider settings surface — shipped unassigned and nil-dereferenced on every request to it. Required-vs-optional was already a real distinction in the code, expressed only as the presence or absence of a nil check; this moves it into the type system.
 
+### Build stages
+
+`app.prepare` → `buildRepos` → `buildWiring` → `buildServices` → `buildQueue` → `buildWatchers` (+ `buildHTTP`); the composition root's build phase as functions over typed bundles (`prepared`, `repos`, `wiring`, `services`), each taking the bundles of the stages before it. A stage that needs a value cannot be called before the stage producing it, so the argument-shaped ordering constraints are compile errors; the ones that genuinely need prose are listed once, at the top of `build.go`. The App holds the bundles as named fields — `w`/`r`/`s`, not embedded, because `repos` and `services` deliberately reuse names — which is what deleted the 45-field App literal the seam test used to hold in step by hand (#254, #304).
+
+### Prepared database
+
+`app.prepared`; the proof the database is ready to be read — schema migrated, storage_v2 backfilled, shared-S3 backend rows reconciled, and the [[Resolver]] built from those reconciled rows. The only carrier of the pool past `prepare`: `buildRepos` takes it directly, everything else reaches it through the `wiring` that embeds it, so "migrations before any repo query" is a signature, not a comment. These writes are Build's only side effects, and they exist because the constructors read the data back; runtime side effects (seeds, reloads, the queue) stay in Start.
+
 ### Book-scoped seam
 
 `handler.bookScoped(fn)`; the one place that turns a book-scoped route into a loaded book. Takes the session user, resolves the `:id` route parameter through the [[bookStore]], answers 404 for a book that is not there and 500 for a lookup that failed, and calls the handler body with a `bookScope{UserID, Book}`.
