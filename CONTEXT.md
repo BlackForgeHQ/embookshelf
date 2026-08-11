@@ -40,6 +40,12 @@ Guarded by a parity test that parses the package's own sources (package-level va
 
 `METADATA_AUTO_ENRICH` is deliberately outside it: a bare `GetBool`/`SetBool` flag with no `Setting[T]`, unseeded, reading false when absent.
 
+### Settings surface
+
+`handler.settingsDomain[Cfg, DTO]`; the handler-tier declaration of one admin settings panel's get/put pair, the third layer over [[Setting]] and the [[Settings registry]]. The HTTP pipeline — nil-store 503, bind, load-current, merge, secret resolution, save, error split, reload, side effect, respond — is written once in `settingsGet`/`settingsPut`; a domain declares only its wire shape, its tri-state secret slots, which save refusal is the admin's 400, and its post-save side effect (SMTP hot-reload, forward-auth runtime publish). `resolveSecret` runs in exactly one place, the adapter's loop over declared slots, so a new panel cannot restate the keep-versus-clear rule — only declare where it applies.
+
+Exists because five surfaces restated that pipeline and had already diverged three ways (#249). Six declarations today: EMAIL, READING_GUIDE, AUDIOBOOK, FORWARD_AUTH, CONVERTER, and OIDC — whose config aggregates five rows and whose save is the transactional `OIDCSettingsService.Apply`, not a store write. `METADATA_AUTO_ENRICH` stays outside for the same reason it skips the registry: no typed row, no pipeline. Probe/test endpoints (SMTP test-send, TTS probe, OIDC connection test) are not part of the shape — they stay hand-written.
+
 ---
 
 ## Users & identity

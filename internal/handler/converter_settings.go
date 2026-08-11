@@ -43,29 +43,30 @@ type converterSettingsDTO struct {
 	BaseURL string `json:"baseUrl"`
 }
 
-func (h *Handler) SettingsConverterGet(c *gin.Context) {
-	cfg, err := h.appSettings.GetConverter(c.Request.Context())
-	if err != nil {
-		writeServerError(c, "read converter settings", err)
-		return
-	}
-	c.JSON(http.StatusOK, converterSettingsDTO{Enabled: cfg.Enabled, BaseURL: cfg.BaseURL})
+// converterSettings declares the CONVERTER surface. No secrets, no
+// side effects; every save refusal maps to a 400 — validation refuses
+// enabling without a URL, and that is the admin's mistake to see, not
+// a 500.
+var converterSettings = settingsDomain[repo.ConverterConfig, converterSettingsDTO]{
+	name: "converter settings",
+	get: func(ctx context.Context, h *Handler) (repo.ConverterConfig, error) {
+		return h.appSettings.GetConverter(ctx)
+	},
+	save: func(ctx context.Context, h *Handler, cfg repo.ConverterConfig) error {
+		return h.appSettings.SetConverter(ctx, cfg)
+	},
+	toDTO: func(_ *Handler, _ *gin.Context, cfg repo.ConverterConfig) converterSettingsDTO {
+		return converterSettingsDTO{Enabled: cfg.Enabled, BaseURL: cfg.BaseURL}
+	},
+	merge: func(dto converterSettingsDTO, _ repo.ConverterConfig) repo.ConverterConfig {
+		return repo.ConverterConfig{Enabled: dto.Enabled, BaseURL: dto.BaseURL}
+	},
+	badRequest: anySaveRefusalIsA400,
 }
 
-func (h *Handler) SettingsConverterUpdate(c *gin.Context) {
-	var body converterSettingsDTO
-	if !bindJSON(c, &body) {
-		return
-	}
-	next := repo.ConverterConfig{Enabled: body.Enabled, BaseURL: body.BaseURL}
-	if err := h.appSettings.SetConverter(c.Request.Context(), next); err != nil {
-		// Validation refuses enabling without a URL; that is the admin's
-		// mistake to see, not a 500.
-		writeError(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	h.SettingsConverterGet(c)
-}
+func (h *Handler) SettingsConverterGet(c *gin.Context) { settingsGet(c, h, converterSettings) }
+
+func (h *Handler) SettingsConverterUpdate(c *gin.Context) { settingsPut(c, h, converterSettings) }
 
 // converterCoverageDTO is the bulk-conversion card's numbers: the
 // pre-flight ("candidates would convert") and the progress poll are the

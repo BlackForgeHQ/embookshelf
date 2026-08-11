@@ -3,6 +3,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -11,17 +12,21 @@ import (
 	"github.com/blackforge/embookshelf/internal/tts"
 )
 
-// audiobookEngineDTO is one engine's row in the settings panel.
+// audiobookEngineDTO is one engine's row in the settings panel, and the
+// same shape a PUT submits back.
 //
 // KeySet rather than the key itself: a GET must never hand back a
-// credential it was given. It comes back on PUT too, so an empty
-// submitted key can mean either "keep the stored one" or "clear it" —
-// the same write-only shape the reading-guide panel uses.
+// credential it was given. APIKey is write-only — never populated on
+// the way out — and rides with KeySet so an empty submitted key can
+// mean either "keep the stored one" or "clear it", the same tri-state
+// the reading-guide panel uses. Label and the Needs*/MaxRequestChars
+// fields are read-only catalog facts a submission cannot change.
 type audiobookEngineDTO struct {
 	ID                   string  `json:"id"`
 	Label                string  `json:"label"`
 	Enabled              bool    `json:"enabled"`
 	BaseURL              string  `json:"baseUrl"`
+	APIKey               string  `json:"apiKey,omitempty"`
 	KeySet               bool    `json:"keySet"`
 	Model                string  `json:"model"`
 	DefaultVoice         string  `json:"defaultVoice"`
@@ -41,85 +46,61 @@ type audiobookSettingsDTO struct {
 	Engines []audiobookEngineDTO `json:"engines"`
 }
 
-// audiobookSettingsRequest mirrors the DTO minus the read-only catalog
-// facts, plus the write-only key.
-type audiobookEngineRequest struct {
-	ID                   string  `json:"id"`
-	Enabled              bool    `json:"enabled"`
-	BaseURL              string  `json:"baseUrl"`
-	APIKey               string  `json:"apiKey"`
-	KeySet               bool    `json:"keySet"`
-	Model                string  `json:"model"`
-	DefaultVoice         string  `json:"defaultVoice"`
-	PricePerMillionChars float64 `json:"pricePerMillionChars"`
-}
-
-type audiobookSettingsRequest struct {
-	Enabled bool                     `json:"enabled"`
-	Engine  string                   `json:"engine"`
-	Engines []audiobookEngineRequest `json:"engines"`
-}
-
-func (h *Handler) SettingsAudiobookGet(c *gin.Context) {
-	if h.appSettings == nil {
-		writeError(c, http.StatusServiceUnavailable, "settings are unavailable")
-		return
-	}
-	cfg, err := h.appSettings.GetAudiobook(c.Request.Context())
-	if err != nil {
-		writeServerError(c, "audiobook settings get", err)
-		return
-	}
-	c.JSON(http.StatusOK, audiobookSettingsToDTO(cfg))
-}
-
-func (h *Handler) SettingsAudiobookUpdate(c *gin.Context) {
-	if h.appSettings == nil {
-		writeError(c, http.StatusServiceUnavailable, "settings are unavailable")
-		return
-	}
-	var req audiobookSettingsRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		writeError(c, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	// Load first so a key the admin did not retype can be kept. Submitting
-	// the form without retyping every credential has to be safe, or admins
-	// learn to paste keys into a field they can no longer read back.
-	cfg, err := h.appSettings.GetAudiobook(c.Request.Context())
-	if err != nil {
-		writeServerError(c, "audiobook settings load", err)
-		return
-	}
-	cfg.Enabled = req.Enabled
-	cfg.Engine = req.Engine
-	for _, in := range req.Engines {
-		slot := cfg.EngineSlot(tts.EngineID(in.ID))
-		if slot == nil {
-			continue
+// audiobookSettings declares the AUDIOBOOK surface. The engine list is
+// the one dynamic secret set among the settings domains: each submitted
+// engine that matches a config slot carries its own tri-state API key.
+// Every save refusal maps to a 400 — same reasoning as the reading
+// guide surface.
+var audiobookSettings = settingsDomain[repo.AudiobookConfig, audiobookSettingsDTO]{
+	name: "audiobook settings",
+	get: func(ctx context.Context, h *Handler) (repo.AudiobookConfig, error) {
+		return h.appSettings.GetAudiobook(ctx)
+	},
+	save: func(ctx context.Context, h *Handler, cfg repo.AudiobookConfig) error {
+		return h.appSettings.SetAudiobook(ctx, cfg)
+	},
+	toDTO: func(_ *Handler, _ *gin.Context, cfg repo.AudiobookConfig) audiobookSettingsDTO {
+		return audiobookSettingsToDTO(cfg)
+	},
+	merge: func(req audiobookSettingsDTO, current repo.AudiobookConfig) repo.AudiobookConfig {
+		next := current
+		next.Enabled = req.Enabled
+		next.Engine = req.Engine
+		for _, in := range req.Engines {
+			slot := next.EngineSlot(tts.EngineID(in.ID))
+			if slot == nil {
+				continue
+			}
+			slot.Enabled = in.Enabled
+			slot.BaseURL = in.BaseURL
+			slot.Model = in.Model
+			slot.DefaultVoice = in.DefaultVoice
+			slot.PricePerMillionChars = in.PricePerMillionChars
 		}
-		slot.Enabled = in.Enabled
-		slot.BaseURL = in.BaseURL
-		slot.Model = in.Model
-		slot.DefaultVoice = in.DefaultVoice
-		slot.PricePerMillionChars = in.PricePerMillionChars
-		slot.APIKey = resolveSecret(in.APIKey, in.KeySet, slot.APIKey)
-	}
-
-	if err := h.appSettings.SetAudiobook(c.Request.Context(), cfg); err != nil {
-		// Validation failures are the admin's to fix and carry their own
-		// message; anything else is ours.
-		writeError(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	saved, err := h.appSettings.GetAudiobook(c.Request.Context())
-	if err != nil {
-		writeServerError(c, "audiobook settings reload", err)
-		return
-	}
-	c.JSON(http.StatusOK, audiobookSettingsToDTO(saved))
+		return next
+	},
+	secrets: func(req *audiobookSettingsDTO, next, current *repo.AudiobookConfig) []settingsSecret {
+		out := make([]settingsSecret, 0, len(req.Engines))
+		for _, in := range req.Engines {
+			slot := next.EngineSlot(tts.EngineID(in.ID))
+			if slot == nil {
+				continue
+			}
+			out = append(out, settingsSecret{
+				incoming: in.APIKey,
+				set:      in.KeySet,
+				stored:   slot.APIKey,
+				slot:     &slot.APIKey,
+			})
+		}
+		return out
+	},
+	badRequest: anySaveRefusalIsA400,
 }
+
+func (h *Handler) SettingsAudiobookGet(c *gin.Context) { settingsGet(c, h, audiobookSettings) }
+
+func (h *Handler) SettingsAudiobookUpdate(c *gin.Context) { settingsPut(c, h, audiobookSettings) }
 
 // SettingsAudiobookVoices proxies the selected engine's voice list, which
 // is what populates the generate dialog's picker.
@@ -170,7 +151,7 @@ func (h *Handler) SettingsAudiobookTest(c *gin.Context) {
 func (h *Handler) probeEngine(c *gin.Context) (repo.ConfiguredEngine, bool) {
 	var zero repo.ConfiguredEngine
 	if h.appSettings == nil {
-		writeError(c, http.StatusServiceUnavailable, "settings are unavailable")
+		writeError(c, http.StatusServiceUnavailable, "settings repo unavailable")
 		return zero, false
 	}
 	cfg, err := h.appSettings.GetAudiobook(c.Request.Context())

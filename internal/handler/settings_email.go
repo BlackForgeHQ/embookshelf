@@ -60,76 +60,71 @@ func toEmailSettingsDTO(cfg repo.EmailConfig) emailSettingsDTO {
 	}
 }
 
-// SettingsEmailGet returns the current EMAIL config with the
-// password elided. Admin-only — ADR-0010 keeps the password
-// AES-GCM-encrypted at rest, but reading "yes a password is set" is
-// useful for the UI even on instances without a KEK.
-func (h *Handler) SettingsEmailGet(c *gin.Context) {
-	cfg, err := h.appSettings.GetEmail(c.Request.Context())
-	if err != nil {
-		writeServerError(c, "email settings get", err)
-		return
-	}
-	c.JSON(http.StatusOK, toEmailSettingsDTO(cfg))
-}
-
-// SettingsEmailUpdate persists the EMAIL row. Trimming and validation
+// emailSettings declares the EMAIL surface. Trimming and validation
 // belong to the row, so a CLI or an importer is held to the same rules
-// as this endpoint. An empty password in the request means "keep the
-// existing one" so admins can edit other fields without retyping the
-// secret.
-func (h *Handler) SettingsEmailUpdate(c *gin.Context) {
-	var body emailSettingsDTO
-	if !bindJSON(c, &body) {
-		return
-	}
-
-	current, err := h.appSettings.GetEmail(c.Request.Context())
-	if err != nil {
-		writeServerError(c, "email settings load", err)
-		return
-	}
-	cfg := repo.EmailConfig{
-		Enabled: body.Enabled,
-		SMTP: repo.EmailSMTPConfig{
-			Host:     body.SMTP.Host,
-			Port:     body.SMTP.Port,
-			Username: body.SMTP.Username,
-			TLS:      body.SMTP.TLS,
-			Password: body.SMTP.Password,
-		},
-		From: repo.EmailFromConfig{
-			Address: body.From.Address,
-			Name:    body.From.Name,
-		},
-		PublicURL: body.PublicURL,
-	}
-	cfg.SMTP.Password = resolveSecret(body.SMTP.Password, body.PasswordSet, current.SMTP.Password)
-	if err := h.appSettings.SetEmail(c.Request.Context(), cfg); err != nil {
-		// The row trims and validates; a refusal is the admin's mistake
-		// to see, and it carries its own message. Anything else — a
-		// cipher or a database failure — is ours.
-		if errors.Is(err, repo.ErrEmailInvalid) {
-			writeError(c, http.StatusBadRequest, err.Error())
-			return
+// as these endpoints; the password is elided from every GET (ADR-0010)
+// and rides the tri-state secret slot on PUT. The 204 is historical —
+// the panel re-fetches rather than reading the PUT body.
+var emailSettings = settingsDomain[repo.EmailConfig, emailSettingsDTO]{
+	name: "email settings",
+	get: func(ctx context.Context, h *Handler) (repo.EmailConfig, error) {
+		return h.appSettings.GetEmail(ctx)
+	},
+	save: func(ctx context.Context, h *Handler, cfg repo.EmailConfig) error {
+		return h.appSettings.SetEmail(ctx, cfg)
+	},
+	toDTO: func(_ *Handler, _ *gin.Context, cfg repo.EmailConfig) emailSettingsDTO {
+		return toEmailSettingsDTO(cfg)
+	},
+	merge: func(dto emailSettingsDTO, _ repo.EmailConfig) repo.EmailConfig {
+		return repo.EmailConfig{
+			Enabled: dto.Enabled,
+			SMTP: repo.EmailSMTPConfig{
+				Host:     dto.SMTP.Host,
+				Port:     dto.SMTP.Port,
+				Username: dto.SMTP.Username,
+				TLS:      dto.SMTP.TLS,
+			},
+			From: repo.EmailFromConfig{
+				Address: dto.From.Address,
+				Name:    dto.From.Name,
+			},
+			PublicURL: dto.PublicURL,
 		}
-		writeServerError(c, "email settings save", err)
-		return
-	}
+	},
+	secrets: func(dto *emailSettingsDTO, next, current *repo.EmailConfig) []settingsSecret {
+		return []settingsSecret{{
+			incoming: dto.SMTP.Password,
+			set:      dto.PasswordSet,
+			stored:   current.SMTP.Password,
+			slot:     &next.SMTP.Password,
+		}}
+	},
+	// A row refusal is the admin's mistake to see, and it carries its
+	// own message. Anything else — a cipher or a database failure — is
+	// ours.
+	badRequest: func(err error) bool { return errors.Is(err, repo.ErrEmailInvalid) },
 	// Hot-reload so the new SMTP config takes effect without restart.
 	// Reload errors don't fail the save — the row is already persisted
 	// and Notifier holds a disabled state until the admin fixes the
 	// config — but they're returned so the UI can surface the SMTP
 	// construction error inline.
-	if h.notifier != nil {
+	afterSave: func(h *Handler, c *gin.Context, _ repo.EmailConfig) bool {
+		if h.notifier == nil {
+			return true
+		}
 		if err := h.notifier.Reload(c.Request.Context()); err != nil {
 			slog.Warn("email settings reload", "err", err)
 			writeErrorCode(c, http.StatusBadGateway, CodeEmailReloadFailed, err.Error())
-			return
+			return false
 		}
-	}
-	c.Status(http.StatusNoContent)
+		return true
+	},
+	noBody: true,
 }
+
+func (h *Handler) SettingsEmailGet(c *gin.Context)    { settingsGet(c, h, emailSettings) }
+func (h *Handler) SettingsEmailUpdate(c *gin.Context) { settingsPut(c, h, emailSettings) }
 
 type emailTestReq struct {
 	To string `json:"to"`

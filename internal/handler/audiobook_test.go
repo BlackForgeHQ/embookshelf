@@ -92,9 +92,9 @@ func assertSingleResponse(t *testing.T, body string) {
 func TestSettingsAudiobookUpdateResolvesTheKey(t *testing.T) {
 	ctx := context.Background()
 	body := func(apiKey string, keySet bool) string {
-		b, err := json.Marshal(audiobookSettingsRequest{
+		b, err := json.Marshal(audiobookSettingsDTO{
 			Engine: string(tts.EngineElevenLabs),
-			Engines: []audiobookEngineRequest{{
+			Engines: []audiobookEngineDTO{{
 				ID: string(tts.EngineElevenLabs), APIKey: apiKey, KeySet: keySet,
 			}},
 		})
