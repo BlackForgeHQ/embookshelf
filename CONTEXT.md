@@ -817,6 +817,18 @@ The markdown produced from a book's file by the [[Converter extension]] — a de
 
 `model.RenditionState` + `repo.renditionLifecycle`; the four-state tracking lifecycle (`pending → running → ready | failed`) shared by the [[Markdown rendition]] and [[Generated EPUB]] rows. One implementation over both tables; per-artifact code is a projection (which columns `MarkReady` writes, how the row scans), never a copy. Every state write carries a from-state guard rendered from `model.RenditionWrite` — the `book_audiobooks` Transition shape — and **ready is sealed**: a late `MarkFailed`/`MarkRunning` from a superseded job is a refused no-op, and only `Start` (the user asking for a regeneration) reopens a concluded row. Far simpler than the [[Audiobook run]]'s lifecycle on purpose: one HTTP call, no cancel, no segments, no generation counter.
 
+### Derived artifact placement
+
+`service.DerivedKind` + `LibraryHandle.DerivedKey` / `PlaceDerived(kind)`; the one key derivation and one placement entry point for everything generated *from* a book — markdown, generated EPUB, narration. The key is the book's own folder (`books.folder_path` when set, `{Author}/{Title}` otherwise), named after the book; the kind selects only the extension and the stored format, the two facts the three placements ever differed by. Deliberately `PlaceAt`, never `Placer.Place`: the book's folder already exists, and Placer would answer that with a "Title (2)" sibling scan reads as a second book.
+
+### Book operations
+
+`service.BookOps`; the deep module over [[LibraryStore]] holding the library-touching steps every derived-artifact job shares — `Open` (the book's bytes), `PrimaryHash` (provenance, via [[Primary hash]]), `OpenMarkdown`, `PlaceDerived`. The job registry consumes it and declares job wiring instead of restating library plumbing per job; the resolve-library-fails arm is testable through its interface instead of being buried in inline closures.
+
+### Primary hash
+
+`service.NewPrimaryHash`; the "which bytes is this book, right now" lookup — the provenance side of every derived artifact and the current side of every `model.Stale` comparison. One constructor so every tier (handler badge, markdown feed, audiobook preflight, job registry) shares the degrade policy: an unresolvable library degrades to "no hash" — which every caller reads as fresh — but warns, because silently absorbing an infrastructure failure into "reads as fresh" is the quiet failure ADR-0033 §5 refuses. `model.Stale` itself states the empty-hash-reads-fresh rule once: staleness labels, never auto-invalidates.
+
 ### Generated EPUB
 
 The EPUB rendered from a PDF book's [[Markdown rendition]] by the [[Converter extension]] (`POST /render/epub`, ADR-0034). A `files` row on the same Book — the ADR-0025 answer reapplied: a user deliverable, not machine feed — tracked by `book_epub_renditions` (state, verbatim error, `file_id` pointer, PDF-hash provenance). `books.format` deliberately stays `PDF`: nothing recomputes primary format, the reader keeps opening the PDF, and in-app reading of the generated EPUB is a deferred rendition-dispatch feature. One per book; regeneration overwrites. **Distinct** from an ingested EPUB (arrived through BookDrop) and from the [[Markdown rendition]] it is rendered from.
