@@ -39,7 +39,6 @@ import (
 	"github.com/blackforge/embookshelf/internal/ingest"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/migrator"
-	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/provider"
 	"github.com/blackforge/embookshelf/internal/queue"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -449,14 +448,9 @@ func Build(ctx context.Context, cfg config.Config, version, commit string) (*App
 		// The hash of the book's own file, for provenance and for the
 		// staleness comparison. Injected because it lives on the files row
 		// behind a library handle, which the service deliberately cannot
-		// reach (#191).
-		ContentHash: func(ctx context.Context, book model.Book) []byte {
-			handle, err := libStore.For(ctx, book.LibraryID)
-			if err != nil {
-				return nil
-			}
-			return handle.PrimaryContentHash(ctx, book)
-		},
+		// reach (#191). The shared constructor warns on an unresolvable
+		// library instead of silently reading fresh (#297).
+		ContentHash: service.NewPrimaryHash(libStore),
 
 		Artifacts: service.RepoNarrationArtifacts{Files: fileRepo, Books: bookRepo},
 

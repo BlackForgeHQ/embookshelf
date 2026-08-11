@@ -405,6 +405,24 @@ func (h *LibraryHandle) PrimaryContentHash(ctx context.Context, book model.Book)
 	return f.ContentHash
 }
 
+// NewPrimaryHash is the "which bytes is this book, right now" lookup —
+// the provenance side of every derived artifact, and the current side
+// of every model.Stale comparison. One constructor so every tier shares
+// the degrade policy: an unresolvable library degrades to "no hash"
+// (the callers' documented empty-hash tolerance) but says so — silently
+// absorbing an infrastructure failure into "reads as fresh" is the
+// quiet failure ADR-0033 §5 exists to refuse (#297).
+func NewPrimaryHash(store LibraryStore) func(context.Context, model.Book) []byte {
+	return func(ctx context.Context, book model.Book) []byte {
+		handle, err := store.For(ctx, book.LibraryID)
+		if err != nil {
+			slog.Warn("primary hash: resolve library", "book", book.ID, "err", err)
+			return nil
+		}
+		return handle.PrimaryContentHash(ctx, book)
+	}
+}
+
 // DeleteBookBytes removes the objects a book owned, given keys that were
 // read before the row was deleted. Deleting a book goes through
 // DeleteBookAndBytes, which is what guarantees that; this stays exported

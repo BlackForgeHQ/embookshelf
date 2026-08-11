@@ -3,7 +3,6 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -75,23 +74,8 @@ func (h *Handler) BookEpubGet(c *gin.Context, s bookScope) {
 	if rendition.State == model.RenditionReady && rendition.FileID == nil {
 		dto.State = "none"
 	}
-	dto.Stale = h.epubStale(c, s.Book, rendition)
+	dto.Stale = h.sourceStale(ctx, s.Book, rendition.State, rendition.SourceContentHash)
 	c.JSON(http.StatusOK, dto)
-}
-
-func (h *Handler) epubStale(c *gin.Context, book model.Book, r model.EpubRendition) bool {
-	if r.State != model.RenditionReady || len(r.SourceContentHash) == 0 || h.libStore == nil {
-		return false
-	}
-	handle, err := h.libStore.For(c.Request.Context(), book.LibraryID)
-	if err != nil {
-		return false
-	}
-	current := handle.PrimaryContentHash(c.Request.Context(), book)
-	if len(current) == 0 {
-		return false
-	}
-	return !bytes.Equal(current, r.SourceContentHash)
 }
 
 // BookEpubGenerate enqueues a render. Admin-gated at the route, same

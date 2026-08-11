@@ -3,6 +3,7 @@
 package handler
 
 import (
+	"context"
 	"embed"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/crypto"
 	"github.com/blackforge/embookshelf/internal/email"
+	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/queue"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -67,6 +69,11 @@ type Handler struct {
 	// installs that haven't configured a storage backend — serveBookFile
 	// falls back to local serving.
 	libStore service.LibraryStore
+	// primaryHash is the shared warn-and-degrade lookup behind every
+	// staleness badge (service.NewPrimaryHash). nil exactly when
+	// libStore is nil — sourceStale then reads fresh, the documented
+	// empty-hash tolerance.
+	primaryHash func(context.Context, model.Book) []byte
 	// Email subsystem seams. notifier is always non-nil — its runtime
 	// state holds whether SMTP is wired. emailEnabled() consults
 	// notifier.Enabled() so admin edits to the EMAIL row hot-reload
@@ -287,7 +294,8 @@ func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailD
 		notifier: e.notifier, resets: e.resets, inviteRepo: e.inviteRepo,
 		cipher: e.cipher, emailTpl: e.emailTpl,
 
-		libStore: opts.LibStore, oidc: opts.OIDC, identities: opts.Identities,
+		libStore: opts.LibStore, primaryHash: newPrimaryHash(opts.LibStore),
+		oidc: opts.OIDC, identities: opts.Identities,
 		oidcSettings: newOIDCSettingsService(a.appSettings, opts.OIDC),
 		covers:       opts.Covers, queue: opts.Queue,
 		fwdAuthHolder: opts.FwdAuthHolder, fwdAuth: opts.FwdAuth,

@@ -2,6 +2,8 @@
 
 package model
 
+import "bytes"
+
 // RenditionState is the lifecycle of one book's derived rendition —
 // Markdown (ADR-0033) and generated EPUB (ADR-0034) share it. Far
 // simpler than the audiobook's: conversion is one HTTP call, so there
@@ -19,6 +21,20 @@ const (
 // over every state, the same job AllAudiobookStates does.
 func AllRenditionStates() []RenditionState {
 	return []RenditionState{RenditionPending, RenditionRunning, RenditionReady, RenditionFailed}
+}
+
+// Stale reports whether a derived artifact's recorded source hash no
+// longer matches the book's current file — the one staleness predicate
+// behind every "made from an older copy" badge (markdown, EPUB,
+// narration alike). Answerable only when both hashes exist: an empty
+// hash on either side reads fresh, because a badge shown on a
+// comparison that never happened is a lie — stated here once, not at
+// each call site. Staleness labels, never auto-invalidates.
+func Stale(current, recorded []byte) bool {
+	if len(current) == 0 || len(recorded) == 0 {
+		return false
+	}
+	return !bytes.Equal(current, recorded)
 }
 
 // RenditionTransition is one worker write of a rendition row, with the

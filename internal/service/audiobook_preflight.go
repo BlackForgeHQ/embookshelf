@@ -3,7 +3,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -270,19 +269,15 @@ func (s *AudiobookService) DeleteNarration(ctx context.Context, book model.Book)
 	return nil
 }
 
-// stale compares what the run was made from against the book's current
-// file. Both hashes have to be readable: without them the honest answer
-// is "not known to be stale", because a badge shown on a comparison that
-// never happened is a lie in the direction that costs money.
+// stale is model.Stale over the injected hash lookup — the badge shown
+// on a comparison that never happened would be a lie in the direction
+// that costs money, and the empty-hash tolerance lives with the
+// predicate now.
 func (s *AudiobookService) stale(ctx context.Context, book model.Book, run model.Audiobook) bool {
-	if len(run.SourceContentHash) == 0 {
+	if s.d.ContentHash == nil {
 		return false
 	}
-	current := s.d.ContentHash(ctx, book)
-	if len(current) == 0 {
-		return false
-	}
-	return !bytes.Equal(current, run.SourceContentHash)
+	return model.Stale(s.d.ContentHash(ctx, book), run.SourceContentHash)
 }
 
 // RepoNarrationArtifacts adapts the two repos to what DeleteNarration

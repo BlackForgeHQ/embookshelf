@@ -3,11 +3,14 @@
 package service_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/model"
@@ -546,4 +549,30 @@ func TestBookFileRootsDegradeToBookDropWhenTheCatalogFails(t *testing.T) {
 	); !errors.Is(err, service.ErrPathOutsideRoots) {
 		t.Fatalf("a failed listing admitted an unrelated path (err %v)", err)
 	}
+}
+
+// TestNewPrimaryHashDegradePolicy — the shared warn-and-degrade seam
+// (#297): an unresolvable library degrades to "no hash" (the callers'
+// documented empty-hash tolerance) but says so in the log. Silently
+// absorbing an infrastructure failure into "reads as fresh" is the
+// quiet failure ADR-0033 §5 refuses.
+func TestNewPrimaryHashDegradePolicy(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	hash := service.NewPrimaryHash(unresolvableStore{err: errors.New("backend down")})
+	if got := hash(context.Background(), model.Book{ID: "b1", LibraryID: "l1"}); got != nil {
+		t.Fatalf("hash = %x, want nil when the library cannot resolve", got)
+	}
+	if out := buf.String(); !strings.Contains(out, "resolve library") || !strings.Contains(out, "b1") {
+		t.Errorf("degrade was silent: log = %q, want a warning naming the book", out)
+	}
+}
+
+type unresolvableStore struct{ err error }
+
+func (s unresolvableStore) For(context.Context, string) (*service.LibraryHandle, error) {
+	return nil, s.err
 }

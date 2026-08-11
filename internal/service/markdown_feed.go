@@ -3,7 +3,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -106,16 +105,12 @@ func (f *MarkdownFeed) request(ctx context.Context, bookID string) error {
 	return ErrRenditionPending
 }
 
-// stale mirrors the audiobook's rule: answerable only when both hashes
-// exist, and a mismatch labels rather than deletes — here the label is
-// "convert again before feeding a guide from the old copy".
+// stale is model.Stale over the injected hash lookup; a mismatch labels
+// rather than deletes — here the label is "convert again before feeding
+// a guide from the old copy".
 func (f *MarkdownFeed) stale(ctx context.Context, book model.Book, r model.MarkdownRendition) bool {
-	if len(r.SourceContentHash) == 0 || f.CurrentHash == nil {
+	if f.CurrentHash == nil {
 		return false
 	}
-	current := f.CurrentHash(ctx, book)
-	if len(current) == 0 {
-		return false
-	}
-	return !bytes.Equal(current, r.SourceContentHash)
+	return model.Stale(f.CurrentHash(ctx, book), r.SourceContentHash)
 }

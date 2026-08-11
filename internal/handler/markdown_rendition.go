@@ -3,7 +3,6 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -18,6 +17,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/layout"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/service"
 )
 
 // markdownRenditionStore is the slice of BookMarkdownRenditionRepo the
@@ -79,26 +79,30 @@ func (h *Handler) BookMarkdownGet(c *gin.Context, s bookScope) {
 		ConverterVersion: rendition.ConverterVersion,
 		UpdatedAt:        &rendition.UpdatedAt,
 	}
-	dto.Stale = h.renditionStale(c, s.Book, rendition)
+	dto.Stale = h.sourceStale(ctx, s.Book, rendition.State, rendition.SourceContentHash)
 	c.JSON(http.StatusOK, dto)
 }
 
-// renditionStale compares the row's source hash with the book's current
-// primary file. Answerable only when both hashes exist and the library
-// resolves; anything else reads as not-stale rather than a scare label.
-func (h *Handler) renditionStale(c *gin.Context, book model.Book, r model.MarkdownRendition) bool {
-	if r.State != model.RenditionReady || len(r.SourceContentHash) == 0 || h.libStore == nil {
+// sourceStale answers a rendition badge's staleness for both artifact
+// shapes: only a ready row can be stale, and the comparison itself is
+// model.Stale over the shared warn-and-degrade hash lookup.
+func (h *Handler) sourceStale(
+	ctx context.Context, book model.Book, state model.RenditionState, recorded []byte,
+) bool {
+	if state != model.RenditionReady || h.primaryHash == nil {
 		return false
 	}
-	handle, err := h.libStore.For(c.Request.Context(), book.LibraryID)
-	if err != nil {
-		return false
+	return model.Stale(h.primaryHash(ctx, book), recorded)
+}
+
+// newPrimaryHash keeps a missing library store nil across the closure —
+// same trap as newMarkdownRenditionStore: sourceStale nil-checks the
+// func, so it must actually be nil when there is no store behind it.
+func newPrimaryHash(store service.LibraryStore) func(context.Context, model.Book) []byte {
+	if store == nil {
+		return nil
 	}
-	current := handle.PrimaryContentHash(c.Request.Context(), book)
-	if len(current) == 0 {
-		return false
-	}
-	return !bytes.Equal(current, r.SourceContentHash)
+	return service.NewPrimaryHash(store)
 }
 
 // BookMarkdownDownload streams the rendition as an attachment.
