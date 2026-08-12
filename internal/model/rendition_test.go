@@ -31,3 +31,19 @@ func TestStale(t *testing.T) {
 		})
 	}
 }
+
+// TestRenditionStateCanBeStale is the gate every rendition-badge caller
+// used to restate for itself — the handler gated on ready, the feed
+// relied on its own upstream switch. Declared once here, beside Stale,
+// and quantified over every state so a fifth rendition state added
+// without an opinion here fails loud rather than silently reading
+// fresh or, worse, stale (#322).
+func TestRenditionStateCanBeStale(t *testing.T) {
+	for _, state := range model.AllRenditionStates() {
+		want := state == model.RenditionReady
+		if got := state.CanBeStale(); got != want {
+			t.Errorf("%q.CanBeStale() = %v, want %v — only a ready row was ever compared against anything",
+				state, got, want)
+		}
+	}
+}

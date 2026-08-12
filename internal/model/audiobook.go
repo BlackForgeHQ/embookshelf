@@ -91,6 +91,18 @@ func (s AudiobookState) Sealed() bool {
 	return stateIn(SealedStates(), s)
 }
 
+// CanBeStale reports whether a run in this state may receive a
+// staleness verdict — ready only, the parallel of RenditionState's
+// CanBeStale. A failed or canceled run's outcome is already settled,
+// and nothing about that outcome was ever compared against the book's
+// current file, so a hash the run happens to carry cannot answer a
+// question staleness never asked of it. Before this gate existed, the
+// preflight wrapper had no state check at all, and a failed or
+// canceled run computed a verdict against whatever hash it had (#322).
+func (s AudiobookState) CanBeStale() bool {
+	return s == AudiobookReady
+}
+
 func stateIn(set []AudiobookState, s AudiobookState) bool {
 	for _, member := range set {
 		if member == s {

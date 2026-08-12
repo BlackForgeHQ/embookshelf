@@ -105,11 +105,17 @@ func (f *MarkdownFeed) request(ctx context.Context, bookID string) error {
 	return ErrRenditionPending
 }
 
-// stale is model.Stale over the injected hash lookup; a mismatch labels
-// rather than deletes — here the label is "convert again before feeding
-// a guide from the old copy".
+// stale is model.Stale over the injected hash lookup, gated by
+// r.State.CanBeStale — the same gate the handler's badge and the
+// audiobook preflight's now share (#322), rather than this method
+// leaning on Text's switch above having already excluded every
+// non-ready state before it gets here.
+//
+// No nil check on CurrentHash: every production MarkdownFeed is built
+// with it set (registry.go), through the same warn-and-degrade Primary
+// hash constructor the other two callers use.
 func (f *MarkdownFeed) stale(ctx context.Context, book model.Book, r model.MarkdownRendition) bool {
-	if f.CurrentHash == nil {
+	if !r.State.CanBeStale() {
 		return false
 	}
 	return model.Stale(f.CurrentHash(ctx, book), r.SourceContentHash)

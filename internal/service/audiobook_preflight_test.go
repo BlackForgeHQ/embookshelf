@@ -172,6 +172,36 @@ func TestReportMarksANarrationStaleAgainstANewerFile(t *testing.T) {
 	}
 }
 
+// TestReportNeverStalesAConcludedNonReadyRun is the pin for #322: a
+// failed or canceled run has no artifact anything was compared
+// against, so it must not receive a staleness verdict even when the
+// hashes it happens to carry disagree. The preflight wrapper used to
+// have no state gate at all — ready-gating lived only in the handler
+// and, implicitly, in the feed's upstream switch — so this was the one
+// caller a failed/canceled run's mismatched hash slipped a stale badge
+// through.
+func TestReportNeverStalesAConcludedNonReadyRun(t *testing.T) {
+	t.Parallel()
+
+	for _, state := range []model.AudiobookState{model.AudiobookFailed, model.AudiobookCanceled} {
+		t.Run(string(state), func(t *testing.T) {
+			svc := preflightService(t, enabledSettings(), []byte{0x02})
+			svc.d.Store.(*fakeAudiobookStore).run = model.Audiobook{
+				BookID: "b1", State: state, SourceContentHash: []byte{0x01},
+			}
+
+			rep, err := svc.Report(context.Background(), narratableBook())
+			if err != nil {
+				t.Fatalf("Report: %v", err)
+			}
+			if rep.Stale {
+				t.Errorf("a %s run was reported stale — its outcome is already settled, "+
+					"and nothing was compared against it (#322)", state)
+			}
+		})
+	}
+}
+
 func TestReportDoesNotGuessStalenessWithoutBothHashes(t *testing.T) {
 	t.Parallel()
 

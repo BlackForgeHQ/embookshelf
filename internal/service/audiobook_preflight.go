@@ -269,12 +269,19 @@ func (s *AudiobookService) DeleteNarration(ctx context.Context, book model.Book)
 	return nil
 }
 
-// stale is model.Stale over the injected hash lookup — the badge shown
+// stale is model.Stale over the injected hash lookup, gated by
+// run.State.CanBeStale — a failed or canceled run has no artifact
+// anything was compared against, so it must not get a verdict even
+// when the hash it happens to carry disagrees (#322). The badge shown
 // on a comparison that never happened would be a lie in the direction
 // that costs money, and the empty-hash tolerance lives with the
 // predicate now.
+//
+// No nil check on ContentHash: NewAudiobookService defaults it to a
+// func returning nil when the caller leaves it unset, so a service
+// built the documented way never holds a nil one here.
 func (s *AudiobookService) stale(ctx context.Context, book model.Book, run model.Audiobook) bool {
-	if s.d.ContentHash == nil {
+	if !run.State.CanBeStale() {
 		return false
 	}
 	return model.Stale(s.d.ContentHash(ctx, book), run.SourceContentHash)
