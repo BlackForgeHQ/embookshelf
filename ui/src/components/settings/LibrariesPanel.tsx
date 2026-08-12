@@ -162,7 +162,7 @@ function LibraryRow({
       style={{
         // Stagger row mount so a fresh page load reads as a deal of cards.
         // Pure CSS — no Framer.
-        animation: "lib-row-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both",
+        animation: "lib-row-in 250ms cubic-bezier(0.16, 1, 0.3, 1) both",
         animationDelay: `${Math.min(index, 8) * 60}ms`,
       }}
     >
@@ -373,7 +373,7 @@ function LibraryRowSkeleton({ count }: { count: number }) {
           key={i}
           className="grid grid-cols-[72px_minmax(0,1fr)_auto] items-start gap-x-8 border-b border-rule-soft py-7"
           style={{
-            animation: "lib-row-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both",
+            animation: "lib-row-in 250ms cubic-bezier(0.16, 1, 0.3, 1) both",
             animationDelay: `${i * 80}ms`,
           }}
         >

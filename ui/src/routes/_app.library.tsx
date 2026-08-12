@@ -242,21 +242,26 @@ function LibraryView() {
         </span>
       </div>
 
-      {/* Content */}
+      {/* Content. Keyed on the loading flag so the skeleton→covers swap
+          crossfades (120ms, opacity only) instead of popping in one
+          frame — the skeleton's grid geometry already matches, so
+          nothing shifts. */}
       <div className="flex-1 p-4 pb-20 md:p-8">
-        {books.isError ? (
-          <ErrorPanel message="Failed to load books." />
-        ) : books.isLoading ? (
-          <LoadingGrid />
-        ) : rows.length === 0 ? (
-          <EmptyPanel unshelved={isUnshelved} />
-        ) : layout === "shelf" ? (
-          <ShelfLayout books={rows} onOpen={openBook} />
-        ) : layout === "grid" ? (
-          <GridLayout books={rows} onOpen={openBook} />
-        ) : (
-          <ListLayout books={rows} onOpen={openBook} />
-        )}
+        <div key={books.isLoading ? "skeleton" : "content"} className="fade-in">
+          {books.isError ? (
+            <ErrorPanel message="Failed to load books." />
+          ) : books.isLoading ? (
+            <LoadingGrid />
+          ) : rows.length === 0 ? (
+            <EmptyPanel unshelved={isUnshelved} />
+          ) : layout === "shelf" ? (
+            <ShelfLayout books={rows} onOpen={openBook} />
+          ) : layout === "grid" ? (
+            <GridLayout books={rows} onOpen={openBook} />
+          ) : (
+            <ListLayout books={rows} onOpen={openBook} />
+          )}
+        </div>
       </div>
     </div>
   )

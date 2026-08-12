@@ -32,6 +32,7 @@ import { ProgressBar } from "@/components/ProgressBar"
 import {
   BookmarkButton,
   ChromeRestoreButton,
+  CollapsibleChrome,
   ExitButton,
   ReaderContainer,
   ReaderFooter,
@@ -326,7 +327,7 @@ function TextReaderShell({ book }: { book: BookDetail }) {
 
   return (
     <ReaderContainer background="var(--color-paper-0)">
-      {chromeVisible && (
+      <CollapsibleChrome visible={chromeVisible}>
         <ReaderHeader>
           <ExitButton onExit={exit} />
           <div
@@ -397,7 +398,7 @@ function TextReaderShell({ book }: { book: BookDetail }) {
             <Icon name="close" size={14} />
           </Button>
         </ReaderHeader>
-      )}
+      </CollapsibleChrome>
 
       <div
         style={{
@@ -411,6 +412,7 @@ function TextReaderShell({ book }: { book: BookDetail }) {
             exposes an outline, but nothing here has ever read it. */}
         {tocOpen && (
           <aside
+            className="panel-in-left"
             style={{
               width: 280,
               borderRight: "1px solid var(--color-rule-soft)",
@@ -710,7 +712,7 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
 
   return (
     <ReaderContainer background="var(--color-paper-0)">
-      {chromeVisible && (
+      <CollapsibleChrome visible={chromeVisible}>
         <ReaderHeader>
           <ExitButton onExit={exit} />
           <div
@@ -770,7 +772,7 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
             <Icon name="close" size={14} />
           </Button>
         </ReaderHeader>
-      )}
+      </CollapsibleChrome>
 
       <div
         style={{
@@ -930,7 +932,7 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
 
   return (
     <ReaderContainer background="var(--color-paper-2)">
-      {chromeVisible && (
+      <CollapsibleChrome visible={chromeVisible}>
         <ReaderHeader>
           <ExitButton onExit={exit} />
           <div
@@ -994,7 +996,7 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
             <Icon name="close" size={14} />
           </Button>
         </ReaderHeader>
-      )}
+      </CollapsibleChrome>
 
       {/* Pre-existing: this restores chrome on a *double* click and
           toggles rather than shows, where the text shell takes a single

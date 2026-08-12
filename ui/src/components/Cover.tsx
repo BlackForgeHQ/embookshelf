@@ -427,6 +427,7 @@ export function StarRating({
           <button
             key={i}
             type="button"
+            className="star-btn"
             aria-label={`Rate ${i} star${i === 1 ? "" : "s"}`}
             onMouseEnter={() => setHover(i)}
             onFocus={() => setHover(i)}

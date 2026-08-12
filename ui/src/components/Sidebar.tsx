@@ -369,7 +369,11 @@ function RegularShelfRow({
         </Link>
       </SidebarMenuButton>
       <SidebarMenuBadge className="group-focus-within/menu-item:hidden group-hover/menu-item:hidden group-data-[collapsible=icon]:!hidden">
-        {shelf.bookCount}
+        {/* Keyed on the value: a shelf-count change remounts the span and
+            rolls the new number in, confirming the add/remove side effect. */}
+        <span key={shelf.bookCount} className="count-roll">
+          {shelf.bookCount}
+        </span>
       </SidebarMenuBadge>
       {canShare && (
         <SidebarMenuAction
@@ -421,7 +425,11 @@ function SharedShelfRow({
         </Link>
       </SidebarMenuButton>
       <SidebarMenuBadge className="group-focus-within/menu-item:hidden group-hover/menu-item:hidden group-data-[collapsible=icon]:!hidden">
-        {shelf.bookCount}
+        {/* Keyed on the value: a shelf-count change remounts the span and
+            rolls the new number in, confirming the add/remove side effect. */}
+        <span key={shelf.bookCount} className="count-roll">
+          {shelf.bookCount}
+        </span>
       </SidebarMenuBadge>
       {canUnshare && (
         <SidebarMenuAction
@@ -465,7 +473,11 @@ function SmartShelfRow({
         </Link>
       </SidebarMenuButton>
       <SidebarMenuBadge className="group-focus-within/menu-item:hidden group-hover/menu-item:hidden group-data-[collapsible=icon]:!hidden">
-        {shelf.bookCount}
+        {/* Keyed on the value: a shelf-count change remounts the span and
+            rolls the new number in, confirming the add/remove side effect. */}
+        <span key={shelf.bookCount} className="count-roll">
+          {shelf.bookCount}
+        </span>
       </SidebarMenuBadge>
       <SidebarMenuAction
         showOnHover
@@ -568,7 +580,9 @@ function NavItem({ to, search, icon, label, count, active }: NavItemProps) {
       </SidebarMenuButton>
       {count != null && (
         <SidebarMenuBadge className="group-data-[collapsible=icon]:!hidden">
-          {count}
+          <span key={count} className="count-roll">
+            {count}
+          </span>
         </SidebarMenuBadge>
       )}
     </SidebarMenuItem>

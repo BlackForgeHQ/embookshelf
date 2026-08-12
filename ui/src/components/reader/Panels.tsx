@@ -61,6 +61,7 @@ export function NotesPanel({
 }: NotesPanelProps) {
   return (
     <aside
+      className="panel-in-right"
       style={{
         width: 320,
         borderLeft: "1px solid var(--color-rule-soft)",
@@ -165,6 +166,7 @@ export function NotesPanel({
 export function TypePanel() {
   return (
     <div
+      className="panel-in-right"
       style={{
         position: "absolute",
         top: 0,

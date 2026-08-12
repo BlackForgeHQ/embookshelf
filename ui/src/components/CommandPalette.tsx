@@ -85,7 +85,10 @@ export function CommandPalette({ open, onOpenChange }: Props) {
       onOpenChange={onOpenChange}
       title="Command palette"
       description="Search the library or run a command."
-      className="sm:max-w-[640px]"
+      // duration-0 kills the dialog zoom/fade: the palette is
+      // keyboard-summoned dozens of times a day, and any open animation
+      // reads as input lag (the Raycast rule).
+      className="duration-0 sm:max-w-[640px]"
       value={selected}
       onValueChange={setSelected}
     >

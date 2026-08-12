@@ -355,8 +355,12 @@
     width: 1px;
     background: oklch(0 0 0 / 0.22);
   }
-  .cover:hover {
-    transform: translateY(-3px);
+  /* Hover lift only where hover is a real signal — touch devices
+     trigger sticky :hover on tap and the cover would jump and stay up. */
+  @media (hover: hover) and (pointer: fine) {
+    .cover:hover {
+      transform: translateY(-3px);
+    }
   }
   .cover .c-title {
     font-weight: 500;
@@ -509,9 +513,11 @@
     background: var(--color-ok);
   }
 
-  /* View transitions */
+  /* View transitions. Opacity only, and short: this runs on every
+     route change, which is tens-to-hundreds of times a day — movement
+     at that frequency reads as lag, not polish. */
   .fade-in {
-    animation: fadeIn 200ms ease both;
+    animation: fadeIn 120ms ease-out both;
   }
 
   /* Interactive card / row wrappers
@@ -981,12 +987,14 @@
       transform 240ms cubic-bezier(0.16, 1, 0.3, 1),
       box-shadow 240ms cubic-bezier(0.16, 1, 0.3, 1);
   }
-  .bdrop-cover-frame:hover {
-    transform: translateY(-2px);
-    box-shadow:
-      inset 0 0 0 1px oklch(0 0 0 / 0.08),
-      4px 4px 0 oklch(0 0 0 / 0.03),
-      12px 14px 32px -4px oklch(0.2 0.02 60 / 0.22);
+  @media (hover: hover) and (pointer: fine) {
+    .bdrop-cover-frame:hover {
+      transform: translateY(-2px);
+      box-shadow:
+        inset 0 0 0 1px oklch(0 0 0 / 0.08),
+        4px 4px 0 oklch(0 0 0 / 0.03),
+        12px 14px 32px -4px oklch(0.2 0.02 60 / 0.22);
+    }
   }
   .bdrop-cover-frame img {
     width: 100%;
@@ -1175,6 +1183,84 @@
     border: 1px solid var(--color-rule-soft);
   }
 
+  /* Reader chrome collapse — the header used to unmount and the page
+     jumped by its height. 0fr/1fr grid rows animate the space itself;
+     visibility flips after the collapse so hidden controls leave the
+     tab order. */
+  .reader-chrome-collapse {
+    display: grid;
+    grid-template-rows: 1fr;
+    transition:
+      grid-template-rows 200ms cubic-bezier(0.23, 1, 0.32, 1),
+      opacity 150ms ease-out,
+      visibility 0s 0s;
+  }
+  .reader-chrome-collapse > * {
+    overflow: hidden;
+    min-height: 0;
+  }
+  .reader-chrome-collapse[data-visible="false"] {
+    grid-template-rows: 0fr;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition:
+      grid-template-rows 200ms cubic-bezier(0.23, 1, 0.32, 1),
+      opacity 150ms ease-out,
+      visibility 0s 200ms;
+  }
+
+  /* Reader side panels — enter with a short slide from their own edge
+     (spatial: the panel lives there). Exit stays instant: removal is a
+     response, arrival is an event. */
+  .panel-in-right {
+    animation: panelInRight 200ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+  .panel-in-left {
+    animation: panelInLeft 200ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+
+  /* Count tick — a keyed remount rolls the new value in when a shelf
+     count changes, confirming the side effect without a toast. */
+  .count-roll {
+    display: inline-block;
+    animation: countRoll 150ms ease-out both;
+  }
+
+  /* Button-label morph (BookDrop approve). Both states occupy the same
+     grid cell; 2px of blur bridges the crossfade so it reads as one
+     object changing state rather than two labels swapping. */
+  .morph-label {
+    display: grid;
+  }
+  .morph-label > * {
+    grid-area: 1 / 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition:
+      opacity 200ms ease,
+      filter 200ms ease;
+  }
+  .morph-label > [data-active="false"] {
+    opacity: 0;
+    filter: blur(2px);
+    pointer-events: none;
+  }
+
+  /* Star rating press feedback — the interface confirms the click
+     before the rating mutation lands. */
+  .star-btn {
+    transition: transform 100ms cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  .star-btn:active {
+    transform: scale(0.85);
+  }
+  .star-btn svg {
+    transition: color 150ms ease;
+  }
+
   .sr-only {
     position: absolute;
     width: 1px;
@@ -1190,11 +1276,9 @@
 @keyframes fadeIn {
   from {
     opacity: 0;
-    transform: translateY(4px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
@@ -1260,5 +1344,83 @@
   }
   100% {
     background-position: -200% 0;
+  }
+}
+
+@keyframes panelInRight {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes panelInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes countRoll {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Reduced motion: movement goes, opacity and color stay. Elements with
+   `both`-fill entrances get animation: none so they land in their final
+   state instead of never appearing. */
+@media (prefers-reduced-motion: reduce) {
+  .fade-in,
+  .bdrop-queue-row {
+    animation: none;
+  }
+  .bdrop-dot[data-state="processing"] {
+    animation: none;
+  }
+  .bdrop-row-progress > span {
+    animation: none;
+    width: 100%;
+  }
+  .cover,
+  .cover:hover,
+  .bdrop-cover-frame:hover {
+    transform: none;
+    transition: box-shadow 180ms ease;
+  }
+  .bdrop-drop[data-drag="true"] .bdrop-drop-icon {
+    transform: none;
+  }
+  .reader-chrome-collapse,
+  .reader-chrome-collapse[data-visible="false"] {
+    transition:
+      opacity 150ms ease-out,
+      visibility 0s;
+  }
+  .star-btn:active {
+    transform: none;
+  }
+  .panel-in-right,
+  .panel-in-left,
+  .count-roll {
+    animation: none;
+  }
+  .morph-label > *,
+  .morph-label > [data-active="false"] {
+    transition: opacity 200ms ease;
+    filter: none;
   }
 }

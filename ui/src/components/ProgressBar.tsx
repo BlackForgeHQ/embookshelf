@@ -66,10 +66,15 @@ export function ProgressBar({ value, label, onSeek, children, style }: Props) {
         aria-label={label}
         style={{
           height: 4,
-          width: `${percent}%`,
+          width: "100%",
+          // scaleX, not width: the reader footer retargets this on every
+          // page turn, and width animates through layout while a
+          // transform stays on the GPU.
+          transform: `scaleX(${clampFraction(value)})`,
+          transformOrigin: "left",
           background: "var(--color-accent)",
           borderRadius: 2,
-          transition: "width 120ms linear",
+          transition: "transform 120ms linear",
         }}
       />
       {children}

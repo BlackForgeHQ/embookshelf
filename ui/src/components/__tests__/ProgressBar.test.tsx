@@ -7,10 +7,15 @@ import { ProgressBar } from "@/components/ProgressBar"
 afterEach(cleanup)
 
 describe("ProgressBar", () => {
-  it("renders the fraction as a percentage width", () => {
+  // The fill is a full-width element scaled by transform, not a width
+  // percentage: the reader footer retargets this bar on every page
+  // turn, and scaleX stays off the layout path.
+  it("renders the fraction as a scaleX transform", () => {
     render(<ProgressBar value={0.42} label="Reading progress" />)
 
-    expect(screen.getByLabelText("Reading progress").style.width).toBe("42%")
+    expect(screen.getByLabelText("Reading progress").style.transform).toBe(
+      "scaleX(0.42)",
+    )
   })
 
   // Every caller passes a 0–1 fraction, and two of them derive it from
@@ -19,19 +24,19 @@ describe("ProgressBar", () => {
   // overflows the layout.
   it("clamps out-of-range values instead of overflowing", () => {
     render(<ProgressBar value={1.8} label="over" />)
-    expect(screen.getByLabelText("over").style.width).toBe("100%")
+    expect(screen.getByLabelText("over").style.transform).toBe("scaleX(1)")
 
     cleanup()
     render(<ProgressBar value={-0.3} label="under" />)
-    expect(screen.getByLabelText("under").style.width).toBe("0%")
+    expect(screen.getByLabelText("under").style.transform).toBe("scaleX(0)")
   })
 
   // NaN reaches this from done/total where total is 0 — a run whose plan
-  // has not been written yet. `width: NaN%` renders as a full-width bar
-  // in some browsers, which reads as "finished".
+  // has not been written yet. `scaleX(NaN)` renders as an un-transformed
+  // full bar, which reads as "finished".
   it("treats a non-finite value as no progress", () => {
     render(<ProgressBar value={Number.NaN} label="nan" />)
-    expect(screen.getByLabelText("nan").style.width).toBe("0%")
+    expect(screen.getByLabelText("nan").style.transform).toBe("scaleX(0)")
   })
 
   describe("seeking", () => {

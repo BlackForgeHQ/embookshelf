@@ -629,6 +629,13 @@ function ApprovalBar({
   )
   const { canApprove } = bookdropView(item)
 
+  // Drives the approve button's label morph: `disabled` covers reject
+  // and sweep too, so the "Importing…" state only shows for the click
+  // that actually started an approval.
+  const [approving, setApproving] = useState(false)
+  const importing = approving && disabled
+  if (approving && !disabled) setApproving(false)
+
   return (
     <>
       {libraries.length > 0 && (
@@ -653,9 +660,19 @@ function ApprovalBar({
       )}
       <Button
         disabled={disabled || !canApprove}
-        onClick={() => onApprove(libraryId)}
+        onClick={() => {
+          setApproving(true)
+          onApprove(libraryId)
+        }}
       >
-        <Icon name="check" size={13} /> Approve import
+        <span className="morph-label">
+          <span data-active={!importing}>
+            <Icon name="check" size={13} /> Approve import
+          </span>
+          <span data-active={importing} aria-hidden={!importing}>
+            Importing…
+          </span>
+        </span>
       </Button>
       <span className="spacer" />
       <Button

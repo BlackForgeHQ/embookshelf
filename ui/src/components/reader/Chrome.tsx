@@ -57,6 +57,31 @@ export function ReaderContainer({
 }
 
 /**
+ * Animates the header's space when chrome is hidden. The shells used to
+ * unmount the header, which snapped the reading area up by the header's
+ * height in one frame. The 1fr→0fr grid collapse animates the space
+ * itself; visibility flips after the collapse so hidden controls leave
+ * the tab order (see .reader-chrome-collapse in styles.css).
+ */
+export function CollapsibleChrome({
+  visible,
+  children,
+}: {
+  visible: boolean
+  children: ReactNode
+}) {
+  return (
+    <div
+      className="reader-chrome-collapse"
+      data-visible={visible}
+      aria-hidden={!visible}
+    >
+      <div>{children}</div>
+    </div>
+  )
+}
+
+/**
  * The top strip. What sits in it is per-shell — a TOC and type toggle for
  * text, a fit-mode group for comics, a chapter drawer for audio — but the
  * strip itself is the same bar in all three.
