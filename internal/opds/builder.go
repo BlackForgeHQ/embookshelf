@@ -5,6 +5,7 @@ package opds
 import (
 	"bytes"
 	"encoding/xml"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,116 +13,74 @@ import (
 )
 
 const (
-	// InstanceID is the URN prefix for ids that need to be globally-unique
+	// instanceID is the URN prefix for ids that need to be globally-unique
 	// within this server. Clients only require stability — not globalness —
 	// but OPDS feeds customarily use urn: ids.
-	InstanceID = "urn:embookshelf"
+	instanceID = "urn:embookshelf"
 )
 
-// MarshalFeed serializes a Feed with the XML declaration prepended.
-func MarshalFeed(f Feed) ([]byte, error) {
-	body, err := xml.MarshalIndent(f, "", "  ")
+// render serializes one OPDS document with the XML declaration prepended
+// and pairs it with the content type it must be served under.
+func render(doc any, contentType string) (Document, error) {
+	body, err := xml.MarshalIndent(doc, "", "  ")
 	if err != nil {
-		return nil, err
+		return Document{}, err
 	}
 	var out bytes.Buffer
 	out.WriteString(xml.Header)
 	out.Write(body)
-	return out.Bytes(), nil
+	return Document{ContentType: contentType, Body: out.Bytes()}, nil
 }
 
-// MarshalOpenSearch serializes the OpenSearch description.
-func MarshalOpenSearch(d OpenSearchDescription) ([]byte, error) {
-	body, err := xml.MarshalIndent(d, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	var out bytes.Buffer
-	out.WriteString(xml.Header)
-	out.Write(body)
-	return out.Bytes(), nil
-}
+// atomTime formats a time.Time for an Atom <updated>/<published>.
+func atomTime(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
-// NowAtom returns the current time in RFC3339 — what Atom specs call for.
-func NowAtom() string { return time.Now().UTC().Format(time.RFC3339) }
-
-// AtomTime formats a time.Time for an Atom <updated>/<published>.
-func AtomTime(t time.Time) string { return t.UTC().Format(time.RFC3339) }
-
-// BookEntry converts a model.Book into an OPDS acquisition Entry. The caller
-// supplies the absolute HREFs for the download + cover (these depend on the
-// request's base URL + cover availability).
-type BookLinks struct {
+// bookLinks are the absolute HREFs one book's entry points at. They
+// depend on the request's base URL and on whether a cover exists, so the
+// catalog resolves them rather than the entry mapping below.
+type bookLinks struct {
 	Download     string // href for the file
 	DownloadMime string // application/epub+zip etc.
 	Cover        string // full-size cover URL, optional
 	Thumbnail    string // thumbnail URL, optional
 }
 
-func BookEntry(b model.Book, l BookLinks) Entry {
-	e := Entry{
-		ID:        InstanceID + ":book:" + b.ID,
+// bookEntry converts a model.Book into an OPDS acquisition entry.
+func bookEntry(b model.Book, l bookLinks) entry {
+	e := entry{
+		ID:        instanceID + ":book:" + b.ID,
 		Title:     b.Title,
-		Updated:   AtomTime(b.CreatedAt),
-		Published: AtomTime(b.CreatedAt),
+		Updated:   atomTime(b.CreatedAt),
+		Published: atomTime(b.CreatedAt),
 		Publisher: b.Publisher,
 	}
 	if b.Author != "" {
-		e.Authors = []Author{{Name: b.Author}}
+		e.Authors = []author{{Name: b.Author}}
 	}
 	if b.Description != "" {
-		e.Summary = &TextField{Type: "text", Value: b.Description}
+		e.Summary = &textField{Type: "text", Value: b.Description}
 	}
 	if b.ISBN != "" {
 		e.Identifier = "urn:isbn:" + strings.ReplaceAll(b.ISBN, "-", "")
 	}
 	if b.Year > 0 {
-		e.Issued = formatYear(b.Year)
+		// A bare yyyy is valid dc:issued per Dublin Core conventions.
+		e.Issued = strconv.Itoa(b.Year)
 	}
 	for _, t := range b.Tags {
-		e.Categories = append(e.Categories, Category{Term: t, Label: t})
+		e.Categories = append(e.Categories, category{Term: t, Label: t})
 	}
 
 	// Cover links come first so clients find them without scanning.
 	if l.Thumbnail != "" {
-		e.Links = append(e.Links, Link{Rel: RelThumbnail, Href: l.Thumbnail, Type: "image/jpeg"})
+		e.Links = append(e.Links, link{Rel: relThumbnail, Href: l.Thumbnail, Type: "image/jpeg"})
 	}
 	if l.Cover != "" {
-		e.Links = append(e.Links, Link{Rel: RelImage, Href: l.Cover, Type: "image/jpeg"})
+		e.Links = append(e.Links, link{Rel: relImage, Href: l.Cover, Type: "image/jpeg"})
 	}
 	if l.Download != "" {
-		e.Links = append(e.Links, Link{Rel: RelAcquisition, Href: l.Download, Type: l.DownloadMime})
+		e.Links = append(e.Links, link{Rel: relAcquisition, Href: l.Download, Type: l.DownloadMime})
 	}
 
 	return e
-}
-
-func formatYear(y int) string {
-	// A bare yyyy is valid dc:issued per Dublin Core conventions.
-	if y <= 0 {
-		return ""
-	}
-	return intToString(y)
-}
-
-func intToString(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }

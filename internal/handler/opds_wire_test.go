@@ -4,13 +4,15 @@ package handler
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/opds"
 )
 
 // Byte-for-byte pins of the three OPDS documents this server emits.
@@ -18,7 +20,7 @@ import (
 // The substring assertions in opds_test.go pin the paging contract; these
 // pin the wire format itself — namespaces, attribute order, indentation,
 // the rel vocabulary, the entry field order. They exist because feed
-// assembly moves from the handler into opds.Catalog (#319), and a
+// assembly moved from the handler into opds.Catalog (#319), and a
 // refactor of an interchange format is only safe if the bytes are pinned
 // before it starts. The goldens below were captured from the pre-move
 // handler code; a diff here is a client-visible change, never a
@@ -60,12 +62,19 @@ func TestOPDSNavigationFeedWireFormat(t *testing.T) {
 		{Name: "History", Slug: "history", CreatedAt: time.Date(2023, 6, 7, 8, 9, 10, 0, time.UTC)},
 	}
 
-	body, err := opds.MarshalFeed(opdsNavFeed("http://example.com", libs, "2024-01-02T03:04:05Z"))
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/opds/", nil)
+
+	catalog := opdsCatalog(c)
+	catalog.Now = func() time.Time { return time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC) }
+
+	doc, err := catalog.Navigation(libs)
 	if err != nil {
-		t.Fatalf("marshal: %v", err)
+		t.Fatalf("Navigation: %v", err)
 	}
 
-	if got := string(body); got != wantNavigationXML {
+	if got := string(doc.Body); got != wantNavigationXML {
 		t.Errorf("navigation feed changed on the wire.\n got:\n%s\nwant:\n%s", got, wantNavigationXML)
 	}
 }
