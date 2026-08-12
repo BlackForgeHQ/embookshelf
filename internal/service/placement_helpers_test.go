@@ -140,6 +140,30 @@ func TestFreeDirTreatsAnExceptedDirectoryAsFree(t *testing.T) {
 	}
 }
 
+// The exception is the folder asked for, not every candidate after it —
+// uniqueDirectoryUnless's rule, which scoped it to the first. Here the
+// folder asked for belongs to another Book and the source is the " (2)"
+// beside it: the walk steps over the source rather than stopping on it,
+// so the Book actually moves instead of being told it landed where it
+// already was.
+func TestFreeDirWalksPastAnExceptedDirectoryItWasNotAskedFor(t *testing.T) {
+	r := newLibRoot(t.TempDir())
+	mkdirAll(t, r.abs("Tolkien/The Hobbit"))  // another Book's folder
+	source := r.abs("Tolkien/The Hobbit (2)") // ours, where we are now
+	mkdirAll(t, source)
+
+	abs, rel, err := r.freeDir("Tolkien/The Hobbit", source)
+	if err != nil {
+		t.Fatalf("freeDir: %v", err)
+	}
+	if rel != "Tolkien/The Hobbit (3)" {
+		t.Errorf("rel = %q, want the first free suffix past the source", rel)
+	}
+	if abs == source {
+		t.Error("the source folder was handed back as the destination — a rename that reports done without moving")
+	}
+}
+
 func TestFreeDirRefusesAFolderThatIsNotInsideTheLibrary(t *testing.T) {
 	r := newLibRoot(t.TempDir())
 

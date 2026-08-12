@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/blackforge/embookshelf/internal/storage"
@@ -109,9 +110,17 @@ func (r libRoot) rel(abs string) (string, error) {
 // only the absolute is what left each caller trimming the root back off
 // by hand.
 //
-// A directory listed in except is treated as free even when it exists.
-// That is the renamer's own source folder: a rename must be allowed to
-// land on the directory it is renaming from.
+// A directory listed in except is treated as free when it is the folder
+// asked for. That is the renamer's own source folder: a rename must be
+// allowed to land on the directory it is renaming from.
+//
+// The exception scopes to that first candidate and not to the suffixed
+// ones after it, which is uniqueDirectoryUnless's rule kept exactly. It
+// matters in one case: when the folder asked for is occupied by another
+// Book and the source happens to be the ` (2)` beside it, the walk steps
+// over the source to ` (3)` and the Book moves, rather than stopping on
+// the folder it is already in and reporting a rename that did not
+// happen.
 func (r libRoot) freeDir(rel string, except ...string) (string, string, error) {
 	if r.empty() {
 		return "", "", fmt.Errorf("resolve folder %q: library has no root: %w", rel, errOutsideRoot)
@@ -124,15 +133,13 @@ func (r libRoot) freeDir(rel string, except ...string) (string, string, error) {
 	if _, err := r.rel(want); err != nil {
 		return "", "", err
 	}
-	free := firstFreeName(want, "", func(cand string) bool {
-		for _, e := range except {
-			if cand == e {
-				return false
-			}
-		}
-		_, err := os.Stat(cand)
-		return !os.IsNotExist(err)
-	})
+	free := want
+	if !slices.Contains(except, want) {
+		free = firstFreeName(want, "", func(cand string) bool {
+			_, err := os.Stat(cand)
+			return !os.IsNotExist(err)
+		})
+	}
 	relDir, err := r.rel(free)
 	if err != nil {
 		return "", "", err
