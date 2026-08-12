@@ -293,17 +293,23 @@ Opaque change token from a backend (S3 returns one; LocalFS leaves it empty). Us
 
 ### Library scan
 
-`task.LibraryScan`; on-demand walk-then-diff over a Library, scoped to drift detection only (ADR-0018). Acts on two diff buckets: **New** entries get a hash + `Files.GetByContentHash` lookup — a same-library hash match means external rename, update the row's `location`; no match means ignore (no `books` row materialised, scan is never an ingest path). **Missing** entries are soft-flagged via `MarkMissing` for the 24h purge sweeper. Changed and Unchanged are no-ops apart from clearing `missing_since` on reappearance. No periodic timer — admin triggers the worker explicitly. Distinct from earlier scan-as-ingest behavior (ADR-0004, superseded).
+`task.LibraryScan`; on-demand walk-then-reconcile over a Library, scoped to drift detection only (ADR-0018). The worker is wiring — resolve the handle via [[LibraryStore]], walk, [[Reconcile]], touch-scan, log — and its one policy decision is what to do about a walk that did not happen: `ErrNoWalkRoot` returns without reconciling, because falling through with an empty listing flags every row in the Library missing. No periodic timer — admin triggers the worker explicitly. Distinct from earlier scan-as-ingest behavior (ADR-0004, superseded).
+
+### Reconcile
+
+`scan.Reconcile(ctx, ReconcileInput) (ReconcileReport, error)`; the drift policy itself, over a walked listing and one seam — `scan.FileState`, five methods on the files table (list by library, get by content hash, update location, mark missing, clear missing). Acts on all four Differ buckets: **New** entries go to [[Relocate by hash]]; **Missing** entries are soft-flagged via `MarkMissing` for the 24h purge sweeper, skipping rows this same scan relocated and rows already flagged; **Changed** and **Unchanged** are no-ops apart from clearing `missing_since` on reappearance. Only the initial read of the files table returns an error; per-row write failures are logged and skipped.
+
+`FileState` has no create method, which is how ADR-0018 stops being only a comment: a scan cannot materialise a `files` row without widening the interface in a diff someone has to read, and an in-memory fake pins the four drift rules — and the absence of creates — with no database in the test.
 
 ### Walker
 
-`internal/scan.Walk`; streams `WalkEntry{Location, Key, Size, Mtime, ETag}` from a Storage. It has no Library, so it reports the listing key in both `Location` and `Key`.
+`service.LibraryHandle.Walk`; the whole listing side, returning `[]scan.WalkEntry{Location, Key, Size, Mtime, ETag}`. It answers the rooting question once and yields **library-relative** `Location`s for both kinds of Backend — an object store from the top of its own prefix, a local Backend from the Library root under a `/`-rooted LocalFS (ADR-0030 §1) — while carrying through the `Key` the object was listed under, so a caller reading the bytes does not re-derive one. Returns `service.ErrNoWalkRoot` for a local Library with no root, which must never be confused with an empty walk: that reads as "every file is gone". A walk that fails partway returns what it collected *and* the error, for the same reason.
 
-The walk workers actually use is `service.LibraryHandle.Walk`, which answers the rooting question once and yields **library-relative** `Location`s for both kinds of Backend — an object store from the top of its own prefix, a local Backend from the Library root under a `/`-rooted LocalFS (ADR-0030 §1) — while carrying through the `Key` the object was listed under, so a caller reading the bytes does not re-derive one. Returns `service.ErrNoWalkRoot` for a local Library with no root, which must never be confused with an empty walk: that reads as "every file is gone".
+There is no `scan.Walk`: it used to be a channel pair plus a drain invariant whose only caller drained it straight into this slice. Cancellation still surfaces — storage iterators check `ctx` themselves.
 
 ### Differ
 
-`internal/scan.Diff`; pure function classifying walk × DB rows into `Changeset{Unchanged, Changed, New, Missing}`.
+`internal/scan.Diff`; pure function classifying walk × DB rows into the four buckets `{Unchanged, Changed, New, Missing}`. The changeset type is package-private — acting on it is [[Reconcile]]'s job, and no caller outside `scan` has one.
 
 A row is matched in **either vocabulary `files.location` is written in**: the library-relative form the walk reports as `Location`, and failing that the backend key it reports as `Key`. The second exists because a location seeded by `migrator.seedFilesFromBooks` is absolute, which on a `/`-rooted local Backend *is* the key — the same equivalence `LibraryHandle.StorageKey`'s absolute branch rests on. Only the leading slash is normalised (`storagetest.KeyShapesNameTheSameObject`); nothing else is cleaned, because a wrong match here reattaches a [[Book]] to someone else's bytes. Where both forms exist as two rows — the `UNIQUE (library_id, location)` collision ADR-0030 anticipates — the relative row takes the match and the absolute duplicate reads Missing, which is the resolution that ADR already agreed to.
 

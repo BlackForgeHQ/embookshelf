@@ -581,6 +581,13 @@ var ErrNoWalkRoot = errors.New("library has no local root to walk")
 // partway returns what it collected *and* the error — a caller that
 // treats a half-finished listing as the truth marks the rest of the
 // library missing, so it needs to see both.
+//
+// The iteration is here rather than behind a helper in the scan package
+// because there was never a second caller to justify one: what scan
+// exported was a channel pair plus an invariant that both had to be
+// drained, and its only consumer drained them straight into this slice.
+// Cancellation is not lost with the channels — storage iterators check
+// ctx themselves, and the error comes back with the partial listing.
 func (h *LibraryHandle) Walk(ctx context.Context) ([]scan.WalkEntry, error) {
 	if h.Storage == nil {
 		return nil, errors.New("library handle: no storage")
@@ -591,13 +598,33 @@ func (h *LibraryHandle) Walk(ctx context.Context) ([]scan.WalkEntry, error) {
 	}
 	base := walkBase(prefix)
 
-	var walked []scan.WalkEntry
-	entries, errc := scan.Walk(ctx, h.Storage, prefix)
-	for e := range entries {
-		e.Location = trimWalkBase(e.Location, base)
-		walked = append(walked, e)
+	it, err := h.Storage.List(ctx, prefix)
+	if err != nil {
+		return nil, err
 	}
-	return walked, <-errc
+	defer func() { _ = it.Close() }()
+
+	var walked []scan.WalkEntry
+	for {
+		obj, err := it.Next(ctx)
+		if errors.Is(err, io.EOF) {
+			return walked, nil
+		}
+		if err != nil {
+			return walked, err
+		}
+		walked = append(walked, scan.WalkEntry{
+			// The location is rooted here, by the one place that knows
+			// what the walk listed under; the key is what the backend
+			// answered with, carried through untouched so a reader never
+			// re-derives it (ADR-0030 §2).
+			Location: trimWalkBase(obj.Key, base),
+			Key:      obj.Key,
+			Size:     obj.Size,
+			Mtime:    obj.ModTime,
+			ETag:     obj.ETag,
+		})
+	}
 }
 
 // walkBase is the prefix in the shape the backend reports keys under it:

@@ -10,22 +10,30 @@ import (
 	"github.com/blackforge/embookshelf/internal/model"
 )
 
-// Changeset is the output of Diff. Each slice holds the WalkEntry +
-// the matching DB row (for Changed and Missing) or just the
-// WalkEntry (for New) / just the model.File (for Missing).
-type Changeset struct {
+// changeset is the output of Diff: the four ways a walked listing and a
+// library's files rows can disagree. Each slice holds the WalkEntry +
+// the matching DB row (for Changed) or just the WalkEntry (for New) /
+// just the model.File (for Unchanged and Missing).
+//
+// Unexported because acting on it is Reconcile's job and no caller
+// outside this package has one — the drift policy that reads these four
+// buckets lives here now. Diff still returns it so the classification
+// stays testable on its own; a test can hold the value and read its
+// fields without being able to name the type, which is the whole of what
+// a test of a classifier needs.
+type changeset struct {
 	// Unchanged: row exists, size+mtime match. No work needed.
 	Unchanged []model.File
-	// Changed: row exists but size or mtime differ — re-hash + update.
-	Changed []ChangedEntry
-	// New: walked but not in DB — enqueue ingest.
+	// Changed: row exists but size or mtime differ.
+	Changed []changedEntry
+	// New: walked but not in DB — a rename candidate, never an ingest.
 	New []WalkEntry
 	// Missing: in DB but not walked — mark missing_since.
 	Missing []model.File
 }
 
-// ChangedEntry pairs the live observation with the stale DB row.
-type ChangedEntry struct {
+// changedEntry pairs the live observation with the stale DB row.
+type changedEntry struct {
 	Walk WalkEntry
 	DB   model.File
 }
@@ -33,7 +41,7 @@ type ChangedEntry struct {
 // Diff computes the changeset comparing walked entries against the
 // current DB rows for one library. Both slices may be in any order;
 // Diff sorts internally by Location.
-func Diff(walked []WalkEntry, dbFiles []model.File) Changeset {
+func Diff(walked []WalkEntry, dbFiles []model.File) changeset {
 	// Build a map of DB rows by Location for O(1) lookup.
 	byLoc := make(map[string]model.File, len(dbFiles))
 	for _, f := range dbFiles {
@@ -49,7 +57,7 @@ func Diff(walked []WalkEntry, dbFiles []model.File) Changeset {
 		byLoc[k] = f
 	}
 
-	var cs Changeset
+	var cs changeset
 	// Matched by row id, not by location: a row can be matched under a
 	// location string that is not the one it stores.
 	matched := make(map[string]bool, len(walked))
@@ -67,7 +75,7 @@ func Diff(walked []WalkEntry, dbFiles []model.File) Changeset {
 			cs.Unchanged = append(cs.Unchanged, f)
 			continue
 		}
-		cs.Changed = append(cs.Changed, ChangedEntry{Walk: w, DB: f})
+		cs.Changed = append(cs.Changed, changedEntry{Walk: w, DB: f})
 	}
 	for _, f := range dbFiles {
 		if !matched[f.ID] {
