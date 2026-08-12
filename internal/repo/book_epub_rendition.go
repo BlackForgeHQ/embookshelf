@@ -23,9 +23,25 @@ func NewBookEpubRenditionRepo(d *db.DB) *BookEpubRenditionRepo {
 	return &BookEpubRenditionRepo{renditionLifecycle{db: d, table: "book_epub_renditions"}}
 }
 
-const epubRenditionCols = `
-	book_id, state, error, file_id,
-	source_content_hash, converter_version, created_at, updated_at`
+// epubRenditionProjection is the book_epub_renditions row, declared
+// once. The lifecycle columns (state, error, provenance) are shared
+// with the markdown rendition's projection; file_id is the EPUB's own
+// artifact column, the pointer at the files row the generated EPUB
+// lives in.
+var epubRenditionProjection = projection[model.EpubRendition]{
+	{name: "book_id", dest: func(m *model.EpubRendition) any { return &m.BookID }},
+	{name: "state", dest: func(m *model.EpubRendition) any { return &m.State }},
+	{name: "error", dest: func(m *model.EpubRendition) any { return &m.Error }},
+	{name: "file_id", dest: func(m *model.EpubRendition) any { return &m.FileID }},
+	{name: "source_content_hash", dest: func(m *model.EpubRendition) any { return &m.SourceContentHash }},
+	{name: "converter_version", dest: func(m *model.EpubRendition) any { return &m.ConverterVersion }},
+	{name: "created_at", dest: func(m *model.EpubRendition) any { return &m.CreatedAt }},
+	{name: "updated_at", dest: func(m *model.EpubRendition) any { return &m.UpdatedAt }},
+}
+
+// epubRenditionCols is the projection rendered for the unaliased
+// book_epub_renditions queries.
+var epubRenditionCols = epubRenditionProjection.returningList("book_epub_renditions")
 
 // MarkReady records a finished render: which files row holds the EPUB
 // and the provenance that decides staleness later.
@@ -37,22 +53,15 @@ func (r *BookEpubRenditionRepo) MarkReady(
 
 // GetByBookID loads the row, ErrNotFound when the book has none.
 func (r *BookEpubRenditionRepo) GetByBookID(ctx context.Context, bookID string) (model.EpubRendition, error) {
-	const q = `SELECT ` + epubRenditionCols + ` FROM book_epub_renditions WHERE book_id = $1`
+	q := `SELECT ` + epubRenditionCols + ` FROM book_epub_renditions WHERE book_id = $1`
 
-	var (
-		m     model.EpubRendition
-		state string
-	)
+	var m model.EpubRendition
 	row := r.db.SQL.QueryRowContext(ctx, q, bookID)
-	if err := row.Scan(
-		&m.BookID, &state, &m.Error, &m.FileID,
-		&m.SourceContentHash, &m.ConverterVersion, &m.CreatedAt, &m.UpdatedAt,
-	); err != nil {
+	if err := epubRenditionProjection.scan(row, &m); err != nil {
 		if dberr.IsNotFound(err) {
 			return model.EpubRendition{}, ErrNotFound
 		}
 		return model.EpubRendition{}, err
 	}
-	m.State = model.RenditionState(state)
 	return m, nil
 }

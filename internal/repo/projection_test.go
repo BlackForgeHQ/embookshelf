@@ -143,6 +143,50 @@ func TestFileProjection_RendersOneBareForm(t *testing.T) {
 	}
 }
 
+// The derived-artifact cluster's golden forms (#314). None of these five
+// tables' queries alias the table, so each has one bare rendering that
+// serves every SELECT site — the same shape fileCols uses.
+
+func TestAudiobookProjection_RendersOneBareForm(t *testing.T) {
+	const want = `book_id, state, generation, engine, voice, model, segment_chars, source_content_hash, ` +
+		`file_id, error, total_chars, duration_ms, created_at, updated_at`
+	if audiobookCols != want {
+		t.Fatalf("audiobookCols =\n%s\nwant\n%s", audiobookCols, want)
+	}
+}
+
+func TestAudiobookSegmentProjection_RendersOneBareForm(t *testing.T) {
+	const want = `id, book_id, seq, chapter_index, chapter_title, char_start, char_end, ` +
+		`start_ms, duration_ms, staged_path, state, error`
+	if segmentCols != want {
+		t.Fatalf("segmentCols =\n%s\nwant\n%s", segmentCols, want)
+	}
+}
+
+func TestReadingGuideProjection_RendersOneBareForm(t *testing.T) {
+	const want = `book_id, about, audience, not_for, problems, ` +
+		`source_kind, model, language, generated_at, edited_by_user`
+	if readingGuideCols != want {
+		t.Fatalf("readingGuideCols =\n%s\nwant\n%s", readingGuideCols, want)
+	}
+}
+
+func TestMarkdownRenditionProjection_RendersOneBareForm(t *testing.T) {
+	const want = `book_id, state, error, location, size_bytes, ` +
+		`source_content_hash, converter_version, created_at, updated_at`
+	if markdownRenditionCols != want {
+		t.Fatalf("markdownRenditionCols =\n%s\nwant\n%s", markdownRenditionCols, want)
+	}
+}
+
+func TestEpubRenditionProjection_RendersOneBareForm(t *testing.T) {
+	const want = `book_id, state, error, file_id, ` +
+		`source_content_hash, converter_version, created_at, updated_at`
+	if epubRenditionCols != want {
+		t.Fatalf("epubRenditionCols =\n%s\nwant\n%s", epubRenditionCols, want)
+	}
+}
+
 // with() must leave the column in place, or a query using the variant
 // would feed the scanner a differently-ordered row.
 func TestProjectionWith_ReplacesOneEntryInPlace(t *testing.T) {
@@ -186,6 +230,11 @@ func TestProjections_HaveOneDistinctDestinationPerColumn(t *testing.T) {
 	checkProjection(t, "users", userProjection, &model.User{})
 	checkProjection(t, "user_devices", deviceProjection, &model.Device{})
 	checkProjection(t, "user_identities", identityProjection, &model.Identity{})
+	checkProjection(t, "book_audiobooks", audiobookProjection, &model.Audiobook{})
+	checkProjection(t, "book_audiobook_segments", audiobookSegmentProjection, &model.AudiobookSegment{})
+	checkProjection(t, "book_reading_guides", readingGuideProjection, &model.ReadingGuide{})
+	checkProjection(t, "book_markdown_renditions", markdownRenditionProjection, &model.MarkdownRendition{})
+	checkProjection(t, "book_epub_renditions", epubRenditionProjection, &model.EpubRendition{})
 }
 
 // The identity cluster's golden forms (#313). As above, the restatement
