@@ -17,17 +17,9 @@ import (
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/layout"
 	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/sidecar"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
-
-// RenameRollbackGrace is the grace window applied to half-rename
-// new keys that need to be reaped after a phase-1 copy or DB-tx
-// failure. Short by design: no client ever held a presigned URL for
-// these keys (DB never referenced them), so there's nothing to wait
-// for. ADR-0005 §3.4.
-const RenameRollbackGrace = 5 * time.Minute
 
 // Trigger identifies the upstream action that drove a metadata
 // write. Different triggers cause different steps to fire in the
@@ -49,21 +41,18 @@ const (
 
 // BookMetadataWriter is the slice of *repo.BookRepo MetadataWriter
 // needs. Defined here so tests can fake it without standing up a DB.
+// The rename-side book writes (SetFolderPath, RenameFolderTx) belong
+// to the FolderRenamer's RenameStore, not here.
 type BookMetadataWriter interface {
 	UpdateMetadata(ctx context.Context, b model.Book) error
-	SetFolderPath(ctx context.Context, bookID, folderPath, path string) error
-	// RenameFolderTx is the single-transaction DB swap that finalises
-	// an S3 folder rename per ADR-0005: rewrites every files.location
-	// supplied, sets books.folder_path + books.path, and enqueues the
-	// supplied orphan rows.
-	RenameFolderTx(ctx context.Context, args repo.RenameFolderTxArgs) error
 }
 
-// PendingOrphansEnqueuer is the slice of *repo.PendingOrphanRepo
-// MetadataWriter needs for the rollback path: a phase-1 copy or DB
-// tx failure schedules the half-rename garbage with a short grace.
-type PendingOrphansEnqueuer interface {
-	Insert(ctx context.Context, rows []repo.PendingOrphanInsert) error
+// Renamer is the pipeline's view of the folder-rename module: one call
+// with the Book, its handle and the folder delta; a RenameOutcome back.
+// The migrate-vs-rename dispatch, collision probing and rollback policy
+// are all the module's own business.
+type Renamer interface {
+	Relocate(ctx context.Context, b model.Book, handle *LibraryHandle, oldFolder, newFolder string) RenameOutcome
 }
 
 // SidecarWriterFor is the slice of *sidecar.Writer we depend on.
@@ -78,11 +67,11 @@ type SidecarWriterFor interface {
 type EmbedderDispatcher func(format string) (fileproc.Embedder, error)
 
 // FileMetadataRepo is the slice of *repo.FileRepo we depend on.
-// Defined here so tests can fake it.
+// Defined here so tests can fake it. The rename-side file writes
+// (UpdateLocation) belong to the FolderRenamer's RenameFileStore.
 type FileMetadataRepo interface {
 	ListByBook(ctx context.Context, bookID string) ([]model.File, error)
 	SetContentHash(ctx context.Context, fileID string, hash []byte, size int64, mtime time.Time) error
-	UpdateLocation(ctx context.Context, fileID, newLocation string) error
 }
 
 // MetadataWriterDeps groups the dependencies MetadataWriter needs.
@@ -94,14 +83,10 @@ type MetadataWriterDeps struct {
 	Sidecar  SidecarWriterFor
 	Dispatch EmbedderDispatcher
 	Files    FileMetadataRepo
-	// Orphans is the queue used by the S3 folder-rename rollback
-	// path (ADR-0005). Nil disables backend rename — a degraded
-	// MetadataWriter behaves like the pre-ADR-0005 build.
-	Orphans PendingOrphansEnqueuer
-	// RenameGrace is the eligible_at delta applied to the *old*
-	// keys enqueued after a successful S3 rename. Defaults to 1h
-	// when zero. Operators set this to ≥ 2 × PresignTTL.
-	RenameGrace time.Duration
+	// Renamer is the folder-rename module. Nil declines every rename —
+	// a degraded MetadataWriter still lands the DB, in-file and sidecar
+	// steps.
+	Renamer Renamer
 }
 
 // Outcome reports the post-execution facts of a Write call: what the
@@ -243,6 +228,74 @@ func Degradation(err error) (deg *Degraded, fatal bool) {
 	return nil, true
 }
 
+// Effects is the plan returned by DecideEffects: the set of side
+// effects the edit-side write pipeline will attempt for one Write
+// call. Pure data; no I/O.
+//
+// The matrix encoded here is ADR-0001 §3 (trigger × backend) plus
+// ADR-0003 §6 + ADR-0005 (folder rename on author/title edits, both
+// backends). When adding a new trigger or backend, update this
+// function and the table test in TestDecideEffects.
+type Effects struct {
+	// DB indicates the canonical books-row update will fire. Always
+	// true for in-scope triggers; the field is explicit so callers
+	// reading the plan don't infer.
+	DB bool
+	// Sidecar indicates the JSON sidecar write will fire. The mode
+	// (full vs. spillover) is decided post-execution from Outcome.
+	Sidecar bool
+	// InFile indicates the in-file embedded write will be attempted.
+	// Format-specific dispatch happens at execution time; an
+	// unsupported format collapses to InFileWritten=false at runtime
+	// without changing the plan.
+	InFile bool
+	// FolderRename indicates the on-disk folder (or S3 prefix) for this
+	// Book will be moved to match the new sanitized {Author}/{Title}
+	// per ADR-0003 §6 + ADR-0005. Set on user-driven triggers when the
+	// sanitized folder name actually changed; backend-agnostic.
+	FolderRename bool
+}
+
+// DecideEffects returns the side-effect plan for a Write call. The
+// triggers in scope are the edit-side ones (manual_edit,
+// apply_enrichment, auto_enrichment); approve and scan-reingest
+// route around MetadataWriter and have their own (smaller) matrix.
+//
+// folderChanged is the caller-computed delta between the new
+// {Author}/{Title} folder and the Book's stored folder_path. When
+// false, no rename is scheduled even if the trigger and backend
+// would otherwise allow it.
+//
+// Degraded handles (nil, or with no Storage) collapse to DB-only:
+// without storage we cannot write a sidecar, open the source for
+// in-file embed, or rename a folder. This mirrors the silent-skip
+// behaviour the previous scattered nil-checks produced, but lifts
+// it into one place.
+func DecideEffects(trigger Trigger, handle *LibraryHandle, folderChanged bool) Effects {
+	if trigger == TriggerAutoEnrichment {
+		return Effects{DB: true}
+	}
+	if handle == nil || handle.Storage == nil {
+		return Effects{DB: true}
+	}
+	e := Effects{DB: true, Sidecar: true}
+	if folderChanged {
+		// Both backends rename on user-driven Author/Title edits, and
+		// both go through Storage.MovePrefix. Local: one atomic
+		// rename(2). S3: copy + sweeper-deferred delete per ADR-0005.
+		// Trigger gate is the same (TriggerAutoEnrichment
+		// short-circuited above; only manual_edit + apply_enrichment
+		// reach here).
+		e.FolderRename = true
+	}
+	if !handle.IsObjectStore() {
+		// In-file embed remains local-only — S3 still skips it per
+		// ADR-0001. Sidecar full-mirror carries the metadata on S3.
+		e.InFile = true
+	}
+	return e
+}
+
 // MetadataWriter is the **edit-side write pipeline** module. Owns
 // ADR-0001's `DB → file embedded → JSON sidecar` sequence for the
 // three edit-side triggers (manual_edit, apply_enrichment,
@@ -324,18 +377,11 @@ func (w *MetadataWriter) Write(ctx context.Context, b model.Book, trigger Trigge
 		}
 	}
 
-	if eff.FolderRename && handle != nil {
-		// A Book with no folder_path has never been in the layout, so
-		// this is the lazy migration of ADR-0003 §5 rather than a
-		// rename. Two calls because they are two operations: one builds
-		// a Book its first folder out of loose files at the library
-		// root, the other moves a folder that already exists.
-		var res RenameOutcome
-		if oldFolder == "" {
-			res = w.migrateToFolderLayout(ctx, b, handle, newFolder)
-		} else {
-			res = w.renameFolder(ctx, b, handle, oldFolder, newFolder)
-		}
+	if eff.FolderRename && handle != nil && w.deps.Renamer != nil {
+		// One call: whether this is a rename or the flat-layout
+		// migration of ADR-0003 §5 is the renamer's dispatch, not the
+		// pipeline's.
+		res := w.deps.Renamer.Relocate(ctx, b, handle, oldFolder, newFolder)
 
 		switch {
 		case res.Done:

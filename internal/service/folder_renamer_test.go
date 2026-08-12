@@ -14,7 +14,9 @@ import (
 	"github.com/blackforge/embookshelf/internal/storage/local"
 )
 
-// Both arms and the migration, reached directly.
+// The renamer is its own module (#256): one entry point, Relocate, that
+// owns the migrate-vs-rename dispatch, and its own dependencies rather
+// than the writer's.
 //
 // Every rename assertion used to go through a full Write — sanitizing a
 // folder name, planning effects, embedding, stamping a hash, writing a
@@ -22,9 +24,9 @@ import (
 // discarding the difference between "declined" and "broke" went
 // unnoticed for as long as it did (#212).
 
-// localRenameFixture wires a local library rooted at a temp dir with one
-// book already in a folder.
-func localRenameFixture(t *testing.T) (*MetadataWriter, *LibraryHandle, model.Book, string) {
+// localRenameFixture wires a renamer over a local library rooted at a
+// temp dir with one book already in a folder.
+func localRenameFixture(t *testing.T) (*FolderRenamer, *LibraryHandle, model.Book, string) {
 	t.Helper()
 	libRoot := t.TempDir()
 
@@ -49,9 +51,8 @@ func localRenameFixture(t *testing.T) (*MetadataWriter, *LibraryHandle, model.Bo
 		Library: model.Library{ID: "lib1", Path: libRoot},
 		Storage: fs,
 	}
-	mw := NewMetadataWriter(MetadataWriterDeps{
-		Books:    &fakeBookWriter{},
-		LibStore: &fakeLibStore{handle: handle},
+	r := NewFolderRenamer(FolderRenamerDeps{
+		Store: &fakeBookWriter{},
 		Files: &fakeFileRepo{files: []model.File{
 			{ID: "f1", Location: oldFolder + "/hobbit.epub", Format: "EPUB"},
 		}},
@@ -61,13 +62,13 @@ func localRenameFixture(t *testing.T) (*MetadataWriter, *LibraryHandle, model.Bo
 		ID: "b1", LibraryID: "lib1", Author: "Tolkien", Title: "The Hobbit",
 		Format: "EPUB", Path: oldFolder + "/hobbit.epub", FolderPath: &folder,
 	}
-	return mw, handle, book, libRoot
+	return r, handle, book, libRoot
 }
 
-func TestRenameFolderLocalMovesTheFolderAndReportsWhereItLanded(t *testing.T) {
-	mw, handle, book, libRoot := localRenameFixture(t)
+func TestRelocateMovesAFolderedBookAndReportsWhereItLanded(t *testing.T) {
+	r, handle, book, libRoot := localRenameFixture(t)
 
-	res := mw.renameFolder(context.Background(), book, handle, "Tolkien/Hobbit", "Tolkien/The Hobbit")
+	res := r.Relocate(context.Background(), book, handle, "Tolkien/Hobbit", "Tolkien/The Hobbit")
 
 	if !res.Done {
 		t.Fatalf("outcome = %+v, want done", res)
@@ -80,13 +81,47 @@ func TestRenameFolderLocalMovesTheFolderAndReportsWhereItLanded(t *testing.T) {
 	}
 }
 
-// A rename that has nothing to move is not a failure, and saying so is
-// the point of the outcome type: this case used to be indistinguishable
-// from a broken rename, so it warned on every edit of such a book.
-func TestRenameFolderDeclinesABookNotInTheLayout(t *testing.T) {
-	mw, handle, book, _ := localRenameFixture(t)
+// The dispatch is the module's own: an empty oldFolder is a flat-layout
+// Book, and Relocate answers it with the ADR-0003 §5 migration rather
+// than a rename — the position of that branch is stated here and
+// nowhere in the write pipeline.
+func TestRelocateDispatchesAFlatLayoutBookToTheMigration(t *testing.T) {
+	libRoot := t.TempDir()
+	fs, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(libRoot, "hobbit.epub"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	handle := &LibraryHandle{
+		Library: model.Library{ID: "lib1", Path: libRoot},
+		Storage: fs,
+	}
+	r := NewFolderRenamer(FolderRenamerDeps{
+		Store: &fakeBookWriter{},
+		Files: &fakeFileRepo{files: []model.File{{ID: "f1", Location: "hobbit.epub", Format: "EPUB"}}},
+	})
+	book := model.Book{
+		ID: "b1", LibraryID: "lib1", Author: "Tolkien", Title: "The Hobbit",
+		Format: "EPUB", Path: "hobbit.epub",
+	}
 
-	res := mw.renameFolder(context.Background(), book, handle, "", "Tolkien/The Hobbit")
+	res := r.Relocate(context.Background(), book, handle, "", "Tolkien/The Hobbit")
+
+	if !res.Done {
+		t.Fatalf("outcome = %+v, want the migration to have run", res)
+	}
+	if _, err := os.Stat(filepath.Join(libRoot, res.Folder, "hobbit.epub")); err != nil {
+		t.Errorf("the book's file did not land in its first folder: %v", err)
+	}
+}
+
+func TestRelocateDeclinesALibraryWithNoRoot(t *testing.T) {
+	r, handle, book, _ := localRenameFixture(t)
+	handle.Library.Path = ""
+
+	res := r.Relocate(context.Background(), book, handle, "Tolkien/Hobbit", "Tolkien/The Hobbit")
 
 	if res.Done || res.Err != nil {
 		t.Fatalf("outcome = %+v, want a decline", res)
@@ -96,25 +131,14 @@ func TestRenameFolderDeclinesABookNotInTheLayout(t *testing.T) {
 	}
 }
 
-func TestRenameFolderLocalDeclinesALibraryWithNoRoot(t *testing.T) {
-	mw, handle, book, _ := localRenameFixture(t)
-	handle.Library.Path = ""
-
-	res := mw.renameFolder(context.Background(), book, handle, "Tolkien/Hobbit", "Tolkien/The Hobbit")
-
-	if res.Done || res.Err != nil {
-		t.Fatalf("outcome = %+v, want a decline", res)
-	}
-}
-
 // The other half of the type: a rename that started and broke reports an
 // error, so the caller can log it as one.
-func TestRenameFolderLocalReportsABrokenMove(t *testing.T) {
-	mw, handle, book, _ := localRenameFixture(t)
+func TestRelocateReportsABrokenMove(t *testing.T) {
+	r, handle, book, _ := localRenameFixture(t)
 	boom := errors.New("disk went away")
 	handle.Storage = brokenMover{Storage: handle.Storage, err: boom}
 
-	res := mw.renameFolder(context.Background(), book, handle, "Tolkien/Hobbit", "Tolkien/The Hobbit")
+	res := r.Relocate(context.Background(), book, handle, "Tolkien/Hobbit", "Tolkien/The Hobbit")
 
 	if res.Done {
 		t.Fatal("a broken move reported done")
@@ -130,11 +154,11 @@ func TestRenameFolderLocalReportsABrokenMove(t *testing.T) {
 // ADR-0005 is fail-closed: without an orphan queue the source delete
 // cannot be deferred safely, so the rename does not start. A decline,
 // not a break — nothing was attempted.
-func TestRenameFolderBackendDeclinesWithoutAnOrphanQueue(t *testing.T) {
-	mw, handle, book, _ := localRenameFixture(t)
+func TestRelocateBackendDeclinesWithoutAnOrphanQueue(t *testing.T) {
+	r, handle, book, _ := localRenameFixture(t)
 	handle.Storage = objectStore{Storage: handle.Storage}
 
-	res := mw.renameFolder(context.Background(), book, handle, "Tolkien/Hobbit", "Tolkien/The Hobbit")
+	res := r.Relocate(context.Background(), book, handle, "Tolkien/Hobbit", "Tolkien/The Hobbit")
 
 	if res.Done || res.Err != nil {
 		t.Fatalf("outcome = %+v, want a fail-closed decline", res)
@@ -144,14 +168,14 @@ func TestRenameFolderBackendDeclinesWithoutAnOrphanQueue(t *testing.T) {
 	}
 }
 
-// The migration is not a rename and answers separately. An object-store
-// book has never had a flat layout (ADR-0003 §7), so there is nothing to
-// migrate — a decline rather than an attempted listing.
-func TestMigrateToFolderLayoutDeclinesAnObjectStoreBook(t *testing.T) {
-	mw, handle, book, _ := localRenameFixture(t)
+// An object-store book has never had a flat layout (ADR-0003 §7), so
+// a flat-layout dispatch on one has nothing to migrate — a decline
+// rather than an attempted listing.
+func TestRelocateDeclinesAFlatLayoutObjectStoreBook(t *testing.T) {
+	r, handle, book, _ := localRenameFixture(t)
 	handle.Storage = objectStore{Storage: handle.Storage}
 
-	res := mw.migrateToFolderLayout(context.Background(), book, handle, "Tolkien/The Hobbit")
+	res := r.Relocate(context.Background(), book, handle, "", "Tolkien/The Hobbit")
 
 	if res.Done || res.Err != nil {
 		t.Fatalf("outcome = %+v, want a decline", res)
@@ -160,7 +184,7 @@ func TestMigrateToFolderLayoutDeclinesAnObjectStoreBook(t *testing.T) {
 
 // The migration proper: files sitting loose at the library root get the
 // Book its first folder, and only this Book's files move.
-func TestMigrateToFolderLayoutMovesOnlyThisBooksFiles(t *testing.T) {
+func TestRelocateMigrationMovesOnlyThisBooksFiles(t *testing.T) {
 	libRoot := t.TempDir()
 	fs, err := local.New("/")
 	if err != nil {
@@ -176,17 +200,16 @@ func TestMigrateToFolderLayoutMovesOnlyThisBooksFiles(t *testing.T) {
 		Library: model.Library{ID: "lib1", Path: libRoot},
 		Storage: fs,
 	}
-	mw := NewMetadataWriter(MetadataWriterDeps{
-		Books:    &fakeBookWriter{},
-		LibStore: &fakeLibStore{handle: handle},
-		Files:    &fakeFileRepo{files: []model.File{{ID: "f1", Location: "hobbit.epub", Format: "EPUB"}}},
+	r := NewFolderRenamer(FolderRenamerDeps{
+		Store: &fakeBookWriter{},
+		Files: &fakeFileRepo{files: []model.File{{ID: "f1", Location: "hobbit.epub", Format: "EPUB"}}},
 	})
 	book := model.Book{
 		ID: "b1", LibraryID: "lib1", Author: "Tolkien", Title: "The Hobbit",
 		Format: "EPUB", Path: "hobbit.epub",
 	}
 
-	res := mw.migrateToFolderLayout(context.Background(), book, handle, "Tolkien/The Hobbit")
+	res := r.Relocate(context.Background(), book, handle, "", "Tolkien/The Hobbit")
 
 	if !res.Done {
 		t.Fatalf("outcome = %+v, want done", res)

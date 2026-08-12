@@ -300,14 +300,19 @@ func buildServices(ctx context.Context, w wiring, r repos) (services, error) {
 		// override) doesn't make the sweeper too aggressive.
 		renameGrace = max(2*w.cfg.PresignTTL, time.Hour)
 	}
+	folderRenamer := service.NewFolderRenamer(service.FolderRenamerDeps{
+		Store:   r.book,
+		Files:   r.file,
+		Orphans: r.pendingOrphans,
+		Grace:   renameGrace,
+	})
 	metadataWriter := service.NewMetadataWriter(service.MetadataWriterDeps{
-		Books:       r.book,
-		LibStore:    libStore,
-		Sidecar:     sidecarWriter,
-		Dispatch:    fileproc.DispatchEmbedder,
-		Files:       r.file,
-		Orphans:     r.pendingOrphans,
-		RenameGrace: renameGrace,
+		Books:    r.book,
+		LibStore: libStore,
+		Sidecar:  sidecarWriter,
+		Dispatch: fileproc.DispatchEmbedder,
+		Files:    r.file,
+		Renamer:  folderRenamer,
 	})
 	libSvc := service.NewLibraryService(r.lib, r.book, service.LibraryServiceDeps{
 		Backends:     r.backend,

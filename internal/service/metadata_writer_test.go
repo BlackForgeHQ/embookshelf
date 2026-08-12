@@ -125,6 +125,60 @@ func newPipelineWriter(
 	}), fs
 }
 
+// recordingRenamer substitutes the rename module at the pipeline's
+// Renamer seam and answers with a fixed outcome.
+type recordingRenamer struct {
+	calls []renamerCall
+	res   RenameOutcome
+}
+
+type renamerCall struct {
+	OldFolder, NewFolder string
+}
+
+func (r *recordingRenamer) Relocate(_ context.Context, _ model.Book, _ *LibraryHandle, oldFolder, newFolder string) RenameOutcome {
+	r.calls = append(r.calls, renamerCall{OldFolder: oldFolder, NewFolder: newFolder})
+	return r.res
+}
+
+// The pipeline's whole rename step is one call across the Renamer seam:
+// it hands over the folder delta it computed and reports the module's
+// outcome as its own facts, without reaching into rename internals.
+func TestMetadataWriter_Write_HandsTheFolderDeltaToTheRenamer(t *testing.T) {
+	books := &fakeBookWriter{}
+	ren := &recordingRenamer{res: renameDone("Tolkien/The Hobbit")}
+	fs, err := local.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	handle := &LibraryHandle{Library: model.Library{ID: "lib1"}, Storage: fs}
+	mw := NewMetadataWriter(MetadataWriterDeps{
+		Books:    books,
+		LibStore: &fakeLibStore{handle: handle},
+		Renamer:  ren,
+	})
+
+	oldFolder := "Tolkien/Hobbit"
+	book := model.Book{
+		ID: "b1", LibraryID: "lib1", Author: "Tolkien", Title: "The Hobbit",
+		Format: "EPUB", Path: oldFolder + "/hobbit.epub", FolderPath: &oldFolder,
+	}
+	out, err := mw.Write(context.Background(), book, TriggerManualEdit)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if len(ren.calls) != 1 {
+		t.Fatalf("Relocate called %d times, want exactly 1", len(ren.calls))
+	}
+	if ren.calls[0].OldFolder != oldFolder || ren.calls[0].NewFolder != "Tolkien/The Hobbit" {
+		t.Errorf("delta handed over = %+v, want the pipeline's computed old/new folders", ren.calls[0])
+	}
+	if !out.FolderRenamed || out.NewFolderPath != "Tolkien/The Hobbit" {
+		t.Errorf("outcome = %+v, want the renamer's answer reported as the pipeline's facts", out)
+	}
+}
+
 func TestMetadataWriter_Write_AutoEnrichment_DBOnly(t *testing.T) {
 	books := &fakeBookWriter{}
 	mw := NewMetadataWriter(MetadataWriterDeps{Books: books})
@@ -640,6 +694,7 @@ func TestMetadataWriter_FolderRename_NewLayout(t *testing.T) {
 		Books:    books,
 		LibStore: libStore,
 		Files:    files,
+		Renamer:  NewFolderRenamer(FolderRenamerDeps{Store: books, Files: files}),
 	})
 
 	folder := oldFolder
@@ -715,6 +770,7 @@ func TestMetadataWriter_FolderRename_NoChange(t *testing.T) {
 		Books:    books,
 		LibStore: libStore,
 		Files:    files,
+		Renamer:  NewFolderRenamer(FolderRenamerDeps{Store: books, Files: files}),
 	})
 
 	book := model.Book{
@@ -829,11 +885,12 @@ func TestMetadataWriter_FolderRename_S3Renames(t *testing.T) {
 	}
 	libStore := &fakeLibStore{handle: handle}
 	mw := NewMetadataWriter(MetadataWriterDeps{
-		Books:       books,
-		LibStore:    libStore,
-		Files:       files,
-		Orphans:     orphans,
-		RenameGrace: time.Hour,
+		Books:    books,
+		LibStore: libStore,
+		Files:    files,
+		Renamer: NewFolderRenamer(FolderRenamerDeps{
+			Store: books, Files: files, Orphans: orphans, Grace: time.Hour,
+		}),
 	})
 
 	folder := oldFolder
@@ -930,7 +987,9 @@ func TestMetadataWriter_FolderRename_BackendTxFailRollback(t *testing.T) {
 		Books:    books,
 		LibStore: &fakeLibStore{handle: handle},
 		Files:    files,
-		Orphans:  orphans,
+		Renamer: NewFolderRenamer(FolderRenamerDeps{
+			Store: books, Files: files, Orphans: orphans,
+		}),
 	})
 
 	folder := oldFolder
@@ -984,9 +1043,12 @@ func TestMetadataWriter_FolderRename_BackendNoOrphansRepo(t *testing.T) {
 		Library: model.Library{ID: "lib1", Path: libRoot, BackendID: &backendID},
 		Storage: copyingBackend{fs},
 	}
+	// The renamer is constructed without an orphan queue — the ADR-0005
+	// fail-closed pin lives in its decline, not in a missing renamer.
 	mw := NewMetadataWriter(MetadataWriterDeps{
 		Books:    books,
 		LibStore: &fakeLibStore{handle: handle},
+		Renamer:  NewFolderRenamer(FolderRenamerDeps{Store: books}),
 	})
 
 	book := model.Book{
