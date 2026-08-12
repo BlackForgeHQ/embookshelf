@@ -186,8 +186,20 @@ function BookDetail() {
         className="page-split page-split--cover-main"
         style={{ padding: "40px 48px" }}
       >
-        {/* Left — cover & actions */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        {/* Left — cover & actions. Capped and centered so the stacked
+            mobile layout doesn't stretch the rail (and the cover with
+            it) across the whole viewport; on desktop the 280px grid
+            column is narrower than the cap, so nothing changes. */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 20,
+            width: "100%",
+            maxWidth: 320,
+            marginInline: "auto",
+          }}
+        >
           <Cover book={b} size="hero" />
           <Button
             size="lg"

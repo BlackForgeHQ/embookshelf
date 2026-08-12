@@ -423,9 +423,14 @@
   .cover.lg .c-author {
     font-size: 10px;
   }
+  /* Hero is fluid: it fills its rail (book detail, cover editor) so the
+     cover, the Open-book button and the shelves card share one width
+     instead of a fixed 240px cover floating beside wider siblings on
+     narrow viewports. Containers cap the width. */
   .cover.hero {
-    width: 240px;
-    height: 360px;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 2 / 3;
   }
   .cover.hero .c-title {
     font-size: 26px;

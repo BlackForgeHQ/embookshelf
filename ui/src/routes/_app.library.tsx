@@ -405,7 +405,13 @@ function BookCard({
       className="group mx-auto flex w-full max-w-[150px] flex-col gap-3 text-left transition-transform duration-200 hover:scale-[1.02]"
       aria-label={`Open ${book.title}`}
     >
-      <Cover book={book} size="md" />
+      {/* Fluid override: the grid cell runs 110-150px, and the class's
+          fixed 130px cover overflowed the narrow cells. */}
+      <Cover
+        book={book}
+        size="md"
+        style={{ width: "100%", height: "auto", aspectRatio: "2 / 3" }}
+      />
       <div>
         <div className="mt-1 text-[13px] leading-snug font-medium text-balance transition-colors group-hover:text-primary">
           {book.title}
