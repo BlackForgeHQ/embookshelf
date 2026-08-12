@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/sidecar"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
@@ -42,17 +43,18 @@ type ExtractResult struct {
 // ("x.epub") to feed the extension dispatcher — a module converting its
 // own input backwards to satisfy the interface it wrapped.
 func DispatchFormat(format string) (Processor, error) {
-	switch strings.ToUpper(strings.TrimSpace(format)) {
-	case "EPUB":
-		return &EPUBProcessor{}, nil
-	case "PDF":
-		return &PDFProcessor{}, nil
-	case "CBZ":
-		return &CBZProcessor{}, nil
-	case "MP3", "M4B":
-		return &AudioProcessor{}, nil
+	spec, ok := model.LookupFormat(format)
+	if !ok {
+		return nil, ErrUnsupportedFormat
 	}
-	return nil, ErrUnsupportedFormat
+	// The format's canonical extension carries its processor entry; a
+	// format whose extractor is still unwired (#310–#312) answers the
+	// same refusal the extension entry point gives.
+	p, ok := processors[spec.Ext]
+	if !ok {
+		return nil, &NoProcessorError{Format: spec.Format, Ext: spec.Ext}
+	}
+	return p(), nil
 }
 
 // ExtractBook runs the format-specific Processor against an open Source,

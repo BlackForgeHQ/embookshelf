@@ -531,6 +531,10 @@ Lived in its own `internal/extractor/` package until it had one caller and no se
 
 `fileproc.DispatchFormat(format) Processor`; the slug-keyed twin of `Dispatch`, which keys off a file extension. Both live in `fileproc` because format dispatch is that package's job. When a caller has both, the key wins: the key is what the bytes actually are, the slug is what a row claims they are.
 
+### Ingest axis
+
+`model.FormatSpec.IngestExts` + `.Audio`, and `fileproc.processors` (#308); the format vocabulary's ingest side, previously seven hand-kept switches across two packages with no parity test — which had already diverged: `.cbr` was admitted by Intake, stamped `CBZ`, then refused by `Dispatch` with the generic unsupported message. Now the table declares which extensions intake admits and what format each stamps (aliases live on their format's row: `.m4a` → M4B, the comic aliases → CBZ), plus the audio flag; `SupportedExts`, `IsSupported`, `FormatForExt`, `Dispatch`, `DispatchFormat` and `IsAudioFormat` are all derivations, held to the table by `dispatch_parity_test.go` — the fileproc sibling of the model↔UI format parity test. The one fact the table cannot hold without inverting the import stays in `fileproc`: the extension → extractor map. An **admitted extension with no processor** (`.cbr`/`.cb7` until #310, `.mobi`/`.azw3` until #311, `.fb2` until #312) fails ingest with `NoProcessorError` — a per-format "recognised but cannot be ingested" message that lands on the bookdrop row verbatim — which unwraps to `ErrUnsupportedFormat` so the worker's terminal-failure branch still refuses to retry it. The pinned no-processor set in the parity test is the work-list those three issues shrink. `IsAudioFormat` stays deliberately case-sensitive (`books.format` stores upper-case; lower-case reaching it is a bug to surface). The reMarkable device-push EPUB/PDF switch stays local on purpose — it is the device's rule, not a format property (#194).
+
 ---
 
 ## Metadata enrichment (ADRs 0008–0013)
