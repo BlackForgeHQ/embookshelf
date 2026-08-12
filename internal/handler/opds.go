@@ -31,9 +31,13 @@ func (h *Handler) OPDSRoot(c *gin.Context) {
 		return
 	}
 
-	base := opdsBase(c)
-	now := opds.NowAtom()
+	writeFeed(c, opdsNavFeed(opdsBase(c), libs, opds.NowAtom()), opds.MimeNavigation)
+}
 
+// opdsNavFeed assembles the navigation feed. Extracted from OPDSRoot as a
+// pure function so its wire output is pinnable without a live library
+// repo (#319).
+func opdsNavFeed(base string, libs []model.Library, now string) opds.Feed {
 	feed := opds.Feed{
 		Xmlns:   opds.NamespaceAtom,
 		ID:      opds.InstanceID + ":opds:root",
@@ -72,8 +76,7 @@ func (h *Handler) OPDSRoot(c *gin.Context) {
 			Links:   []opds.Link{{Rel: opds.RelSubsection, Href: base + "/opds/library/" + lib.Slug, Type: opds.MimeAcquisition}},
 		})
 	}
-
-	writeFeed(c, feed, opds.MimeNavigation)
+	return feed
 }
 
 // OPDSAll serves the complete catalog as a paged acquisition feed.
