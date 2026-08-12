@@ -8,9 +8,11 @@ package fileproc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 
+	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
 
@@ -56,68 +58,68 @@ type Processor interface {
 // ErrUnsupportedFormat is returned by Dispatch when the extension is unknown.
 var ErrUnsupportedFormat = errors.New("unsupported file format")
 
+// processors is the one fact model.FormatSpecs cannot hold without
+// inverting the import: which extension has an extractor. Everything
+// else — which extensions are admitted, what format they stamp, which
+// formats are audio — derives from the table (#308). Keyed by extension
+// rather than format because the alias and the canonical form need not
+// share an implementation: .cbr is stamped CBZ but is a RAR archive the
+// zip processor cannot open, so it has no entry until #310 wires one.
+var processors = map[string]func() Processor{
+	".epub": func() Processor { return &EPUBProcessor{} },
+	".pdf":  func() Processor { return &PDFProcessor{} },
+	".cbz":  func() Processor { return &CBZProcessor{} },
+	".mp3":  func() Processor { return &AudioProcessor{} },
+	".m4a":  func() Processor { return &AudioProcessor{} },
+	".m4b":  func() Processor { return &AudioProcessor{} },
+}
+
+// NoProcessorError is Dispatch's answer for an extension the table
+// admits but nothing extracts yet — a recognised format, refused with
+// its own name instead of the generic unsupported message that used to
+// make an admitted .cbr read like a typo'd extension. Reads as
+// ErrUnsupportedFormat so the ingest worker's terminal-failure branch
+// keeps firing: the same bytes refuse identically in thirty seconds.
+type NoProcessorError struct {
+	Format string
+	Ext    string
+}
+
+func (e *NoProcessorError) Error() string {
+	return fmt.Sprintf("no processor for %s (%s) yet — the format is recognised but cannot be ingested", e.Format, e.Ext)
+}
+
+func (e *NoProcessorError) Unwrap() error { return ErrUnsupportedFormat }
+
 // Dispatch picks the right processor based on the file's extension.
 func Dispatch(path string) (Processor, string, error) {
 	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".epub":
-		return &EPUBProcessor{}, "EPUB", nil
-	case ".pdf":
-		return &PDFProcessor{}, "PDF", nil
-	case ".cbz":
-		return &CBZProcessor{}, "CBZ", nil
-	case ".mp3":
-		return &AudioProcessor{}, "MP3", nil
-	case ".m4a", ".m4b":
-		return &AudioProcessor{}, "M4B", nil
-	// TODO: cbr, azw3, mobi, fb2
-	default:
+	format := model.IngestFormatForExt(ext)
+	if format == "" {
 		return nil, strings.ToUpper(strings.TrimPrefix(ext, ".")), ErrUnsupportedFormat
 	}
+	p, ok := processors[ext]
+	if !ok {
+		return nil, format, &NoProcessorError{Format: format, Ext: ext}
+	}
+	return p(), format, nil
 }
 
 // FormatForExt returns the canonical format tag for a given extension, or
-// an empty string for unknown/unsupported extensions.
+// an empty string for unknown/unsupported extensions. A derivation of
+// the model table — the folding (.cbr → CBZ, .m4a → M4B) lives on the
+// rows there.
 func FormatForExt(ext string) string {
-	ext = strings.ToLower(strings.TrimPrefix(ext, "."))
-	switch ext {
-	case "epub":
-		return "EPUB"
-	case "pdf":
-		return "PDF"
-	case "cbz", "cbr", "cb7":
-		return "CBZ"
-	case "mp3":
-		return "MP3"
-	case "m4a", "m4b":
-		return "M4B"
-	case "mobi":
-		return "MOBI"
-	case "azw3":
-		return "AZW3"
-	case "fb2":
-		return "FB2"
-	}
-	return ""
+	return model.IngestFormatForExt(ext)
 }
 
-// SupportedExts is the set of file extensions the watcher should consider.
-var SupportedExts = []string{
-	".epub", ".pdf",
-	".cbz", ".cbr", ".cb7",
-	".mp3", ".m4a", ".m4b",
-	".mobi", ".azw3", ".fb2",
-}
+// SupportedExts is the set of file extensions the watcher should
+// consider — the table's ingest axis, derived once at init.
+var SupportedExts = model.IngestExtensions()
 
 // IsSupported reports whether the file's extension is in SupportedExts.
 func IsSupported(path string) bool {
-	ext := strings.ToLower(filepath.Ext(path))
-	for _, e := range SupportedExts {
-		if e == ext {
-			return true
-		}
-	}
-	return false
+	return model.IngestFormatForExt(filepath.Ext(path)) != ""
 }
 
 // IsAudioFormat reports whether a books.format value denotes an
@@ -125,14 +127,10 @@ func IsSupported(path string) bool {
 // narrator come from tag metadata rather than a text extractor — so
 // several packages need to ask this question.
 //
-// It lives here because format dispatch is this package's job, and
-// because the answer was previously copied verbatim into three packages,
-// which meant adding a format was three edits that nothing forced to
-// agree.
+// A derivation of the table's Audio column, kept case-sensitive on
+// purpose: books.format stores the upper-case form, and a lower-case
+// value reaching this predicate is a bug to surface, not absorb.
 func IsAudioFormat(format string) bool {
-	switch format {
-	case "MP3", "M4B":
-		return true
-	}
-	return false
+	s, ok := model.LookupFormat(format)
+	return ok && s.Audio && format == s.Format
 }

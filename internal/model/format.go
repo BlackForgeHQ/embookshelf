@@ -68,6 +68,20 @@ type FormatSpec struct {
 	// extraction serves it with no sidecar (gap-filler routing, ADR-0033
 	// §2) — and MOBI/AZW3/FB2 are outside anydoc's set.
 	Convertible bool
+	// IngestExts are the file extensions intake admits and stamps with
+	// this Format — the ingest axis fileproc's dispatchers derive from
+	// (#308). Distinct from Ext (the one download extension): a format
+	// can be reached from several extensions (.m4a and .m4b are the same
+	// container; the comic aliases fold into CBZ), and a legacy tag (CBR,
+	// TXT) declares none because no ingest path produces it. An extension
+	// may appear on exactly one row.
+	IngestExts []string
+	// Audio is whether a file of this format is an audiobook at ingest:
+	// duration and narrator come from tag metadata rather than a text
+	// extractor. The ingest-side fact behind fileproc.IsAudioFormat —
+	// says nothing about origin (a generated narration's book stays
+	// EPUB, see CONTEXT.md, Audio format).
+	Audio bool
 }
 
 // FormatSpecs is every format the library can hold. The client keeps one
@@ -80,26 +94,68 @@ var FormatSpecs = []FormatSpec{
 	{
 		Format: "EPUB", Ext: ".epub", MIME: "application/epub+zip", Reader: ReaderText,
 		Narratable: true, KindleEligible: true,
+		IngestExts: []string{".epub"},
 	},
 	{
 		Format: "PDF", Ext: ".pdf", MIME: "application/pdf", Reader: ReaderText,
 		KindleEligible: true, Convertible: true,
+		IngestExts: []string{".pdf"},
 	},
-	{Format: "CBZ", Ext: ".cbz", MIME: "application/vnd.comicbook+zip", Reader: ReaderComic},
-	{Format: "MP3", Ext: ".mp3", MIME: "audio/mpeg", Reader: ReaderAudio},
+	// The comic aliases fold into CBZ at ingest, the folding FormatForExt
+	// always did; giving CBR its own ingest life is the RAR-processor
+	// issue's decision (#310), not this table's.
+	{
+		Format: "CBZ", Ext: ".cbz", MIME: "application/vnd.comicbook+zip", Reader: ReaderComic,
+		IngestExts: []string{".cbz", ".cbr", ".cb7"},
+	},
+	{
+		Format: "MP3", Ext: ".mp3", MIME: "audio/mpeg", Reader: ReaderAudio,
+		IngestExts: []string{".mp3"}, Audio: true,
+	},
 	// Apple uses audio/mp4; the m4b container is identical to m4a.
-	{Format: "M4B", Ext: ".m4b", MIME: "audio/mp4", Reader: ReaderAudio},
-	// Ingested and downloadable, but nothing reads them in-app: there is
-	// no extractor and no reader, so they carry an extension and no MIME.
-	{Format: "MOBI", Ext: ".mobi"},
-	{Format: "AZW3", Ext: ".azw3"},
-	{Format: "FB2", Ext: ".fb2"},
-	// Tags no ingest path produces any more — fileproc.FormatForExt folds
-	// .cbr into CBZ and never returns TXT — but which the download path
-	// met on rows written by older releases, and named correctly. Listed
-	// so it still does.
+	{
+		Format: "M4B", Ext: ".m4b", MIME: "audio/mp4", Reader: ReaderAudio,
+		IngestExts: []string{".m4b", ".m4a"}, Audio: true,
+	},
+	// Admitted and downloadable, but nothing reads them in-app: no
+	// reader, so an extension and no MIME. Their processors are #311 and
+	// #312; until then dispatch refuses them with the per-format
+	// no-processor answer.
+	{Format: "MOBI", Ext: ".mobi", IngestExts: []string{".mobi"}},
+	{Format: "AZW3", Ext: ".azw3", IngestExts: []string{".azw3"}},
+	{Format: "FB2", Ext: ".fb2", IngestExts: []string{".fb2"}},
+	// Legacy tags no ingest path produces — .cbr stamps CBZ above, and
+	// nothing stamps TXT — but which the download path met on rows
+	// written by older releases, and named correctly. No IngestExts:
+	// the extension belongs to the row that stamps it.
 	{Format: "CBR", Ext: ".cbr"},
 	{Format: "TXT", Ext: ".txt"},
+}
+
+// IngestFormatForExt folds a file extension onto the format intake
+// stamps it with, or "" for one no ingest path admits. Case and the
+// leading dot are normalised — the value arrives from filenames in the
+// wild.
+func IngestFormatForExt(ext string) string {
+	want := "." + strings.TrimPrefix(strings.ToLower(strings.TrimSpace(ext)), ".")
+	for _, s := range FormatSpecs {
+		for _, e := range s.IngestExts {
+			if e == want {
+				return s.Format
+			}
+		}
+	}
+	return ""
+}
+
+// IngestExtensions lists every admitted extension in table order — the
+// watcher's admit set, derived rather than hand-kept beside the table.
+func IngestExtensions() []string {
+	var out []string
+	for _, s := range FormatSpecs {
+		out = append(out, s.IngestExts...)
+	}
+	return out
 }
 
 // LookupFormat finds a format's spec. The lookup is case-insensitive and
