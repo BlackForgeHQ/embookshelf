@@ -25,10 +25,32 @@ func NewDeviceRepo(d *db.DB) *DeviceRepo {
 // a device with the same display name (case-insensitive).
 var ErrDeviceNameTaken = errors.New("a device with that name already exists")
 
-const deviceCols = `id, user_id, kind, name, secret, config, last_sent_at, last_error, created_at, updated_at`
+// deviceProjection is the user_devices row, declared once. kind, name
+// and secret are three adjacent TEXT columns — the Column-order coupling
+// hazard where a crossed pair sends a push to the wrong endpoint with
+// the wrong secret — so their positions and destinations are one
+// declaration. The config JSONB document lands through its adapter: a
+// NULL reads as an empty, non-nil map, so callers index it unguarded.
+var deviceProjection = projection[model.Device]{
+	{name: "id", dest: func(d *model.Device) any { return &d.ID }},
+	{name: "user_id", dest: func(d *model.Device) any { return &d.UserID }},
+	{name: "kind", dest: func(d *model.Device) any { return &d.Kind }},
+	{name: "name", dest: func(d *model.Device) any { return &d.Name }},
+	{name: "secret", dest: func(d *model.Device) any { return &d.Secret }},
+	{name: "config", dest: func(d *model.Device) any { return deviceConfigJSON{Dst: &d.Config} }},
+	{name: "last_sent_at", dest: func(d *model.Device) any { return &d.LastSentAt }},
+	{name: "last_error", dest: func(d *model.Device) any { return &d.LastError }},
+	{name: "created_at", dest: func(d *model.Device) any { return &d.CreatedAt }},
+	{name: "updated_at", dest: func(d *model.Device) any { return &d.UpdatedAt }},
+}
+
+var (
+	deviceCols      = deviceProjection.selectList("user_devices")
+	deviceReturning = deviceProjection.returningList("user_devices")
+)
 
 func (r *DeviceRepo) ListForUser(ctx context.Context, userID string) ([]model.Device, error) {
-	const q = `
+	q := `
 		SELECT ` + deviceCols + `
 		FROM user_devices
 		WHERE user_id = $1
@@ -42,7 +64,7 @@ func (r *DeviceRepo) ListForUser(ctx context.Context, userID string) ([]model.De
 }
 
 func (r *DeviceRepo) GetForUser(ctx context.Context, userID, id string) (model.Device, error) {
-	const q = `
+	q := `
 		SELECT ` + deviceCols + `
 		FROM user_devices WHERE user_id = $1 AND id = $2
 	`
@@ -56,10 +78,10 @@ func (r *DeviceRepo) Create(ctx context.Context, d model.Device) (model.Device, 
 		return model.Device{}, err
 	}
 	id := db.NewID()
-	const q = `
+	q := `
 		INSERT INTO user_devices (id, user_id, kind, name, secret, config)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING ` + deviceCols
+		RETURNING ` + deviceReturning
 	row := r.db.SQL.QueryRowContext(ctx, q,
 		id, d.UserID, string(d.Kind), strings.TrimSpace(d.Name), d.Secret, cfg)
 	created, err := r.scanDevice(row)
@@ -102,29 +124,12 @@ func (r *DeviceRepo) MarkSendResult(ctx context.Context, userID, id string, send
 }
 
 func (r *DeviceRepo) scanDevice(s scanner) (model.Device, error) {
-	var (
-		d      model.Device
-		kind   string
-		rawCfg []byte
-	)
-	err := s.Scan(
-		&d.ID, &d.UserID, &kind, &d.Name, &d.Secret, &rawCfg,
-		&d.LastSentAt, &d.LastError, &d.CreatedAt, &d.UpdatedAt,
-	)
-	if err != nil {
+	var d model.Device
+	if err := deviceProjection.scan(s, &d); err != nil {
 		if dberr.IsNotFound(err) {
 			return d, ErrNotFound
 		}
 		return d, err
-	}
-	d.Kind = model.DeviceKind(kind)
-	if len(rawCfg) > 0 {
-		if err := json.Unmarshal(rawCfg, &d.Config); err != nil {
-			return d, err
-		}
-	}
-	if d.Config == nil {
-		d.Config = map[string]any{}
 	}
 	return d, nil
 }

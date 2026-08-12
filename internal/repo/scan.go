@@ -80,6 +80,32 @@ func (r shelfRuleJSON) Scan(src any) error {
 	return nil
 }
 
+// deviceConfigJSON decodes the user_devices.config JSONB document. SQL
+// NULL and an empty payload read as an empty, non-nil map — callers
+// index the config unguarded — while malformed JSON is an error: unlike
+// chapters, a device's config drives sends, and silently dropping it
+// would push to a device with half its settings.
+type deviceConfigJSON struct{ Dst *map[string]any }
+
+func (c deviceConfigJSON) Scan(src any) error {
+	if c.Dst == nil {
+		return fmt.Errorf("scan config: nil dst")
+	}
+	raw, err := jsonBytes("config", src)
+	if err != nil {
+		return err
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, c.Dst); err != nil {
+			return fmt.Errorf("decode config: %w", err)
+		}
+	}
+	if *c.Dst == nil {
+		*c.Dst = map[string]any{}
+	}
+	return nil
+}
+
 // jsonBytes normalises a JSONB column value. The driver hands one over
 // as []byte, but a string is equally valid JSON.
 func jsonBytes(what string, src any) ([]byte, error) {
