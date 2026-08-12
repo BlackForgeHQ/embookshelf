@@ -397,6 +397,16 @@ type narrationFixture struct {
 // configured, exactly as app.go passes it through.
 func newNarrationFixture(t *testing.T, store storage.Storage, libRoot, presign string) narrationFixture {
 	t.Helper()
+	return newNarrationFixtureIn(t, store, libRoot, presign, serveReady)
+}
+
+// newNarrationFixtureIn is that fixture with the run left in a chosen
+// state, so the shared serve suite can drive the narration through the
+// same gates as the other two artifacts.
+func newNarrationFixtureIn(
+	t *testing.T, store storage.Storage, libRoot, presign string, state renditionServeState,
+) narrationFixture {
+	t.Helper()
 	ctx := context.Background()
 	d := repotest.New(t)
 	libRepo := repo.NewLibraryRepo(d)
@@ -431,17 +441,27 @@ func newNarrationFixture(t *testing.T, store storage.Storage, libRoot, presign s
 	if err != nil {
 		t.Fatalf("Insert file: %v", err)
 	}
-	if _, err := runs.Start(ctx, model.Audiobook{
-		BookID: book.ID, Engine: "kokoro", Voice: "af_heart", TotalChars: 10,
-	}, nil); err != nil {
-		t.Fatalf("Start run: %v", err)
+	if state != serveNoRow {
+		if _, err := runs.Start(ctx, model.Audiobook{
+			BookID: book.ID, Engine: "kokoro", Voice: "af_heart", TotalChars: 10,
+		}, nil); err != nil {
+			t.Fatalf("Start run: %v", err)
+		}
 	}
-	if _, err := runs.Transition(ctx, book.ID, model.Transition{
-		To:     model.AudiobookReady,
-		From:   []model.AudiobookState{model.AudiobookPending},
-		FileID: &audio.ID,
-	}); err != nil {
-		t.Fatalf("Transition to ready: %v", err)
+	if state == serveNoBytes || state == serveReady {
+		// serveNoBytes is the run finalize never finished writing: ready
+		// on the row, pointing at no file.
+		fileID := &audio.ID
+		if state == serveNoBytes {
+			fileID = nil
+		}
+		if _, err := runs.Transition(ctx, book.ID, model.Transition{
+			To:     model.AudiobookReady,
+			From:   []model.AudiobookState{model.AudiobookPending},
+			FileID: fileID,
+		}); err != nil {
+			t.Fatalf("Transition to ready: %v", err)
+		}
 	}
 
 	h := &Handler{

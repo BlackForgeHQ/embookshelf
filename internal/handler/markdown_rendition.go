@@ -5,15 +5,12 @@ package handler
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/blackforge/embookshelf/internal/layout"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -119,40 +116,48 @@ func newPrimaryHash(store service.LibraryStore) func(context.Context, model.Book
 // the rendition is ready, so a direct URL hit on a pending or failed
 // one answers not-found rather than a half-truth.
 func (h *Handler) BookMarkdownDownload(c *gin.Context, s bookScope) {
-	ctx := c.Request.Context()
-	if h.renditions == nil || h.libStore == nil {
-		writeError(c, http.StatusServiceUnavailable, "markdown renditions are unavailable")
-		return
-	}
-	rendition, err := h.renditions.GetByBookID(ctx, s.Book.ID)
-	if errors.Is(err, repo.ErrNotFound) ||
-		(err == nil && (rendition.State != model.RenditionReady || rendition.Location == "")) {
-		writeError(c, http.StatusNotFound, "this book has no markdown rendition")
-		return
-	}
-	if err != nil {
-		writeServerError(c, "read markdown rendition", err)
-		return
-	}
+	const markdownMIME = "text/markdown; charset=utf-8"
+	var rowLocation string
+	h.renditionServe(c, s.Book, renditionServeSpec{
+		available: h.renditions != nil && h.libStore != nil,
+		// 503 rather than the 404 the ?rendition= arms give: this route
+		// is the feature, so an install without it answers that the
+		// feature is missing, not that this book is.
+		unavailableStatus: http.StatusServiceUnavailable,
+		unavailableMsg:    "markdown renditions are unavailable",
+		noneMsg:           "this book has no markdown rendition",
+		readOp:            "read markdown rendition",
+		resolveOp:         "resolve library",
+		gate: func(ctx context.Context) error {
+			rendition, err := h.renditions.GetByBookID(ctx, s.Book.ID)
+			if errors.Is(err, repo.ErrNotFound) ||
+				(err == nil && (rendition.State != model.RenditionReady || rendition.Location == "")) {
+				return errRenditionNone
+			}
+			if err != nil {
+				return err
+			}
+			rowLocation = rendition.Location
+			return nil
+		},
+		// The row names the location itself — no files row to resolve,
+		// which is what the other two artifacts' locate step is for.
+		locate:       func(context.Context, *service.LibraryHandle) string { return rowLocation },
+		ext:          ".md",
+		attachAlways: true,
+		deliver: func(ctx context.Context, handle *service.LibraryHandle, location string, attach func()) {
+			src, err := handle.OpenMarkdown(ctx, location)
+			if err != nil {
+				writeServerError(c, "open markdown rendition", err)
+				return
+			}
+			defer func() { _ = src.Close() }()
 
-	handle, err := h.libStore.For(ctx, s.Book.LibraryID)
-	if err != nil {
-		writeServerError(c, "resolve library", err)
-		return
-	}
-	src, err := handle.OpenMarkdown(ctx, rendition.Location)
-	if err != nil {
-		writeServerError(c, "open markdown rendition", err)
-		return
-	}
-	defer func() { _ = src.Close() }()
-
-	filename := layout.SanitizeTitle(s.Book.Title) + ".md"
-	c.Header("Content-Disposition",
-		fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`,
-			asciiFallback(filename), url.PathEscape(filename)))
-	c.DataFromReader(http.StatusOK, src.Size(), "text/markdown; charset=utf-8",
-		io.NewSectionReader(src, 0, src.Size()), nil)
+			attach()
+			c.DataFromReader(http.StatusOK, src.Size(), markdownMIME,
+				io.NewSectionReader(src, 0, src.Size()), nil)
+		},
+	})
 }
 
 // BookMarkdownGenerate enqueues a conversion — the shared gate chain

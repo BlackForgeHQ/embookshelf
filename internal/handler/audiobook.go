@@ -5,13 +5,10 @@ package handler
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
-	"net/url"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/blackforge/embookshelf/internal/layout"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -87,7 +84,7 @@ func (h *Handler) BookAudiobookGet(c *gin.Context, s bookScope) {
 	rep, err := h.audiobooks.Report(c.Request.Context(), s.Book)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "this book has no generated narration")
+			writeError(c, http.StatusNotFound, noNarrationMsg)
 			return
 		}
 		writeServerError(c, "audiobook get", err)
@@ -169,7 +166,7 @@ func (h *Handler) BookAudiobookDelete(c *gin.Context, s bookScope) {
 	// is gone — belongs with the delete, the way DeleteBook has it (#191).
 	if err := h.audiobooks.DeleteNarration(c.Request.Context(), s.Book); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "this book has no generated narration")
+			writeError(c, http.StatusNotFound, noNarrationMsg)
 			return
 		}
 		writeServerError(c, "audiobook delete", err)
@@ -194,21 +191,6 @@ func audiobookDTOFrom(rep service.AudiobookReport) audiobookDTO {
 		DurationS:      float64(run.DurationMS) / 1000,
 		Stale:          rep.Stale,
 	}
-}
-
-// narrationLocation resolves the storage key of a run's generated audio.
-// Serving it needs the same lookup deleting it does; what differs is that
-// the delete has an ordering to respect, which is why that one lives with
-// the delete in AudiobookService rather than here (#191).
-func narrationLocation(ctx context.Context, handle *service.LibraryHandle, bookID string, run model.Audiobook) string {
-	if run.FileID == nil || handle == nil {
-		return ""
-	}
-	f, ok := handle.BookFile(ctx, bookID, *run.FileID)
-	if !ok {
-		return ""
-	}
-	return f.Location
 }
 
 // publishAudiobookUpdated tells open pages the narration changed.
@@ -259,7 +241,7 @@ func (h *Handler) writeAudiobookError(c *gin.Context, err error) {
 	case errors.Is(err, tts.ErrPermanent):
 		writeError(c, http.StatusBadGateway, err.Error())
 	case errors.Is(err, repo.ErrNotFound):
-		writeError(c, http.StatusNotFound, "this book has no generated narration")
+		writeError(c, http.StatusNotFound, noNarrationMsg)
 	default:
 		// Cancel-a-finished-run and retry-with-nothing-outstanding both
 		// land here: the caller asked for something the current state does
@@ -272,6 +254,11 @@ func (h *Handler) writeAudiobookError(c *gin.Context, err error) {
 // generated narration over its primary file.
 const renditionAudio = "audio"
 
+// noNarrationMsg is the narration's one not-found sentence — the answer
+// to a book that never had one, to a run that has not finished, and to
+// a ready run the player could not be pointed at.
+const noNarrationMsg = "this book has no generated narration"
+
 // serveNarrationRendition streams a book's generated audio.
 //
 // Exists because books.format names the *primary* format and the reader
@@ -279,6 +266,11 @@ const renditionAudio = "audio"
 // (ADR-0025 §3). Without an explicit selector the narration has no URL:
 // the ordinary file route resolves through primaryFile, which by
 // definition returns the EPUB.
+//
+// A narration being a rendition of the book is now what the handler tier
+// says too: this is the shared serve chain with the narration's
+// configuration, the same seam the generated EPUB and the markdown
+// rendition go through (#316).
 //
 // The run comes from the reconciling read rather than straight from the
 // repo. Serving is one more caller asking how a run is doing, and Status
@@ -289,48 +281,31 @@ const renditionAudio = "audio"
 // of the application had already moved on from — and it cost the handler
 // a second seam onto the same table, held beside the service that owns it.
 func (h *Handler) serveNarrationRendition(c *gin.Context, book model.Book) {
-	if h.libStore == nil {
-		writeError(c, http.StatusNotFound, "this book has no generated narration")
-		return
-	}
-	ctx := c.Request.Context()
-
-	rep, err := h.audiobooks.Report(ctx, book)
-	// Ready *and* pointing at a file: finalize sets the state only once it
-	// has written the row, so a run marked ready without one is a book the
-	// UI offers and the player cannot open.
-	if err != nil || rep.Run.State != model.AudiobookReady || rep.Run.FileID == nil {
-		writeError(c, http.StatusNotFound, "this book has no generated narration")
-		return
-	}
-	handle, err := h.libStore.For(ctx, book.LibraryID)
-	if err != nil {
-		writeServerError(c, "narration library handle", err)
-		return
-	}
-	location := narrationLocation(ctx, handle, book.ID, rep.Run)
-	if location == "" {
-		writeError(c, http.StatusNotFound, "this book has no generated narration")
-		return
-	}
-
-	if c.Query("download") != "" {
-		filename := layout.SanitizeTitle(book.Title) + ".mp3"
-		c.Header("Content-Disposition",
-			fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`,
-				asciiFallback(filename), url.PathEscape(filename)))
-	}
-
-	// The library's own delivery decision, not a second reading of where
-	// its bytes live. Whether these bytes are redirected to, streamed
-	// through the app or read off disk is one question per library, and
-	// serveBookFile already asks it for the primary file.
-	src, err := handle.FileSource(ctx, location)
-	if err != nil {
-		writeError(c, http.StatusNotFound, "this book has no generated narration")
-		return
-	}
-	if err := h.serveBookSource(c, src, "audio/mpeg"); err != nil {
-		writeError(c, http.StatusForbidden, err.Error())
-	}
+	var fileID string
+	h.renditionServe(c, book, renditionServeSpec{
+		// The audiobooks seam itself is never nil (see above); the library
+		// store is, and without it there is nothing to resolve the audio
+		// through.
+		available:         h.libStore != nil,
+		unavailableStatus: http.StatusNotFound,
+		unavailableMsg:    noNarrationMsg,
+		noneMsg:           noNarrationMsg,
+		resolveOp:         "narration library handle",
+		gate: func(ctx context.Context) error {
+			rep, err := h.audiobooks.Report(ctx, book)
+			// Ready *and* pointing at a file: finalize sets the state only
+			// once it has written the row, so a run marked ready without one
+			// is a book the UI offers and the player cannot open.
+			if err != nil || rep.Run.State != model.AudiobookReady || rep.Run.FileID == nil {
+				return errRenditionNone
+			}
+			fileID = *rep.Run.FileID
+			return nil
+		},
+		locate: func(ctx context.Context, handle *service.LibraryHandle) string {
+			return renditionFileLocation(ctx, handle, book.ID, fileID)
+		},
+		ext:  ".mp3",
+		mime: "audio/mpeg",
+	})
 }
