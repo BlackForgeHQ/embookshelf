@@ -36,7 +36,7 @@ const emptyForm: AudiobookSettings = {
 // (caps, whether it needs a model); this is the editorial half.
 const ENGINE_NOTES: Record<string, string> = {
   openai:
-    "Point this at OpenAI, or at a local Kokoro or openedai-speech — same API either way. Local means free and nothing leaves this machine.",
+    "Point this at OpenAI, or at a local Kokoro or openedai-speech. Same API either way. Local means free and nothing leaves this machine.",
   elevenlabs:
     "The best narration money buys, and roughly twelve times the price of the others. Voices come from your account.",
   azure:
@@ -67,7 +67,7 @@ export function AudiobooksPanel() {
     test: testAudiobook,
     read: (res) => ({
       ok: res.ok,
-      message: `${res.engine} returned ${res.bytes.toLocaleString()} bytes of audio — the engine works.`,
+      message: `${res.engine} returned ${res.bytes.toLocaleString()} bytes of audio. The engine works.`,
     }),
   })
 
@@ -99,7 +99,7 @@ export function AudiobooksPanel() {
           Reads {narratableFormatList()} books aloud with a text-to-speech
           engine and saves the result beside the book as an MP3 with chapter
           marks. Generation is admin-only
-          and always per book — there is no bulk run, because narrating a
+          and always per book. There is no bulk run, because narrating a
           thousand-book library would cost thousands of dollars.
         </p>
 
@@ -155,7 +155,7 @@ export function AudiobooksPanel() {
         {selected && !selected.enabled && (
           <p
             className="t-small mt-2"
-            style={{ color: "var(--color-warn, #92400e)" }}
+            style={{ color: "var(--color-warn-ink)" }}
           >
             {selected.label} is selected but switched off below.
           </p>
@@ -258,7 +258,7 @@ function EngineCard({
       </Field>
       <p className="t-small" style={{ marginTop: -4 }}>
         Drives the cost shown before each run. Prefilled from what the engine
-        charged when this version shipped — prices move, so it is yours to
+        charged when this version shipped. Prices move, so it is yours to
         correct. Zero is right for a local engine.
       </p>
     </Card>
@@ -284,7 +284,7 @@ function VoicePicker({ engineLabel }: { engineLabel: string }) {
       ) : voices.isLoading ? (
         <p className="t-small">Asking {engineLabel}…</p>
       ) : voices.error ? (
-        <p className="t-small" style={{ color: "var(--color-warn, #92400e)" }}>
+        <p className="t-small" style={{ color: "var(--color-warn-ink)" }}>
           Could not list voices:{" "}
           {(voices.error as { message?: string }).message}
         </p>

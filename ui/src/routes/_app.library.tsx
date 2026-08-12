@@ -11,6 +11,7 @@ import { NotebookEmpty } from "@/components/SettingsShared"
 import { ShelfIcon } from "@/components/ShelfIcon"
 import { TopBar } from "@/components/TopBar"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Select,
   SelectContent,
@@ -245,7 +246,9 @@ function LibraryView() {
       <div className="flex-1 p-4 pb-20 md:p-8">
         {books.isError ? (
           <ErrorPanel message="Failed to load books." />
-        ) : rows.length === 0 && !books.isLoading ? (
+        ) : books.isLoading ? (
+          <LoadingGrid />
+        ) : rows.length === 0 ? (
           <EmptyPanel unshelved={isUnshelved} />
         ) : layout === "shelf" ? (
           <ShelfLayout books={rows} onOpen={openBook} />
@@ -417,12 +420,33 @@ function BookCard({
   )
 }
 
+// Cover-shaped placeholders in the same grid as GridLayout, so the page
+// doesn't render a blank content area while the query is in flight and
+// doesn't jump when covers arrive.
+function LoadingGrid() {
+  return (
+    <div
+      aria-hidden
+      className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-x-6 gap-y-8"
+    >
+      {Array.from({ length: 12 }, (_, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: identical static placeholders; position is the identity
+        <div key={i} className="flex flex-col gap-2">
+          <Skeleton className="aspect-2/3 w-full rounded-[2px]" />
+          <Skeleton className="h-3 w-4/5 rounded-[2px]" />
+          <Skeleton className="h-3 w-3/5 rounded-[2px]" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function EmptyPanel({ unshelved = false }: { unshelved?: boolean }) {
   if (unshelved) {
     return (
       <NotebookEmpty
         title="Every book has a home."
-        body="Nothing to surface here — every book in your library is already shelved."
+        body="Nothing to surface here. Every book in your library is already shelved."
       />
     )
   }

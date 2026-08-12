@@ -5,6 +5,7 @@ import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
 import { appConfigQuery } from "@/api/settings"
 import { affordanceFor } from "@/lib/affordance"
+import { formatDate } from "@/lib/format"
 import { Icon } from "@/components/Icon"
 import { Card, Field, Select } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
@@ -173,11 +174,7 @@ export function InvitesPanel() {
                 {row.role === "admin" ? "Admin" : "User"}
                 {row.invitedByName && ` · invited by ${row.invitedByName}`}
                 {" · expires "}
-                {new Date(row.expiresAt).toLocaleDateString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                  year: "numeric",
-                })}
+                {formatDate(row.expiresAt)}
               </div>
             </div>
             <Button

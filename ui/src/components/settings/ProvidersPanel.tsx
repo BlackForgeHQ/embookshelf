@@ -83,7 +83,7 @@ export function ProvidersPanel() {
           <div className="min-w-0">
             <h2 className="t-h2">Metadata providers</h2>
             <p className="t-small mt-2 max-w-[58ch] italic">
-              Enrichment queries fan out across enabled providers — toggle any
+              Enrichment queries fan out across enabled providers. Toggle any
               row to include or skip it. Priority drives ISBN-lookup chain
               order; the parallel fan-out on the book editor still sorts by
               match confidence.
@@ -110,7 +110,7 @@ export function ProvidersPanel() {
             <div className="t-item-title">Auto-enrich on bookdrop approve</div>
             <div className="t-small mt-1 max-w-[58ch]">
               When enabled, approving a bookdrop item triggers a provider
-              fan-out and writes the top match — empty fields only, respecting
+              fan-out and writes the top match, empty fields only, respecting
               locks.
             </div>
           </div>
@@ -553,7 +553,7 @@ function ProviderHealth({
       title={errorWins ? lastError : "Last successful fetch"}
     >
       {errorWins
-        ? `failed ${rel}${lastError ? ` — ${truncate(lastError, 80)}` : ""}`
+        ? `failed ${rel}${lastError ? `: ${truncate(lastError, 80)}` : ""}`
         : `ok · ${rel}`}
     </div>
   )

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import { createFileRoute, Link, redirect } from "@tanstack/react-router"
 import type { FormEvent } from "react"
 
+import { AuthShell } from "@/components/AuthShell"
 import type { ApiError } from "@/api/client"
 import { meQuery, oidcConfigQuery, signupStatusQuery } from "@/api/auth"
 import { apiQueryOptions, useApiQuery } from "@/api/query"
@@ -22,13 +23,13 @@ type LoginSearch = {
 // place so new failure paths pick up a friendly message automatically.
 const OIDC_ERROR_MESSAGES: Record<string, string> = {
   stateMismatch:
-    "The SSO login timed out or was tampered with — please try again.",
+    "The SSO login timed out or was tampered with. Please try again.",
   userNotProvisioned:
     "Your SSO account is not authorised for this instance. Contact an administrator.",
   disabled: "SSO is not currently enabled on this instance.",
   notConfigured: "SSO is not configured on this instance.",
   invalidRequest:
-    "The provider returned an incomplete response — please try again.",
+    "The provider returned an incomplete response. Please try again.",
   // Names the claim, because this one is an admin's misconfiguration
   // rather than anything the person signing in can retry their way out
   // of: the provider answered, it just did not send an email.
@@ -142,58 +143,28 @@ function LoginPage() {
   const showSignupToggle = signupOpen.data?.enabled
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        background: "var(--color-paper-1)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 32,
-      }}
-    >
-      <div style={{ width: "100%", maxWidth: 420 }}>
-        <div
-          style={{
-            textAlign: "center",
-            marginBottom: 24,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: 10,
-          }}
-        >
-          <img
-            src="/logo.png"
-            alt="embookshelf"
-            style={{
-              width: 40,
-              height: 40,
-              objectFit: "contain",
-              borderRadius: 2,
-            }}
-          />
-          <div
-            style={{
-              fontFamily: "var(--font-serif)",
-              fontSize: 22,
-              fontWeight: 500,
-              letterSpacing: "-0.01em",
-            }}
-          >
-            embookshelf
+    <AuthShell
+      footer={
+        showSignupToggle ? (
+          <div style={{ textAlign: "center", marginTop: 16 }}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setMode((m) => (m === "signup" ? "login" : "signup"))
+                loginMut.reset()
+                signupMut.reset()
+              }}
+            >
+              {mode === "signup"
+                ? "I already have an account"
+                : "First-run? Create the admin account"}
+            </Button>
           </div>
-        </div>
-
-        <div
-          style={{
-            background: "var(--color-paper-0)",
-            border: "1px solid var(--color-rule-soft)",
-            padding: 32,
-            borderRadius: 3,
-            boxShadow: "0 12px 32px -8px oklch(0.2 0.02 60 / 0.14)",
-          }}
-        >
+        ) : null
+      }
+    >
           <h1 className="t-h2" style={{ marginBottom: 4 }}>
             {mode === "signup" ? "Create the first account" : "Sign in"}
           </h1>
@@ -202,7 +173,7 @@ function LoginPage() {
             style={{ marginBottom: 24, fontStyle: "italic" }}
           >
             {mode === "signup"
-              ? "You are the first user — this account will be the admin."
+              ? "You are the first user. This account will be the admin."
               : "Enter your credentials to continue."}
           </p>
 
@@ -227,7 +198,7 @@ function LoginPage() {
               role="status"
             >
               This deployment uses upstream SSO via your reverse proxy. Sign in
-              through your provider — embookshelf trusts the session it
+              through your provider. embookshelf trusts the session it
               forwards.
             </div>
           )}
@@ -352,28 +323,7 @@ function LoginPage() {
               </>
             )}
           </form>
-        </div>
-
-        {showSignupToggle && (
-          <div style={{ textAlign: "center", marginTop: 16 }}>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setMode((m) => (m === "signup" ? "login" : "signup"))
-                loginMut.reset()
-                signupMut.reset()
-              }}
-            >
-              {mode === "signup"
-                ? "I already have an account"
-                : "First-run? Create the admin account"}
-            </Button>
-          </div>
-        )}
-      </div>
-    </main>
+    </AuthShell>
   )
 }
 

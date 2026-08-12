@@ -188,7 +188,7 @@ function FindMetadata() {
             Find metadata online
           </h1>
           <p className="t-small italic">
-            for <em>{b.title}</em> — by {b.author}
+            for <em>{b.title}</em>, by {b.author}
           </p>
         </div>
         <div className="grow" />

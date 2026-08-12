@@ -2,6 +2,7 @@ import { useState } from "react"
 import { Link, createFileRoute } from "@tanstack/react-router"
 import type { FormEvent } from "react"
 
+import { AuthShell } from "@/components/AuthShell"
 import { requestPasswordReset } from "@/api/auth"
 import { useApiMutation } from "@/api/mutation"
 import { Button } from "@/components/ui/button"
@@ -29,26 +30,7 @@ function ForgotPasswordPage() {
   }
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        background: "var(--color-paper-1)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 32,
-      }}
-    >
-      <div style={{ width: "100%", maxWidth: 420 }}>
-        <div
-          style={{
-            background: "var(--color-paper-0)",
-            border: "1px solid var(--color-rule-soft)",
-            padding: 32,
-            borderRadius: 3,
-            boxShadow: "0 12px 32px -8px oklch(0.2 0.02 60 / 0.14)",
-          }}
-        >
+    <AuthShell>
           <h1 className="t-h2" style={{ marginBottom: 4 }}>
             Reset your password
           </h1>
@@ -113,8 +95,6 @@ function ForgotPasswordPage() {
               Back to sign in
             </Link>
           </div>
-        </div>
-      </div>
-    </main>
+    </AuthShell>
   )
 }

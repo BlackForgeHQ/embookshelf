@@ -63,7 +63,7 @@ export function ReadingGuidePanel({
   const generateMut = useApiMutation(generateBookGuide, {
     // 202: the work is queued. The guide.updated SSE event busts the
     // cache when it lands, so there is nothing to refetch here.
-    successToast: "Generating — this can take a minute.",
+    successToast: "Generating. This can take a minute.",
     // One sentence per code, from lib/affordance.ts, rather than a
     // ternary that only this panel knows about (#171).
     errorToast: (err: ApiError) =>
@@ -89,7 +89,7 @@ export function ReadingGuidePanel({
     // thing the admin has to act on.
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 640 }}>
-        <p className="t-small" style={{ color: "var(--color-destructive, #b91c1c)" }}>
+        <p className="t-small" style={{ color: "var(--color-accent-ink)" }}>
           Book text conversion failed: {markdown.data.error ?? "no further detail"}
         </p>
         {viewer.isAdmin && (
@@ -111,7 +111,7 @@ export function ReadingGuidePanel({
   if (!g && convertible && (markdown.data?.state === "pending" || markdown.data?.state === "running")) {
     return (
       <p className="t-small">
-        Converting the book's text for guide generation — this can take a
+        Converting the book's text for guide generation. This can take a
         moment.
       </p>
     )
@@ -121,7 +121,7 @@ export function ReadingGuidePanel({
     if (!viewer.isAdmin) {
       return (
         <p className="t-small">
-          No reading guide yet. An administrator can generate one — it asks a
+          No reading guide yet. An administrator can generate one; it asks a
           language model and spends the instance's key, so it is theirs to
           start.
         </p>
@@ -251,14 +251,14 @@ function GuideProvenance({ guide }: { guide: ReadingGuide }) {
         margin: 0,
         paddingTop: 10,
         borderTop: "1px dashed var(--color-rule-soft)",
-        color: metadataOnly ? "var(--color-warn, #92400e)" : undefined,
+        color: metadataOnly ? "var(--color-warn-ink)" : undefined,
       }}
     >
       {guide.editedByUser ? (
         <>Edited by hand.</>
       ) : metadataOnly ? (
         <>
-          Written from catalog metadata only — the model did not read this book,
+          Written from catalog metadata only: the model did not read this book,
           so treat specifics with care.
         </>
       ) : (

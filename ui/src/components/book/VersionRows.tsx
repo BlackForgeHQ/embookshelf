@@ -43,7 +43,7 @@ export function VersionRows({
   })
 
   const generateMut = useApiMutation(generateBookEpub, {
-    successToast: "Generating EPUB — conversion runs first if needed.",
+    successToast: "Generating EPUB. Conversion runs first if needed.",
     errorToast: (err: ApiError) => err.message,
   })
 
@@ -72,7 +72,7 @@ export function VersionRows({
           // the audiobook rule (ADR-0025 §2) applied to the rendition.
           note={
             md.stale
-              ? "Stale — converted from an older copy of this book."
+              ? "Stale: converted from an older copy of this book."
               : undefined
           }
         />
@@ -92,18 +92,18 @@ export function VersionRows({
           href={`/api/v1/books/${bookId}/file?rendition=epub&download=1`}
           note={
             epub.data?.stale
-              ? "Stale — generated from an older copy of this book."
+              ? "Stale: generated from an older copy of this book."
               : undefined
           }
         />
       )}
       {convertible && (epubState === "pending" || epubState === "running") && (
-        <p className="t-small">Generating EPUB — this can take a moment…</p>
+        <p className="t-small">Generating EPUB. This can take a moment…</p>
       )}
       {convertible && epubState === "failed" && (
         <p
           className="t-small"
-          style={{ color: "var(--color-destructive, #b91c1c)" }}
+          style={{ color: "var(--color-accent-ink)" }}
         >
           EPUB generation failed: {epub.data?.error ?? "no further detail"}
         </p>

@@ -9,6 +9,7 @@ import {
 } from "@/api/devices"
 import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
+import { formatDateTime } from "@/lib/format"
 import { Icon } from "@/components/Icon"
 import { Card, Field } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
@@ -151,7 +152,7 @@ function DeviceRow({
   busy: boolean
 }) {
   const lastSent = device.lastSentAt
-    ? new Date(device.lastSentAt).toLocaleString()
+    ? formatDateTime(device.lastSentAt)
     : null
   return (
     <div
@@ -169,9 +170,11 @@ function DeviceRow({
           width: 8,
           height: 8,
           borderRadius: "50%",
+          // editorial-accent, not the shadcn --color-accent (which is a
+          // paper tint and rendered the error dot invisible)
           background: device.lastError
-            ? "var(--color-accent)"
-            : "oklch(0.58 0.12 140)",
+            ? "var(--color-editorial-accent)"
+            : "var(--color-ok)",
         }}
       />
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -242,7 +245,7 @@ function AddDeviceForm({
           my.remarkable.com/device/desktop/connect
         </a>{" "}
         and sign in. Copy the 8-character one-time code and paste it below. The
-        code is consumed once — re-pairing later requires a fresh code.
+        code is consumed once; re-pairing later requires a fresh code.
       </div>
 
       <form

@@ -80,7 +80,10 @@ export function Icon({ name, size = 16, className, style, title }: Props) {
     style,
   }
   return (
-    <svg {...svgProps}>
+    // Untitled icons are decoration next to a text label; without
+    // aria-hidden every one of them lands in the accessibility tree as
+    // an unnamed image.
+    <svg {...svgProps} aria-hidden={title ? undefined : true} role={title ? "img" : undefined}>
       {title && <title>{title}</title>}
       {renderPath(name)}
     </svg>

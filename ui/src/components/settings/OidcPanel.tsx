@@ -56,7 +56,7 @@ const emptyForm: OidcAdminSettings = {
   redirectUri: "",
 }
 
-const INTRO = `Enable Google, GitHub, and a custom OpenID Connect provider independently — the login page shows a button for each one you turn on. Changes take effect on the next login, no restart required.`
+const INTRO = `Enable Google, GitHub, and a custom OpenID Connect provider independently. The login page shows a button for each one you turn on. Changes take effect on the next login, no restart required.`
 
 export function OidcPanel() {
   // Three write-only secrets, one per slug. The panel used to carry a
@@ -596,10 +596,10 @@ function TestChecks({ result }: { result: OidcTestResult }) {
               style={{
                 color:
                   c.status === "PASS"
-                    ? "oklch(0.58 0.12 140)"
+                    ? "var(--color-ok)"
                     : c.status === "WARN"
-                      ? "oklch(0.72 0.14 70)"
-                      : "oklch(0.62 0.22 25)",
+                      ? "var(--color-warn)"
+                      : "var(--color-accent-ink)",
                 fontWeight: 600,
               }}
             >

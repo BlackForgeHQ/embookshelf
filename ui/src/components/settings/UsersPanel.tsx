@@ -12,6 +12,7 @@ import {
 } from "@/api/settings"
 import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
+import { formatDate } from "@/lib/format"
 import { Icon } from "@/components/Icon"
 import { Avatar, Card, Field, Select } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
@@ -180,7 +181,7 @@ export function UsersPanel() {
               {u.status !== "active" && (
                 <span
                   data-row-status={u.status}
-                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${u.status === "pending" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" : "bg-muted text-muted-foreground"}`}
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${u.status === "pending" ? "bg-(--color-warn-soft) text-(--color-warn-ink)" : "bg-muted text-muted-foreground"}`}
                 >
                   {u.status === "pending" ? "Pending" : "Denied"}
                 </span>
@@ -195,13 +196,8 @@ export function UsersPanel() {
                   )}
                 </div>
                 <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                  {u.email} · joined{" "}
-                  {new Date(u.createdAt).toLocaleDateString(undefined, {
-                    month: "short",
-                    year: "numeric",
-                  })}
-                  {u.lastSeenAt &&
-                    ` · last seen ${new Date(u.lastSeenAt).toLocaleDateString()}`}
+                  {u.email} · joined {formatDate(u.createdAt)}
+                  {u.lastSeenAt && ` · last seen ${formatDate(u.lastSeenAt)}`}
                 </div>
               </div>
               {u.status === "active" && (
@@ -222,6 +218,7 @@ export function UsersPanel() {
                     type="button"
                     variant="ghost"
                     size="icon-sm"
+                    aria-label={`Delete ${u.display}`}
                     disabled={isMe || deleteMut.isPending}
                     onClick={() => {
                       if (
@@ -233,7 +230,6 @@ export function UsersPanel() {
                       }
                     }}
                     className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    aria-label="Delete user"
                     title={isMe ? "You can't delete yourself" : "Delete user"}
                   >
                     <Icon name="close" size={12} />

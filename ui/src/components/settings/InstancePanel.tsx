@@ -112,7 +112,7 @@ export function InstancePanel() {
       </div>
 
       <p className="t-small mt-6 italic">
-        embookshelf — self-hosted ebook library. AGPL-3.0.
+        embookshelf, a self-hosted ebook library. AGPL-3.0.
       </p>
     </>
   )

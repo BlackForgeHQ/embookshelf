@@ -105,8 +105,6 @@ function StatusBar() {
           <span>{catalog}</span>
         </>
       )}
-      <span>·</span>
-      <span>PostgreSQL · connected</span>
       <div className="grow" />
     </div>
   )
