@@ -577,9 +577,10 @@ func buildHTTP(w wiring, r repos, s services, q queue.Client, version, commit st
 			s.stats, s.readingStats, s.annotation,
 			r.guide, s.guideRunner,
 			handler.RenditionDeps{
-				Markdown: r.rendition,
-				Epub:     r.epubRendition,
-				Runner:   service.NewConversionRunner(r.rendition, w.enq),
+				Markdown:         r.rendition,
+				Epub:             r.epubRendition,
+				MarkdownRequests: service.NewMarkdownRequests(r.rendition, w.enq),
+				EpubRequests:     service.NewEpubRequests(r.epubRendition, w.enq),
 			},
 			s.audiobook,
 		),

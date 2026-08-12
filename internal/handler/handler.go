@@ -22,24 +22,28 @@ import (
 // Ensure *service.OIDCService satisfies the nil-safe pattern used in the handler.
 
 type Handler struct {
-	cfg              config.Config
-	static           embed.FS
-	version          string
-	commit           string
-	lib              *service.LibraryService
-	shelf            *service.ShelfService
-	auth             *service.AuthService
-	bookdrop         *service.BookDropService
-	progress         *service.ProgressService
-	enrich           *service.EnrichmentService
-	providerCfg      *service.ProviderSettingsService
-	annotations      *service.AnnotationService
-	guides           *repo.BookReadingGuideRepo
-	guideRunner      *service.GuideRunner
-	renditions       markdownRenditionStore
-	epubRenditions   epubRenditionStore
-	conversionRunner *service.ConversionRunner
-	audiobooks       *service.AudiobookService
+	cfg            config.Config
+	static         embed.FS
+	version        string
+	commit         string
+	lib            *service.LibraryService
+	shelf          *service.ShelfService
+	auth           *service.AuthService
+	bookdrop       *service.BookDropService
+	progress       *service.ProgressService
+	enrich         *service.EnrichmentService
+	providerCfg    *service.ProviderSettingsService
+	annotations    *service.AnnotationService
+	guides         *repo.BookReadingGuideRepo
+	guideRunner    *service.GuideRunner
+	renditions     markdownRenditionStore
+	epubRenditions epubRenditionStore
+	// mdRequests / epubRequests own "ask for a rendition" — the
+	// Start-before-Enqueue ordering and its compensation (#317). The
+	// generate chain and the bulk settings run both go through them.
+	mdRequests   *service.RenditionRequests
+	epubRequests *service.RenditionRequests
+	audiobooks   *service.AudiobookService
 	// oidcSettings applies a settings submission as one decision (#195).
 	oidcSettings *service.OIDCSettingsService
 	stats        *service.StatsService
@@ -179,13 +183,17 @@ type DiscoveryDeps struct {
 }
 
 // RenditionDeps groups the converter subsystem's handler seams — the
-// two tracking repos and the bulk runner travel together, so they are
+// two tracking repos and their request modules travel together, so they are
 // one argument to NewDiscoveryDeps rather than three positional slots
 // free to be shuffled (#303).
 type RenditionDeps struct {
 	Markdown *repo.BookMarkdownRenditionRepo
 	Epub     *repo.BookEpubRenditionRepo
-	Runner   *service.ConversionRunner
+	// MarkdownRequests / EpubRequests are the request modules bound to
+	// the two repos above at the composition root, so the rows and the
+	// job args cannot be paired wrong here.
+	MarkdownRequests *service.RenditionRequests
+	EpubRequests     *service.RenditionRequests
 }
 
 // NewDiscovery builds the discovery group.
@@ -288,10 +296,11 @@ func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailD
 		enrich: d.enrich, providerCfg: d.providerCfg, search: d.search,
 		stats: d.stats, readingStats: d.readingStats, annotations: d.annotations,
 		guides: d.guides, guideRunner: d.guideRunner,
-		renditions:       newMarkdownRenditionStore(d.renditions.Markdown),
-		epubRenditions:   newEpubRenditionStore(d.renditions.Epub),
-		conversionRunner: d.renditions.Runner,
-		audiobooks:       d.audiobooks,
+		renditions:     newMarkdownRenditionStore(d.renditions.Markdown),
+		epubRenditions: newEpubRenditionStore(d.renditions.Epub),
+		mdRequests:     d.renditions.MarkdownRequests,
+		epubRequests:   d.renditions.EpubRequests,
+		audiobooks:     d.audiobooks,
 
 		auth: a.auth, users: a.users, devices: a.devices,
 		appSettings: newAppSettingsStore(a.appSettings),

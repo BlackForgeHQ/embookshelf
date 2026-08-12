@@ -23,6 +23,8 @@ func (f *fakeEpubRenditions) Start(context.Context, string) error {
 	return nil
 }
 
+func (f *fakeEpubRenditions) MarkFailed(context.Context, string, string) error { return nil }
+
 func (f *fakeEpubRenditions) GetByBookID(context.Context, string) (model.EpubRendition, error) {
 	if f.missing {
 		return model.EpubRendition{}, repo.ErrNotFound

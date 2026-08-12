@@ -13,7 +13,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/layout"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -151,13 +150,11 @@ func (h *Handler) BookMarkdownDownload(c *gin.Context, s bookScope) {
 // spends CPU somebody pays for.
 func (h *Handler) BookMarkdownGenerate(c *gin.Context, s bookScope) {
 	h.renditionGenerate(c, s, renditionRouteSpec{
-		available:      h.renditions != nil,
+		available:      h.renditions != nil && h.mdRequests != nil,
 		unavailableMsg: "markdown renditions are unavailable",
 		notConvertibleMsg: "only " + model.ConvertibleFormatList() + " books can be converted — " +
 			s.Book.Format + " is served natively or not supported",
-		startOp: "start markdown rendition",
-		queueOp: "queue markdown conversion",
-		start:   func(ctx context.Context, bookID string) error { return h.renditions.Start(ctx, bookID) },
-		args:    jobs.MarkdownRenditionArgs{BookID: s.Book.ID},
+		requestOp: "request markdown conversion",
+		request:   h.mdRequests.One,
 	})
 }

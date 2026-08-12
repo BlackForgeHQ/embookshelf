@@ -141,12 +141,10 @@ func registry(deps Deps) []registration {
 			IsMissing:   func(err error) bool { return errors.Is(err, repo.ErrNotFound) },
 			Open:        bookOps.OpenMarkdown,
 			CurrentHash: bookOps.PrimaryHash,
-			Request: func(ctx context.Context, bookID string) error {
-				if err := deps.Renditions.Start(ctx, bookID); err != nil {
-					return err
-				}
-				return deps.Enqueuer.Enqueue(ctx, jobs.MarkdownRenditionArgs{BookID: bookID})
-			},
+			// The request module owns Start-before-Enqueue and records a
+			// refused enqueue on the row (#317) — this closure used to
+			// restate the ordering and skip the compensation.
+			Request: service.NewMarkdownRequests(deps.Renditions, deps.Enqueuer).One,
 		}
 	}
 	readingGuide.Markdown = markdownFeed

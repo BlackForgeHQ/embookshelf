@@ -9,7 +9,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 )
@@ -29,22 +28,20 @@ type renditionRouteSpec struct {
 	// notConvertibleMsg is the 415 refusal for a book outside the
 	// Convertible set.
 	notConvertibleMsg string
-	// startOp / queueOp label the server-error log lines.
-	startOp string
-	queueOp string
-	// start upserts the tracking row to pending.
-	start func(ctx context.Context, bookID string) error
-	// args is the job the queue works.
-	args jobs.Args
+	// requestOp labels the server-error log line.
+	requestOp string
+	// request asks for the rendition — service.RenditionRequests.One,
+	// which owns the Start-before-Enqueue ordering and records a refused
+	// enqueue on the row (#317).
+	request func(ctx context.Context, bookID string) error
 }
 
 // renditionGenerate is the shared gate chain behind every generate
 // button: nil-store → Convertible → requireConverter → requireQueue →
-// Start+Enqueue+202. The order is load-bearing — the instant refusals
-// answer the click now rather than a job failing in thirty seconds, and
-// the row goes pending before the enqueue so the status endpoint has an
-// answer the moment the button is pressed; a failed enqueue is recorded
-// on it rather than leaving a phantom pending. Held by
+// request+202. The order is load-bearing — the instant refusals answer
+// the click now rather than a job failing in thirty seconds. The
+// Start-before-Enqueue ordering and the phantom-pending compensation
+// live in the request module, not here (#317). Held by
 // TestRenditionGenerateGateChain over both artifacts.
 func (h *Handler) renditionGenerate(c *gin.Context, s bookScope, spec renditionRouteSpec) {
 	ctx := c.Request.Context()
@@ -59,16 +56,11 @@ func (h *Handler) renditionGenerate(c *gin.Context, s bookScope, spec renditionR
 	if _, ok := h.requireConverter(c); !ok {
 		return
 	}
-	q, ok := h.requireQueue(c)
-	if !ok {
+	if _, ok := h.requireQueue(c); !ok {
 		return
 	}
-	if err := spec.start(ctx, s.Book.ID); err != nil {
-		writeServerError(c, spec.startOp, err)
-		return
-	}
-	if err := q.Enqueue(ctx, spec.args); err != nil {
-		writeServerError(c, spec.queueOp, err)
+	if err := spec.request(ctx, s.Book.ID); err != nil {
+		writeServerError(c, spec.requestOp, err)
 		return
 	}
 	c.Status(http.StatusAccepted)
