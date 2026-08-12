@@ -42,8 +42,11 @@ type MarkdownRenditionDeps struct {
 	// Convert speaks the sidecar's wire contract and stages the answer
 	// in a temp file.
 	Convert func(ctx context.Context, baseURL string, body io.Reader) (service.ConvertResult, error)
-	// Place moves the staged markdown into the book's folder.
-	Place func(context.Context, model.Book, string) (service.PlaceResult, error)
+	// Record is the shared finalize tail (#307): places the staged
+	// markdown into the book's folder. Markdown records no files row —
+	// that exception is RecordDerived's to own (ADR-0033 §4), not this
+	// worker's to restate.
+	Record func(context.Context, model.Book, string) (service.DerivedRecord, error)
 }
 
 // ErrConverterNotConfigured is the loud "extension not configured"
@@ -120,15 +123,15 @@ func MarkdownRendition(ctx context.Context, a jobs.MarkdownRenditionArgs, deps M
 			return "", false, nil
 		},
 		func(ctx context.Context) (string, bool, error) {
-			// Hash before placing: placement consumes the staged file, and
-			// the hash is what answers "is this rendition still current".
+			// The source hash is read before Record consumes the staged
+			// file — it is what answers "is this rendition still current".
 			sourceHash := deps.SourceHash(ctx, book)
 
-			placed, err := deps.Place(ctx, book, result.Path)
+			rec, err := deps.Record(ctx, book, result.Path)
 			if err != nil {
 				return "place markdown: " + err.Error(), false, fmt.Errorf("place markdown for %s: %w", a.BookID, err)
 			}
-			if err := deps.Renditions.MarkReady(ctx, a.BookID, placed.Location, placed.Size, sourceHash, result.Version); err != nil {
+			if err := deps.Renditions.MarkReady(ctx, a.BookID, rec.Location, rec.Size, sourceHash, result.Version); err != nil {
 				return "", false, fmt.Errorf("mark ready: %w", err)
 			}
 			return "", false, nil

@@ -18,7 +18,6 @@ import (
 	"github.com/blackforge/embookshelf/internal/audio/audiotest"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 	"github.com/blackforge/embookshelf/internal/task"
 )
@@ -73,37 +72,6 @@ func (f *fakeFinalizeRuns) NarrationAssembled(_ context.Context, _, fileID strin
 	return nil
 }
 
-type fakeFiles struct {
-	existing  *model.File
-	inserted  []model.File
-	hashSets  int
-	nextID    string
-	lookupErr error
-}
-
-func (f *fakeFiles) GetByLocation(context.Context, string, string) (model.File, error) {
-	if f.existing != nil {
-		return *f.existing, nil
-	}
-	if f.lookupErr != nil {
-		return model.File{}, f.lookupErr
-	}
-	return model.File{}, repo.ErrNotFound
-}
-
-func (f *fakeFiles) SetContentHash(context.Context, string, []byte, int64, time.Time) error {
-	f.hashSets++
-	return nil
-}
-
-func (f *fakeFiles) Insert(_ context.Context, file model.File) (model.File, error) {
-	if f.nextID != "" {
-		file.ID = f.nextID
-	}
-	f.inserted = append(f.inserted, file)
-	return file, nil
-}
-
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
@@ -112,11 +80,10 @@ type finalizeHarness struct {
 	deps      task.FinalizeDeps
 	runs      *fakeFinalizeRuns
 	books     *fakeBooks
-	files     *fakeFiles
 	staging   task.Staging
 	published int
-	placed    int
-	placeErr  error
+	recorded  int
+	recordErr error
 }
 
 // newFinalizeHarness stages two done segments on disk, which is the
@@ -131,7 +98,6 @@ func newFinalizeHarness(t *testing.T) *finalizeHarness {
 			ID: "b1", LibraryID: "lib1", Title: "Dune", Author: "Frank Herbert", Format: "EPUB",
 			Narrator: "Ada Lovelace",
 		}},
-		files:   &fakeFiles{nextID: "file-1"},
 		staging: tempStaging(t),
 	}
 
@@ -153,18 +119,16 @@ func newFinalizeHarness(t *testing.T) *finalizeHarness {
 	h.deps = task.FinalizeDeps{
 		Runs:  h.runs,
 		Books: h.books,
-		Files: h.files,
-		Place: func(_ context.Context, _ model.Book, srcPath string) (service.PlaceResult, error) {
-			h.placed++
-			if h.placeErr != nil {
-				return service.PlaceResult{}, h.placeErr
+		Record: func(_ context.Context, _ model.Book, srcPath string) (service.DerivedRecord, error) {
+			h.recorded++
+			if h.recordErr != nil {
+				return service.DerivedRecord{}, h.recordErr
 			}
-			// Placement consumes the source file in production; the fake
-			// mirrors that so a regression that hashes after placement
-			// fails here instead of passing by accident.
+			// Recording consumes the source file in production (placement
+			// is inside it); the fake mirrors that.
 			_ = os.Remove(srcPath)
-			return service.PlaceResult{
-				Location: "Dune/Dune.mp3", Size: 1234, Mtime: time.Unix(0, 0).UTC(),
+			return service.DerivedRecord{
+				FileID: "file-1", Location: "Dune/Dune.mp3", Size: 1234, Mtime: time.Unix(0, 0).UTC(),
 			}, nil
 		},
 		// The one module that marks a run failed also publishes, so the
@@ -213,8 +177,8 @@ func TestFinalizeSweepsACanceledRunWithoutPublishing(t *testing.T) {
 	if h.published != 0 {
 		t.Errorf("published %d times for a canceled run", h.published)
 	}
-	if len(h.files.inserted) != 0 {
-		t.Errorf("inserted %d files rows for a canceled run", len(h.files.inserted))
+	if h.recorded != 0 {
+		t.Errorf("recorded %d files for a canceled run", h.recorded)
 	}
 }
 
@@ -225,8 +189,8 @@ func TestFinalizeIsANoOpForAReadyRun(t *testing.T) {
 	if err := h.run(); err != nil {
 		t.Fatalf("AudiobookFinalize: %v", err)
 	}
-	if h.placed != 0 || h.published != 0 {
-		t.Errorf("placed=%d published=%d, want neither on a finished run", h.placed, h.published)
+	if h.recorded != 0 || h.published != 0 {
+		t.Errorf("recorded=%d published=%d, want neither on a finished run", h.recorded, h.published)
 	}
 }
 
@@ -239,8 +203,8 @@ func TestFinalizeDefersWhileASegmentIsOutstanding(t *testing.T) {
 	if err := h.run(); err != nil {
 		t.Fatalf("AudiobookFinalize: %v", err)
 	}
-	if h.placed != 0 {
-		t.Errorf("placed %d times with a segment still outstanding", h.placed)
+	if h.recorded != 0 {
+		t.Errorf("recorded %d times with a segment still outstanding", h.recorded)
 	}
 	if h.published != 0 {
 		t.Errorf("published %d times before the run finished", h.published)
@@ -267,10 +231,12 @@ func TestFinalizeFailsARunWithNoSegments(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // Retry re-enqueues only the segments that never finished, so every
-// paid-for segment has to survive a failed finalize.
-func TestFinalizeRetainsStagingWhenPlacementFails(t *testing.T) {
+// paid-for segment has to survive a failed finalize. The refusal can be
+// the placement or the files row — both are inside Record now, and both
+// fail the run the same way, naming the step.
+func TestFinalizeRetainsStagingWhenRecordingFails(t *testing.T) {
 	h := newFinalizeHarness(t)
-	h.placeErr = errors.New("backend refused the upload")
+	h.recordErr = errors.New("backend refused the upload")
 
 	if err := h.run(); err != nil {
 		t.Fatalf("AudiobookFinalize returned %v, want nil so River stops", err)
@@ -278,11 +244,14 @@ func TestFinalizeRetainsStagingWhenPlacementFails(t *testing.T) {
 	if len(h.runs.states) != 1 || h.runs.states[0].State != model.AudiobookFailed {
 		t.Fatalf("states = %+v, want one failed write", h.runs.states)
 	}
+	if !strings.Contains(h.runs.states[0].Msg, "record narration") {
+		t.Errorf("failure message = %q, want it to name the failing step", h.runs.states[0].Msg)
+	}
 	if !h.stagingExists() {
 		t.Error("a failed finalize reclaimed the staging — Retry would have to buy it again")
 	}
-	if h.placed != 1 {
-		t.Errorf("placed %d times, want exactly one placement attempt before the failure", h.placed)
+	if h.recorded != 1 {
+		t.Errorf("recorded %d times, want exactly one attempt before the failure", h.recorded)
 	}
 	if h.published != 1 {
 		t.Errorf("published %d times, want exactly one terminal event", h.published)
@@ -303,21 +272,18 @@ func TestFinalizeReportsTheNarrationAndSweeps(t *testing.T) {
 	if err := h.run(); err != nil {
 		t.Fatalf("AudiobookFinalize: %v", err)
 	}
-	if len(h.files.inserted) != 1 {
-		t.Fatalf("inserted %d files rows, want 1", len(h.files.inserted))
-	}
-	got := h.files.inserted[0]
-	if got.Format != "MP3" {
-		t.Errorf("format = %q, want MP3", got.Format)
-	}
-	if len(got.ContentHash) == 0 {
-		t.Error("content_hash is empty — the rename safety net a library scan runs is blind to it")
+	// The files row's shape — format, content hash, update-don't-duplicate
+	// — is RecordDerived's, pinned by the service tests (#307). What is
+	// this worker's: one record of the assembled file, and the run marked
+	// ready with the id it answered.
+	if h.recorded != 1 {
+		t.Fatalf("recorded %d times, want 1", h.recorded)
 	}
 	if h.runs.ready == nil {
 		t.Fatal("the run was never marked ready")
 	}
 	if h.runs.ready.FileID != "file-1" {
-		t.Errorf("file id = %q, want the inserted row's", h.runs.ready.FileID)
+		t.Errorf("file id = %q, want the recorded row's", h.runs.ready.FileID)
 	}
 	_, perSegMS, err := audio.Payload(audiotest.Frames(4))
 	if err != nil {
@@ -353,27 +319,6 @@ func TestFinalizeReportsTheNarrationAndSweeps(t *testing.T) {
 	}
 }
 
-// Regeneration lands on the same key. Inserting unconditionally would
-// violate files' UNIQUE(library_id, location), and on a backend it would
-// leave the old row pointing at bytes the new upload overwrote.
-func TestFinalizeUpdatesTheRowAPreviousRenditionLeft(t *testing.T) {
-	h := newFinalizeHarness(t)
-	h.files.existing = &model.File{ID: "old-file", LibraryID: "lib1", BookID: "b1", Location: "Dune/Dune.mp3"}
-
-	if err := h.run(); err != nil {
-		t.Fatalf("AudiobookFinalize: %v", err)
-	}
-	if len(h.files.inserted) != 0 {
-		t.Errorf("inserted %d rows, want the existing one reused", len(h.files.inserted))
-	}
-	if h.files.hashSets != 1 {
-		t.Errorf("set the hash %d times, want 1", h.files.hashSets)
-	}
-	if h.runs.ready == nil || h.runs.ready.FileID != "old-file" {
-		t.Errorf("ready points at %+v, want the reused row", h.runs.ready)
-	}
-}
-
 // A narration without embedded art is still a good narration.
 func TestFinalizeSucceedsWithNoCoverSource(t *testing.T) {
 	h := newFinalizeHarness(t)
@@ -401,16 +346,16 @@ func TestFinalizeEmbedsTheSuppliedCover(t *testing.T) {
 	}
 
 	var tag []byte
-	h.deps.Place = func(_ context.Context, _ model.Book, srcPath string) (service.PlaceResult, error) {
-		h.placed++
+	h.deps.Record = func(_ context.Context, _ model.Book, srcPath string) (service.DerivedRecord, error) {
+		h.recorded++
 		b, err := os.ReadFile(srcPath)
 		if err != nil {
 			t.Fatalf("read assembled file: %v", err)
 		}
 		tag = b
 		_ = os.Remove(srcPath)
-		return service.PlaceResult{
-			Location: "Dune/Dune.mp3", Size: 1234, Mtime: time.Unix(0, 0).UTC(),
+		return service.DerivedRecord{
+			FileID: "file-1", Location: "Dune/Dune.mp3", Size: 1234, Mtime: time.Unix(0, 0).UTC(),
 		}, nil
 	}
 
@@ -419,24 +364,5 @@ func TestFinalizeEmbedsTheSuppliedCover(t *testing.T) {
 	}
 	if !bytes.Contains(tag, []byte("APIC")) || !bytes.Contains(tag, []byte(coverBytes)) {
 		t.Error("the cover never reached the finished file's ID3 tag")
-	}
-}
-
-// A files lookup failure that is not "row doesn't exist" has to fail the
-// run rather than fall through to Insert, which would collide with
-// files' UNIQUE(library_id, location) once the row it should have found
-// turns out to exist after all.
-func TestFinalizeFailsWhenTheFilesLookupErrors(t *testing.T) {
-	h := newFinalizeHarness(t)
-	h.files.lookupErr = errors.New("db unavailable")
-
-	if err := h.run(); err != nil {
-		t.Fatalf("AudiobookFinalize returned %v, want nil so River stops", err)
-	}
-	if len(h.runs.states) != 1 || h.runs.states[0].State != model.AudiobookFailed {
-		t.Fatalf("states = %+v, want one failed write", h.runs.states)
-	}
-	if !strings.Contains(h.runs.states[0].Msg, "record narration file") {
-		t.Errorf("failure message = %q, want it to name the failing step", h.runs.states[0].Msg)
 	}
 }

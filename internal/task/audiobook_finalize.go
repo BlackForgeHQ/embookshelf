@@ -10,12 +10,10 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/blackforge/embookshelf/internal/audio"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
 )
 
@@ -46,27 +44,20 @@ type bookAudioWriter interface {
 	UpdateAudio(ctx context.Context, id string, durationSeconds *int, narrator string, chapters []model.Chapter) error
 }
 
-// narrationFiles is the files-table slice finalize needs to record the
-// placed audio, reusing the row a previous rendition left behind.
-type narrationFiles interface {
-	GetByLocation(ctx context.Context, libraryID, location string) (model.File, error)
-	SetContentHash(ctx context.Context, fileID string, hash []byte, size int64, mtime time.Time) error
-	Insert(ctx context.Context, f model.File) (model.File, error)
-}
-
 // FinalizeDeps groups the seams the finalize worker needs.
 type FinalizeDeps struct {
 	Runs   finalizeStore
 	Report narrationReporter
 	Books  bookAudioWriter
-	Files  narrationFiles
-	// Place moves the assembled file into the book's own folder.
+	// Record is the shared finalize tail (#307): hash the assembled
+	// file, place it into the book's own folder, and land the files row
+	// — reusing the row a previous rendition left at the same location.
 	// Narrower than a LibraryStore on purpose: handing over the whole
-	// store would let a later edit reach more than placing one file
+	// store would let a later edit reach more than recording one file
 	// needs. Why the wiring behind this field must use the derived
 	// placement rather than the generic Placer is that wiring's
 	// decision to explain, not this worker's — see the registry.
-	Place func(ctx context.Context, book model.Book, srcPath string) (service.PlaceResult, error)
+	Record func(ctx context.Context, book model.Book, srcPath string) (service.DerivedRecord, error)
 	// Cover supplies the art embedded in the finished file. Nil-able and
 	// best effort: a narration without embedded art is still a good
 	// narration.
@@ -137,28 +128,13 @@ func AudiobookFinalize(ctx context.Context, a jobs.AudiobookFinalizeArgs, deps F
 	}
 	defer func() { _ = os.Remove(assembled) }()
 
-	// Hashed before placement, because placement consumes the file:
-	// content_hash is the authoritative identity of every other files row
-	// (CONTEXT, Content hash) and a narration with a NULL one is invisible
-	// to the rename safety net a library scan runs on.
-	hash, err := hashFile(ctx, assembled)
+	// Hash, placement and the files row are one call: the tail is shared
+	// with every other derived artifact (#307), and its ordering — hash
+	// before placement consumes the file, update-don't-duplicate on
+	// regeneration — lives there, not here.
+	rec, err := deps.Record(ctx, book, assembled)
 	if err != nil {
-		return fail(ctx, deps, a.BookID, fmt.Errorf("hash narration: %w", err))
-	}
-
-	placed, err := deps.Place(ctx, book, assembled)
-	if err != nil {
-		return fail(ctx, deps, a.BookID, fmt.Errorf("place narration: %w", err))
-	}
-
-	// Regeneration lands on the same key, so the previous rendition's row
-	// is updated rather than duplicated. Inserting unconditionally would
-	// violate files' UNIQUE(library_id, location) on the second run, and
-	// on a backend it would leave the old row pointing at bytes the new
-	// upload has already overwritten.
-	fileRow, err := upsertNarrationFile(ctx, deps, book, placed, hash)
-	if err != nil {
-		return fail(ctx, deps, a.BookID, fmt.Errorf("record narration file: %w", err))
+		return fail(ctx, deps, a.BookID, fmt.Errorf("record narration: %w", err))
 	}
 
 	// books.chapters and duration_seconds are what the existing audio
@@ -174,42 +150,11 @@ func AudiobookFinalize(ctx context.Context, a jobs.AudiobookFinalizeArgs, deps F
 	// publish here: a run the user cancelled while this was assembling
 	// does not move, and telling open pages otherwise would contradict
 	// the cancel they just watched land.
-	if err := deps.Report.NarrationAssembled(ctx, a.BookID, fileRow.ID, totalMS); err != nil {
+	if err := deps.Report.NarrationAssembled(ctx, a.BookID, rec.FileID, totalMS); err != nil {
 		return fmt.Errorf("mark ready: %w", err)
 	}
 	deps.Staging.Clean(a.BookID)
 	return nil
-}
-
-// upsertNarrationFile records the placed audio, reusing the row a
-// previous rendition left at the same location.
-func upsertNarrationFile(
-	ctx context.Context,
-	deps FinalizeDeps,
-	book model.Book,
-	placed service.PlaceResult,
-	hash []byte,
-) (model.File, error) {
-	existing, err := deps.Files.GetByLocation(ctx, book.LibraryID, placed.Location)
-	if err == nil {
-		if serr := deps.Files.SetContentHash(ctx, existing.ID, hash, placed.Size, placed.Mtime); serr != nil {
-			return model.File{}, serr
-		}
-		existing.ContentHash, existing.Size, existing.Mtime = hash, placed.Size, placed.Mtime
-		return existing, nil
-	}
-	if !errors.Is(err, repo.ErrNotFound) {
-		return model.File{}, err
-	}
-	return deps.Files.Insert(ctx, model.File{
-		LibraryID:   book.LibraryID,
-		BookID:      book.ID,
-		Location:    placed.Location,
-		Size:        placed.Size,
-		Mtime:       placed.Mtime,
-		ContentHash: hash,
-		Format:      "MP3",
-	})
 }
 
 // assemble concatenates the staged segments, writes the ID3 tag, and

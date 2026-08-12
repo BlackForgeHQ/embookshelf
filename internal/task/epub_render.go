@@ -22,12 +22,6 @@ type epubRenditionStore interface {
 	MarkFailed(ctx context.Context, bookID, msg string) error
 }
 
-// epubFiles is the narrow files-repo slice the finalize step needs —
-// the narrationFiles trio, for the same regeneration reason: the
-// location is stable, so a second render must update the row that
-// exists rather than violate UNIQUE(library_id, location).
-type epubFiles = narrationFiles
-
 // epubTextCap bounds how much markdown feeds the render. Deliberately
 // enormous — the EPUB wants the whole book, unlike the guide's cost
 // dial — while still refusing a pathological rendition.
@@ -45,8 +39,11 @@ type EpubRenderDeps struct {
 	// is answered against, not the markdown.
 	SourceHash func(context.Context, model.Book) []byte
 	Render     func(ctx context.Context, baseURL string, req service.EpubRenderRequest) (service.ConvertResult, error)
-	Place      func(context.Context, model.Book, string) (service.PlaceResult, error)
-	Files      epubFiles
+	// Record is the shared finalize tail (#307): hash the staged EPUB,
+	// place it in the book's folder, and land the files row — updating
+	// the row a previous render left rather than violating
+	// UNIQUE(library_id, location) on regeneration.
+	Record func(context.Context, model.Book, string) (service.DerivedRecord, error)
 }
 
 // EpubRender renders one book's generated EPUB and records the outcome
@@ -141,54 +138,19 @@ func EpubRender(ctx context.Context, a jobs.EpubRenderArgs, deps EpubRenderDeps)
 			return "", false, nil
 		},
 		func(ctx context.Context) (string, bool, error) {
-			// Hash before placing — placement consumes the staged file, and
-			// the files row's content_hash is the identity scan's rename
-			// safety net keys on (same order as audiobook finalize).
-			epubHash, err := hashFile(ctx, result.Path)
-			if err != nil {
-				return "hash epub: " + err.Error(), false, fmt.Errorf("hash epub for %s: %w", a.BookID, err)
-			}
+			// The source hash (the PDF's) is read before Record consumes
+			// the staged file; the artifact's own hash is Record's job.
 			sourceHash := deps.SourceHash(ctx, book)
 
-			placed, err := deps.Place(ctx, book, result.Path)
+			rec, err := deps.Record(ctx, book, result.Path)
 			if err != nil {
-				return "place epub: " + err.Error(), false, fmt.Errorf("place epub for %s: %w", a.BookID, err)
+				return "record epub: " + err.Error(), false, fmt.Errorf("record epub for %s: %w", a.BookID, err)
 			}
 
-			fileID, err := upsertEpubFile(ctx, deps.Files, book, placed, epubHash)
-			if err != nil {
-				return "record files row: " + err.Error(), false, fmt.Errorf("record files row for %s: %w", a.BookID, err)
-			}
-
-			if err := deps.Renditions.MarkReady(ctx, a.BookID, fileID, sourceHash, result.Version); err != nil {
+			if err := deps.Renditions.MarkReady(ctx, a.BookID, rec.FileID, sourceHash, result.Version); err != nil {
 				return "", false, fmt.Errorf("mark ready: %w", err)
 			}
 			return "", false, nil
 		},
 	)
-}
-
-// upsertEpubFile lands the generated EPUB in files without violating
-// UNIQUE(library_id, location) on regeneration — update the existing
-// row's hash if the location is already recorded, insert otherwise.
-func upsertEpubFile(ctx context.Context, files epubFiles, book model.Book, placed service.PlaceResult, hash []byte) (string, error) {
-	if existing, err := files.GetByLocation(ctx, book.LibraryID, placed.Location); err == nil {
-		if err := files.SetContentHash(ctx, existing.ID, hash, placed.Size, placed.Mtime); err != nil {
-			return "", err
-		}
-		return existing.ID, nil
-	}
-	inserted, err := files.Insert(ctx, model.File{
-		LibraryID:   book.LibraryID,
-		BookID:      book.ID,
-		Location:    placed.Location,
-		Size:        placed.Size,
-		Mtime:       placed.Mtime,
-		ContentHash: hash,
-		Format:      "EPUB",
-	})
-	if err != nil {
-		return "", err
-	}
-	return inserted.ID, nil
 }

@@ -70,12 +70,12 @@ func renditionDeps(store *fakeRenditionStore, cfg repo.ConverterConfig) Markdown
 			_ = f.Close()
 			return service.ConvertResult{Path: f.Name(), Version: "0.1.0"}, nil
 		},
-		Place: func(_ context.Context, _ model.Book, src string) (service.PlaceResult, error) {
+		Record: func(_ context.Context, _ model.Book, src string) (service.DerivedRecord, error) {
 			info, err := os.Stat(src)
 			if err != nil {
-				return service.PlaceResult{}, err
+				return service.DerivedRecord{}, err
 			}
-			return service.PlaceResult{Location: "A/Sample/Sample.md", Size: info.Size()}, nil
+			return service.DerivedRecord{Location: "A/Sample/Sample.md", Size: info.Size()}, nil
 		},
 	}
 }

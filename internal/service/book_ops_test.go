@@ -48,7 +48,7 @@ func TestDerivedKeyTable(t *testing.T) {
 // untestable there (#299): every operation surfaces the failure through
 // the module's own interface instead of a nil dereference downstream.
 func TestBookOpsResolveLibraryFailure(t *testing.T) {
-	ops := service.NewBookOps(unresolvableStore{err: errors.New("backend down")})
+	ops := service.NewBookOps(unresolvableStore{err: errors.New("backend down")}, nil)
 	ctx := context.Background()
 	book := model.Book{ID: "b1", LibraryID: "l1", Title: "T", Author: "A"}
 
@@ -57,9 +57,6 @@ func TestBookOpsResolveLibraryFailure(t *testing.T) {
 	}
 	if _, err := ops.OpenMarkdown(ctx, book, "A/T/T.md"); err == nil || !strings.Contains(err.Error(), "resolve library") {
 		t.Errorf("OpenMarkdown: err = %v, want a resolve-library failure", err)
-	}
-	if _, err := ops.PlaceDerived(ctx, book, "/tmp/x", service.DerivedMarkdown); err == nil || !strings.Contains(err.Error(), "resolve library") {
-		t.Errorf("PlaceDerived: err = %v, want a resolve-library failure", err)
 	}
 	// PrimaryHash is the warn-and-degrade seam (#297): no hash, no error.
 	if got := ops.PrimaryHash(ctx, book); got != nil {

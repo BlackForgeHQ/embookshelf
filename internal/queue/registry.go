@@ -104,7 +104,7 @@ func registry(deps Deps) []registration {
 	// shares (#299): open the book, read its provenance hash, open its
 	// markdown, place a derived file. The registry declares which job
 	// gets which operation; the library plumbing lives in the module.
-	bookOps := service.NewBookOps(deps.LibStore)
+	bookOps := service.NewBookOps(deps.LibStore, deps.FileRepo)
 
 	// Settings is read per job so an admin can change model, language or
 	// cap without a restart. Registered unconditionally, like the email
@@ -161,7 +161,7 @@ func registry(deps Deps) []registration {
 		Open:       bookOps.Open,
 		SourceHash: bookOps.PrimaryHash,
 		Convert:    (&service.ConverterClient{}).Convert,
-		Place:      bookOps.Placer(service.DerivedMarkdown),
+		Record:     bookOps.Recorder(service.DerivedMarkdown),
 	}
 
 	// Generated EPUBs (ADR-0034): the second converter stage, chained
@@ -173,8 +173,7 @@ func registry(deps Deps) []registration {
 		Markdown:   markdownFeed,
 		SourceHash: bookOps.PrimaryHash,
 		Render:     (&service.ConverterClient{}).RenderEPUB,
-		Place:      bookOps.Placer(service.DerivedEPUB),
-		Files:      deps.FileRepo,
+		Record:     bookOps.Recorder(service.DerivedEPUB),
 	}
 
 	// publishAudiobook is the SSE side of every audiobook state change —
@@ -203,13 +202,12 @@ func registry(deps Deps) []registration {
 		Report:  deps.AudiobookSvc,
 		Fail:    deps.AudiobookSvc.FailRun,
 		Books:   deps.Books,
-		Files:   deps.FileRepo,
 		Staging: deps.Staging,
-		// Deliberately the derived placement rather than the generic
+		// Deliberately the derived recording rather than the generic
 		// Placer: the book's folder already exists, and Placer would
 		// answer that with a "Title (2)" sibling — a second leaf that
 		// scan reads as a second book.
-		Place: bookOps.Placer(service.DerivedNarration),
+		Record: bookOps.Recorder(service.DerivedNarration),
 	}
 	if deps.Covers != nil {
 		finalize.Cover = deps.Covers.Open

@@ -837,7 +837,11 @@ The markdown produced from a book's file by the [[Converter extension]] — a de
 
 ### Book operations
 
-`service.BookOps`; the deep module over [[LibraryStore]] holding the library-touching steps every derived-artifact job shares — `Open` (the book's bytes), `PrimaryHash` (provenance, via [[Primary hash]]), `OpenMarkdown`, `PlaceDerived`. The job registry consumes it and declares job wiring instead of restating library plumbing per job; the resolve-library-fails arm is testable through its interface instead of being buried in inline closures.
+`service.BookOps`; the deep module over [[LibraryStore]] holding the library-touching steps every derived-artifact job shares — `Open` (the book's bytes), `PrimaryHash` (provenance, via [[Primary hash]]), `OpenMarkdown`, and `RecordDerived` (the finalize tail, below). The job registry consumes it and declares job wiring instead of restating library plumbing per job; the resolve-library-fails arm is testable through its interface instead of being buried in inline closures.
+
+### Derived record
+
+`BookOps.RecordDerived(book, srcPath, kind)` → `DerivedRecord{FileID, Hash, Location, Size, Mtime}`; the one finalize tail every derived-artifact job ends with (#307): hash the staged bytes, place them via [[Derived artifact placement]], and land the `files` row — updating the row a previous generation left at the same location rather than violating `UNIQUE(library_id, location)` on regeneration. The ordering is the module's, not the callers': hash strictly before placement (placement consumes the staged file, and `content_hash` is what the [[Relocate by hash]] safety net keys on), and a files-row lookup failure that is not "no row" is an error — falling through to Insert is exactly the constraint violation the lookup exists to prevent, which is the drift the previous two hand-written copies (generated EPUB vs narration finalize) had already grown. Markdown is the one kind that records no `files` row (ADR-0033 §4 — machine feed, not a library artifact); that exception lives here, so `FileID` is empty for it and no worker restates the rule. Workers take it as a per-kind closure via `Recorder(kind)`, the record-side shape `FinalizeDeps`/`EpubRenderDeps`/`MarkdownRenditionDeps` share.
 
 ### Primary hash
 

@@ -9,7 +9,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
@@ -38,30 +37,6 @@ func (f *fakeEpubStore) MarkFailed(_ context.Context, _, msg string) error {
 	return nil
 }
 
-type fakeEpubFiles struct {
-	byLocation map[string]model.File
-	inserted   []model.File
-	rehashee   string
-}
-
-func (f *fakeEpubFiles) GetByLocation(_ context.Context, _, location string) (model.File, error) {
-	if row, ok := f.byLocation[location]; ok {
-		return row, nil
-	}
-	return model.File{}, repo.ErrNotFound
-}
-
-func (f *fakeEpubFiles) SetContentHash(_ context.Context, id string, _ []byte, _ int64, _ time.Time) error {
-	f.rehashee = id
-	return nil
-}
-
-func (f *fakeEpubFiles) Insert(_ context.Context, row model.File) (model.File, error) {
-	row.ID = "file-new"
-	f.inserted = append(f.inserted, row)
-	return row, nil
-}
-
 func readyFeed(text string) *service.MarkdownFeed {
 	return &service.MarkdownFeed{
 		Renditions: renditionRowFake{row: model.MarkdownRendition{
@@ -79,7 +54,30 @@ func (f renditionRowFake) GetByBookID(context.Context, string) (model.MarkdownRe
 	return f.row, nil
 }
 
-func epubDeps(store *fakeEpubStore, files *fakeEpubFiles) EpubRenderDeps {
+// epubRecorder counts Record calls and mirrors production's consuming of
+// the staged file; the files-row shape itself is RecordDerived's,
+// pinned by the service tests (#307).
+type epubRecorder struct {
+	calls int
+	err   error
+}
+
+func (r *epubRecorder) record(_ context.Context, _ model.Book, src string) (service.DerivedRecord, error) {
+	r.calls++
+	if r.err != nil {
+		return service.DerivedRecord{}, r.err
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return service.DerivedRecord{}, err
+	}
+	_ = os.Remove(src)
+	return service.DerivedRecord{
+		FileID: "file-new", Location: "A/Sample/Sample.epub", Size: info.Size(),
+	}, nil
+}
+
+func epubDeps(store *fakeEpubStore, rec *epubRecorder) EpubRenderDeps {
 	return EpubRenderDeps{
 		Config: func(context.Context) (repo.ConverterConfig, error) {
 			return repo.ConverterConfig{Enabled: true, BaseURL: "http://c"}, nil
@@ -97,21 +95,14 @@ func epubDeps(store *fakeEpubStore, files *fakeEpubFiles) EpubRenderDeps {
 			_ = f.Close()
 			return service.ConvertResult{Path: f.Name(), Version: "0.2.0"}, nil
 		},
-		Place: func(_ context.Context, _ model.Book, src string) (service.PlaceResult, error) {
-			info, err := os.Stat(src)
-			if err != nil {
-				return service.PlaceResult{}, err
-			}
-			return service.PlaceResult{Location: "A/Sample/Sample.epub", Size: info.Size()}, nil
-		},
-		Files: files,
+		Record: rec.record,
 	}
 }
 
-func TestEpubRenderHappyPathInsertsAFilesRow(t *testing.T) {
+func TestEpubRenderHappyPathRecordsTheArtifact(t *testing.T) {
 	store := &fakeEpubStore{}
-	files := &fakeEpubFiles{}
-	deps := epubDeps(store, files)
+	rec := &epubRecorder{}
+	deps := epubDeps(store, rec)
 
 	if err := EpubRender(context.Background(), jobs.EpubRenderArgs{BookID: "b1"}, deps); err != nil {
 		t.Fatalf("EpubRender: %v", err)
@@ -119,35 +110,29 @@ func TestEpubRenderHappyPathInsertsAFilesRow(t *testing.T) {
 	if !store.ready || store.fileID != "file-new" || store.version != "0.2.0" {
 		t.Fatalf("store = %+v", store)
 	}
-	if len(files.inserted) != 1 || files.inserted[0].Format != "EPUB" {
-		t.Fatalf("inserted = %+v", files.inserted)
-	}
-	if len(files.inserted[0].ContentHash) == 0 {
-		t.Fatal("files row has no content hash — scan's rename safety net keys on it")
+	if rec.calls != 1 {
+		t.Fatalf("recorded %d times, want 1", rec.calls)
 	}
 	if len(store.hash) == 0 || store.hash[0] != 0xcd {
 		t.Fatalf("source hash = %x, want the PDF's", store.hash)
 	}
 }
 
-// TestEpubRenderRegenerationReusesTheFilesRow — the location is stable,
-// so a second render updates the existing row instead of violating
-// UNIQUE(library_id, location).
-func TestEpubRenderRegenerationReusesTheFilesRow(t *testing.T) {
+// TestEpubRenderRecordFailureIsLoudAndRetryable — the recording arm
+// (hash, place, files row — all inside Record now) lands on the row and
+// stays retryable; the update-vs-insert split itself is RecordDerived's,
+// pinned by the service tests (#307).
+func TestEpubRenderRecordFailureIsLoudAndRetryable(t *testing.T) {
 	store := &fakeEpubStore{}
-	files := &fakeEpubFiles{byLocation: map[string]model.File{
-		"A/Sample/Sample.epub": {ID: "file-old"},
-	}}
-	deps := epubDeps(store, files)
+	rec := &epubRecorder{err: errors.New("backend refused the upload")}
+	deps := epubDeps(store, rec)
 
-	if err := EpubRender(context.Background(), jobs.EpubRenderArgs{BookID: "b1"}, deps); err != nil {
-		t.Fatalf("EpubRender: %v", err)
+	err := EpubRender(context.Background(), jobs.EpubRenderArgs{BookID: "b1"}, deps)
+	if err == nil || errors.Is(err, jobs.ErrDoNotRetry) {
+		t.Fatalf("err = %v, want a retryable failure", err)
 	}
-	if store.fileID != "file-old" || files.rehashee != "file-old" {
-		t.Fatalf("store.fileID = %q, rehashee = %q, want the existing row reused", store.fileID, files.rehashee)
-	}
-	if len(files.inserted) != 0 {
-		t.Fatalf("inserted a duplicate row: %+v", files.inserted)
+	if !strings.Contains(store.failed, "record epub") {
+		t.Fatalf("row error = %q, want it to name the failing step", store.failed)
 	}
 }
 
@@ -155,7 +140,7 @@ func TestEpubRenderRegenerationReusesTheFilesRow(t *testing.T) {
 // is loud on the row but transient for the queue.
 func TestEpubRenderWaitsForTheMarkdownRendition(t *testing.T) {
 	store := &fakeEpubStore{}
-	deps := epubDeps(store, &fakeEpubFiles{})
+	deps := epubDeps(store, &epubRecorder{})
 	requested := 0
 	deps.Markdown = &service.MarkdownFeed{
 		Renditions: renditionRowFake{row: model.MarkdownRendition{
@@ -180,7 +165,7 @@ func TestEpubRenderWaitsForTheMarkdownRendition(t *testing.T) {
 // message is the row's message (ADR-0034 §5).
 func TestEpubRenderPropagatesMarkdownFailureVerbatim(t *testing.T) {
 	store := &fakeEpubStore{}
-	deps := epubDeps(store, &fakeEpubFiles{})
+	deps := epubDeps(store, &epubRecorder{})
 	deps.Markdown = &service.MarkdownFeed{
 		Renditions: renditionRowFake{row: model.MarkdownRendition{
 			State: model.RenditionFailed,
@@ -201,4 +186,5 @@ func TestEpubRenderPropagatesMarkdownFailureVerbatim(t *testing.T) {
 // non-convertible) are TestMarkdownRenditionFailureArms' table plus the
 // renditionRun choreography test — what stays here is the EPUB
 // worker's own: the markdown chain (wait + verbatim propagation above)
-// and the files-row upsert.
+// and the record arm. The files-row shape lives with RecordDerived's
+// service tests (#307).

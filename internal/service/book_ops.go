@@ -4,13 +4,18 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/blackforge/embookshelf/internal/layout"
 	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/repo"
 )
 
 // DerivedKind names a derived artifact a book can grow: the machine or
@@ -91,11 +96,21 @@ func (h *LibraryHandle) PlaceDerived(
 // inline closures (#299).
 type BookOps struct {
 	store LibraryStore
+	files DerivedFiles
 	hash  func(context.Context, model.Book) []byte
 }
 
-func NewBookOps(store LibraryStore) *BookOps {
-	return &BookOps{store: store, hash: NewPrimaryHash(store)}
+// DerivedFiles is the files-table slice RecordDerived needs to land a
+// derived artifact's row, reusing the row a previous generation left at
+// the same location.
+type DerivedFiles interface {
+	GetByLocation(ctx context.Context, libraryID, location string) (model.File, error)
+	SetContentHash(ctx context.Context, fileID string, hash []byte, size int64, mtime time.Time) error
+	Insert(ctx context.Context, f model.File) (model.File, error)
+}
+
+func NewBookOps(store LibraryStore, files DerivedFiles) *BookOps {
+	return &BookOps{store: store, files: files, hash: NewPrimaryHash(store)}
 }
 
 // Open yields the book's bytes as a stream — the converter POST body's
@@ -134,20 +149,103 @@ func (o *BookOps) OpenMarkdown(ctx context.Context, book model.Book, location st
 	}{io.NewSectionReader(src, 0, src.Size()), src}, nil
 }
 
-// PlaceDerived places one derived artifact into the book's own folder.
-func (o *BookOps) PlaceDerived(
-	ctx context.Context, book model.Book, srcPath string, kind DerivedKind,
-) (PlaceResult, error) {
-	handle, err := o.store.For(ctx, book.LibraryID)
-	if err != nil {
-		return PlaceResult{}, fmt.Errorf("resolve library: %w", err)
-	}
-	return handle.PlaceDerived(ctx, book, srcPath, kind)
+// DerivedRecord is what recording a derived artifact established: where
+// the bytes landed and, for kinds the catalog tracks, the files row
+// holding them. FileID is empty for markdown — machine feed, no files
+// row (ADR-0033 §4).
+type DerivedRecord struct {
+	FileID   string
+	Hash     []byte
+	Location string
+	Size     int64
+	Mtime    time.Time
 }
 
-// Placer binds PlaceDerived to one kind, in the shape worker deps take.
-func (o *BookOps) Placer(kind DerivedKind) func(context.Context, model.Book, string) (PlaceResult, error) {
-	return func(ctx context.Context, book model.Book, srcPath string) (PlaceResult, error) {
-		return o.PlaceDerived(ctx, book, srcPath, kind)
+// RecordDerived is the finalize tail every derived-artifact job shares:
+// hash the staged bytes, place them in the book's own folder, and land
+// the files row — updating the row a previous generation left at the
+// same location rather than violating UNIQUE(library_id, location) on
+// regeneration (#307).
+//
+// The order is the module's to own, not the callers': the hash comes
+// first because placement consumes the staged file, and content_hash is
+// the identity the library scan's rename safety net keys on. A lookup
+// failure that is not "no row" is an error — falling through to Insert
+// is exactly the constraint violation the lookup exists to prevent.
+func (o *BookOps) RecordDerived(
+	ctx context.Context, book model.Book, srcPath string, kind DerivedKind,
+) (DerivedRecord, error) {
+	handle, err := o.store.For(ctx, book.LibraryID)
+	if err != nil {
+		return DerivedRecord{}, fmt.Errorf("resolve library: %w", err)
 	}
+
+	var hash []byte
+	if kind != DerivedMarkdown {
+		if hash, err = hashStaged(srcPath); err != nil {
+			return DerivedRecord{}, fmt.Errorf("hash %s: %w", kind, err)
+		}
+	}
+
+	placed, err := handle.PlaceDerived(ctx, book, srcPath, kind)
+	if err != nil {
+		return DerivedRecord{}, fmt.Errorf("place %s: %w", kind, err)
+	}
+	rec := DerivedRecord{
+		Hash:     hash,
+		Location: placed.Location,
+		Size:     placed.Size,
+		Mtime:    placed.Mtime,
+	}
+	if kind == DerivedMarkdown {
+		return rec, nil
+	}
+
+	existing, err := o.files.GetByLocation(ctx, book.LibraryID, placed.Location)
+	switch {
+	case err == nil:
+		if err := o.files.SetContentHash(ctx, existing.ID, hash, placed.Size, placed.Mtime); err != nil {
+			return DerivedRecord{}, fmt.Errorf("refresh files row %s: %w", existing.ID, err)
+		}
+		rec.FileID = existing.ID
+	case errors.Is(err, repo.ErrNotFound):
+		inserted, err := o.files.Insert(ctx, model.File{
+			LibraryID:   book.LibraryID,
+			BookID:      book.ID,
+			Location:    placed.Location,
+			Size:        placed.Size,
+			Mtime:       placed.Mtime,
+			ContentHash: hash,
+			Format:      derivedSpecs[kind].format,
+		})
+		if err != nil {
+			return DerivedRecord{}, fmt.Errorf("insert files row at %s: %w", placed.Location, err)
+		}
+		rec.FileID = inserted.ID
+	default:
+		return DerivedRecord{}, fmt.Errorf("look up files row at %s: %w", placed.Location, err)
+	}
+	return rec, nil
+}
+
+// Recorder binds RecordDerived to one kind, in the shape worker deps
+// take — the record-side twin of Placer.
+func (o *BookOps) Recorder(kind DerivedKind) func(context.Context, model.Book, string) (DerivedRecord, error) {
+	return func(ctx context.Context, book model.Book, srcPath string) (DerivedRecord, error) {
+		return o.RecordDerived(ctx, book, srcPath, kind)
+	}
+}
+
+// hashStaged streams a staged artifact through sha256.
+func hashStaged(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return nil, err
+	}
+	return h.Sum(nil), nil
 }
