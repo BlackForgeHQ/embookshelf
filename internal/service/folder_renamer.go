@@ -167,23 +167,32 @@ func (r *FolderRenamer) renameLocal(
 	handle *LibraryHandle,
 	oldFolder, newFolder string,
 ) RenameOutcome {
-	// libRoot deliberately reads Library.Path, not localRoot()'s
+	// The root deliberately reads Library.Path, not localRoot()'s
 	// Root-then-Path preference. The two columns disagree and ADR-0030
 	// files that as its own problem; switching which one the rename
 	// reads under cover of this refactor would move books for reasons
-	// nobody asked for.
-	libRoot := strings.TrimRight(handle.Library.Path, "/")
-	if libRoot == "" {
+	// nobody asked for. libRoot holds whichever root it is given — it
+	// does not settle that question.
+	root := newLibRoot(handle.Library.Path)
+	if root.empty() {
 		return renameDeclined("library has no root configured")
 	}
 
 	// Build a unique destination dir if the target already exists —
 	// a collision with another Book that happens to share Author+Title.
 	// Collision probing is policy and stays here; only the move itself
-	// is the adapter's.
-	oldAbs := filepath.Join(libRoot, oldFolder)
-	finalAbs := uniqueDirectoryUnless(filepath.Join(libRoot, newFolder), oldAbs)
-	finalFolder := strings.TrimPrefix(finalAbs, libRoot+"/")
+	// is the adapter's. The source folder is excepted so a no-op rename
+	// does not bump itself to " (2)".
+	oldAbs := root.abs(oldFolder)
+	finalAbs, finalFolder, err := root.freeDir(newFolder, oldAbs)
+	if err != nil {
+		// Nothing has moved yet. The old code trimmed the prefix by hand
+		// and, when it did not match, persisted the absolute path as
+		// books.folder_path (#323).
+		slog.Warn("folder renamer: resolve target folder",
+			"book_id", b.ID, "folder", newFolder, "err", err)
+		return renameBroke(err)
+	}
 
 	// Through the adapter, not os.Rename: a local library's LocalFS is
 	// rooted at "/" (ADR-0030 §1), so these absolute paths are exactly
@@ -271,7 +280,15 @@ func (r *FolderRenamer) renameBackend(
 		return renameDeclined("no orphan queue; ADR-0005 rename is fail-closed")
 	}
 
-	finalFolder := uniqueBackendFolder(ctx, handle.Storage, newFolder)
+	// backendRoot: an object store has no filesystem root, and the
+	// prefix it answers with is already the library-relative location
+	// (ADR-0030 §1). No arithmetic, only the probe.
+	finalFolder, err := backendRoot().freeDirBackend(ctx, handle.Storage, newFolder)
+	if err != nil {
+		slog.Warn("folder renamer: resolve backend prefix",
+			"book_id", b.ID, "folder", newFolder, "err", err)
+		return renameBroke(err)
+	}
 	oldPrefix := oldFolder + "/"
 	newPrefix := finalFolder + "/"
 
@@ -422,19 +439,28 @@ func (r *FolderRenamer) migrateToFolderLayout(
 		// migrate.
 		return renameDeclined("object-store book has no flat layout to migrate")
 	}
-	libRoot := strings.TrimRight(handle.Library.Path, "/")
-	if libRoot == "" {
+	// Library.Path again, the same reading the rename arm makes and for
+	// the same reason (ADR-0030).
+	root := newLibRoot(handle.Library.Path)
+	if root.empty() {
 		return renameDeclined("library has no root configured")
 	}
 
-	finalAbs := uniqueDirectory(filepath.Join(libRoot, newFolder))
-	finalFolder := strings.TrimPrefix(finalAbs, libRoot+"/")
+	finalAbs, finalFolder, err := root.freeDir(newFolder)
+	if err != nil {
+		// Before this, an unusable newFolder probed from the library
+		// root itself: it made a sibling of the root, moved the Book's
+		// files into it, and wrote the absolute path to folder_path.
+		slog.Warn("folder renamer: resolve migration folder",
+			"book_id", b.ID, "folder", newFolder, "err", err)
+		return renameBroke(err)
+	}
 	if err := os.MkdirAll(finalAbs, 0o755); err != nil {
 		slog.Warn("folder renamer: mkdir new folder",
 			"book_id", b.ID, "dir", finalAbs, "err", err)
 		return renameBroke(err)
 	}
-	if err := r.moveFlatFiles(ctx, b, libRoot, finalAbs); err != nil {
+	if err := r.moveFlatFiles(ctx, b, root, finalAbs); err != nil {
 		return renameBroke(err)
 	}
 	if err := r.persist(ctx, b, finalFolder); err != nil {
@@ -452,7 +478,8 @@ func (r *FolderRenamer) migrateToFolderLayout(
 func (r *FolderRenamer) moveFlatFiles(
 	ctx context.Context,
 	b model.Book,
-	libRoot, newDir string,
+	root libRoot,
+	newDir string,
 ) error {
 	files, err := r.deps.Files.ListByBook(ctx, b.ID)
 	if err != nil {
@@ -463,7 +490,7 @@ func (r *FolderRenamer) moveFlatFiles(
 	// No rows is not the same as no files: an un-scanned Book still has
 	// its primary path, and that is what there is to move.
 	if len(files) == 0 {
-		return moveSingleFlatFile(b, libRoot, newDir)
+		return moveSingleFlatFile(b, root, newDir)
 	}
 	for _, f := range files {
 		// Flat-layout files live directly under the library root
@@ -474,7 +501,7 @@ func (r *FolderRenamer) moveFlatFiles(
 				"book_id", b.ID, "location", f.Location)
 			continue
 		}
-		from := filepath.Join(libRoot, f.Location)
+		from := root.abs(f.Location)
 		to := filepath.Join(newDir, f.Location)
 		if err := moveFile(from, to); err != nil {
 			slog.Warn("folder renamer: move flat file",
@@ -493,12 +520,14 @@ func (r *FolderRenamer) moveFlatFiles(
 // wiring produces one — internal/app always supplies it — so that branch
 // was unreachable, and it was the only thing keeping the flat move able
 // to proceed without the repo it needs (#212).
-func moveSingleFlatFile(b model.Book, libRoot, newDir string) error {
+func moveSingleFlatFile(b model.Book, root libRoot, newDir string) error {
 	base := filepath.Base(b.Path)
 	if base == "" || base == "." || base == "/" {
 		return fmt.Errorf("book %s has no usable primary path %q", b.ID, b.Path)
 	}
-	from := filepath.Join(libRoot, b.Path)
+	// books.path is mixed and stays mixed (ADR-0030): a legacy row holds
+	// an absolute path, which is already where the file is.
+	from := root.abs(b.Path)
 	if filepath.IsAbs(b.Path) {
 		from = b.Path
 	}

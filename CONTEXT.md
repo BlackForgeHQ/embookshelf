@@ -487,7 +487,7 @@ It is an error because the alternative was proven not to work: both pipelines us
 
 ### Folder layout
 
-Every Book lives in its own folder named `{Author}/{Title}/{filename}` under the library root. Sentinels: empty Author → `Unknown Author`, empty Title → `Untitled`. Path segments sanitized by `internal/layout/sanitize.go` (replace `/ \ : * ? " < > |`, NFC-normalize, cap 200 bytes). Multi-author authors stay one string. Collisions resolved by `uniqueDestination` ` (2)`, ` (3)` suffix on the title segment.
+Every Book lives in its own folder named `{Author}/{Title}/{filename}` under the library root. Sentinels: empty Author → `Unknown Author`, empty Title → `Untitled`. Path segments sanitized by `internal/layout/sanitize.go` (replace `/ \ : * ? " < > |`, NFC-normalize, cap 200 bytes). Multi-author authors stay one string. Collisions resolved by a ` (2)`, ` (3)` suffix on the title segment — `libRoot.freeDir` on a filesystem, `freeDirBackend` on an object store, both in `internal/service/placement_helpers.go`, which also owns the absolute ⇄ library-relative conversion the Placer and the FolderRenamer persist (#323).
 
 ### LeafBook
 
