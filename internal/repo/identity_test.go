@@ -116,3 +116,55 @@ func TestIdentityRepo_crud(t *testing.T) {
 		t.Fatalf("CountByUser bob after relink = (%d, %v), want (1, nil)", n, err)
 	}
 }
+
+// TestIdentityRepo_RoundTripDistinctFields — user_identities carries the
+// schema's longest same-type adjacent run (provider, issuer, subject,
+// email: four TEXT columns), where a crossed pair compiles and runs.
+// Every field carries a distinct value so a crossing surfaces as a
+// mismatch — verified to fail on a deliberate crossing before the
+// projection was introduced (#313).
+func TestIdentityRepo_RoundTripDistinctFields(t *testing.T) {
+	d := repotest.New(t)
+	ur := repo.NewUserRepo(d)
+	ir := repo.NewIdentityRepo(d)
+	ctx := context.Background()
+
+	owner, err := ur.Create(ctx, "roundtrip@example.com", "RT", "hash", model.RoleUser)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	created, err := ir.Insert(ctx, owner.ID,
+		"generic", "https://issuer.example.net/realm", "subject-value-42", "claim-email@example.org")
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	got, err := ir.GetByIssuerSubject(ctx, "https://issuer.example.net/realm", "subject-value-42")
+	if err != nil {
+		t.Fatalf("GetByIssuerSubject: %v", err)
+	}
+	if got.ID != created.ID {
+		t.Errorf("ID = %q, want %q", got.ID, created.ID)
+	}
+	if got.UserID != owner.ID {
+		t.Errorf("UserID = %q, want %q", got.UserID, owner.ID)
+	}
+	if got.Provider != "generic" {
+		t.Errorf("Provider = %q (crossed with a neighbouring text column?)", got.Provider)
+	}
+	if got.Issuer != "https://issuer.example.net/realm" {
+		t.Errorf("Issuer = %q", got.Issuer)
+	}
+	if got.Subject != "subject-value-42" {
+		t.Errorf("Subject = %q", got.Subject)
+	}
+	if got.Email == nil || *got.Email != "claim-email@example.org" {
+		t.Errorf("Email = %v, want the claim email", got.Email)
+	}
+	if got.LinkedAt.IsZero() {
+		t.Error("LinkedAt not scanned")
+	}
+	if got.LastLoginAt == nil || got.LastLoginAt.IsZero() {
+		t.Error("LastLoginAt not scanned")
+	}
+}

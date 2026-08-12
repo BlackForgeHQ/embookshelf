@@ -20,10 +20,36 @@ func NewUserRepo(d *db.DB) *UserRepo {
 	return &UserRepo{db: d}
 }
 
-const userCols = `id, email, password_hash, name, role, avatar_url, status, status_changed_at, created_at, updated_at, last_seen_at, kindle_email`
+// userProjection is the users row, declared once — SELECTs, RETURNING
+// clauses and the Scan destinations all render from here. The list used
+// to leak across a file boundary: SessionRepo.GetActive re-hydrates the
+// user through the same projection, so the two files can no longer
+// agree only by hand. Six of the twelve columns are TEXT, the
+// Column-order coupling hazard's densest run on the auth surface.
+var userProjection = projection[model.User]{
+	{name: "id", dest: func(u *model.User) any { return &u.ID }},
+	{name: "email", dest: func(u *model.User) any { return &u.Email }},
+	// password_hash is NULL for OIDC-provisioned users; the model keeps
+	// a plain string, "" meaning "no local password".
+	{name: "password_hash", dest: func(u *model.User) any { return nullText{Dst: &u.PasswordHash} }},
+	{name: "name", dest: func(u *model.User) any { return &u.Name }},
+	{name: "role", dest: func(u *model.User) any { return &u.Role }},
+	{name: "avatar_url", dest: func(u *model.User) any { return &u.AvatarURL }},
+	{name: "status", dest: func(u *model.User) any { return &u.Status }},
+	{name: "status_changed_at", dest: func(u *model.User) any { return &u.StatusChangedAt }},
+	{name: "created_at", dest: func(u *model.User) any { return &u.CreatedAt }},
+	{name: "updated_at", dest: func(u *model.User) any { return &u.UpdatedAt }},
+	{name: "last_seen_at", dest: func(u *model.User) any { return &u.LastSeenAt }},
+	{name: "kindle_email", dest: func(u *model.User) any { return &u.KindleEmail }},
+}
+
+var (
+	userCols      = userProjection.selectList("users")
+	userReturning = userProjection.returningList("users")
+)
 
 func (r *UserRepo) GetByEmail(ctx context.Context, email string) (model.User, error) {
-	const q = `
+	q := `
 		SELECT ` + userCols + `
 		FROM users
 		WHERE lower(email) = lower($1)
@@ -33,7 +59,7 @@ func (r *UserRepo) GetByEmail(ctx context.Context, email string) (model.User, er
 }
 
 func (r *UserRepo) GetByID(ctx context.Context, id string) (model.User, error) {
-	const q = `SELECT ` + userCols + ` FROM users WHERE id = $1`
+	q := `SELECT ` + userCols + ` FROM users WHERE id = $1`
 	row := r.db.SQL.QueryRowContext(ctx, q, id)
 	return r.scanUser(row)
 }
@@ -46,10 +72,10 @@ func (r *UserRepo) Count(ctx context.Context) (int, error) {
 
 func (r *UserRepo) Create(ctx context.Context, email, name, hash string, role model.Role) (model.User, error) {
 	id := db.NewID()
-	const q = `
+	q := `
 		INSERT INTO users (id, email, name, password_hash, role)
 		VALUES ($1, lower($2), $3, $4, $5)
-		RETURNING ` + userCols
+		RETURNING ` + userReturning
 	row := r.db.SQL.QueryRowContext(ctx, q,
 		id, strings.TrimSpace(email), strings.TrimSpace(name), hash, string(role))
 	return r.scanUser(row)
@@ -122,10 +148,10 @@ func (r *UserRepo) CountByRole(ctx context.Context, role model.Role) (int, error
 // the service layer; the users row only carries the profile fields.
 func (r *UserRepo) CreateOIDC(ctx context.Context, email, name string, role model.Role) (model.User, error) {
 	id := db.NewID()
-	const q = `
+	q := `
 		INSERT INTO users (id, email, name, password_hash, role)
 		VALUES ($1, lower($2), $3, NULL, $4)
-		RETURNING ` + userCols
+		RETURNING ` + userReturning
 	row := r.db.SQL.QueryRowContext(ctx, q,
 		id, strings.TrimSpace(email), strings.TrimSpace(name), string(role))
 	return r.scanUser(row)
@@ -135,10 +161,10 @@ func (r *UserRepo) CreateOIDC(ctx context.Context, email, name string, role mode
 // status='pending' so they cannot log in until an admin approves them.
 func (r *UserRepo) CreateOIDCPending(ctx context.Context, email, name string, role model.Role) (model.User, error) {
 	id := db.NewID()
-	const q = `
+	q := `
 		INSERT INTO users (id, email, name, password_hash, role, status, status_changed_at)
 		VALUES ($1, lower($2), $3, NULL, $4, 'pending', now())
-		RETURNING ` + userCols
+		RETURNING ` + userReturning
 	row := r.db.SQL.QueryRowContext(ctx, q,
 		id, strings.TrimSpace(email), strings.TrimSpace(name), string(role))
 	return r.scanUser(row)
@@ -178,31 +204,17 @@ func (r *UserRepo) scanUser(s scanner) (model.User, error) {
 }
 
 // scanUser is the package-level scanner used by both UserRepo and SessionRepo
-// (which needs to re-hydrate the user after fetching an active session).
+// (which needs to re-hydrate the user after fetching an active session). Its
+// destinations come from the projection, in the order it declares — the
+// enum columns settle into their named string types directly, and the
+// nullable password_hash lands through the nullText adapter.
 func scanUser(s scanner) (model.User, error) {
-	var (
-		u      model.User
-		role   string
-		status string
-	)
-	var passwordHash *string
-	err := s.Scan(
-		&u.ID, &u.Email, &passwordHash, &u.Name, &role,
-		&u.AvatarURL,
-		&status, &u.StatusChangedAt,
-		&u.CreatedAt, &u.UpdatedAt, &u.LastSeenAt,
-		&u.KindleEmail,
-	)
-	if passwordHash != nil {
-		u.PasswordHash = *passwordHash
-	}
-	if err != nil {
+	var u model.User
+	if err := userProjection.scan(s, &u); err != nil {
 		if dberr.IsNotFound(err) {
 			return u, ErrNotFound
 		}
 		return u, err
 	}
-	u.Role = model.Role(role)
-	u.Status = model.UserStatus(status)
 	return u, nil
 }

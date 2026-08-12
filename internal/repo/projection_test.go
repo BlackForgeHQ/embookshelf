@@ -183,6 +183,54 @@ func TestProjections_HaveOneDistinctDestinationPerColumn(t *testing.T) {
 	checkProjection(t, "bookdrop_items", bookDropProjection, &model.BookDropItem{})
 	checkProjection(t, "sessions", sessionProjection, &model.Session{})
 	checkProjection(t, "user_invites", userInviteProjection, &UserInvite{})
+	checkProjection(t, "users", userProjection, &model.User{})
+	checkProjection(t, "user_devices", deviceProjection, &model.Device{})
+	checkProjection(t, "user_identities", identityProjection, &model.Identity{})
+}
+
+// The identity cluster's golden forms (#313). As above, the restatement
+// is the point: a reorder surfaces here as a reviewed diff.
+
+func TestUserProjection_RendersBothForms(t *testing.T) {
+	const want = `users.id, users.email, users.password_hash, users.name, users.role, ` +
+		`users.avatar_url, users.status, users.status_changed_at, users.created_at, ` +
+		`users.updated_at, users.last_seen_at, users.kindle_email`
+	if userCols != want {
+		t.Fatalf("userCols =\n%s\nwant\n%s", userCols, want)
+	}
+	const wantBare = `id, email, password_hash, name, role, avatar_url, status, ` +
+		`status_changed_at, created_at, updated_at, last_seen_at, kindle_email`
+	if userReturning != wantBare {
+		t.Fatalf("userReturning =\n%s\nwant\n%s", userReturning, wantBare)
+	}
+}
+
+func TestDeviceProjection_RendersBothForms(t *testing.T) {
+	const want = `user_devices.id, user_devices.user_id, user_devices.kind, ` +
+		`user_devices.name, user_devices.secret, user_devices.config, ` +
+		`user_devices.last_sent_at, user_devices.last_error, ` +
+		`user_devices.created_at, user_devices.updated_at`
+	if deviceCols != want {
+		t.Fatalf("deviceCols =\n%s\nwant\n%s", deviceCols, want)
+	}
+	const wantBare = `id, user_id, kind, name, secret, config, last_sent_at, ` +
+		`last_error, created_at, updated_at`
+	if deviceReturning != wantBare {
+		t.Fatalf("deviceReturning =\n%s\nwant\n%s", deviceReturning, wantBare)
+	}
+}
+
+func TestIdentityProjection_RendersBothForms(t *testing.T) {
+	const want = `user_identities.id, user_identities.user_id, user_identities.provider, ` +
+		`user_identities.issuer, user_identities.subject, user_identities.email, ` +
+		`user_identities.linked_at, user_identities.last_login_at`
+	if identityCols != want {
+		t.Fatalf("identityCols =\n%s\nwant\n%s", identityCols, want)
+	}
+	const wantBare = `id, user_id, provider, issuer, subject, email, linked_at, last_login_at`
+	if identityReturning != wantBare {
+		t.Fatalf("identityReturning =\n%s\nwant\n%s", identityReturning, wantBare)
+	}
 }
 
 func checkProjection[T any](t *testing.T, table string, p projection[T], zero *T) {

@@ -81,7 +81,7 @@ func (r *SessionRepo) GetActive(ctx context.Context, id string) (model.Session, 
 		return s, model.User{}, err
 	}
 
-	const uq = `SELECT ` + userCols + ` FROM users WHERE id = $1`
+	uq := `SELECT ` + userCols + ` FROM users WHERE id = $1`
 	userRow := r.db.SQL.QueryRowContext(ctx, uq, s.UserID)
 	u, err := scanUser(userRow)
 	if err != nil {

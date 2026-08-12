@@ -32,12 +32,30 @@ func NewIdentityRepo(d *db.DB) *IdentityRepo {
 	return &IdentityRepo{db: d}
 }
 
-const identityCols = `id, user_id, provider, issuer, subject, email, linked_at, last_login_at`
+// identityProjection is the user_identities row, declared once. It
+// holds the schema's longest same-type adjacent run — provider, issuer,
+// subject, email: four TEXT columns in a row — where a crossed pair
+// compiles, runs, and attaches a login to the wrong identity facts.
+var identityProjection = projection[model.Identity]{
+	{name: "id", dest: func(i *model.Identity) any { return &i.ID }},
+	{name: "user_id", dest: func(i *model.Identity) any { return &i.UserID }},
+	{name: "provider", dest: func(i *model.Identity) any { return &i.Provider }},
+	{name: "issuer", dest: func(i *model.Identity) any { return &i.Issuer }},
+	{name: "subject", dest: func(i *model.Identity) any { return &i.Subject }},
+	{name: "email", dest: func(i *model.Identity) any { return &i.Email }},
+	{name: "linked_at", dest: func(i *model.Identity) any { return &i.LinkedAt }},
+	{name: "last_login_at", dest: func(i *model.Identity) any { return &i.LastLoginAt }},
+}
+
+var (
+	identityCols      = identityProjection.selectList("user_identities")
+	identityReturning = identityProjection.returningList("user_identities")
+)
 
 // GetByIssuerSubject finds an identity by the IdP-attested pair. The
 // uniqueness constraint guarantees at most one row.
 func (r *IdentityRepo) GetByIssuerSubject(ctx context.Context, issuer, subject string) (model.Identity, error) {
-	const q = `SELECT ` + identityCols + ` FROM user_identities WHERE issuer = $1 AND subject = $2`
+	q := `SELECT ` + identityCols + ` FROM user_identities WHERE issuer = $1 AND subject = $2`
 	row := r.db.SQL.QueryRowContext(ctx, q, issuer, subject)
 	return r.scan(row)
 }
@@ -45,7 +63,7 @@ func (r *IdentityRepo) GetByIssuerSubject(ctx context.Context, issuer, subject s
 // ListByUser returns every identity linked to the user, ordered by
 // linked_at ASC so the UI shows them in the order they were attached.
 func (r *IdentityRepo) ListByUser(ctx context.Context, userID string) ([]model.Identity, error) {
-	const q = `SELECT ` + identityCols + ` FROM user_identities WHERE user_id = $1 ORDER BY linked_at ASC`
+	q := `SELECT ` + identityCols + ` FROM user_identities WHERE user_id = $1 ORDER BY linked_at ASC`
 	rows, err := r.db.SQL.QueryContext(ctx, q, userID)
 	if err != nil {
 		return nil, err
@@ -69,10 +87,10 @@ func (r *IdentityRepo) CountByUser(ctx context.Context, userID string) (int, err
 func (r *IdentityRepo) Insert(ctx context.Context, userID, provider, issuer, subject, email string) (model.Identity, error) {
 	id := db.NewID()
 	now := time.Now().UTC()
-	const q = `
+	q := `
 		INSERT INTO user_identities (id, user_id, provider, issuer, subject, email, linked_at, last_login_at)
 		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7, $8)
-		RETURNING ` + identityCols
+		RETURNING ` + identityReturning
 
 	provider = strings.TrimSpace(provider)
 	row := r.db.SQL.QueryRowContext(ctx, q,
@@ -102,13 +120,13 @@ func (r *IdentityRepo) Insert(ctx context.Context, userID, provider, issuer, sub
 func (r *IdentityRepo) Upsert(ctx context.Context, userID, provider, issuer, subject, email string) (model.Identity, error) {
 	now := time.Now().UTC()
 	id := db.NewID()
-	const q = `
+	q := `
 		INSERT INTO user_identities (id, user_id, provider, issuer, subject, email, linked_at, last_login_at)
 		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7, $8)
 		ON CONFLICT (issuer, subject) DO UPDATE
 		SET email         = COALESCE(EXCLUDED.email, user_identities.email),
 		    last_login_at = EXCLUDED.last_login_at
-		RETURNING ` + identityCols
+		RETURNING ` + identityReturning
 	row := r.db.SQL.QueryRowContext(ctx, q,
 		id, userID, strings.TrimSpace(provider), issuer, subject, strings.TrimSpace(email),
 		now, now,
@@ -125,7 +143,7 @@ func (r *IdentityRepo) Upsert(ctx context.Context, userID, provider, issuer, sub
 func (r *IdentityRepo) RelinkProvider(ctx context.Context, userID, provider, issuer, subject, email string) (model.Identity, error) {
 	id := db.NewID()
 	now := time.Now().UTC()
-	const q = `
+	q := `
 		INSERT INTO user_identities (id, user_id, provider, issuer, subject, email, linked_at, last_login_at)
 		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7, $8)
 		ON CONFLICT (user_id, provider) DO UPDATE
@@ -133,7 +151,7 @@ func (r *IdentityRepo) RelinkProvider(ctx context.Context, userID, provider, iss
 		    subject       = EXCLUDED.subject,
 		    email         = COALESCE(EXCLUDED.email, user_identities.email),
 		    last_login_at = EXCLUDED.last_login_at
-		RETURNING ` + identityCols
+		RETURNING ` + identityReturning
 	row := r.db.SQL.QueryRowContext(ctx, q,
 		id, userID, strings.TrimSpace(provider), issuer, subject, strings.TrimSpace(email),
 		now, now,
@@ -198,11 +216,7 @@ func (r *IdentityRepo) DeleteWithGuard(ctx context.Context, userID, provider str
 
 func (r *IdentityRepo) scan(s scanner) (model.Identity, error) {
 	var i model.Identity
-	err := s.Scan(
-		&i.ID, &i.UserID, &i.Provider, &i.Issuer, &i.Subject, &i.Email,
-		&i.LinkedAt, &i.LastLoginAt,
-	)
-	if err != nil {
+	if err := identityProjection.scan(s, &i); err != nil {
 		if dberr.IsNotFound(err) {
 			return i, ErrNotFound
 		}
