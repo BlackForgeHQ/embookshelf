@@ -5,6 +5,7 @@ package scan
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -37,18 +38,39 @@ type FileState interface {
 	ClearMissing(ctx context.Context, fileID string) error
 }
 
-// ReconcileInput is one library's scan: what the walk saw, where its
-// bytes can be read from, and the files table to reconcile against.
+// ReconcileInput is one library's scan: how to list it, where its bytes
+// can be read from, and the files table to reconcile against.
 type ReconcileInput struct {
 	// LibraryID scopes both the rows read and the content-hash matches
 	// acted on: the same bytes in another library are another library's
 	// book, not this one moving.
 	LibraryID string
-	// Walked is the library-relative listing, materialised — what
-	// service.LibraryHandle.Walk returns. A partial listing is a caller's
-	// decision to make; whatever arrives here is treated as the whole
-	// library, and every row it does not mention reads Missing.
-	Walked []WalkEntry
+	// Walk lists the library, library-relative — what
+	// service.LibraryHandle.Walk does. Required.
+	//
+	// It is a function and not a listing because *when* it runs is part
+	// of the policy, and therefore belongs in here with the rest of it.
+	// The files snapshot has to be taken before the walk starts, never
+	// after: bookdrop places a book's bytes and only then inserts its
+	// row (service.BookDropService.Approve), so a row read after the
+	// walk can describe a file the walk had already passed the folder
+	// of. That row is in no walked entry, lands in Missing, gets flagged,
+	// and the 24h sweeper deletes it — a book with no files row pointing
+	// at bytes that are right there, which is the #264 shape. Scans are
+	// admin-triggered with no periodic timer, so nothing is guaranteed
+	// to come along and clear the flag first.
+	//
+	// Taking the snapshot first closes it: a row created during the walk
+	// is simply not in the snapshot, so it cannot be classified at all.
+	// It is picked up, correctly, by the next scan.
+	//
+	// Returning an error aborts the scan before anything is written.
+	// A caller that would rather reconcile a partial listing than abort
+	// says so by logging and returning what it collected with a nil
+	// error — the choice is the caller's because only the caller can
+	// tell "the walk failed partway" from "this library is unconfigured",
+	// and reconciling an empty listing flags every row in the library.
+	Walk func(ctx context.Context) ([]WalkEntry, error)
 	// Store reads bytes for the relocate-by-hash pass. A nil Store
 	// disables that pass rather than failing the scan.
 	Store storage.Storage
@@ -84,26 +106,42 @@ type ReconcileReport struct {
 //   - Missing — soft-flag for the 24h purge sweeper, skipping rows this
 //     same scan relocated and rows already flagged.
 //
-// The order matters and is load-bearing in one place: the relocate pass
-// runs before the missing pass, because the location a relocated row used
-// to live at also comes back from this scan as Missing, and flagging it
-// would undo the relocate.
+// Order is load-bearing twice, which is why both halves are in here
+// rather than split across a caller:
+//
+//   - The files snapshot is read before the walk runs, so a row created
+//     while the walk was in flight cannot be mistaken for a missing one
+//     (see ReconcileInput.Walk).
+//   - The relocate pass runs before the missing pass, because the
+//     location a relocated row used to live at also comes back from this
+//     scan as Missing, and flagging it would undo the relocate.
 //
 // Per-row write failures are logged and skipped — one row must not cost
-// the rest of the library its scan. Only the initial read of the files
-// table returns an error, because a scan that cannot see the table would
-// otherwise flag the whole library missing.
+// the rest of the library its scan. Only reading the files table and
+// walking return an error, because both are ways of ending up with a
+// listing that isn't the library, and acting on one of those flags rows
+// that are perfectly fine.
 func Reconcile(ctx context.Context, in ReconcileInput) (ReconcileReport, error) {
 	if in.Files == nil {
 		return ReconcileReport{}, errors.New("reconcile: no file state")
 	}
+	if in.Walk == nil {
+		return ReconcileReport{}, errors.New("reconcile: no walk")
+	}
 
 	dbFiles, err := in.Files.ListByLibrary(ctx, in.LibraryID)
 	if err != nil {
-		return ReconcileReport{}, errors.New("list db files: " + err.Error())
+		return ReconcileReport{}, fmt.Errorf("list db files: %w", err)
 	}
 
-	cs := Diff(in.Walked, dbFiles)
+	// Strictly after the snapshot. Nothing has been written yet, so an
+	// aborted walk leaves the library exactly as it found it.
+	walked, err := in.Walk(ctx)
+	if err != nil {
+		return ReconcileReport{}, err
+	}
+
+	cs := Diff(walked, dbFiles)
 
 	// Unchanged: clear missing flag if file reappeared.
 	for _, f := range cs.Unchanged {
@@ -146,7 +184,7 @@ func Reconcile(ctx context.Context, in ReconcileInput) (ReconcileReport, error) 
 	}
 
 	return ReconcileReport{
-		Walked:    len(in.Walked),
+		Walked:    len(walked),
 		Relocated: len(relocated),
 		Missing:   len(cs.Missing),
 	}, nil

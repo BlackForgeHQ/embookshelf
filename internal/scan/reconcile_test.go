@@ -5,6 +5,7 @@ package scan_test
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -148,6 +149,11 @@ func entry(loc string, size int64, mtime time.Time) scan.WalkEntry {
 	return scan.WalkEntry{Location: loc, Key: loc, Size: size, Mtime: mtime}
 }
 
+// walked is a walk that just answers with a listing.
+func walked(entries ...scan.WalkEntry) func(context.Context) ([]scan.WalkEntry, error) {
+	return func(context.Context) ([]scan.WalkEntry, error) { return entries, nil }
+}
+
 // The four drift rules ADR-0018 leaves the scan: what a walk that found
 // a row's file does to that row's missing flag, and what the missing
 // pass is allowed to flag.
@@ -283,7 +289,7 @@ func TestReconcileDriftRules(t *testing.T) {
 			files := newFakeFileState(tc.rows...)
 			rep, err := scan.Reconcile(context.Background(), scan.ReconcileInput{
 				LibraryID: testLibrary,
-				Walked:    tc.walked,
+				Walk:      walked(tc.walked...),
 				Store:     backingStore(t, tc.files),
 				Files:     files,
 			})
@@ -313,10 +319,10 @@ func TestReconcileCreatesNothing(t *testing.T) {
 
 	rep, err := scan.Reconcile(context.Background(), scan.ReconcileInput{
 		LibraryID: testLibrary,
-		Walked: []scan.WalkEntry{
+		Walk: walked(
 			entry("Kept/Book/kept.epub", 4, baseMtime),
 			entry(stranger, 9, baseMtime),
-		},
+		),
 		Store: backingStore(t, map[string]string{stranger: "strangers"}),
 		Files: files,
 	})
@@ -347,7 +353,7 @@ func TestReconcileDoesNotRelocateAcrossLibraries(t *testing.T) {
 
 	rep, err := scan.Reconcile(context.Background(), scan.ReconcileInput{
 		LibraryID: testLibrary,
-		Walked:    []scan.WalkEntry{entry(renamed, 14, baseMtime)},
+		Walk:      walked(entry(renamed, 14, baseMtime)),
 		Store:     backingStore(t, map[string]string{renamed: "the same bytes"}),
 		Files:     files,
 	})
@@ -359,5 +365,90 @@ func TestReconcileDoesNotRelocateAcrossLibraries(t *testing.T) {
 	}
 	if got := files.row(t, "f1").Location; got != "elsewhere/original.epub" {
 		t.Errorf("another library's row moved to %q", got)
+	}
+}
+
+// A book approved while the walk is in flight must not be flagged
+// missing by that same walk.
+//
+// Bookdrop places the bytes and only then inserts the files row
+// (service.BookDropService.Approve), so the two land on opposite sides of
+// a walk that has already passed the destination folder: the walk cannot
+// have seen the file, and a files snapshot taken afterwards does contain
+// the row. Classified against each other, that row reads Missing, gets
+// flagged, and RunMissingPurge deletes it once MissingTTL has passed —
+// a book with no files row pointing at bytes that are right there, the
+// #264 shape. Scans are admin-triggered with no periodic timer, so
+// nothing is guaranteed to rescan and clear the flag inside 24h.
+//
+// Reconcile owns the ordering that closes this — snapshot, then walk —
+// which is why the walk is a function it calls rather than a listing it
+// is handed. The insert here happens during the walk, exactly where
+// Approve's does.
+func TestReconcileIgnoresARowCreatedDuringTheWalk(t *testing.T) {
+	const (
+		existing = "Kobo Abe/Woman in the Dunes/dunes.epub"
+		approved = "Ursula Le Guin/The Dispossessed/dispossessed.epub"
+	)
+	files := newFakeFileState(model.File{
+		ID: "f1", LibraryID: testLibrary, Location: existing,
+		Size: 5, Mtime: baseMtime,
+	})
+
+	rep, err := scan.Reconcile(context.Background(), scan.ReconcileInput{
+		LibraryID: testLibrary,
+		Store:     backingStore(t, nil),
+		Files:     files,
+		Walk: func(context.Context) ([]scan.WalkEntry, error) {
+			// Approve lands mid-walk: bytes into a folder this walk has
+			// already been past, then the row.
+			files.rows = append(files.rows, model.File{
+				ID: "f2", LibraryID: testLibrary, Location: approved,
+				Size: 18, Mtime: baseMtime,
+			})
+			return []scan.WalkEntry{entry(existing, 5, baseMtime)}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if has(files.marked, "f2") {
+		t.Error("a row inserted while the walk was running was flagged missing — " +
+			"the files snapshot was taken after the walk, so bookdrop's " +
+			"place-then-insert lands on both sides of it")
+	}
+	if got := files.row(t, "f2").MissingSince; got != nil {
+		t.Errorf("the freshly approved row carries MissingSince = %v", got)
+	}
+	if rep.Missing != 0 {
+		t.Errorf("Missing = %d, want 0 — the new row is not in the snapshot at all", rep.Missing)
+	}
+}
+
+// A walk that could not run must leave the library exactly as it found
+// it. The caller aborts by returning an error — an unconfigured library
+// is the live case — and the one thing that must not happen is for the
+// empty listing to be reconciled, because every row in the library then
+// reads Missing and the sweeper takes the lot.
+func TestReconcileWritesNothingWhenTheWalkFails(t *testing.T) {
+	files := newFakeFileState(model.File{
+		ID: "f1", LibraryID: testLibrary, Location: "Kept/Book/kept.epub",
+	})
+	sentinel := errors.New("library has no local root to walk")
+
+	_, err := scan.Reconcile(context.Background(), scan.ReconcileInput{
+		LibraryID: testLibrary,
+		Store:     backingStore(t, nil),
+		Files:     files,
+		Walk: func(context.Context) ([]scan.WalkEntry, error) {
+			return nil, sentinel
+		},
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("Reconcile = %v, want the walk's own error back for the caller to classify", err)
+	}
+	if len(files.marked) != 0 || len(files.cleared) != 0 {
+		t.Errorf("a failed walk still wrote: marked=%v cleared=%v", files.marked, files.cleared)
 	}
 }
