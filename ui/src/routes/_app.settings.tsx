@@ -57,7 +57,7 @@ function PendingBadge({ count }: { count: number }) {
   return (
     <span
       data-testid="users-tab-badge"
-      className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] font-semibold leading-relaxed"
+      className="px-1.5 py-0.5 rounded-full bg-(--color-warn-soft) text-(--color-warn-ink) text-[10px] font-semibold leading-relaxed"
     >
       {count}
     </span>

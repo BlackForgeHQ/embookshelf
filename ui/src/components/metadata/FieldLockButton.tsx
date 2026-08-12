@@ -31,7 +31,7 @@ export function FieldLockButton({
       type="button"
       title={
         locked
-          ? "Field is locked — click to unlock"
+          ? "Field is locked. Click to unlock"
           : "Lock this field against auto-refresh"
       }
       aria-label={locked ? `Unlock ${field}` : `Lock ${field}`}

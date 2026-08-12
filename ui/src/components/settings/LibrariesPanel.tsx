@@ -31,6 +31,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { formatDateTime } from "@/lib/format"
 import { slugify } from "@/lib/utils"
 
 export function LibrariesPanel() {
@@ -198,7 +199,7 @@ function LibraryRow({
             muted={!lastScanned}
             title={
               library.lastScannedAt
-                ? new Date(library.lastScannedAt).toLocaleString()
+                ? formatDateTime(library.lastScannedAt)
                 : undefined
             }
           />
@@ -680,5 +681,5 @@ function formatRelative(d: Date): string {
   const day = Math.round(hr / 24)
   if (day === 1) return "yesterday"
   if (day < 7) return `${day}d ago`
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" })
 }

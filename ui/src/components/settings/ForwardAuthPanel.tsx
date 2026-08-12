@@ -40,7 +40,7 @@ const INTRO = (
     Trust identity headers from an upstream reverse proxy that already
     terminates SSO (Authelia, oauth2-proxy, Traefik forwardAuth, Cloudflare
     Access). Headers are read only when the request's immediate TCP peer matches
-    one of the trusted CIDRs — <code>X-Forwarded-For</code> is ignored.
+    one of the trusted CIDRs. <code>X-Forwarded-For</code> is ignored.
     ADR-0022.
   </>
 )

@@ -74,6 +74,41 @@ export function formatCost(usd: number): string {
 }
 
 /**
+ * A calendar date as "Aug 9, 2026".
+ *
+ * Locale is pinned: the UI copy is English, and `toLocaleDateString()`
+ * with no argument follows the browser instead — the account page said
+ * "joined серп. 2026 р." next to English prose while the book page said
+ * "09.08.2026". Every date in the app goes through here (or
+ * `formatDateTime`) so they all agree.
+ */
+export function formatDate(value: string | number | Date): string {
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return "—"
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  })
+}
+
+/**
+ * A timestamp as "Aug 9, 2026, 2:32 PM" — `formatDate` plus the time,
+ * for rows where the hour matters (last scan, last sent, last seen).
+ */
+export function formatDateTime(value: string | number | Date): string {
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return "—"
+  return d.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })
+}
+
+/**
  * How long ago a timestamp was, in the largest whole unit.
  *
  * Lived privately inside ProvidersPanel until the Instance panel needed

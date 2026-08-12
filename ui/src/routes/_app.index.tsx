@@ -8,6 +8,7 @@ import { meQuery } from "@/api/auth"
 import { booksQuery, librariesQuery } from "@/api/books"
 import { readingStatsQuery } from "@/api/reading"
 import { apiQueryOptions } from "@/api/query"
+import { heatColor } from "@/lib/heat"
 import { Cover } from "@/components/Cover"
 import { ProgressBar } from "@/components/ProgressBar"
 import { TopBar } from "@/components/TopBar"
@@ -15,14 +16,6 @@ import { TopBar } from "@/components/TopBar"
 export const Route = createFileRoute("/_app/")({
   component: Dashboard,
 })
-
-function heatColor(m: number): string {
-  if (m === 0) return "var(--color-paper-2)"
-  if (m < 20) return "oklch(0.78 0.06 35)"
-  if (m < 35) return "oklch(0.65 0.09 35)"
-  if (m < 50) return "oklch(0.52 0.11 35)"
-  return "oklch(0.42 0.11 35)"
-}
 
 function Dashboard() {
   const navigate = useNavigate()
@@ -67,9 +60,11 @@ function Dashboard() {
         subtitle={
           readingStats.isLoading
             ? "Pulling your reading session log…"
-            : quarterSessions === 0
-              ? "No reading sessions this quarter yet — open a book and the tracker starts."
-              : `You've been reading for ${quarterHours} hours this quarter across ${quarterSessions} sessions.`
+            : readingStats.isError
+              ? "Reading stats are unavailable right now."
+              : quarterSessions === 0
+                ? "No reading sessions this quarter yet. Open a book and the tracker starts."
+                : `You've been reading for ${quarterHours} hours this quarter across ${quarterSessions} sessions.`
         }
       />
 
@@ -83,7 +78,9 @@ function Dashboard() {
               : `${readingList.length} open book${readingList.length === 1 ? "" : "s"}`
           }
         >
-          {readingList.length === 0 && !reading.isLoading ? (
+          {reading.isError ? (
+            <ErrorRow>Couldn't load the Reading Now shelf.</ErrorRow>
+          ) : readingList.length === 0 && !reading.isLoading ? (
             <EmptyState message="Nothing on the Reading Now shelf. Open a book and tap “Continue reading” to add it." />
           ) : (
             <div
@@ -104,6 +101,8 @@ function Dashboard() {
         <Section title="Reading activity" overline="last 12 weeks">
           {readingStats.isLoading ? (
             <EmptyRow>Loading session log…</EmptyRow>
+          ) : readingStats.isError ? (
+            <ErrorRow>Couldn't load reading activity.</ErrorRow>
           ) : (
             <div className="grid gap-10 md:grid-cols-[auto_1fr] md:items-start">
               <div>
@@ -237,7 +236,9 @@ function Dashboard() {
                 : `${recent.data?.total ?? 0} books indexed`
             }
           >
-            {recentList.length === 0 && !recent.isLoading ? (
+            {recent.isError ? (
+              <ErrorRow>Couldn't load recently added books.</ErrorRow>
+            ) : recentList.length === 0 && !recent.isLoading ? (
               <EmptyState message="Drop a book into /bookdrop to start growing your library." />
             ) : (
               <div
@@ -256,7 +257,9 @@ function Dashboard() {
           </Section>
 
           <Section title="Your libraries">
-            {libraryList.length === 0 ? (
+            {libraries.isError ? (
+              <ErrorRow>Couldn't load libraries.</ErrorRow>
+            ) : libraryList.length === 0 ? (
               <EmptyRow>
                 {libraries.isLoading ? "Loading libraries…" : "No libraries yet."}
               </EmptyRow>
@@ -484,6 +487,21 @@ function EmptyRow({ children }: { children: ReactNode }) {
     <div
       className="t-small italic"
       style={{ color: "var(--color-ink-3)", padding: "8px 0" }}
+    >
+      {children}
+    </div>
+  )
+}
+
+// A section whose query failed. Same quiet register as EmptyRow — the
+// dashboard is a summary, not the place to surface a stack trace — but
+// tinted so a failure never reads as "you have no books".
+function ErrorRow({ children }: { children: ReactNode }) {
+  return (
+    <div
+      role="alert"
+      className="t-small italic"
+      style={{ color: "var(--color-accent-ink)", padding: "8px 0" }}
     >
       {children}
     </div>

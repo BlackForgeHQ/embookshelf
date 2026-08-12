@@ -211,6 +211,7 @@ export function ChromeRestoreButton({ onRestore }: { onRestore: () => void }) {
       variant="outline"
       size="icon-sm"
       onClick={onRestore}
+      aria-label="Show reader controls"
       className="absolute top-2 right-2 z-10"
     >
       <Icon name="menu" size={14} />

@@ -237,6 +237,14 @@ function TextReaderShell({ book }: { book: BookDetail }) {
   const [typePanelOpen, setTypePanelOpen] = useState(false)
   const [toc, setToc] = useState<Array<TocItem>>([])
 
+  // epub.js unzips and lays the book out in-browser, which takes long
+  // enough on a real EPUB that the reader sat on blank paper with no
+  // sign anything was happening. "loading" until onReady, "error" if the
+  // boot throws.
+  const [bookState, setBookState] = useState<"loading" | "ready" | "error">(
+    "loading"
+  )
+
   // Progress state mirrors what the reader reports. Used for the bottom
   // scrubber and to compose the token we persist on unmount.
   const [percent, setPercent] = useState(0)
@@ -291,6 +299,9 @@ function TextReaderShell({ book }: { book: BookDetail }) {
         .filter(
           (a) => !!a.selectedText && decodeLocator(a.locator)?.kind === "cfi"
         )
+        // Literal, not var(--color-highlight): the fill lands in the
+        // epub.js overlay where the app's custom properties may not
+        // resolve.
         .map((a) => ({ cfiRange: a.locator!, color: "oklch(0.92 0.07 85)" })),
     [annotations.data]
   )
@@ -336,6 +347,7 @@ function TextReaderShell({ book }: { book: BookDetail }) {
           <Button
             variant={tocOpen ? "default" : "ghost"}
             size="icon-sm"
+            aria-label="Table of contents"
             onClick={() => {
               const next = !tocOpen
               closePanels()
@@ -347,6 +359,7 @@ function TextReaderShell({ book }: { book: BookDetail }) {
           <Button
             variant={typePanelOpen ? "default" : "ghost"}
             size="icon-sm"
+            aria-label="Typography settings"
             onClick={() => {
               const next = !typePanelOpen
               closePanels()
@@ -365,6 +378,7 @@ function TextReaderShell({ book }: { book: BookDetail }) {
           <Button
             variant={notesOpen ? "default" : "ghost"}
             size="icon-sm"
+            aria-label="Notes"
             onClick={() => {
               const next = !notesOpen
               closePanels()
@@ -378,6 +392,7 @@ function TextReaderShell({ book }: { book: BookDetail }) {
             size="icon-sm"
             onClick={() => setChromeVisible(false)}
             title="Hide chrome"
+            aria-label="Hide chrome"
           >
             <Icon name="close" size={14} />
           </Button>
@@ -465,10 +480,42 @@ function TextReaderShell({ book }: { book: BookDetail }) {
             url={`/api/v1/books/${book.id}/file`}
             initialCfi={initialCfi}
             highlights={epubHighlights}
-            onReady={({ toc: t }) => setToc(t.flatMap(flatten))}
+            onReady={({ toc: t }) => {
+              setToc(t.flatMap(flatten))
+              setBookState("ready")
+            }}
             onProgress={onEpubProgress}
             onSelect={(sel) => setPendingSelection(sel)}
+            onError={() => setBookState("error")}
           />
+
+          {bookState !== "ready" && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "var(--color-paper-0)",
+              }}
+            >
+              <span
+                className="t-small italic"
+                style={{
+                  color:
+                    bookState === "error"
+                      ? "var(--color-accent-ink)"
+                      : "var(--color-ink-3)",
+                }}
+                role={bookState === "error" ? "alert" : "status"}
+              >
+                {bookState === "error"
+                  ? "Couldn't open this book."
+                  : "Opening the book…"}
+              </span>
+            </div>
+          )}
 
           {/* Selection toolbar — shown whenever the user drags across
               text and epub.js emits a `selected` event. Pending
@@ -685,6 +732,7 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
           <Button
             variant={typePanelOpen ? "default" : "ghost"}
             size="icon-sm"
+            aria-label="Typography settings"
             onClick={() => {
               const next = !typePanelOpen
               closePanels()
@@ -703,6 +751,7 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
           <Button
             variant={notesOpen ? "default" : "ghost"}
             size="icon-sm"
+            aria-label="Notes"
             onClick={() => {
               const next = !notesOpen
               closePanels()
@@ -716,6 +765,7 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
             size="icon-sm"
             onClick={() => setChromeVisible(false)}
             title="Hide chrome"
+            aria-label="Hide chrome"
           >
             <Icon name="close" size={14} />
           </Button>
@@ -939,6 +989,7 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
             size="icon-sm"
             onClick={() => setChromeVisible(false)}
             title="Hide chrome"
+            aria-label="Hide chrome"
           >
             <Icon name="close" size={14} />
           </Button>
@@ -1068,6 +1119,7 @@ function AudioReaderShell({
           disabled={!book.chapters || book.chapters.length === 0}
           onClick={() => setChaptersOpen((v) => !v)}
           title="Chapters"
+          aria-label="Chapters"
         >
           <Icon name="contents" size={14} />
         </Button>
@@ -1158,6 +1210,7 @@ function AudioReaderShell({
               size="icon-sm"
               onClick={() => audioRef.current?.skip(-15)}
               title="Back 15s"
+              aria-label="Back 15 seconds"
             >
               <Icon name="chevron-left" size={16} />
             </Button>
@@ -1165,6 +1218,7 @@ function AudioReaderShell({
               variant="default"
               size="lg"
               onClick={togglePlay}
+              aria-label={playing ? "Pause" : "Play"}
               style={{ minWidth: 72 }}
             >
               <Icon name={playing ? "pause" : "play"} size={18} />
@@ -1174,6 +1228,7 @@ function AudioReaderShell({
               size="icon-sm"
               onClick={() => audioRef.current?.skip(30)}
               title="Forward 30s"
+              aria-label="Forward 30 seconds"
             >
               <Icon name="chevron-right" size={16} />
             </Button>

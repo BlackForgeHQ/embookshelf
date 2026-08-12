@@ -170,7 +170,7 @@ function Notebook() {
                       lineHeight: 1.6,
                       color: "var(--color-ink-1)",
                       fontStyle: "italic",
-                      background: "oklch(0.94 0.04 85)",
+                      background: "var(--color-highlight)",
                       padding: "6px 10px",
                       marginBottom: a.note ? 10 : 0,
                     }}

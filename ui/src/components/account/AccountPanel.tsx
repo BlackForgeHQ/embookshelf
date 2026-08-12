@@ -21,6 +21,7 @@ import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
 import type { Viewer } from "@/lib/affordance"
 import { affordanceFor, viewerOf } from "@/lib/affordance"
+import { formatDate } from "@/lib/format"
 import { Avatar, Card, Field } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -111,12 +112,7 @@ export function AccountPanel() {
     successToast: (_, provider) => `${prettyProvider(provider)} disconnected.`,
   })
 
-  const joined = user?.createdAt
-    ? new Date(user.createdAt).toLocaleDateString(undefined, {
-        month: "short",
-        year: "numeric",
-      })
-    : "—"
+  const joined = user?.createdAt ? formatDate(user.createdAt) : "—"
   const roleLabel = viewer.isAdmin ? "Admin" : "User"
 
   const data = identities.data
@@ -354,7 +350,7 @@ export function AccountPanel() {
                 title={p.displayName}
                 subtitle={
                   p.email
-                    ? `${p.email} — managed by your administrator`
+                    ? `${p.email}, managed by your administrator`
                     : "Managed by your administrator"
                 }
                 enabled
@@ -582,7 +578,7 @@ function SignInRow({
           width: 8,
           height: 8,
           borderRadius: "50%",
-          background: enabled ? "oklch(0.58 0.12 140)" : "var(--color-ink-4)",
+          background: enabled ? "var(--color-ok)" : "var(--color-ink-4)",
         }}
       />
       <div className="grow">

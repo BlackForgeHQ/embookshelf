@@ -12,6 +12,7 @@ import {
 } from "@/api/bookdrop"
 import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
+import { formatDateTime } from "@/lib/format"
 import { ConfirmPhraseDialog } from "@/components/ConfirmPhraseDialog"
 import { DefRow } from "@/components/DefRow"
 import { Card, InboxMark, NotebookEmpty } from "@/components/SettingsShared"
@@ -64,7 +65,7 @@ export function BookDropPanel() {
       <p className="t-small" style={{ marginBottom: 24, fontStyle: "italic" }}>
         Housekeeping for the staging directory. Clear processed history wipes
         terminal-state queue rows. Wipe files removes every file under{" "}
-        <span className="mono">BOOKDROP_PATH</span> on disk — files referenced
+        <span className="mono">BOOKDROP_PATH</span> on disk. Files referenced
         by an in-flight extraction are left alone.
       </p>
 
@@ -172,16 +173,7 @@ export function BookDropPanel() {
 }
 
 function ProcessedRow({ item }: { item: BookDropItem }) {
-  const date = new Date(item.updatedAt)
-  const dateLabel = Number.isNaN(date.getTime())
-    ? "—"
-    : date.toLocaleString(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
+  const dateLabel = formatDateTime(item.updatedAt)
   const title = item.title?.trim() || item.filename
   // The shared view, not a third spelling of the same two words: this
   // panel used to render "Imported"/"Discarded" while the queue route

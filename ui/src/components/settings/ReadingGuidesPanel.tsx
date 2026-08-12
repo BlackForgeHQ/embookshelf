@@ -126,7 +126,7 @@ export function ReadingGuidesPanel() {
 
       <Card>
         <p className="t-small mb-4">
-          Generates a short orientation for each book — what it is about, who it
+          Generates a short orientation for each book: what it is about, who it
           suits, who should skip it. Books are sent to the endpoint below, so
           point it at a local model if you would rather they stayed here.
         </p>
@@ -206,7 +206,7 @@ export function ReadingGuidesPanel() {
           />
         </Field>
         <p className="t-small mb-4">
-          About {Math.round(form.textCap / 4).toLocaleString()} tokens — roughly
+          About {Math.round(form.textCap / 4).toLocaleString()} tokens, roughly
           the first {Math.round(form.textCap / 1600)} pages. Only EPUBs send
           text; PDFs, comics and audiobooks are described from their metadata.
         </p>
@@ -311,7 +311,7 @@ function GuideRunCard() {
           </p>
           <p className="t-small mb-4">
             Up to <strong>{est.maxInputTokens.toLocaleString()}</strong> input
-            tokens. This is a ceiling — it assumes every book fills the cap.
+            tokens. This is a ceiling: it assumes every book fills the cap.
             Books whose guide you edited by hand are skipped.
           </p>
           <Button

@@ -116,10 +116,7 @@ function Badge({ stored, cleared }: { stored: boolean; cleared: boolean }) {
   const [text, tone] = cleared
     ? ["Removing on save", "bg-muted text-(--color-accent-ink)"]
     : stored
-      ? [
-          "Stored",
-          "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
-        ]
+      ? ["Stored", "bg-(--color-ok-soft) text-(--color-ok-ink)"]
       : ["Not set", "bg-muted text-muted-foreground"]
   return (
     <span

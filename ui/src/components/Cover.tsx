@@ -296,7 +296,9 @@ function FormatBadge({ format, size }: { format: string; size: CoverSize }) {
     <Badge
       aria-label={`format ${format}`}
       className={cn(
-        "absolute top-1.5 left-1.5 tracking-wide uppercase",
+        // Top-right: the generated covers put the author line in the
+        // top-left, and the badge sat directly on top of it.
+        "absolute top-1.5 right-1.5 tracking-wide uppercase",
         compact ? "h-4 px-1.5 text-[9px]" : "h-5 px-2 text-[10px]"
       )}
       style={tokenStyle}

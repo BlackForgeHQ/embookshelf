@@ -89,7 +89,7 @@ export function ShelfIconPicker({ value, onChange, trigger, className }: Props) 
               {results.length === 0
                 ? "No matches"
                 : results.length >= MAX_RESULTS
-                  ? `${MAX_RESULTS}+ — refine search`
+                  ? `${MAX_RESULTS}+ matches. Refine search.`
                   : `${results.length} match${results.length === 1 ? "" : "es"}`}
             </div>
             <IconGrid names={results} value={value} onChange={onChange} />

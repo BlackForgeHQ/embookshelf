@@ -32,7 +32,7 @@ const INTRO = (
   <>
     The converter extension is a separately deployed sidecar that turns
     PDF, Word, RTF and OpenDocument books into Markdown for AI features
-    (ADR-0033). embookshelf works without it — features that need book text
+    (ADR-0033). embookshelf works without it; features that need book text
     for those formats will say the extension is not configured. Start it with{" "}
     <code>make converter-up</code> and point this at{" "}
     <code>http://localhost:6070</code>.
@@ -191,7 +191,7 @@ function BulkConversionCard() {
       {cov.failed > 0 && (
         <p className="t-small mb-1 text-destructive">
           {cov.failed.toLocaleString()} conversion
-          {cov.failed === 1 ? "" : "s"} failed — each book's guide tab shows
+          {cov.failed === 1 ? "" : "s"} failed. Each book's guide tab shows
           the reason verbatim. Running again retries them.
         </p>
       )}
@@ -233,7 +233,7 @@ function ConverterStatus({
   if (failed || !health) {
     return (
       <p className="text-sm text-destructive">
-        The health check itself failed — see the server log.
+        The health check itself failed. See the server log.
       </p>
     )
   }
@@ -241,18 +241,16 @@ function ConverterStatus({
     case "not_configured":
       return (
         <p className="text-sm text-muted-foreground">
-          Not configured — enable the extension and set its base URL, then
+          Not configured. Enable the extension and set its base URL, then
           save.
         </p>
       )
     case "ok":
       return (
         <p className="text-sm">
-          <span className="text-emerald-600 dark:text-emerald-400">
-            Reachable
-          </span>
+          <span className="text-(--color-ok-ink)">Reachable</span>
           {health.version ? (
-            <span className="text-muted-foreground"> — v{health.version}</span>
+            <span className="text-muted-foreground">, v{health.version}</span>
           ) : null}
         </p>
       )

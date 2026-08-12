@@ -3,6 +3,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
 import { toast } from "sonner"
 import type { FormEvent } from "react"
 
+import { AuthShell } from "@/components/AuthShell"
 import { confirmPasswordReset, passwordResetVerifyQuery } from "@/api/auth"
 import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
@@ -54,26 +55,7 @@ function ResetPasswordPage() {
   const isInvalid = !token || verify.data?.valid === false
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        background: "var(--color-paper-1)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 32,
-      }}
-    >
-      <div style={{ width: "100%", maxWidth: 420 }}>
-        <div
-          style={{
-            background: "var(--color-paper-0)",
-            border: "1px solid var(--color-rule-soft)",
-            padding: 32,
-            borderRadius: 3,
-            boxShadow: "0 12px 32px -8px oklch(0.2 0.02 60 / 0.14)",
-          }}
-        >
+    <AuthShell>
           <h1 className="t-h2" style={{ marginBottom: 4 }}>
             Choose a new password
           </h1>
@@ -162,8 +144,6 @@ function ResetPasswordPage() {
               Back to sign in
             </Link>
           </div>
-        </div>
-      </div>
-    </main>
+    </AuthShell>
   )
 }

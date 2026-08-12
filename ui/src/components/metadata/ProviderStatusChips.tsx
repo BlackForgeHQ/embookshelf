@@ -16,7 +16,10 @@ const DOT_BY_STATUS: Record<ProviderStatus, string> = {
   disabled: "bg-(--color-ink-4)",
   pending: "bg-(--color-paper-3)",
   active: "bg-(--color-accent-soft) animate-pulse",
-  done: "bg-(--color-accent-ink)",
+  // Done is neutral ink, error keeps the burgundy: they were both
+  // accent-ink, which made a finished provider and a failed one
+  // indistinguishable at a glance.
+  done: "bg-(--color-ink-1)",
   error: "bg-(--color-accent-ink)",
 }
 
@@ -39,7 +42,7 @@ export function ProviderStatusChips({
         to="/settings"
         className="t-small italic text-(--color-accent-ink) underline-offset-2 hover:underline"
       >
-        No providers enabled — open Settings → Metadata providers.
+        No providers enabled. Open Settings → Metadata providers.
       </Link>
     )
   }

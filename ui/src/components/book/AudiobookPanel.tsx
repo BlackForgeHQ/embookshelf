@@ -109,7 +109,7 @@ function EmptyState({
   if (!isNarratableFormat(format)) {
     return (
       <p className="t-small">
-        Only {narratableFormatList()} books can be narrated — this one is{" "}
+        Only {narratableFormatList()} books can be narrated; this one is{" "}
         {format}. Text has to come from somewhere, and no other format in the
         library carries any.
       </p>
@@ -118,7 +118,7 @@ function EmptyState({
   if (!viewer.isAdmin) {
     return (
       <p className="t-small">
-        No narration yet. An administrator can generate one — it costs real
+        No narration yet. An administrator can generate one; it costs real
         money, so it is theirs to start.
       </p>
     )
@@ -166,7 +166,7 @@ function RunProgress({
     <div>
       <div className="mb-1 flex items-baseline justify-between" style={{ gap: 12 }}>
         <span className="t-small">
-          Narrating — {audiobook.segmentsDone} of {audiobook.segmentsTotal}{" "}
+          Narrating {audiobook.segmentsDone} of {audiobook.segmentsTotal}{" "}
           sections
           {audiobook.segmentsFailed > 0
             ? `, ${audiobook.segmentsFailed} failed`
@@ -176,7 +176,7 @@ function RunProgress({
       </div>
       <ProgressBar value={pct / 100} label="Narration progress" />
       <p className="t-small" style={{ marginTop: 8 }}>
-        This runs in the background — you can leave this page.
+        This runs in the background. You can leave this page.
       </p>
       {viewer.isAdmin && view.canCancel && (
         <div style={{ marginTop: 10 }}>
@@ -251,7 +251,7 @@ function StoppedState({
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <p
         className="t-small"
-        style={{ margin: 0, color: failed ? "var(--color-warn, #92400e)" : undefined }}
+        style={{ margin: 0, color: failed ? "var(--color-warn-ink)" : undefined }}
       >
         {failed ? (
           <>
@@ -265,7 +265,7 @@ function StoppedState({
       </p>
       {failed && (
         <p className="t-small" style={{ margin: 0 }}>
-          The sections that finished were kept — retrying only pays for the
+          The sections that finished were kept; retrying only pays for the
           ones that did not.
         </p>
       )}
@@ -293,12 +293,12 @@ function Provenance({ audiobook }: { audiobook: Audiobook }) {
         margin: 0,
         paddingTop: 10,
         borderTop: "1px dashed var(--color-rule-soft)",
-        color: audiobook.stale ? "var(--color-warn, #92400e)" : undefined,
+        color: audiobook.stale ? "var(--color-warn-ink)" : undefined,
       }}
     >
       {audiobook.stale ? (
         <>
-          Generated from an older copy of this book — the file has changed
+          Generated from an older copy of this book. The file has changed
           since. Regenerate to match the current text.{" "}
         </>
       ) : null}
@@ -332,7 +332,7 @@ function RegenerateButton({
   })
 
   const generateMut = useApiMutation(generateAudiobook, {
-    successToast: "Narrating — this takes a while.",
+    successToast: "Narrating. This takes a while.",
     // One sentence per code, from lib/affordance.ts, rather than a
     // ternary chain that only this panel knows about (#171).
     errorToast: (err: ApiError) => messageForCode(err.code, err.message, viewer),
@@ -422,7 +422,7 @@ function ConfirmBody({
         {estimate.engine} · {estimate.voice}.
       </p>
       {hasExisting && (
-        <p className="t-small" style={{ margin: 0, color: "var(--color-warn, #92400e)" }}>
+        <p className="t-small" style={{ margin: 0, color: "var(--color-warn-ink)" }}>
           This replaces the existing narration. The old audio is deleted.
         </p>
       )}

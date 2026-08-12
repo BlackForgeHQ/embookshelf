@@ -26,6 +26,7 @@ import {
 import { appConfigQuery } from "@/api/settings"
 import type { Viewer } from "@/lib/affordance"
 import { affordanceFor, messageForCode, viewerOf } from "@/lib/affordance"
+import { formatDate } from "@/lib/format"
 import { isKindleEligibleFormat } from "@/lib/formats"
 import {
   DEVICE_KIND_LABELS,
@@ -219,7 +220,8 @@ function BookDetail() {
         {/* Right — info */}
         <div>
           <div className="t-micro" style={{ marginBottom: 8 }}>
-            {b.format} · {b.year}
+            {b.format}
+            {b.year ? ` · ${b.year}` : ""}
           </div>
           <h1
             className="t-display"
@@ -260,7 +262,9 @@ function BookDetail() {
             >
               {b.rating.toFixed(1)}
             </span>
-            <span style={{ color: "var(--color-rule)" }}>·</span>
+            {b.tags.length > 0 && (
+              <span style={{ color: "var(--color-rule)" }}>·</span>
+            )}
             {b.tags.map((t) => (
               <span key={t} className="chip">
                 {t}
@@ -328,19 +332,23 @@ function BookDetail() {
                     {...META_ROW}
                   />
                 )}
-                <DefRow label="Published" value={b.year} {...META_ROW} />
+                {b.year ? (
+                  <DefRow label="Published" value={b.year} {...META_ROW} />
+                ) : null}
                 <DefRow label="Format" value={b.format} {...META_ROW} />
                 {b.publisher && (
                   <DefRow label="Publisher" value={b.publisher} {...META_ROW} />
                 )}
-                <DefRow
-                  label="Categories"
-                  value={b.tags.join(" · ") || "—"}
-                  {...META_ROW}
-                />
+                {b.tags.length > 0 && (
+                  <DefRow
+                    label="Categories"
+                    value={b.tags.join(" · ")}
+                    {...META_ROW}
+                  />
+                )}
                 <DefRow
                   label="Added"
-                  value={new Date(b.addedAt).toLocaleDateString()}
+                  value={formatDate(b.addedAt)}
                   {...META_ROW}
                 />
                 {b.isbn && (
@@ -603,7 +611,7 @@ function ShelfCard({ book }: { book: BookDetailPayload }) {
             <span
               key={s.slug}
               className="chip"
-              title="Auto-matched by rule — manage on the shelf page"
+              title="Auto-matched by rule. Manage on the shelf page"
               style={{
                 cursor: "default",
                 background: "transparent",
@@ -942,9 +950,7 @@ function NotesPanel({ bookId }: { bookId: string }) {
                 {a.locator && ` · ${locatorLabel(a.locator)}`}
               </span>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span className="t-micro">
-                  {new Date(a.createdAt).toLocaleDateString()}
-                </span>
+                <span className="t-micro">{formatDate(a.createdAt)}</span>
                 <Button
                   type="button"
                   variant="ghost"
@@ -964,7 +970,7 @@ function NotesPanel({ bookId }: { bookId: string }) {
                   fontSize: 14.5,
                   lineHeight: 1.55,
                   fontStyle: "italic",
-                  background: "oklch(0.94 0.04 85)",
+                  background: "var(--color-highlight)",
                   padding: "4px 8px",
                   marginBottom: a.note ? 8 : 0,
                 }}
@@ -1121,7 +1127,7 @@ function SendToDeviceButton({ bookId }: { bookId: string }) {
         onClick={() =>
           navigate({ to: "/account", search: { section: "devices" } })
         }
-        title="No devices paired — pair one in Account → Device sync"
+        title="No devices paired. Pair one in Account → Device sync"
       >
         <Icon name="device" size={13} /> Send to device
       </Button>
@@ -1179,7 +1185,7 @@ function DeleteBookDialog({
       title="Delete book"
       description={
         <>
-          Permanently remove <strong>{title}</strong> — the DB row, its cover,
+          Permanently remove <strong>{title}</strong>: the DB row, its cover,
           its source file on disk, and every reader&apos;s progress, notes, and
           shelf placements for it. This cannot be undone.
         </>

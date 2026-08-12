@@ -11,6 +11,7 @@ import type {
 import { statsQuery } from "@/api/stats"
 import { readingStatsQuery } from "@/api/reading"
 import { useApiQuery } from "@/api/query"
+import { heatColor } from "@/lib/heat"
 import { ProgressBar } from "@/components/ProgressBar"
 import { TopBar } from "@/components/TopBar"
 
@@ -33,7 +34,7 @@ function StatsPage() {
     <div className="fade-in">
       <TopBar
         title="Statistics"
-        subtitle="A view of your collection — size, shape, and texture."
+        subtitle="A view of your collection: size, shape, and texture."
       />
 
       <div className="mx-auto flex max-w-[1100px] flex-col gap-16 px-8 pt-10 pb-24">
@@ -128,7 +129,7 @@ function StatsPage() {
               >
                 {stats.data.topAuthors.length === 0 ? (
                   <EmptyRow>
-                    No authors yet — add books to your library.
+                    No authors yet. Add books to your library.
                   </EmptyRow>
                 ) : (
                   <BarList buckets={stats.data.topAuthors} />
@@ -476,16 +477,6 @@ function SideMetric({
       )}
     </div>
   )
-}
-
-// Heatmap color ramp — same thresholds the Dashboard uses so the two
-// views stay visually consistent.
-function heatColor(m: number): string {
-  if (m === 0) return "var(--color-paper-2)"
-  if (m < 20) return "oklch(0.78 0.06 35)"
-  if (m < 35) return "oklch(0.65 0.09 35)"
-  if (m < 50) return "oklch(0.52 0.11 35)"
-  return "oklch(0.42 0.11 35)"
 }
 
 function fillDays(minutes: Array<number>, target: number): Array<number> {

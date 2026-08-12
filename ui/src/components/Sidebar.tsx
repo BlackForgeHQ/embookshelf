@@ -406,8 +406,8 @@ function SharedShelfRow({
 }) {
   const tooltip =
     (shelf.ownerName ?? "") !== ""
-      ? `${shelf.name} — shared by ${shelf.ownerName}`
-      : `${shelf.name} — shared with everyone`
+      ? `${shelf.name}, shared by ${shelf.ownerName}`
+      : `${shelf.name}, shared with everyone`
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={tooltip}>

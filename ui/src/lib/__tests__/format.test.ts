@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { formatBytes, formatCost, formatDuration, relativeTime } from "@/lib/format"
+import {
+  formatBytes,
+  formatCost,
+  formatDate,
+  formatDateTime,
+  formatDuration,
+  relativeTime,
+} from "@/lib/format"
 
 // These three were spelled out at their call sites — bytes twice,
 // verbatim except for the one line that mattered, and duration and cost
@@ -98,6 +105,29 @@ describe("formatCost", () => {
       expect(formatCost(input)).toBe(want)
     })
   }
+})
+
+describe("formatDate", () => {
+  it("pins the locale so the same ISO string renders the same everywhere", () => {
+    expect(formatDate("2026-08-09T10:30:00Z")).toBe("Aug 9, 2026")
+    expect(formatDate(Date.parse("2026-01-02T00:00:00"))).toBe("Jan 2, 2026")
+  })
+
+  it("renders an unparsable date as an em dash, not 'Invalid Date'", () => {
+    expect(formatDate("not-a-date")).toBe("—")
+  })
+})
+
+describe("formatDateTime", () => {
+  it("is formatDate plus the time", () => {
+    // Constructed from local parts so the expectation holds in any zone.
+    const d = new Date(2026, 7, 9, 14, 5)
+    expect(formatDateTime(d)).toBe("Aug 9, 2026, 2:05 PM")
+  })
+
+  it("renders an unparsable date as an em dash", () => {
+    expect(formatDateTime("nope")).toBe("—")
+  })
 })
 
 describe("relativeTime", () => {

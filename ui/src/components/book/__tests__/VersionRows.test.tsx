@@ -82,7 +82,7 @@ it("labels a stale rendition without hiding it", async () => {
   markdownReply = { state: "ready", stale: true, sizeBytes: 1 }
   renderRows()
   await waitFor(() => {
-    expect(screen.getByText(/Stale — converted from an older copy/)).toBeTruthy()
+    expect(screen.getByText(/Stale: converted from an older copy/)).toBeTruthy()
   })
   expect(screen.getAllByRole("link", { name: /download/i })).toHaveLength(2)
 })

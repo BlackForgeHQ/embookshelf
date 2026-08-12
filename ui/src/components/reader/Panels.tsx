@@ -139,7 +139,7 @@ export function NotesPanel({
                   fontSize: 12.5,
                   lineHeight: 1.5,
                   fontStyle: "italic",
-                  background: "oklch(0.94 0.04 85)",
+                  background: "var(--color-highlight)",
                   padding: "4px 6px",
                   marginBottom: a.note ? 6 : 0,
                 }}

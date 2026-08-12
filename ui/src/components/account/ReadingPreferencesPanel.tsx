@@ -35,7 +35,7 @@ export function ReadingPreferencesPanel() {
       <p className="t-small" style={{ marginBottom: 24, fontStyle: "italic" }}>
         Stored locally in this browser. The reader picks them up on next open.
         {saved && (
-          <span style={{ marginLeft: 8, color: "oklch(0.5 0.12 140)" }}>
+          <span style={{ marginLeft: 8, color: "var(--color-ok-ink)" }}>
             ✓ saved
           </span>
         )}
@@ -68,7 +68,7 @@ export function ReadingPreferencesPanel() {
           />
         </Field>
 
-        <Field label={`Font size — ${prefs.fontSize}px`}>
+        <Field label={`Font size: ${prefs.fontSize}px`}>
           <input
             type="range"
             min={14}
@@ -80,7 +80,7 @@ export function ReadingPreferencesPanel() {
           />
         </Field>
 
-        <Field label={`Line height — ${prefs.lineHeight.toFixed(2)}`}>
+        <Field label={`Line height: ${prefs.lineHeight.toFixed(2)}`}>
           <input
             type="range"
             min={1.2}
