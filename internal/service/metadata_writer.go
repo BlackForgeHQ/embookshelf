@@ -377,7 +377,9 @@ func (w *MetadataWriter) Write(ctx context.Context, b model.Book, trigger Trigge
 		}
 	}
 
-	if eff.FolderRename && handle != nil && w.deps.Renamer != nil {
+	// No handle re-check: DecideEffects only plans a rename over a live
+	// handle, and Relocate declines a nil one anyway.
+	if eff.FolderRename && w.deps.Renamer != nil {
 		// One call: whether this is a rename or the flat-layout
 		// migration of ADR-0003 §5 is the renamer's dispatch, not the
 		// pipeline's.

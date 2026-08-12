@@ -317,7 +317,7 @@ func (r *FolderRenamer) renameBackend(
 
 // grace returns the configured grace duration for old keys after a
 // successful rename. Defaults to 1h when unset, matching the ADR-0005
-// fallback used in cmd/embookshelf wiring.
+// fallback internal/app applies when building the renamer.
 func (r *FolderRenamer) grace() time.Duration {
 	if r.deps.Grace > 0 {
 		return r.deps.Grace
@@ -509,16 +509,4 @@ func moveSingleFlatFile(b model.Book, libRoot, newDir string) error {
 		return err
 	}
 	return nil
-}
-
-// uniqueDirectoryUnless is a variant of uniqueDirectory that returns
-// the input unchanged when it equals the source (oldAbs). Used by
-// rename to avoid bumping a target that is the same directory we're
-// renaming from (a no-op rename) — though the pipeline's folder delta
-// should have short-circuited that case already.
-func uniqueDirectoryUnless(dest, oldAbs string) string {
-	if dest == oldAbs {
-		return dest
-	}
-	return uniqueDirectory(dest)
 }
