@@ -47,15 +47,13 @@ type EpubRenderDeps struct {
 }
 
 // EpubRender renders one book's generated EPUB and records the outcome
-// on the tracking row. A sequence of renditionRun steps, sharing the
-// markdown worker's loud-failure choreography: the wrapper writes the
-// row before any failure returns, permanent verdicts wrap
-// ErrDoNotRetry, and a pending markdown rendition is a plain error so
-// River's retry becomes the wait.
+// on the tracking row. The shared prelude (renditionJob, #309) runs the
+// gates — with the markdown feed's wiring as this artifact's Wired gate
+// — and marks the row running; the artifact steps share renditionRun's
+// loud-failure choreography, and a pending markdown rendition is a
+// plain error so River's retry becomes the wait.
 func EpubRender(ctx context.Context, a jobs.EpubRenderArgs, deps EpubRenderDeps) error {
 	var (
-		book     model.Book
-		cfg      repo.ConverterConfig
 		markdown string
 		result   service.ConvertResult
 	)
@@ -65,42 +63,25 @@ func EpubRender(ctx context.Context, a jobs.EpubRenderArgs, deps EpubRenderDeps)
 		}
 	}()
 
-	return renditionRun(ctx, deps.Renditions, a.BookID,
-		func(ctx context.Context) (string, bool, error) {
-			var err error
-			book, err = deps.Books.GetByID(ctx, "", a.BookID)
-			if err != nil {
-				return "", true, fmt.Errorf("load book %s: %w", a.BookID, err)
-			}
-			return "", false, nil
+	book, cfg, err := renditionJob{
+		Rows:   deps.Renditions,
+		Books:  deps.Books,
+		Config: deps.Config,
+		Refusal: func(format string) string {
+			return fmt.Sprintf("format %s cannot become a generated EPUB — the chain starts from %v", format, model.ConvertibleFormats())
 		},
-		func(context.Context) (string, bool, error) {
-			if model.Convertible(book.Format) {
-				return "", false, nil
-			}
-			msg := fmt.Sprintf("format %s cannot become a generated EPUB — the chain starts from %v", book.Format, model.ConvertibleFormats())
-			return msg, true, errors.New(msg)
-		},
-		func(ctx context.Context) (string, bool, error) {
-			var err error
-			cfg, err = deps.Config(ctx)
-			if err != nil {
-				return "read converter settings: " + err.Error(), false, fmt.Errorf("read converter settings: %w", err)
-			}
-			if !cfg.Configured() {
-				return repo.MsgConverterNotConfigured, true, ErrConverterNotConfigured
-			}
+		Wired: func() (string, error) {
 			if deps.Markdown == nil {
-				return "markdown feed is not wired", true, errors.New("markdown feed is not wired")
+				return "markdown feed is not wired", errors.New("markdown feed is not wired")
 			}
-			return "", false, nil
+			return "", nil
 		},
-		func(ctx context.Context) (string, bool, error) {
-			if err := deps.Renditions.MarkRunning(ctx, a.BookID); err != nil {
-				return "", false, fmt.Errorf("mark running: %w", err)
-			}
-			return "", false, nil
-		},
+	}.Prepare(ctx, a.BookID)
+	if err != nil {
+		return err
+	}
+
+	return renditionRun(ctx, deps.Renditions, a.BookID,
 		// The chained stage (ADR-0034 §5): the same feed the guide
 		// consumes, so a missing or stale rendition is requested and
 		// waited for identically.
