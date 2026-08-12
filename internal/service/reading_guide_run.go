@@ -92,22 +92,25 @@ func (r *GuideRunner) Estimate(ctx context.Context) (GuideEstimate, error) {
 	return est, nil
 }
 
-// Start queues one job per candidate and reports how many went.
-//
-// Returns the count queued so far alongside the error when the queue
-// refuses partway: those jobs are already running, and reporting zero
-// would misrepresent what the admin's click actually did.
+// Start queues one job per candidate through the shared request module
+// — the guide is the artifact with no tracking row, so its request is
+// just the enqueue (nil RenditionRequestRows) and the partial-count
+// contract lives on Bulk rather than being restated here (#317).
 func (r *GuideRunner) Start(ctx context.Context) (int, error) {
-	rows, err := r.candidates.ListGuideCandidates(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("list guide candidates: %w", err)
+	requests := &RenditionRequests{
+		enq:  r.enq,
+		args: func(bookID string) jobs.Args { return jobs.ReadingGuideArgs{BookID: bookID} },
+		candidates: func(ctx context.Context) ([]string, error) {
+			rows, err := r.candidates.ListGuideCandidates(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("list guide candidates: %w", err)
+			}
+			ids := make([]string, 0, len(rows))
+			for _, c := range rows {
+				ids = append(ids, c.BookID)
+			}
+			return ids, nil
+		},
 	}
-	queued := 0
-	for _, c := range rows {
-		if err := r.enq.Enqueue(ctx, jobs.ReadingGuideArgs{BookID: c.BookID}); err != nil {
-			return queued, fmt.Errorf("queue guide for %s: %w", c.BookID, err)
-		}
-		queued++
-	}
-	return queued, nil
+	return requests.Bulk(ctx)
 }

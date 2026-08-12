@@ -11,7 +11,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/layout"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -76,13 +75,11 @@ func (h *Handler) BookEpubGet(c *gin.Context, s bookScope) {
 // EPUB's configuration. Admin-gated at the route.
 func (h *Handler) BookEpubGenerate(c *gin.Context, s bookScope) {
 	h.renditionGenerate(c, s, renditionRouteSpec{
-		available:         h.epubRenditions != nil,
+		available:         h.epubRenditions != nil && h.epubRequests != nil,
 		unavailableMsg:    "generated EPUBs are unavailable",
 		notConvertibleMsg: "only " + model.ConvertibleFormatList() + " books can become a generated EPUB",
-		startOp:           "start epub rendition",
-		queueOp:           "queue epub render",
-		start:             func(ctx context.Context, bookID string) error { return h.epubRenditions.Start(ctx, bookID) },
-		args:              jobs.EpubRenderArgs{BookID: s.Book.ID},
+		requestOp:         "request epub render",
+		request:           h.epubRequests.One,
 	})
 }
 

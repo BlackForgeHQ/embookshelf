@@ -11,6 +11,7 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/service"
 )
 
 // renditionRouteCase adapts one artifact's generate route to the shared
@@ -41,6 +42,7 @@ func TestRenditionGenerateGateChain(t *testing.T) {
 				h := &Handler{appSettings: settings, queue: q}
 				if withStore {
 					h.renditions = store
+					h.mdRequests = service.NewMarkdownRequests(store, q)
 				}
 				return h, func() bool { return store.started }
 			},
@@ -53,6 +55,7 @@ func TestRenditionGenerateGateChain(t *testing.T) {
 				h := &Handler{appSettings: settings, queue: q}
 				if withStore {
 					h.epubRenditions = store
+					h.epubRequests = service.NewEpubRequests(store, q)
 				}
 				return h, func() bool { return store.started }
 			},

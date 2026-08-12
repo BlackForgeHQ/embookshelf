@@ -157,6 +157,8 @@ func (f *fakeConversionStore) Start(_ context.Context, bookID string) error {
 	return nil
 }
 
+func (f *fakeConversionStore) MarkFailed(context.Context, string, string) error { return nil }
+
 func TestSettingsConverterCoverageDerivesCandidates(t *testing.T) {
 	h := &Handler{renditions: &fakeRenditions{coverage: repo.ConversionCoverage{
 		Total: 10, Ready: 5, Converting: 2, Failed: 1, Unconverted: 2,
@@ -186,7 +188,7 @@ func TestSettingsConverterRunStartsRowsAndEnqueues(t *testing.T) {
 	}}
 	q := &captureQueue{}
 	h := &Handler{
-		conversionRunner: service.NewConversionRunner(store, q),
+		mdRequests: service.NewMarkdownRequests(store, q),
 		appSettings: &fakeAppSettings{
 			converter: repo.ConverterConfig{Enabled: true, BaseURL: "http://c"},
 		},
@@ -213,8 +215,8 @@ func TestSettingsConverterRunStartsRowsAndEnqueues(t *testing.T) {
 // per-book button: the loud answer beats a thousand failing jobs.
 func TestSettingsConverterRunRefusesWhenNotConfigured(t *testing.T) {
 	h := &Handler{
-		conversionRunner: service.NewConversionRunner(&fakeConversionStore{}, &captureQueue{}),
-		appSettings:      &fakeAppSettings{},
+		mdRequests:  service.NewMarkdownRequests(&fakeConversionStore{}, &captureQueue{}),
+		appSettings: &fakeAppSettings{},
 	}
 	c, rec := settingsCtx(t, http.MethodPost, "/api/v1/settings/converter/run", "")
 	h.SettingsConverterRun(c)

@@ -30,6 +30,12 @@ func (f *fakeRenditions) Start(context.Context, string) error {
 	return nil
 }
 
+func (f *fakeRenditions) MarkFailed(context.Context, string, string) error { return nil }
+
+func (f *fakeRenditions) ListConversionCandidates(context.Context) ([]repo.ConversionCandidate, error) {
+	return nil, nil
+}
+
 func (f *fakeRenditions) GetByBookID(context.Context, string) (model.MarkdownRendition, error) {
 	if f.missing {
 		return model.MarkdownRendition{}, repo.ErrNotFound

@@ -108,11 +108,11 @@ func (h *Handler) SettingsConverterRun(c *gin.Context) {
 	if _, ok := h.requireConverter(c); !ok {
 		return
 	}
-	if h.conversionRunner == nil {
+	if h.mdRequests == nil {
 		writeError(c, http.StatusServiceUnavailable, "no conversion runner configured")
 		return
 	}
-	queued, err := h.conversionRunner.Start(ctx)
+	queued, err := h.mdRequests.Bulk(ctx)
 	if err != nil {
 		// Partial progress is real: those jobs are running. Report the
 		// count alongside the failure rather than implying nothing began.
