@@ -4,9 +4,7 @@ package repo
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/blackforge/embookshelf/internal/db"
 	"github.com/blackforge/embookshelf/internal/db/dberr"
@@ -231,35 +229,20 @@ func (r *LibraryRepo) SearchSuggest(ctx context.Context, q string, limit int) ([
 // library by joining through the backend_id FK. Returns ErrNotFound when the
 // library either does not exist or has no backend_id set yet.
 func (r *LibraryRepo) LibraryBackend(ctx context.Context, libraryID string) (model.StorageBackend, error) {
-	const q = `
-		SELECT sb.id, sb.kind, sb.config, sb.created_at
+	q := `
+		SELECT ` + storageBackendProjection.selectList("sb") + `
 		FROM libraries l
 		JOIN storage_backends sb ON sb.id = l.backend_id
 		WHERE l.id = $1
 	`
 	row := r.db.SQL.QueryRowContext(ctx, q, libraryID)
 
-	// Re-use the same scan logic as StorageBackendRepo to avoid duplication.
 	var b model.StorageBackend
-	var configRaw any
-	if err := row.Scan(&b.ID, &b.Kind, &configRaw, &b.CreatedAt); err != nil {
+	if err := storageBackendProjection.scan(row, &b); err != nil {
 		if dberr.IsNotFound(err) {
 			return model.StorageBackend{}, ErrNotFound
 		}
 		return model.StorageBackend{}, err
-	}
-
-	var raw []byte
-	switch v := configRaw.(type) {
-	case []byte:
-		raw = v
-	case string:
-		raw = []byte(v)
-	default:
-		return model.StorageBackend{}, fmt.Errorf("unexpected type for config column: %T", configRaw)
-	}
-	if err := json.Unmarshal(raw, &b.Config); err != nil {
-		return model.StorageBackend{}, fmt.Errorf("decode config: %w", err)
 	}
 	return b, nil
 }

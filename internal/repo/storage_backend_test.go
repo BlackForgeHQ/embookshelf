@@ -94,3 +94,66 @@ func TestStorageBackendRepo_crud(t *testing.T) {
 		t.Fatalf("Delete in-use backend: got %v, want ErrStorageBackendInUse", err)
 	}
 }
+
+// TestStorageBackendProjection_RoundTripsAcrossBothCallSites exercises
+// storageBackendProjection at both sites that render it:
+// StorageBackendRepo's own bare form (Create/Get/List) and
+// LibraryRepo.LibraryBackend's "sb"-aliased join, which used to carry a
+// second, hand-kept copy of the same four-column scan. id and kind are
+// adjacent TEXT columns in both, and config's JSONB decode sits right
+// next to them — kind is short and never UUID-shaped while id always
+// is, so a crossed id/kind pair fails the shape check below rather than
+// coincidentally passing a loose string comparison.
+func TestStorageBackendProjection_RoundTripsAcrossBothCallSites(t *testing.T) {
+	d := repotest.New(t)
+	backends := repo.NewStorageBackendRepo(d)
+	libs := repo.NewLibraryRepo(d)
+	ctx := context.Background()
+
+	// kind is constrained to 'local' | 's3' by the schema.
+	const kind = "s3"
+	cfg := map[string]any{"endpoint": "https://round-trip.example", "bucket": "round-trip-bucket"}
+
+	b, err := backends.Create(ctx, kind, cfg)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if b.Kind != kind {
+		t.Fatalf("Create: Kind = %q, want %q", b.Kind, kind)
+	}
+	if len(b.ID) < 20 {
+		t.Fatalf("Create: ID = %q, want a generated (UUID-length) id — a crossed id/kind pair would land kind's short value here", b.ID)
+	}
+	if b.Config["endpoint"] != "https://round-trip.example" || b.Config["bucket"] != "round-trip-bucket" {
+		t.Fatalf("Create: Config = %+v, want the two distinct strings unswapped", b.Config)
+	}
+
+	got, err := backends.Get(ctx, b.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ID != b.ID || got.Kind != kind {
+		t.Fatalf("Get: id/kind = %q/%q, want %q/%q", got.ID, got.Kind, b.ID, kind)
+	}
+
+	lib, err := libs.CreateLibrary(ctx, "Round Trip", "storage-backend-round-trip", "/tmp/sb-round-trip", nil)
+	if err != nil {
+		t.Fatalf("CreateLibrary: %v", err)
+	}
+	if err := libs.SetBackendID(ctx, lib.ID, b.ID); err != nil {
+		t.Fatalf("SetBackendID: %v", err)
+	}
+
+	// LibraryBackend renders the same projection aliased as "sb" — the
+	// second call site the projection collapses.
+	viaLibrary, err := libs.LibraryBackend(ctx, lib.ID)
+	if err != nil {
+		t.Fatalf("LibraryBackend: %v", err)
+	}
+	if viaLibrary.ID != b.ID || viaLibrary.Kind != kind {
+		t.Fatalf("LibraryBackend: id/kind = %q/%q, want %q/%q", viaLibrary.ID, viaLibrary.Kind, b.ID, kind)
+	}
+	if viaLibrary.Config["endpoint"] != "https://round-trip.example" || viaLibrary.Config["bucket"] != "round-trip-bucket" {
+		t.Fatalf("LibraryBackend: Config = %+v, want the two distinct strings unswapped", viaLibrary.Config)
+	}
+}

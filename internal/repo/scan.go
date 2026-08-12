@@ -106,6 +106,32 @@ func (c deviceConfigJSON) Scan(src any) error {
 	return nil
 }
 
+// storageBackendConfigJSON decodes the storage_backends.config JSONB
+// document. Unlike deviceConfigJSON, an unexpected type is the only
+// failure mode handled specially here — the column is NOT NULL, so a
+// driver value that is neither []byte nor string is a decode bug, not a
+// shape the config can legitimately take.
+type storageBackendConfigJSON struct{ Dst *map[string]any }
+
+func (c storageBackendConfigJSON) Scan(src any) error {
+	if c.Dst == nil {
+		return fmt.Errorf("scan config: nil dst")
+	}
+	var raw []byte
+	switch v := src.(type) {
+	case []byte:
+		raw = v
+	case string:
+		raw = []byte(v)
+	default:
+		return fmt.Errorf("scan config: unexpected type %T", src)
+	}
+	if err := json.Unmarshal(raw, c.Dst); err != nil {
+		return fmt.Errorf("decode config: %w", err)
+	}
+	return nil
+}
+
 // jsonBytes normalises a JSONB column value. The driver hands one over
 // as []byte, but a string is equally valid JSON.
 func jsonBytes(what string, src any) ([]byte, error) {

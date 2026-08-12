@@ -35,13 +35,46 @@ type Placement struct {
 // HasFileRow reports whether a files row backs this placement.
 func (p Placement) HasFileRow() bool { return p.FileID != "" }
 
+// placementProjection is the ListPlacements row, declared once. It had
+// zero direct tests before this — only the recovery integration test
+// exercised it — despite spanning two tables' worth of same-type columns
+// in one SELECT: title/author/format/book_path are four adjacent TEXT
+// columns from books, and file_id/location sit next to them from the
+// files side of the join. A crossed pair here would compile, run, and
+// point the misplaced-file recovery flow at the wrong book or the wrong
+// key.
+//
+// Every entry hardcodes its own table's alias (b. or f.) in expr rather
+// than using the {alias} substitution token: the projection's usual
+// single-alias form doesn't fit a two-table join, and expr already
+// exists for exactly this case (a computed/joined column, per the
+// projection's documented contract). size uses COALESCE for the same
+// reason the book/shelf projections' joined columns do — a book with no
+// files row LEFT JOINs to NULL, and folding that into the SQL keeps the
+// scan destination a plain int64 instead of a nullable adapter.
+var placementProjection = projection[Placement]{
+	{name: "book_id", expr: "b.id", dest: func(p *Placement) any { return &p.BookID }},
+	{name: "title", expr: "b.title", dest: func(p *Placement) any { return &p.Title }},
+	{name: "author", expr: "b.author", dest: func(p *Placement) any { return &p.Author }},
+	{name: "format", expr: "b.format", dest: func(p *Placement) any { return &p.Format }},
+	{name: "book_path", expr: "b.path", dest: func(p *Placement) any { return &p.BookPath }},
+	{name: "file_id", expr: "f.id", dest: func(p *Placement) any { return nullText{Dst: &p.FileID} }},
+	{name: "location", expr: "f.location", dest: func(p *Placement) any { return nullText{Dst: &p.Location} }},
+	{name: "size", expr: "COALESCE(f.size, 0)", dest: func(p *Placement) any { return &p.Size }},
+	{name: "content_hash", expr: "f.content_hash", dest: func(p *Placement) any { return &p.ContentHash }},
+}
+
+// placementCols is the projection rendered once. The alias argument is
+// unused — every column's expr names its own table explicitly, so there
+// is no {alias} token for render to substitute.
+var placementCols = placementProjection.selectList("")
+
 // ListPlacements returns every (book, files row) pair in a library,
 // including books whose files rows are gone. Ordered by book id then
 // location so a report over it is stable between runs.
 func (r *BookRepo) ListPlacements(ctx context.Context, libraryID string) ([]Placement, error) {
-	const q = `
-		SELECT b.id, b.title, b.author, b.format, b.path,
-		       f.id, f.location, f.size, f.content_hash
+	q := `
+		SELECT ` + placementCols + `
 		FROM books b
 		LEFT JOIN files f ON f.book_id = b.id
 		WHERE b.library_id = $1 AND b.deleted_at IS NULL
@@ -53,14 +86,7 @@ func (r *BookRepo) ListPlacements(ctx context.Context, libraryID string) ([]Plac
 	}
 	return collect(rows, []Placement{}, func(s scanner) (Placement, error) {
 		var p Placement
-		var size *int64
-		err := s.Scan(
-			&p.BookID, &p.Title, &p.Author, &p.Format, &p.BookPath,
-			nullText{Dst: &p.FileID}, nullText{Dst: &p.Location}, &size, &p.ContentHash,
-		)
-		if size != nil {
-			p.Size = *size
-		}
+		err := placementProjection.scan(s, &p)
 		return p, err
 	})
 }
