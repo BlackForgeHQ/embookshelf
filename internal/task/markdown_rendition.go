@@ -49,63 +49,33 @@ type MarkdownRenditionDeps struct {
 	Record func(context.Context, model.Book, string) (service.DerivedRecord, error)
 }
 
-// ErrConverterNotConfigured is the loud "extension not configured"
-// answer (ADR-0033 §5) — distinct from a conversion that failed. Wraps
-// ErrDoNotRetry: a disabled extension will still be disabled in thirty
-// seconds.
-var ErrConverterNotConfigured = fmt.Errorf(repo.MsgConverterNotConfigured+": %w", jobs.ErrDoNotRetry)
-
 // MarkdownRendition converts one book's file into markdown and records
-// the outcome on the tracking row. A sequence of renditionRun steps:
-// the wrapper owns writing the row before any failure returns (ADR-0033
-// §5) and mapping permanent verdicts onto ErrDoNotRetry — what lands in
-// the row is surfaced verbatim.
+// the outcome on the tracking row. The shared prelude (renditionJob,
+// #309) runs the gates and marks the row running; what remains here is
+// the artifact's own work as renditionRun steps — the wrapper owns
+// writing the row before any failure returns (ADR-0033 §5) and mapping
+// permanent verdicts onto ErrDoNotRetry.
 func MarkdownRendition(ctx context.Context, a jobs.MarkdownRenditionArgs, deps MarkdownRenditionDeps) error {
-	var (
-		book   model.Book
-		cfg    repo.ConverterConfig
-		result service.ConvertResult
-	)
+	var result service.ConvertResult
 	defer func() {
 		if result.Path != "" {
 			_ = os.Remove(result.Path)
 		}
 	}()
 
+	book, cfg, err := renditionJob{
+		Rows:   deps.Renditions,
+		Books:  deps.Books,
+		Config: deps.Config,
+		Refusal: func(format string) string {
+			return fmt.Sprintf("format %s is not convertible — the converter accepts %v", format, model.ConvertibleFormats())
+		},
+	}.Prepare(ctx, a.BookID)
+	if err != nil {
+		return err
+	}
+
 	return renditionRun(ctx, deps.Renditions, a.BookID,
-		func(ctx context.Context) (string, bool, error) {
-			var err error
-			book, err = deps.Books.GetByID(ctx, "", a.BookID)
-			if err != nil {
-				// A deleted book cascades its rendition row; nothing to record.
-				return "", true, fmt.Errorf("load book %s: %w", a.BookID, err)
-			}
-			return "", false, nil
-		},
-		func(context.Context) (string, bool, error) {
-			if model.Convertible(book.Format) {
-				return "", false, nil
-			}
-			msg := fmt.Sprintf("format %s is not convertible — the converter accepts %v", book.Format, model.ConvertibleFormats())
-			return msg, true, errors.New(msg)
-		},
-		func(ctx context.Context) (string, bool, error) {
-			var err error
-			cfg, err = deps.Config(ctx)
-			if err != nil {
-				return "read converter settings: " + err.Error(), false, fmt.Errorf("read converter settings: %w", err)
-			}
-			if !cfg.Configured() {
-				return repo.MsgConverterNotConfigured, true, ErrConverterNotConfigured
-			}
-			return "", false, nil
-		},
-		func(ctx context.Context) (string, bool, error) {
-			if err := deps.Renditions.MarkRunning(ctx, a.BookID); err != nil {
-				return "", false, fmt.Errorf("mark running: %w", err)
-			}
-			return "", false, nil
-		},
 		func(ctx context.Context) (string, bool, error) {
 			body, _, closer, err := deps.Open(ctx, book)
 			if err != nil {

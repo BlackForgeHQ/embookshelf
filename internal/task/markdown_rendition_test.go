@@ -18,16 +18,20 @@ import (
 )
 
 type fakeRenditionStore struct {
-	running bool
-	ready   bool
-	failed  string
-	loc     string
-	size    int64
-	hash    []byte
-	version string
+	running    bool
+	runningErr error
+	ready      bool
+	failed     string
+	loc        string
+	size       int64
+	hash       []byte
+	version    string
 }
 
 func (f *fakeRenditionStore) MarkRunning(context.Context, string) error {
+	if f.runningErr != nil {
+		return f.runningErr
+	}
 	f.running = true
 	return nil
 }
