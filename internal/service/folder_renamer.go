@@ -252,7 +252,7 @@ func (r *FolderRenamer) persist(
 // renameBackend is the S3 (any non-local Storage) arm, per ADR-0005.
 // Pipeline:
 //
-//  1. Resolve a non-colliding new prefix via uniqueBackendFolder.
+//  1. Resolve a non-colliding new prefix via backendRoot().freeDirBackend.
 //  2. Storage.MovePrefix the old folder onto it. The adapter owns the
 //     list, the per-key copy and its retry budget; it hands back the
 //     destinations it wrote and the sources it left alive.

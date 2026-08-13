@@ -269,8 +269,7 @@ const noNarrationMsg = "this book has no generated narration"
 //
 // A narration being a rendition of the book is now what the handler tier
 // says too: this is the shared serve chain with the narration's
-// configuration, the same seam the generated EPUB and the markdown
-// rendition go through (#316).
+// configuration, the same seam the generated EPUB goes through (#316).
 //
 // The run comes from the reconciling read rather than straight from the
 // repo. Serving is one more caller asking how a run is doing, and Status

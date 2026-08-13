@@ -531,10 +531,10 @@ func (h *LibraryHandle) SidecarKey(bookLocation string) string {
 // the library root and un-absolutized each entry against it; Walk below
 // does the rooting itself, from the prefix it listed under rather than
 // from the root as spelled, and nothing else ever asked. ADR-0030's
-// Consequences names Relativize and relativeToRoot as the two live
-// producers of absolute locations, "the very rows a migration would have
-// had to clean up" — this is one of the two, retired rather than
-// reimplemented.
+// Consequences named Relativize and relativeToRoot as live producers of
+// absolute locations, "the very rows a migration would have had to clean up"
+// — libRoot.rel is now the single relativizer, and this one is retired
+// rather than reimplemented.
 
 // ErrNoWalkRoot says a local library has no root configured, so there
 // is nothing for Walk to start from.

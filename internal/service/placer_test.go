@@ -159,7 +159,7 @@ func TestLocalPlacer_FileCollisionWithinSameFolder(t *testing.T) {
 	}
 
 	// Pre-create a placeholder so the directory exists; force B to also
-	// see "hobbit.epub" present. Without uniqueDirectory's title suffix
+	// see "hobbit.epub" present. Without freeDir's title suffix
 	// we'd land in the same folder; assert that we either get a unique
 	// directory OR a unique file basename.
 	resB, err := p.Place(context.Background(), PlaceSource{
