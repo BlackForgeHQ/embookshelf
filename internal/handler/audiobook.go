@@ -281,31 +281,24 @@ const noNarrationMsg = "this book has no generated narration"
 // of the application had already moved on from — and it cost the handler
 // a second seam onto the same table, held beside the service that owns it.
 func (h *Handler) serveNarrationRendition(c *gin.Context, book model.Book) {
-	var fileID string
 	h.renditionServe(c, book, renditionServeSpec{
-		// The audiobooks seam itself is never nil (see above); the library
-		// store is, and without it there is nothing to resolve the audio
-		// through.
-		available:         h.libStore != nil,
-		unavailableStatus: http.StatusNotFound,
-		unavailableMsg:    noNarrationMsg,
-		noneMsg:           noNarrationMsg,
-		resolveOp:         "narration library handle",
-		gate: func(ctx context.Context) error {
+		noneMsg:   noNarrationMsg,
+		resolveOp: "narration library handle",
+		// The audiobooks seam itself is never nil (see above), so there is
+		// no not-wired arm here; the library store is, and the chain
+		// guards that one for both artifacts.
+		ready: func(ctx context.Context) (string, bool) {
 			rep, err := h.audiobooks.Report(ctx, book)
 			// Ready *and* pointing at a file: finalize sets the state only
 			// once it has written the row, so a run marked ready without one
 			// is a book the UI offers and the player cannot open.
 			if err != nil || rep.Run.State != model.AudiobookReady || rep.Run.FileID == nil {
-				return errRenditionNone
+				return "", false
 			}
-			fileID = *rep.Run.FileID
-			return nil
+			return *rep.Run.FileID, true
 		},
-		locate: func(ctx context.Context, handle *service.LibraryHandle) string {
-			return renditionFileLocation(ctx, handle, book.ID, fileID)
-		},
-		ext:  ".mp3",
-		mime: "audio/mpeg",
+		locate: renditionFileLocation,
+		ext:    ".mp3",
+		mime:   "audio/mpeg",
 	})
 }

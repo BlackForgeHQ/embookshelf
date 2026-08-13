@@ -4,14 +4,12 @@ package handler
 
 import (
 	"context"
-	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/service"
 )
 
 // renditionEpub is BookFile's second rendition selector, beside
@@ -89,25 +87,24 @@ const noEpubRenditionMsg = "this book has no generated EPUB"
 // the row's ready-and-pointing-at-a-file gate, the files row it points
 // at, and the library's own delivery decision.
 func (h *Handler) serveEpubRendition(c *gin.Context, book model.Book) {
-	var fileID string
 	h.renditionServe(c, book, renditionServeSpec{
-		available:         h.libStore != nil && h.epubRenditions != nil,
-		unavailableStatus: http.StatusNotFound,
-		unavailableMsg:    noEpubRenditionMsg,
-		noneMsg:           noEpubRenditionMsg,
-		resolveOp:         "epub library handle",
-		gate: func(ctx context.Context) error {
+		noneMsg:   noEpubRenditionMsg,
+		resolveOp: "epub library handle",
+		ready: func(ctx context.Context) (string, bool) {
+			// No rendition store wired is the deliberate degrade, and it
+			// gets the same answer as a book that has no generated EPUB:
+			// this route must not claim otherwise.
+			if h.epubRenditions == nil {
+				return "", false
+			}
 			rendition, err := h.epubRenditions.GetByBookID(ctx, book.ID)
 			if err != nil || rendition.State != model.RenditionReady || rendition.FileID == nil {
-				return errRenditionNone
+				return "", false
 			}
-			fileID = *rendition.FileID
-			return nil
+			return *rendition.FileID, true
 		},
-		locate: func(ctx context.Context, handle *service.LibraryHandle) string {
-			return renditionFileLocation(ctx, handle, book.ID, fileID)
-		},
-		ext:  ".epub",
-		mime: model.MIMEForFormat("EPUB"),
+		locate: renditionFileLocation,
+		ext:    ".epub",
+		mime:   model.MIMEForFormat("EPUB"),
 	})
 }

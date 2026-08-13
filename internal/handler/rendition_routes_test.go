@@ -165,13 +165,11 @@ const (
 // suite: a Handler for every state the chain must refuse, one whose
 // artifact is ready, and how the route is invoked.
 type renditionServeCase struct {
-	// unwired is the artifact with its seam missing, plus the answer
-	// that must come back: a 503 for markdown's own download route, a
-	// 404 for a ?rendition= arm of the file route, which must not claim
-	// a book has an artifact this install cannot serve.
-	unwired       func(t *testing.T) (*Handler, model.Book)
-	unwiredStatus int
-	unwiredMsg    string
+	// unwired is the artifact with its seam missing. It answers the same
+	// 404 and the same sentence as a book that has none: a ?rendition=
+	// arm must not claim a book has an artifact this install cannot
+	// serve.
+	unwired func(t *testing.T) (*Handler, model.Book)
 	// refused are the row states no download is offered for. Every one
 	// answers 404 with the artifact's one sentence.
 	refused map[renditionServeState]func(t *testing.T) (*Handler, model.Book)
@@ -187,15 +185,18 @@ type renditionServeCase struct {
 	invoke   func(h *Handler, c *gin.Context, book model.Book)
 }
 
-// TestRenditionServeGateChain — the one gate-order suite for all three
-// serve legs (#316): unwired seam → no row → not ready → a pointer the
-// library cannot resolve → the bytes, with the artifact's own sentence
-// on every refusal and its own download name on the answer. Ran per
-// artifact, so the narration, the generated EPUB and the markdown
-// rendition cannot drift apart the way three copied chains could.
+// TestRenditionServeGateChain — the one gate-order suite for both
+// ?rendition= serve legs (#316): unwired seam → no row → not ready → a
+// pointer the library cannot resolve → the bytes, with the artifact's
+// own sentence on every refusal and its own download name on the
+// answer. Ran per artifact, so the narration and the generated EPUB
+// cannot drift apart the way two copied chains could.
+//
+// The markdown rendition is not here: its route is its own chain, and
+// its gates are TestBookMarkdownDownloadGateChain, the same subtests
+// against the same fixtures.
 func TestRenditionServeGateChain(t *testing.T) {
 	artifacts := map[string]renditionServeCase{
-		"markdown":  markdownServeCase(),
 		"epub":      epubServeCase(),
 		"narration": narrationServeCase(),
 	}
@@ -207,11 +208,11 @@ func TestRenditionServeGateChain(t *testing.T) {
 				c, rec := renditionServeCtx(t, art.query)
 				art.invoke(h, c, book)
 
-				if httpStatus(c, rec) != art.unwiredStatus {
-					t.Fatalf("status = %d, want %d (body %s)", rec.Code, art.unwiredStatus, rec.Body.String())
+				if httpStatus(c, rec) != http.StatusNotFound {
+					t.Fatalf("status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
 				}
-				if !strings.Contains(rec.Body.String(), art.unwiredMsg) {
-					t.Fatalf("body = %s, want %q", rec.Body.String(), art.unwiredMsg)
+				if !strings.Contains(rec.Body.String(), art.noneMsg) {
+					t.Fatalf("body = %s, want %q", rec.Body.String(), art.noneMsg)
 				}
 			})
 
@@ -259,78 +260,6 @@ func renditionServeCtx(t *testing.T, query string) (*gin.Context, *httptest.Resp
 	return settingsCtx(t, http.MethodGet, "/api/v1/books/b1/file"+query, "")
 }
 
-// markdownServeCase wires the markdown download route. Its bytes go
-// through a real local backend — PlaceDerived writes them, StorageKey
-// finds them again.
-func markdownServeCase() renditionServeCase {
-	row := func(r model.MarkdownRendition) *fakeRenditions { return &fakeRenditions{row: r} }
-	withLibStore := func(store markdownRenditionStore) (*Handler, model.Book) {
-		return &Handler{
-			renditions: store,
-			libStore:   fakeLibStore{handle: &service.LibraryHandle{}},
-		}, model.Book{ID: "b1", Title: "Dune"}
-	}
-	return renditionServeCase{
-		unwired: func(*testing.T) (*Handler, model.Book) {
-			return &Handler{libStore: fakeLibStore{handle: &service.LibraryHandle{}}},
-				model.Book{ID: "b1", Title: "Dune"}
-		},
-		unwiredStatus: http.StatusServiceUnavailable,
-		unwiredMsg:    "markdown renditions are unavailable",
-		noneMsg:       "this book has no markdown rendition",
-		refused: map[renditionServeState]func(t *testing.T) (*Handler, model.Book){
-			serveNoRow: func(*testing.T) (*Handler, model.Book) {
-				return withLibStore(&fakeRenditions{missing: true})
-			},
-			serveNotReady: func(*testing.T) (*Handler, model.Book) {
-				return withLibStore(row(model.MarkdownRendition{State: model.RenditionRunning}))
-			},
-			serveNoBytes: func(*testing.T) (*Handler, model.Book) {
-				return withLibStore(row(model.MarkdownRendition{State: model.RenditionReady}))
-			},
-		},
-		served: markdownServed,
-		// No ?download flag: the markdown route is a download route, and
-		// its answer is always an attachment.
-		query:    "",
-		mime:     "text/markdown",
-		filename: `filename="Dune.md"`,
-		body:     "# markdown body\n",
-		invoke: func(h *Handler, c *gin.Context, book model.Book) {
-			h.BookMarkdownDownload(c, bookScope{UserID: "u1", Book: book})
-		},
-	}
-}
-
-func markdownServed(t *testing.T) (*Handler, model.Book) {
-	t.Helper()
-	root := t.TempDir()
-	rootedAtSlash, err := local.New("/")
-	if err != nil {
-		t.Fatalf("local.New: %v", err)
-	}
-	handle := &service.LibraryHandle{
-		Library: model.Library{ID: "lib1", Root: &root},
-		Storage: rootedAtSlash,
-	}
-	book := model.Book{ID: "b1", LibraryID: "lib1", Title: "Dune", Author: "A", Format: "PDF"}
-
-	tmp := filepath.Join(t.TempDir(), "staged.md")
-	if err := os.WriteFile(tmp, []byte("# markdown body\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	placed, err := handle.PlaceDerived(context.Background(), book, tmp, service.DerivedMarkdown)
-	if err != nil {
-		t.Fatalf("PlaceDerived: %v", err)
-	}
-	return &Handler{
-		renditions: &fakeRenditions{row: model.MarkdownRendition{
-			BookID: book.ID, State: model.RenditionReady, Location: placed.Location,
-		}},
-		libStore: fakeLibStore{handle: handle},
-	}, book
-}
-
 // epubRenditionKey is where a generated EPUB lives, in the vocabulary
 // files.location is stored in: relative to the library root.
 const epubRenditionKey = "Author/Rendered Book/book.epub"
@@ -351,9 +280,7 @@ func epubServeCase() renditionServeCase {
 		unwired: func(*testing.T) (*Handler, model.Book) {
 			return &Handler{libStore: blindStore}, model.Book{ID: "b1", Title: "Rendered Book"}
 		},
-		unwiredStatus: http.StatusNotFound,
-		unwiredMsg:    "this book has no generated EPUB",
-		noneMsg:       "this book has no generated EPUB",
+		noneMsg: "this book has no generated EPUB",
 		refused: map[renditionServeState]func(t *testing.T) (*Handler, model.Book){
 			serveNoRow: func(*testing.T) (*Handler, model.Book) {
 				return withLibStore(&fakeEpubRenditions{missing: true})
@@ -467,9 +394,7 @@ func narrationServeCase() renditionServeCase {
 			// No library store: nothing to resolve the audio through.
 			return &Handler{}, model.Book{ID: "b1", Title: "Narrated Book"}
 		},
-		unwiredStatus: http.StatusNotFound,
-		unwiredMsg:    "this book has no generated narration",
-		noneMsg:       "this book has no generated narration",
+		noneMsg: "this book has no generated narration",
 		refused: map[renditionServeState]func(t *testing.T) (*Handler, model.Book){
 			serveNoRow:    narration(serveNoRow),
 			serveNotReady: narration(serveNotReady),
