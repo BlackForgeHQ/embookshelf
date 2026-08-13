@@ -18,6 +18,31 @@ import (
 	"github.com/blackforge/embookshelf/internal/repo"
 )
 
+// readingGuideStore is the slice of BookReadingGuideRepo the book-scoped
+// routes need — an interface so the handler tier is exercisable without
+// Postgres, same reasoning as markdownRenditionStore.
+type readingGuideStore interface {
+	GetByBookID(ctx context.Context, bookID string) (model.ReadingGuide, error)
+	SaveEdit(ctx context.Context, bookID string, t model.ReadingGuideText) error
+}
+
+// newReadingGuideStore keeps a missing repo nil across the interface
+// conversion — same trap newMarkdownRenditionStore exists for: a nil
+// pointer boxed into an interface is non-nil, and every degrade check
+// downstream would panic instead.
+func newReadingGuideStore(r *repo.BookReadingGuideRepo) readingGuideStore {
+	if r == nil {
+		return nil
+	}
+	return r
+}
+
+// guidesUnavailableMsg is the reading guide's one "not wired" sentence,
+// answered by BookGuideGet, BookGuideEdit and — folded into
+// CodeGuidesDisabled — BookGuideGenerate, whenever the store behind them
+// is nil.
+const guidesUnavailableMsg = "reading guides are unavailable"
+
 // readingGuideDTO is the wire shape. SourceKind travels because the
 // reader needs it: a metadata-only guide for an obscure title leans on
 // what the model already believed about it (ADR-0024 §2).
@@ -47,6 +72,10 @@ func toReadingGuideDTO(g model.ReadingGuide) readingGuideDTO {
 // BookGuideGet returns a book's reading guide. 404 when none has been
 // generated — distinct from an empty one, which cannot be stored.
 func (h *Handler) BookGuideGet(c *gin.Context, s bookScope) {
+	if h.guides == nil {
+		writeError(c, http.StatusServiceUnavailable, guidesUnavailableMsg)
+		return
+	}
 	g, err := h.guides.GetByBookID(c.Request.Context(), s.Book.ID)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
@@ -59,7 +88,20 @@ func (h *Handler) BookGuideGet(c *gin.Context, s bookScope) {
 	c.JSON(http.StatusOK, gin.H{"guide": toReadingGuideDTO(g)})
 }
 
-// BookGuideGenerate queues generation for one book and returns 202.
+// guidesDisabledMsg is CodeGuidesDisabled's sentence — answered whether
+// the store isn't wired at all or the admin has simply left the row off;
+// either way there is no configured way to generate a guide.
+const guidesDisabledMsg = "reading guides are not configured by the admin"
+
+// BookGuideGenerate queues generation for one book and returns 202 — the
+// shared rendition generate chain with the guide's own configuration
+// (#320). Availability folds the store's presence together with the
+// admin row, both answering CodeGuidesDisabled on the spec: a store that
+// was never wired offers no more than one an admin switched off, and in
+// practice the two always travel together — New wires h.guides and the
+// READING_GUIDE row from the same install. The format preflight replaces
+// the chain's built-in Convertible gate rather than running beside it —
+// the guide is offered for every format, unlike markdown and the EPUB.
 //
 // Always overwrites, including a hand-edited guide — unlike a bulk run,
 // which skips those. Here the user is looking at the guide they are
@@ -72,23 +114,16 @@ func (h *Handler) BookGuideGenerate(c *gin.Context, s bookScope) {
 		writeServerError(c, "read guide settings", err)
 		return
 	}
-	if !cfg.Enabled {
-		writeErrorCode(c, http.StatusServiceUnavailable, CodeGuidesDisabled,
-			"reading guides are not configured by the admin")
-		return
-	}
-	if !h.guidePreflightConvertible(c, s) {
-		return
-	}
-	q, ok := h.requireQueue(c)
-	if !ok {
-		return
-	}
-	if err := q.Enqueue(ctx, jobs.ReadingGuideArgs{BookID: s.Book.ID}); err != nil {
-		writeServerError(c, "queue guide generation", err)
-		return
-	}
-	c.Status(http.StatusAccepted)
+	h.renditionGenerate(c, s, renditionRouteSpec{
+		available:       h.guides != nil && cfg.Enabled,
+		unavailableMsg:  guidesDisabledMsg,
+		unavailableCode: CodeGuidesDisabled,
+		formatGate:      h.guidePreflightConvertible,
+		requestOp:       "queue guide generation",
+		request: func(ctx context.Context, bookID string) error {
+			return h.queue.Enqueue(ctx, jobs.ReadingGuideArgs{BookID: bookID})
+		},
+	})
 }
 
 // guidePreflightConvertible refuses at the button what the guide job
@@ -143,6 +178,10 @@ func (h *Handler) BookGuideEdit(c *gin.Context, s bookScope) {
 	}
 	if text.About == "" && text.Audience == "" && text.NotFor == "" && text.Problems == "" {
 		writeError(c, http.StatusBadRequest, "a reading guide cannot be entirely empty")
+		return
+	}
+	if h.guides == nil {
+		writeError(c, http.StatusServiceUnavailable, guidesUnavailableMsg)
 		return
 	}
 

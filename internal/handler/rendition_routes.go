@@ -27,14 +27,30 @@ type renditionRouteSpec struct {
 	// deliberate degrade every route answers 503 with unavailableMsg.
 	available      bool
 	unavailableMsg string
+	// unavailableCode is the catalogued code riding beside unavailableMsg,
+	// for the one artifact whose unavailable answer is a UI-switchable
+	// code rather than a plain sentence — the reading guide's
+	// CodeGuidesDisabled (#320). Empty leaves the answer as writeError
+	// always wrote it for markdown and the EPUB: a message with no code.
+	unavailableCode string
 	// notConvertibleMsg is the 415 refusal for a book outside the
-	// Convertible set.
+	// Convertible set. Unused when formatGate is set.
 	notConvertibleMsg string
+	// formatGate overrides the built-in Convertible → requireConverter
+	// step for the one artifact whose own gate does not agree with it:
+	// the reading guide is offered for every format, Convertible or not
+	// — a metadata-only guide asks nothing of the converter — so its
+	// preflight (guidePreflightConvertible) replaces the pair rather than
+	// running beside it. nil keeps the built-in pair, which markdown and
+	// the EPUB both still own outright. A non-nil gate has already
+	// written the response before returning false.
+	formatGate func(c *gin.Context, s bookScope) bool
 	// requestOp labels the server-error log line.
 	requestOp string
 	// request asks for the rendition — service.RenditionRequests.One,
 	// which owns the Start-before-Enqueue ordering and records a refused
-	// enqueue on the row (#317).
+	// enqueue on the row (#317). The reading guide has no tracking row to
+	// start; its request is a direct Enqueue (#320).
 	request func(ctx context.Context, bookID string) error
 }
 
@@ -43,20 +59,32 @@ type renditionRouteSpec struct {
 // request+202. The order is load-bearing — the instant refusals answer
 // the click now rather than a job failing in thirty seconds. The
 // Start-before-Enqueue ordering and the phantom-pending compensation
-// live in the request module, not here (#317). Held by
-// TestRenditionGenerateGateChain over both artifacts.
+// live in the request module, not here (#317). The middle step is a
+// per-artifact formatGate override for the one artifact whose format
+// rule disagrees with the built-in pair (#320). Held by
+// TestRenditionGenerateGateChain over all three artifacts.
 func (h *Handler) renditionGenerate(c *gin.Context, s bookScope, spec renditionRouteSpec) {
 	ctx := c.Request.Context()
 	if !spec.available {
-		writeError(c, http.StatusServiceUnavailable, spec.unavailableMsg)
+		if spec.unavailableCode != "" {
+			writeErrorCode(c, http.StatusServiceUnavailable, spec.unavailableCode, spec.unavailableMsg)
+		} else {
+			writeError(c, http.StatusServiceUnavailable, spec.unavailableMsg)
+		}
 		return
 	}
-	if !model.Convertible(s.Book.Format) {
-		writeErrorCode(c, http.StatusUnsupportedMediaType, CodeFormatNotConvertible, spec.notConvertibleMsg)
-		return
-	}
-	if _, ok := h.requireConverter(c); !ok {
-		return
+	if spec.formatGate != nil {
+		if !spec.formatGate(c, s) {
+			return
+		}
+	} else {
+		if !model.Convertible(s.Book.Format) {
+			writeErrorCode(c, http.StatusUnsupportedMediaType, CodeFormatNotConvertible, spec.notConvertibleMsg)
+			return
+		}
+		if _, ok := h.requireConverter(c); !ok {
+			return
+		}
 	}
 	if _, ok := h.requireQueue(c); !ok {
 		return

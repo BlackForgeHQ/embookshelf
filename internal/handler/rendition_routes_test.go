@@ -33,16 +33,35 @@ type renditionRouteCase struct {
 	build   func(withStore bool, settings *fakeAppSettings, q *captureQueue) (*Handler, func() bool)
 	invoke  func(h *Handler, c *gin.Context, s bookScope)
 	jobType func(a jobs.Args) bool
+	// nonConvertibleRefused is true for the two artifacts whose own gate
+	// owns the format axis outright: markdown and the EPUB refuse a
+	// non-Convertible book with 415 before any other gate runs. The
+	// guide's preflight (#320) does not — a metadata-only guide is
+	// offered for every format — so its case (false) asserts the
+	// opposite: the book reaches the queue like any other.
+	nonConvertibleRefused bool
+	// notConfiguredSettings builds the settings row this artifact's own
+	// gate refuses on before ever reaching the queue: the converter row
+	// alone for markdown and the EPUB. The guide needs its own admin
+	// toggle left on too, or its availability gate — not the converter
+	// one this subtest means to exercise — would be what answers first;
+	// that gate is already pinned on its own by
+	// TestBookGuideGenerateIsA503WhenGuidesAreOff.
+	notConfiguredSettings func() *fakeAppSettings
 }
 
-// TestRenditionGenerateGateChain — the one gate-order suite for both
-// generate buttons (#303): nil store → Convertible → requireConverter →
-// requireQueue → Start+Enqueue+202. Ran per artifact, so the two routes
-// cannot drift the way the deleted
+// TestRenditionGenerateGateChain — the one gate-order suite for every
+// generate button (#303, #320): nil store → Convertible → requireConverter
+// → requireQueue → Start+Enqueue+202, with the guide's own preflight
+// standing in for the middle two steps (#320). Ran per artifact, so the
+// routes cannot drift the way the deleted
 // TestBookEpubGenerateGatesMatchTheMarkdownButton confessed they could.
 func TestRenditionGenerateGateChain(t *testing.T) {
 	configured := func() *fakeAppSettings {
-		return &fakeAppSettings{converter: repo.ConverterConfig{Enabled: true, BaseURL: "http://c"}}
+		return &fakeAppSettings{
+			converter: repo.ConverterConfig{Enabled: true, BaseURL: "http://c"},
+			guide:     repo.ReadingGuideConfig{Enabled: true},
+		}
 	}
 
 	artifacts := map[string]renditionRouteCase{
@@ -56,8 +75,10 @@ func TestRenditionGenerateGateChain(t *testing.T) {
 				}
 				return h, func() bool { return store.started }
 			},
-			invoke:  func(h *Handler, c *gin.Context, s bookScope) { h.BookMarkdownGenerate(c, s) },
-			jobType: func(a jobs.Args) bool { _, ok := a.(jobs.MarkdownRenditionArgs); return ok },
+			invoke:                func(h *Handler, c *gin.Context, s bookScope) { h.BookMarkdownGenerate(c, s) },
+			jobType:               func(a jobs.Args) bool { _, ok := a.(jobs.MarkdownRenditionArgs); return ok },
+			nonConvertibleRefused: true,
+			notConfiguredSettings: func() *fakeAppSettings { return &fakeAppSettings{} },
 		},
 		"epub": {
 			build: func(withStore bool, settings *fakeAppSettings, q *captureQueue) (*Handler, func() bool) {
@@ -69,8 +90,38 @@ func TestRenditionGenerateGateChain(t *testing.T) {
 				}
 				return h, func() bool { return store.started }
 			},
-			invoke:  func(h *Handler, c *gin.Context, s bookScope) { h.BookEpubGenerate(c, s) },
-			jobType: func(a jobs.Args) bool { _, ok := a.(jobs.EpubRenderArgs); return ok },
+			invoke:                func(h *Handler, c *gin.Context, s bookScope) { h.BookEpubGenerate(c, s) },
+			jobType:               func(a jobs.Args) bool { _, ok := a.(jobs.EpubRenderArgs); return ok },
+			nonConvertibleRefused: true,
+			notConfiguredSettings: func() *fakeAppSettings { return &fakeAppSettings{} },
+		},
+		// The reading guide (#320): no tracking row to Start, so "started"
+		// collapses onto "reached the queue" — there is no separate
+		// pending state for a guide request the way #317 gives markdown
+		// and the EPUB one. Its own format preflight
+		// (guidePreflightConvertible) stands in for the built-in
+		// Convertible→requireConverter pair via renditionRouteSpec's
+		// formatGate, which is why h.renditions is wired here too: the
+		// preflight only engages the converter gate for a Convertible
+		// book when it has a rendition store to consult.
+		"guide": {
+			build: func(withStore bool, settings *fakeAppSettings, q *captureQueue) (*Handler, func() bool) {
+				h := &Handler{
+					appSettings: settings,
+					queue:       q,
+					renditions:  &fakeRenditions{missing: true},
+				}
+				if withStore {
+					h.guides = &fakeReadingGuideStore{missing: true}
+				}
+				return h, func() bool { return q != nil && len(q.enqueued) > 0 }
+			},
+			invoke:                func(h *Handler, c *gin.Context, s bookScope) { h.BookGuideGenerate(c, s) },
+			jobType:               func(a jobs.Args) bool { _, ok := a.(jobs.ReadingGuideArgs); return ok },
+			nonConvertibleRefused: false,
+			notConfiguredSettings: func() *fakeAppSettings {
+				return &fakeAppSettings{guide: repo.ReadingGuideConfig{Enabled: true}}
+			},
 		},
 	}
 
@@ -86,24 +137,38 @@ func TestRenditionGenerateGateChain(t *testing.T) {
 				}
 			})
 
-			t.Run("non-convertible refused before any gate spends work", func(t *testing.T) {
+			t.Run("non-convertible book at the format gate", func(t *testing.T) {
 				q := &captureQueue{}
 				h, started := art.build(true, configured(), q)
 				s := pdfScope()
 				s.Book.Format = "EPUB"
 				c, rec := settingsCtx(t, http.MethodPost, "/x", "")
 				art.invoke(h, c, s)
-				if httpStatus(c, rec) != http.StatusUnsupportedMediaType {
+
+				if art.nonConvertibleRefused {
+					if httpStatus(c, rec) != http.StatusUnsupportedMediaType {
+						t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())
+					}
+					if started() || len(q.enqueued) != 0 {
+						t.Fatal("a non-convertible book reached the row or the queue")
+					}
+					return
+				}
+				// The guide's own preflight is permissive on format
+				// (#320): a non-Convertible book reaches the queue like
+				// any other, since a metadata-only guide asks nothing of
+				// the converter.
+				if httpStatus(c, rec) != http.StatusAccepted {
 					t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())
 				}
-				if started() || len(q.enqueued) != 0 {
-					t.Fatal("a non-convertible book reached the row or the queue")
+				if !started() || len(q.enqueued) != 1 {
+					t.Fatal("a non-convertible guide request never reached the queue")
 				}
 			})
 
 			t.Run("not configured refused verbatim", func(t *testing.T) {
 				q := &captureQueue{}
-				h, started := art.build(true, &fakeAppSettings{}, q)
+				h, started := art.build(true, art.notConfiguredSettings(), q)
 				c, rec := settingsCtx(t, http.MethodPost, "/x", "")
 				art.invoke(h, c, pdfScope())
 				if httpStatus(c, rec) != http.StatusServiceUnavailable {

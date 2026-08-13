@@ -119,6 +119,7 @@ func TestBookGuideGenerateSurfacesConversionStateAtTheButton(t *testing.T) {
 
 	t.Run("converter not configured", func(t *testing.T) {
 		h := &Handler{
+			guides:      &fakeReadingGuideStore{missing: true},
 			renditions:  &fakeRenditions{missing: true},
 			appSettings: guideOn(&fakeAppSettings{}),
 			queue:       &captureQueue{},
@@ -136,6 +137,7 @@ func TestBookGuideGenerateSurfacesConversionStateAtTheButton(t *testing.T) {
 
 	t.Run("conversion failed, verbatim", func(t *testing.T) {
 		h := &Handler{
+			guides: &fakeReadingGuideStore{missing: true},
 			renditions: &fakeRenditions{row: model.MarkdownRendition{
 				State: model.RenditionFailed,
 				Error: "PDF has no extractable text (Scanned, 1 pages): OCR is required",
@@ -159,6 +161,7 @@ func TestBookGuideGenerateSurfacesConversionStateAtTheButton(t *testing.T) {
 	t.Run("missing rendition still enqueues the guide", func(t *testing.T) {
 		q := &captureQueue{}
 		h := &Handler{
+			guides:     &fakeReadingGuideStore{missing: true},
 			renditions: &fakeRenditions{missing: true},
 			appSettings: guideOn(&fakeAppSettings{
 				converter: repo.ConverterConfig{Enabled: true, BaseURL: "http://c"},
@@ -179,6 +182,7 @@ func TestBookGuideGenerateSurfacesConversionStateAtTheButton(t *testing.T) {
 	t.Run("EPUB skips the converter entirely", func(t *testing.T) {
 		q := &captureQueue{}
 		h := &Handler{
+			guides: &fakeReadingGuideStore{missing: true},
 			// No renditions store consulted, no converter config needed:
 			// the EPUB path must not depend on either.
 			renditions:  &fakeRenditions{missing: true},
