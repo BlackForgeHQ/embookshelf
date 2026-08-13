@@ -83,13 +83,10 @@ const (
 	// the length includes these 8 bytes.
 	exthRecordHeaderLen = 8
 
-	// EXTH record types this processor reads. 121 is consulted only as a
-	// fallback source for the first-image record index, which KF8 files
-	// carry there when the MOBI header's own field is left unset.
+	// EXTH record types this processor reads.
 	exthAuthor       = 100
 	exthDescription  = 103
 	exthISBN         = 104
-	exthFirstImage   = 121
 	exthCoverOffset  = 201
 	exthThumbOffset  = 202
 	exthUpdatedTitle = 503
@@ -363,17 +360,14 @@ func (h mobiHeader) text(b []byte) string {
 	if len(b) == 0 {
 		return ""
 	}
-	switch h.encoding {
-	case mobiCP1252:
+	if h.encoding == mobiCP1252 {
 		return strings.TrimSpace(decodeCP1252(b))
-	case mobiUTF8:
-		return strings.TrimSpace(strings.ToValidUTF8(string(b), ""))
-	default:
-		// Neither of the two encodings the format defines. UTF-8 is the
-		// reading that cannot invent characters: the scrub drops whatever
-		// does not decode instead of mapping it to some other alphabet.
-		return strings.TrimSpace(strings.ToValidUTF8(string(b), ""))
 	}
+	// mobiUTF8, and anything else: UTF-8 is the reading that cannot invent
+	// characters, so an encoding the format does not define takes it too —
+	// the scrub drops whatever fails to decode instead of mapping those
+	// bytes into some other alphabet.
+	return strings.TrimSpace(strings.ToValidUTF8(string(b), ""))
 }
 
 // --- the EXTH block ------------------------------------------------------
@@ -390,8 +384,8 @@ func (e exthRecords) first(typ uint32) []byte {
 	return nil
 }
 
-// firstU32 reads a 4-byte EXTH value — the shape the record-index types
-// (121, 201, 202) use. ok is false for a missing or truncated record.
+// firstU32 reads a 4-byte EXTH value — the shape the cover-offset types
+// (201, 202) use. ok is false for a missing or truncated record.
 func (e exthRecords) firstU32(typ uint32) (uint32, bool) {
 	v := e.first(typ)
 	if len(v) < 4 {
@@ -433,7 +427,11 @@ func parseEXTH(rec0 []byte, start int) (exthRecords, error) {
 		return nil, fmt.Errorf("mobi: the EXTH block declares %d records, more than its %d bytes can hold", count, blockLen)
 	}
 
-	out := make(exthRecords, count)
+	// No size hint: count is a number read out of the file, and sizing the
+	// map by it lets a crafted record 0 pre-allocate far more than its own
+	// bytes. Real files carry a few dozen records, where the hint buys
+	// nothing anyway.
+	out := make(exthRecords)
 	pos := start + exthHeaderLen
 	for i := int64(0); i < count; i++ {
 		if pos+exthRecordHeaderLen > end {
@@ -468,8 +466,8 @@ func parseEXTH(rec0 []byte, start int) (exthRecords, error) {
 // logo or a chapter ornament as the cover, and a wrong cover is worse
 // than the placeholder the UI already draws.
 func mobiCover(src storage.Source, db *palmDB, h mobiHeader, exth exthRecords) ([]byte, string, bool) {
-	first, ok := mobiFirstImageIndex(h, exth)
-	if !ok {
+	first, ok := h.u32(mobiOffFirstImage)
+	if !ok || first == 0 || first == mobiNoIndex {
 		return nil, "", false
 	}
 	// 201 is the cover, 202 the thumbnail of it; a smaller cover beats
@@ -481,7 +479,7 @@ func mobiCover(src storage.Source, db *palmDB, h mobiHeader, exth exthRecords) (
 		}
 		// int64 throughout: first + off is two attacker-controlled uint32s,
 		// which would wrap in 32-bit arithmetic and index a real record.
-		idx := first + int64(off)
+		idx := int64(first) + int64(off)
 		if idx <= 0 || idx >= int64(db.count()) {
 			continue
 		}
@@ -494,19 +492,6 @@ func mobiCover(src storage.Source, db *palmDB, h mobiHeader, exth exthRecords) (
 		}
 	}
 	return nil, "", false
-}
-
-// mobiFirstImageIndex is the record index EXTH 201/202 are relative to.
-// The MOBI header's own field is the source; KF8 files that leave it
-// unset carry the index in EXTH 121 instead.
-func mobiFirstImageIndex(h mobiHeader, exth exthRecords) (int64, bool) {
-	if v, ok := h.u32(mobiOffFirstImage); ok && v != 0 && v != mobiNoIndex {
-		return int64(v), true
-	}
-	if v, ok := exth.firstU32(exthFirstImage); ok && v != 0 && v != mobiNoIndex {
-		return int64(v), true
-	}
-	return 0, false
 }
 
 // mobiImageMime sniffs a record's magic. Records carry no names or types,

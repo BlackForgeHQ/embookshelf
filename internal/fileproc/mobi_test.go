@@ -57,6 +57,7 @@ func exthU32(typ uint32, v uint32) exthEntry {
 type rec0Opts struct {
 	fullName    string
 	encoding    uint32 // 0 → 65001 (UTF-8)
+	encryption  uint16 // PalmDOC encryption type; non-zero means DRM
 	fileVersion uint32
 	firstImage  uint32 // 0 → the 0xFFFFFFFF "none" sentinel
 	exth        []exthEntry
@@ -100,9 +101,11 @@ func buildEXTH(entries []exthEntry, lenOverride uint32) []byte {
 func mobiRecord0(o rec0Opts) []byte {
 	rec := make([]byte, fxPalmDocLen+fxMOBIHeaderLen)
 
-	// PalmDOC header: no compression, no encryption, 4 KB text records.
+	// PalmDOC header: no compression, 4 KB text records, and whatever
+	// encryption type the case asked for (zero = none).
 	be.PutUint16(rec[0:], 1)
 	be.PutUint16(rec[10:], 4096)
+	be.PutUint16(rec[12:], o.encryption)
 
 	magic := "MOBI"
 	if o.noMOBIMagic {
@@ -363,19 +366,20 @@ func TestMOBIExtract_FirstAuthorWins(t *testing.T) {
 	}
 }
 
-// KF8 files routinely leave the MOBI header's first-image field at the
-// 0xFFFFFFFF "none" sentinel and carry the index in EXTH 121 instead.
-func TestMOBIExtract_FirstImageFromEXTH121(t *testing.T) {
+// EXTH 201 is the cover and 202 its thumbnail. When a file carries both,
+// the full-size cover wins — pinned with two different images so the
+// assertion cannot pass by accident.
+func TestMOBIExtract_CoverBeatsThumbnail(t *testing.T) {
 	raw := mobiFile(rec0Opts{
-		fileVersion: 8,
+		firstImage: 1,
 		exth: []exthEntry{
-			exthStr(503, "KF8"),
-			exthU32(121, 2),
+			exthStr(503, "T"),
+			exthU32(202, 1), // the thumbnail record, listed first on purpose
 			exthU32(201, 0),
 		},
 	},
-		[]byte("text record"),
-		fakePNG,
+		fakeJPEG, // record 1: the cover
+		fakePNG,  // record 2: the thumbnail
 	)
 
 	meta, err := extractMOBI(t, raw)
@@ -383,10 +387,40 @@ func TestMOBIExtract_FirstImageFromEXTH121(t *testing.T) {
 		t.Fatalf("Extract: %v", err)
 	}
 	if !meta.HasCover {
-		t.Fatal("expected the cover found via the EXTH 121 fallback")
+		t.Fatal("expected HasCover")
 	}
-	if meta.CoverMime != "image/png" {
-		t.Errorf("CoverMime = %q, want image/png", meta.CoverMime)
+	if meta.CoverMime != "image/jpeg" || string(meta.CoverBytes) != string(fakeJPEG) {
+		t.Errorf("cover = %q/%x, want the EXTH 201 record (image/jpeg) rather than the 202 thumbnail",
+			meta.CoverMime, meta.CoverBytes)
+	}
+}
+
+// A DRM'd file declares a non-zero PalmDOC encryption type. Only the text
+// records are encrypted — the PalmDB index, the MOBI header, the EXTH
+// block and the image records are all in the clear, and none of them is
+// what this processor cannot read. So a DRM'd book still lands on the
+// shelf with its title, author and cover; the property, not just the
+// argument for it.
+func TestMOBIExtract_EncryptedFileStillYieldsMetadata(t *testing.T) {
+	raw := mobiFile(rec0Opts{
+		encryption: 2, // Mobipocket DRM
+		firstImage: 1,
+		exth: []exthEntry{
+			exthStr(503, "Encrypted Book"),
+			exthStr(100, "Frank Herbert"),
+			exthU32(201, 0),
+		},
+	}, fakeJPEG)
+
+	meta, err := extractMOBI(t, raw)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if meta.Title != "Encrypted Book" || meta.Author != "Frank Herbert" {
+		t.Errorf("Title/Author = %q/%q, want them read through the encryption flag", meta.Title, meta.Author)
+	}
+	if !meta.HasCover {
+		t.Error("expected the cover — image records are not encrypted")
 	}
 }
 
@@ -473,6 +507,17 @@ func TestMOBIExtract_BadCoverPointerDegradesToNoCover(t *testing.T) {
 		{
 			name: "no first-image index anywhere",
 			opts: rec0Opts{exth: []exthEntry{exthStr(503, "T"), exthU32(201, 0)}},
+			rest: [][]byte{fakeJPEG},
+		},
+		{
+			// EXTH 121 is the KF8 boundary record in a dual-format file, not
+			// a first-image index. Using it as a fallback base would resolve
+			// EXTH 201 against the wrong part of the file and serve an image
+			// that is not the cover — silently, since it really is an image
+			// and the magic sniff would pass it. With the header's own field
+			// unset there is no base, and no base means no cover.
+			name: "EXTH 121 is not a first-image fallback",
+			opts: rec0Opts{exth: []exthEntry{exthStr(503, "T"), exthU32(121, 1), exthU32(201, 0)}},
 			rest: [][]byte{fakeJPEG},
 		},
 	}
