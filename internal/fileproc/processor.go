@@ -72,6 +72,7 @@ var processors = map[string]func() Processor{
 	".mp3":  func() Processor { return &AudioProcessor{} },
 	".m4a":  func() Processor { return &AudioProcessor{} },
 	".m4b":  func() Processor { return &AudioProcessor{} },
+	".fb2":  func() Processor { return &FB2Processor{} },
 }
 
 // NoProcessorError is Dispatch's answer for an extension the table

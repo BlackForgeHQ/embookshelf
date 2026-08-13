@@ -45,6 +45,7 @@ func TestDispatchCoversEveryProcessorExt(t *testing.T) {
 	cases := map[string]string{
 		".epub": "EPUB", ".pdf": "PDF", ".cbz": "CBZ",
 		".mp3": "MP3", ".m4a": "M4B", ".m4b": "M4B",
+		".fb2": "FB2",
 	}
 	for ext, wantFormat := range cases {
 		p, format, err := Dispatch("x" + ext)
@@ -66,7 +67,7 @@ func TestDispatchCoversEveryProcessorExt(t *testing.T) {
 // thirty seconds).
 //
 // This set is the interim ADR-0033-style loud state; #310 (.cbr/.cb7),
-// #311 (.mobi/.azw3) and #312 (.fb2) each shrink it by wiring a
+// #311 (.mobi/.azw3) and #312 (.fb2, done) each shrink it by wiring a
 // processor, at which point the entry moves to the covers-every-ext
 // test above.
 func TestDispatchNoProcessorIsPerFormatAndPermanent(t *testing.T) {
@@ -75,7 +76,6 @@ func TestDispatchNoProcessorIsPerFormatAndPermanent(t *testing.T) {
 		".cb7":  "CBZ",
 		".mobi": "MOBI",
 		".azw3": "AZW3",
-		".fb2":  "FB2",
 	}
 	for ext, format := range noProcessor {
 		_, _, err := Dispatch("x" + ext)
@@ -95,6 +95,7 @@ func TestDispatchNoProcessorIsPerFormatAndPermanent(t *testing.T) {
 	covered := map[string]bool{
 		".epub": true, ".pdf": true, ".cbz": true,
 		".mp3": true, ".m4a": true, ".m4b": true,
+		".fb2": true,
 	}
 	for _, ext := range SupportedExts {
 		if _, ok := noProcessor[ext]; ok == covered[ext] {
@@ -121,7 +122,7 @@ func TestDispatchUnknownExtensionStaysGeneric(t *testing.T) {
 // TestDispatchFormatAgreesWithDispatch — the slug-keyed twin answers
 // with the same processor type as the extension entry point.
 func TestDispatchFormatAgreesWithDispatch(t *testing.T) {
-	for _, format := range []string{"EPUB", "PDF", "CBZ", "MP3", "M4B"} {
+	for _, format := range []string{"EPUB", "PDF", "CBZ", "MP3", "M4B", "FB2"} {
 		byFormat, err := DispatchFormat(format)
 		if err != nil {
 			t.Errorf("DispatchFormat(%q): %v", format, err)

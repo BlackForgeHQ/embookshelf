@@ -31,7 +31,7 @@ func TestDispatchFormat(t *testing.T) {
 		{format: "M4B"},
 		{format: "AZW3", wantErr: true},
 		{format: "MOBI", wantErr: true},
-		{format: "FB2", wantErr: true},
+		{format: "FB2"},
 		{format: "", wantErr: true},
 		{format: "unknown", wantErr: true},
 	}
