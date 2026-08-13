@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+
+	"golang.org/x/text/encoding/charmap"
 )
 
 // fb2Doc assembles a minimal FictionBook document around the given
@@ -268,5 +270,115 @@ func TestFB2Extract_MissingBinaryIDIsBestEffort(t *testing.T) {
 	}
 	if meta.HasCover {
 		t.Error("expected no cover for a missing binary id")
+	}
+}
+
+// --- charset decoding ------------------------------------------------------
+
+// A document that declares windows-1251 and is genuinely encoded in it —
+// not just labeled — must decode to correct UTF-8. windows-1251 is FB2's
+// dominant wild encoding (a Russian-origin format), and encoding/xml only
+// understands UTF-8/US-ASCII on its own; without a CharsetReader this fails
+// outright with "encoding \"windows-1251\" declared but Decoder.CharsetReader
+// is nil".
+func TestFB2Extract_Windows1251Charset(t *testing.T) {
+	const wantTitle = "Дюна"
+	const wantFirst = "Фрэнк"
+	const wantLast = "Герберт"
+
+	utf8Doc := `<?xml version="1.0" encoding="windows-1251"?>` + "\n" +
+		`<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">` +
+		`<description><title-info>` +
+		`<book-title>` + wantTitle + `</book-title>` +
+		`<author><first-name>` + wantFirst + `</first-name><last-name>` + wantLast + `</last-name></author>` +
+		`</title-info></description>` +
+		`<body><section><p>Текст на русском языке.</p></section></body>` +
+		`</FictionBook>`
+
+	encoded, err := charmap.Windows1251.NewEncoder().String(utf8Doc)
+	if err != nil {
+		t.Fatalf("encode fixture as windows-1251: %v", err)
+	}
+	// encoded is a Go string whose bytes ARE the windows-1251 byte
+	// stream (not valid UTF-8) — []byte(encoded) recovers those raw
+	// bytes untouched, which is what a genuinely windows-1251-encoded
+	// file on disk looks like.
+	src := memSourceFromBytes([]byte(encoded))
+	defer func() { _ = src.Close() }()
+
+	meta, err := FB2Processor{}.Extract(context.Background(), src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if meta.Title != wantTitle {
+		t.Errorf("Title = %q, want %q", meta.Title, wantTitle)
+	}
+	if want := wantFirst + " " + wantLast; meta.Author != want {
+		t.Errorf("Author = %q, want %q", meta.Author, want)
+	}
+}
+
+// A declared encoding this processor (via htmlindex) doesn't recognize —
+// garbage, not a real charset label — must fail cleanly, not panic.
+func TestFB2Extract_UnknownDeclaredEncodingFails(t *testing.T) {
+	doc := `<?xml version="1.0" encoding="totally-bogus-charset"?>` + "\n" +
+		`<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">` +
+		`<description><title-info><book-title>T</book-title></title-info></description>` +
+		`<body><section><p>Text.</p></section></body></FictionBook>`
+	src := memSourceFromBytes([]byte(doc))
+	defer func() { _ = src.Close() }()
+
+	_, err := (FB2Processor{}).Extract(context.Background(), src)
+	if err == nil {
+		t.Fatal("expected an error for an unrecognized declared encoding")
+	}
+}
+
+// --- cover content-type sniffing --------------------------------------------
+
+// A crafted <binary content-type="text/html"> whose bytes are HTML, not an
+// image, must never be trusted: the declared attribute is served back
+// verbatim as this cover's Content-Type by the handler, so trusting it is
+// stored XSS via the cover URL. The bytes are sniffed and don't match any
+// recognized image format, so the cover degrades to none.
+func TestFB2Extract_CoverContentTypeIsSniffedNotTrusted(t *testing.T) {
+	htmlPayload := []byte(`<script>alert(document.domain)</script>`)
+	b64 := base64.StdEncoding.EncodeToString(htmlPayload)
+	titleInfo := `<book-title>T</book-title><coverpage><image xlink:href="#cover.evil"/></coverpage>`
+	binaries := `<binary id="cover.evil" content-type="text/html">` + b64 + `</binary>`
+	src := memSourceFromBytes([]byte(fb2Doc(titleInfo, binaries)))
+	defer func() { _ = src.Close() }()
+
+	meta, err := FB2Processor{}.Extract(context.Background(), src)
+	if err != nil {
+		t.Fatalf("Extract: %v, want best-effort success", err)
+	}
+	if meta.HasCover {
+		t.Errorf("expected no cover for non-image bytes, got CoverMime=%q CoverBytes=%q", meta.CoverMime, meta.CoverBytes)
+	}
+}
+
+// A binary whose declared content-type is wrong but harmless (image/png
+// declared, real JPEG bytes) still keeps its cover — the sniffed type
+// wins, not the declared one.
+func TestFB2Extract_CoverContentTypeMismatchUsesSniffedType(t *testing.T) {
+	b64 := base64.StdEncoding.EncodeToString(fakeJPEG)
+	titleInfo := `<book-title>T</book-title><coverpage><image xlink:href="#cover.jpg"/></coverpage>`
+	binaries := `<binary id="cover.jpg" content-type="image/png">` + b64 + `</binary>`
+	src := memSourceFromBytes([]byte(fb2Doc(titleInfo, binaries)))
+	defer func() { _ = src.Close() }()
+
+	meta, err := FB2Processor{}.Extract(context.Background(), src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if !meta.HasCover {
+		t.Fatal("expected HasCover")
+	}
+	if meta.CoverMime != "image/jpeg" {
+		t.Errorf("CoverMime = %q, want image/jpeg (sniffed, not the declared image/png)", meta.CoverMime)
+	}
+	if string(meta.CoverBytes) != string(fakeJPEG) {
+		t.Errorf("CoverBytes = %x, want %x", meta.CoverBytes, fakeJPEG)
 	}
 }

@@ -119,6 +119,10 @@ const (
 )
 
 func (MOBIProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, error) {
+	// Unused: every read here is bounded (record 0 and, at most, one
+	// cover record, each capped — see mobiMaxRecord0Bytes/
+	// mobiMaxCoverBytes) and nothing in this function can run long
+	// enough for cancellation to matter.
 	_ = ctx
 
 	db, err := readPalmDB(src)
@@ -487,28 +491,15 @@ func mobiCover(src storage.Source, db *palmDB, h mobiHeader, exth exthRecords) (
 		if err != nil {
 			continue
 		}
-		if mime := mobiImageMime(b); mime != "" {
+		// Records carry no names or types, so this sniff (shared with FB2
+		// in imagesniff.go) is the only check standing between a cover
+		// pointer that is wrong (or hostile) and a text record served to
+		// the UI as an image.
+		if mime := sniffImageMime(b); mime != "" {
 			return b, mime, true
 		}
 	}
 	return nil, "", false
-}
-
-// mobiImageMime sniffs a record's magic. Records carry no names or types,
-// so this is the only check standing between a cover pointer that is
-// wrong (or hostile) and a text record served to the UI as an image.
-func mobiImageMime(b []byte) string {
-	switch {
-	case len(b) >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF:
-		return "image/jpeg"
-	case len(b) >= 8 && string(b[:8]) == "\x89PNG\r\n\x1a\n":
-		return "image/png"
-	case len(b) >= 6 && (string(b[:6]) == "GIF87a" || string(b[:6]) == "GIF89a"):
-		return "image/gif"
-	case len(b) >= 12 && string(b[:4]) == "RIFF" && string(b[8:12]) == "WEBP":
-		return "image/webp"
-	}
-	return ""
 }
 
 // --- CP1252 --------------------------------------------------------------

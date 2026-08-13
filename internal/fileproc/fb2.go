@@ -3,12 +3,15 @@
 package fileproc
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"strings"
+
+	"golang.org/x/text/encoding/htmlindex"
 
 	"github.com/blackforge/embookshelf/internal/storage"
 )
@@ -91,6 +94,9 @@ type fb2Binary struct {
 }
 
 func (FB2Processor) Extract(ctx context.Context, src storage.Source) (Metadata, error) {
+	// Unused: the whole document is read and parsed in one bounded pass
+	// (fb2MaxBytes caps it below) — there is no long-running or
+	// cancelable step for ctx to interrupt.
 	_ = ctx
 
 	f := io.NewSectionReader(src, 0, src.Size())
@@ -107,7 +113,14 @@ func (FB2Processor) Extract(ctx context.Context, src storage.Source) (Metadata, 
 	}
 
 	var doc fb2Document
-	if err := xml.Unmarshal(raw, &doc); err != nil {
+	dec := xml.NewDecoder(bytes.NewReader(raw))
+	// FB2 is a Russian-origin format, and windows-1251 is its dominant
+	// wild encoding — encoding/xml only decodes UTF-8 and US-ASCII on its
+	// own, so anything else declared in the XML prolog needs a
+	// CharsetReader or Decode fails with "encoding ... declared but
+	// Decoder.CharsetReader is nil".
+	dec.CharsetReader = fb2CharsetReader
+	if err := dec.Decode(&doc); err != nil {
 		return Metadata{}, fmt.Errorf("parse fb2: %w", err)
 	}
 
@@ -178,6 +191,23 @@ func fb2AnnotationText(ti *fb2TitleInfo) string {
 	return strings.Join(paras, "\n\n")
 }
 
+// fb2CharsetReader resolves a non-UTF-8, non-ASCII encoding declared in an
+// FB2's XML prolog (windows-1251 chief among them — FB2 is a Russian-origin
+// format and windows-1251 is its dominant wild encoding, but koi8-r and
+// others do turn up) and wraps input in a decoder that transcodes it to
+// UTF-8 as the XML decoder reads. htmlindex covers the WHATWG label set
+// (case-insensitive, with the usual aliases like "cp1251" and "win-1251"),
+// which is broader than hand-listing the handful of encodings FB2 producers
+// actually use. An unrecognized or garbage declared encoding is reported as
+// a clean error here rather than panicking or silently misdecoding.
+func fb2CharsetReader(charset string, input io.Reader) (io.Reader, error) {
+	enc, err := htmlindex.Get(charset)
+	if err != nil {
+		return nil, fmt.Errorf("fb2: unsupported declared encoding %q: %w", charset, err)
+	}
+	return enc.NewDecoder().Reader(input), nil
+}
+
 // fb2CoverHref returns the binary id referenced by <coverpage><image
 // xlink:href="#id"/>, with the leading '#' stripped. Empty when there is
 // no coverpage.
@@ -189,9 +219,10 @@ func fb2CoverHref(ti *fb2TitleInfo) string {
 }
 
 // fb2ReadCover finds the <binary> matching id and base64-decodes its
-// content. ok is false — never an error — for a missing id or invalid
-// base64, so a bad cover reference degrades to no cover instead of
-// failing metadata that's otherwise good.
+// content. ok is false — never an error — for a missing id, invalid
+// base64, or content that doesn't sniff as a recognized image, so a bad
+// cover reference degrades to no cover instead of failing metadata that's
+// otherwise good.
 func fb2ReadCover(binaries []fb2Binary, id string) (data []byte, mime string, ok bool) {
 	for _, b := range binaries {
 		if b.ID != id {
@@ -204,9 +235,16 @@ func fb2ReadCover(binaries []fb2Binary, id string) (data []byte, mime string, ok
 		if err != nil {
 			return nil, "", false
 		}
-		mime = strings.TrimSpace(b.ContentType)
+		// b.ContentType is an attribute the file's author wrote, not
+		// something derived from the image data — trusting it verbatim
+		// and serving it back as this cover's Content-Type is a stored
+		// XSS primitive (content-type="text/html" plus an HTML payload).
+		// Sniff the decoded bytes instead and use that; a declared type
+		// that doesn't match a recognized image format degrades to no
+		// cover rather than being served at all.
+		mime = sniffImageMime(decoded)
 		if mime == "" {
-			mime = "application/octet-stream"
+			return nil, "", false
 		}
 		return decoded, mime, true
 	}
