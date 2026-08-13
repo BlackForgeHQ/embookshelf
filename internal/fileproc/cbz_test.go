@@ -216,6 +216,12 @@ func TestCBZPagesClassifiesNonZIPFromDamagedZIP(t *testing.T) {
 		{name: "7z bytes", raw: append([]byte("7z\xbc\xaf\x27\x1c"), bytes.Repeat([]byte{0}, 64)...), wantKind: true},
 		{name: "empty", raw: nil, wantKind: true},
 		{name: "truncated zip", raw: good[:len(good)/2], wantKind: false},
+		// The other magic a ZIP can start with — an archive with no
+		// entries — truncated so the end-of-central-directory record it
+		// heads is incomplete. Still a ZIP by its signature, so it takes
+		// the damaged-archive route, which is the second half of
+		// hasZipMagic that the cases above leave untouched.
+		{name: "truncated empty-archive record", raw: append([]byte("PK\x05\x06"), bytes.Repeat([]byte{0}, 8)...), wantKind: false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

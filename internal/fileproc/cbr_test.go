@@ -365,6 +365,52 @@ func TestCBRExtract_SolidWalkDecodesWhatItStepsOver(t *testing.T) {
 	}
 }
 
+// The defect the review found, pinned exactly.
+//
+// TestCBRExtract_SolidWalkDecodesWhatItStepsOver above covers an entry
+// nothing wanted, which the original bug handled correctly — the `continue`
+// that skipped the drain lived inside `if wanted`, so it only fired for an
+// entry the pass asked for and then could not take: one that runs past its
+// per-entry cap. `readCappedEntry` stops one byte past the cap, leaving the
+// rest of that entry undecoded, and in a solid archive the files behind it
+// decode against a window missing exactly those bytes.
+//
+// So: a wanted ComicInfo.xml over its 1 MiB cap, followed by the wanted
+// cover. The byte count is the assertion, because with stored entries the
+// cover still comes out right either way (Next() re-syncs at the packed
+// level, which is precisely why this needs counting rather than comparing).
+func TestCBRExtract_SolidWalkDrainsAStoppedShortWantedEntry(t *testing.T) {
+	const overshoot = 512 << 10
+	oversized := bytes.Repeat([]byte(" "), int(comicMaxComicInfoBytes)+overshoot)
+	copy(oversized, []byte("<ComicInfo><Series>Saga</Series></ComicInfo>"))
+
+	raw := rarArchive(
+		rarEntry{name: "ComicInfo.xml", data: oversized, solid: true},
+		rarEntry{name: "01.png", data: fakePNG, solid: true},
+	)
+	src := &countingComicSource{Reader: bytes.NewReader(raw), size: int64(len(raw))}
+
+	meta, err := CBRProcessor{}.Extract(context.Background(), src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	// The over-cap entry is dropped, and the entry behind it still arrives.
+	if meta.Title != "" {
+		t.Errorf("Title = %q — an over-cap ComicInfo was parsed anyway", meta.Title)
+	}
+	if !bytes.Equal(meta.CoverBytes, fakePNG) {
+		t.Errorf("CoverBytes = %q, want the entry behind the over-cap one", meta.CoverBytes)
+	}
+
+	// The whole oversized entry has to have been pulled through the
+	// decoder, not just the cap's worth: a walk that stops at the cap and
+	// seeks the remainder reads about comicMaxComicInfoBytes here.
+	if want := int64(len(oversized)); src.read < want {
+		t.Errorf("read %d bytes for a %d-byte over-cap entry — the walk stopped short of it and skipped the rest, "+
+			"leaving the solid decoder mid-entry", src.read, want)
+	}
+}
+
 // One unreadable page is one missing field, not a failed import — the
 // same degradation a bad entry inside a CBZ gets. The flipped byte here
 // is in the cover's data, so its stored checksum no longer matches.
