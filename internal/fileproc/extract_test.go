@@ -29,8 +29,8 @@ func TestDispatchFormat(t *testing.T) {
 		{format: "CBZ"},
 		{format: "MP3"},
 		{format: "M4B"},
-		{format: "AZW3", wantErr: true},
-		{format: "MOBI", wantErr: true},
+		{format: "AZW3"},
+		{format: "MOBI"},
 		{format: "FB2"},
 		{format: "", wantErr: true},
 		{format: "unknown", wantErr: true},
@@ -67,7 +67,7 @@ func TestDispatchKeyOrFormat(t *testing.T) {
 		{name: "slug lowercased", format: "mp3", wantFormat: "MP3"},
 		{name: "unknown key falls back to slug", key: "books/h.bin", format: "EPUB", wantFormat: "EPUB"},
 		{name: "neither", wantErr: true},
-		{name: "unsupported slug", format: "AZW3", wantErr: true},
+		{name: "unsupported slug", format: "CBR", wantErr: true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

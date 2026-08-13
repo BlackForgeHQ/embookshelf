@@ -397,7 +397,8 @@ SHA-256 dedup since `000027`); presence + MIME live on
 | `CBZProcessor` | **Built** | `archive/zip` page count + first-image cover | — (read-only format) |
 | `AudioProcessor` | **Built** | `dhowden/tag` for MP3/M4A/M4B (title, artist, narrator, duration) | — (deferred) |
 | CBR | Deferred | needs `nwaples/rardecode` | — |
-| AZW3 / MOBI / FB2 | Deferred | parser TBD | — |
+| `MOBIProcessor` | **Built** | stdlib PalmDB record index + EXTH walk; MOBI and AZW3/KF8 share it | — (read-only format) |
+| `FB2Processor` | **Built** | stdlib `encoding/xml` over the one FictionBook document | — (read-only format) |
 
 Unsupported files dropped today are queued, surface
 `ErrUnsupportedFormat` in the review UI, and can still be approved

@@ -45,7 +45,7 @@ func TestDispatchCoversEveryProcessorExt(t *testing.T) {
 	cases := map[string]string{
 		".epub": "EPUB", ".pdf": "PDF", ".cbz": "CBZ",
 		".mp3": "MP3", ".m4a": "M4B", ".m4b": "M4B",
-		".fb2": "FB2",
+		".fb2": "FB2", ".mobi": "MOBI", ".azw3": "AZW3",
 	}
 	for ext, wantFormat := range cases {
 		p, format, err := Dispatch("x" + ext)
@@ -67,15 +67,13 @@ func TestDispatchCoversEveryProcessorExt(t *testing.T) {
 // thirty seconds).
 //
 // This set is the interim ADR-0033-style loud state; #310 (.cbr/.cb7),
-// #311 (.mobi/.azw3) and #312 (.fb2, done) each shrink it by wiring a
-// processor, at which point the entry moves to the covers-every-ext
-// test above.
+// #311 (.mobi/.azw3, done) and #312 (.fb2, done) each shrink it by wiring
+// a processor, at which point the entry moves to the covers-every-ext
+// test above. Only the comic aliases are left.
 func TestDispatchNoProcessorIsPerFormatAndPermanent(t *testing.T) {
 	noProcessor := map[string]string{
-		".cbr":  "CBZ",
-		".cb7":  "CBZ",
-		".mobi": "MOBI",
-		".azw3": "AZW3",
+		".cbr": "CBZ",
+		".cb7": "CBZ",
 	}
 	for ext, format := range noProcessor {
 		_, _, err := Dispatch("x" + ext)
@@ -95,7 +93,7 @@ func TestDispatchNoProcessorIsPerFormatAndPermanent(t *testing.T) {
 	covered := map[string]bool{
 		".epub": true, ".pdf": true, ".cbz": true,
 		".mp3": true, ".m4a": true, ".m4b": true,
-		".fb2": true,
+		".fb2": true, ".mobi": true, ".azw3": true,
 	}
 	for _, ext := range SupportedExts {
 		if _, ok := noProcessor[ext]; ok == covered[ext] {
@@ -122,7 +120,7 @@ func TestDispatchUnknownExtensionStaysGeneric(t *testing.T) {
 // TestDispatchFormatAgreesWithDispatch — the slug-keyed twin answers
 // with the same processor type as the extension entry point.
 func TestDispatchFormatAgreesWithDispatch(t *testing.T) {
-	for _, format := range []string{"EPUB", "PDF", "CBZ", "MP3", "M4B", "FB2"} {
+	for _, format := range []string{"EPUB", "PDF", "CBZ", "MP3", "M4B", "FB2", "MOBI", "AZW3"} {
 		byFormat, err := DispatchFormat(format)
 		if err != nil {
 			t.Errorf("DispatchFormat(%q): %v", format, err)
@@ -138,8 +136,11 @@ func TestDispatchFormatAgreesWithDispatch(t *testing.T) {
 			t.Errorf("DispatchFormat(%q) = %T, Dispatch = %T", format, byFormat, byExt)
 		}
 	}
-	if _, err := DispatchFormat("MOBI"); !errors.Is(err, ErrUnsupportedFormat) {
-		t.Errorf("DispatchFormat(MOBI) err = %v, want ErrUnsupportedFormat while no processor exists", err)
+	// CBR is the legacy tag whose .cbr bytes are a RAR archive no
+	// processor here opens (#310) — the remaining format that answers the
+	// refusal on the slug side too.
+	if _, err := DispatchFormat("CBR"); !errors.Is(err, ErrUnsupportedFormat) {
+		t.Errorf("DispatchFormat(CBR) err = %v, want ErrUnsupportedFormat while no processor exists", err)
 	}
 }
 

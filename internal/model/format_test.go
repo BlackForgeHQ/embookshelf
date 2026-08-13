@@ -8,8 +8,9 @@ import (
 )
 
 // EPUB alone: there is no PDF text library in go.mod, CBZ is images,
-// audio formats are already audio, and MOBI/AZW3/FB2 have no extractor
-// (ADR-0028 §4). Stated once here and asserted here, so a format gaining
+// audio formats are already audio, and MOBI/AZW3/FB2 have no text
+// extractor (ADR-0028 §4) — their ingest processors read metadata and a
+// cover only. Stated once here and asserted here, so a format gaining
 // narratability is one edit.
 func TestNarratableIsEPUBAlone(t *testing.T) {
 	t.Parallel()

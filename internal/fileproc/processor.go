@@ -73,6 +73,10 @@ var processors = map[string]func() Processor{
 	".m4a":  func() Processor { return &AudioProcessor{} },
 	".m4b":  func() Processor { return &AudioProcessor{} },
 	".fb2":  func() Processor { return &FB2Processor{} },
+	// Two formats, one processor: AZW3 (KF8) is the same PalmDB container
+	// and EXTH layout as MOBI, and the file version inside says which.
+	".mobi": func() Processor { return &MOBIProcessor{} },
+	".azw3": func() Processor { return &MOBIProcessor{} },
 }
 
 // NoProcessorError is Dispatch's answer for an extension the table
