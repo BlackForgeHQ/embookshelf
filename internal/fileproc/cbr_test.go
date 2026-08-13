@@ -140,17 +140,15 @@ func cbrSource(t *testing.T, entries ...rarEntry) *memSource {
 	return &memSource{Reader: bytes.NewReader(b), size: int64(len(b))}
 }
 
-// comicFixtureEntries is the one comic every container fixture holds, so
-// "the same comic packed three ways produces the same row" is a
-// comparison of like with like. Matches what testdata/comic.cb7 was
-// packed from, entry for entry.
-func comicFixtureEntries() []rarEntry {
-	return []rarEntry{
-		{name: "ComicInfo.xml", data: []byte(comicInfoFixtureXML)},
-		{name: "notes.txt", data: []byte("skip")},
-		{name: "page10.png", data: []byte("ten")},
-		{name: "page2.png", data: []byte("page-two")},
+// rarEntriesFrom packs the container-neutral fixture entries as plain
+// stored RAR files — no encryption, no solid flag, which is what every
+// cross-container comparison wants.
+func rarEntriesFrom(entries []comicEntry) []rarEntry {
+	out := make([]rarEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, rarEntry{name: e.name, data: e.data})
 	}
+	return out
 }
 
 // TestComicFixture_Generate writes testdata/comic.cbr, the RAR half of
@@ -169,7 +167,7 @@ func TestComicFixture_Generate(t *testing.T) {
 	if err := os.MkdirAll("testdata", 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(cbrFixture, rarArchive(comicFixtureEntries()...), 0o644); err != nil {
+	if err := os.WriteFile(cbrFixture, rarArchive(rarEntriesFrom(comicFixtureEntries())...), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
 }
@@ -180,7 +178,7 @@ const cbrFixture = "testdata/comic.cbr"
 // drift, the pipeline test two packages away is exercising bytes nothing
 // here has ever looked at.
 func TestCBRFixtureMatchesTheWriter(t *testing.T) {
-	want := rarArchive(comicFixtureEntries()...)
+	want := rarArchive(rarEntriesFrom(comicFixtureEntries())...)
 	got, err := os.ReadFile(cbrFixture)
 	if err != nil {
 		t.Fatalf("read fixture: %v — regenerate it with EMBED_FIXTURE_UPDATE=1", err)
@@ -294,6 +292,76 @@ func TestCBRExtract_SolidArchive(t *testing.T) {
 	assertComicInfoFixture(t, meta)
 	if !bytes.Equal(meta.CoverBytes, fakePNG) {
 		t.Errorf("CoverBytes = %q, want the last entry's bytes", meta.CoverBytes)
+	}
+}
+
+// countingComicSource records every byte handed back, so a test can tell
+// a walk that seeks past an entry from one that decodes through it.
+type countingComicSource struct {
+	*bytes.Reader
+	size int64
+	read int64
+}
+
+func (c *countingComicSource) Size() int64  { return c.size }
+func (c *countingComicSource) Close() error { return nil }
+
+func (c *countingComicSource) ReadAt(p []byte, off int64) (int, error) {
+	n, err := c.Reader.ReadAt(p, off)
+	c.read += int64(n)
+	return n, err
+}
+
+// The solid branch, made discriminating. Deleting the drain in
+// rarComic.read leaves TestCBRExtract_SolidArchive passing — a stored
+// entry decodes correctly however the reader arrived at it — so what is
+// asserted here is the observable difference the drain makes: in a solid
+// archive the bytes of an entry nothing wants are pulled through the
+// decoder, and in a non-solid one they are seeked past and never read.
+//
+// Why not a *compressed* solid fixture, which is what would prove the
+// drain is load-bearing rather than merely present: RAR compression is
+// proprietary and there is no Go encoder for it, so the writer in this
+// file emits stored entries only, and no committed archive can be
+// regenerated from source either. The necessity argument therefore rests
+// on rardecode's own code — newArchiveFileFrom passes reset = !h.Solid to
+// decodeReader.init, which keeps the sliding window across files when the
+// flag is set, so a file whose predecessors were skipped decodes against
+// a window that was never filled. This test pins the behaviour that
+// argument asks for.
+func TestCBRExtract_SolidWalkDecodesWhatItStepsOver(t *testing.T) {
+	const fillerBytes = 256 << 10
+
+	build := func(solid bool) *countingComicSource {
+		raw := rarArchive(
+			// Not an image and not ComicInfo: nothing wants it, so the only
+			// reason to read it is to keep a solid decoder in step.
+			rarEntry{name: "filler.bin", data: bytes.Repeat([]byte("x"), fillerBytes), solid: solid},
+			rarEntry{name: "01.png", data: fakePNG, solid: solid},
+		)
+		return &countingComicSource{Reader: bytes.NewReader(raw), size: int64(len(raw))}
+	}
+
+	solid := build(true)
+	meta, err := CBRProcessor{}.Extract(context.Background(), solid)
+	if err != nil {
+		t.Fatalf("solid Extract: %v", err)
+	}
+	if !bytes.Equal(meta.CoverBytes, fakePNG) {
+		t.Fatalf("solid cover = %q, want the last entry's bytes", meta.CoverBytes)
+	}
+
+	plain := build(false)
+	if _, err := (CBRProcessor{}).Extract(context.Background(), plain); err != nil {
+		t.Fatalf("non-solid Extract: %v", err)
+	}
+
+	if solid.read < fillerBytes {
+		t.Errorf("solid walk read %d bytes of a %d-byte filler entry — it skipped what it must decode through",
+			solid.read, fillerBytes)
+	}
+	if plain.read >= fillerBytes {
+		t.Errorf("non-solid walk read %d bytes — it should seek past the filler, not decode it", plain.read)
 	}
 }
 

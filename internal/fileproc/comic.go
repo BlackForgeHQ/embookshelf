@@ -3,10 +3,12 @@
 package fileproc
 
 import (
+	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"path"
 	"sort"
 	"strings"
@@ -50,7 +52,11 @@ type comicArchive interface {
 	// metadata, the same best-effort contract EPUB, FB2 and MOBI covers
 	// have. The error return is for the archive as a whole — encrypted,
 	// or a container failure that makes every remaining read meaningless.
-	read(want map[string]int64) (map[string][]byte, error)
+	//
+	// ctx is honoured because a read is not always cheap: walking a solid
+	// RAR to reach its cover decodes everything ahead of it, which is an
+	// amount of work the archive chose, not this package.
+	read(ctx context.Context, want map[string]int64) (map[string][]byte, error)
 }
 
 const (
@@ -99,7 +105,7 @@ type comicInfoXML struct {
 // in error messages (.cbz, .cbr, .cb7); the format stamped is CBZ for all
 // three, because that is the one format row the table folds them onto and
 // books.format is what this field feeds.
-func extractComic(kind string, a comicArchive) (Metadata, error) {
+func extractComic(ctx context.Context, kind string, a comicArchive) (Metadata, error) {
 	names := a.entries()
 
 	pages := comicPages(names)
@@ -119,7 +125,7 @@ func extractComic(kind string, a comicArchive) (Metadata, error) {
 	if infoName != "" {
 		want[infoName] = comicMaxComicInfoBytes
 	}
-	got, err := a.read(want)
+	got, err := a.read(ctx, want)
 	if err != nil {
 		return Metadata{}, err
 	}
@@ -287,12 +293,19 @@ func stripLeadingZeros(s string) string {
 // This is the bound that stands between a decompression bomb and this
 // process: the declared size in an archive header is a number the archive
 // chose, so the limit has to sit on the read itself.
+//
+// Refusing here loses a field silently as far as the row is concerned —
+// the book arrives with no cover and nothing on it says why — so the cap
+// says so in the log. It is a warning rather than an error because a
+// bomb-shaped page and a genuinely enormous scan look identical from
+// here, and one of them is a real book someone dropped.
 func readCappedEntry(r io.Reader, name string, max int64) ([]byte, error) {
 	b, err := io.ReadAll(&io.LimitedReader{R: r, N: max + 1})
 	if err != nil {
 		return nil, err
 	}
 	if int64(len(b)) > max {
+		slog.Warn("comic entry over the read cap, dropped", "entry", name, "capBytes", max)
 		return nil, fmt.Errorf("entry %q expands past the %d byte cap", name, max)
 	}
 	return b, nil

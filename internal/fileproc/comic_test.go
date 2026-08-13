@@ -38,6 +38,47 @@ func assertComicInfoFixture(t *testing.T, meta Metadata) {
 	}
 }
 
+// comicEntry is one archive entry, in a slice so every container fixture
+// is built in the *same, stated* order. Archive order is not decoration
+// here: the ComicInfo lookup and the top-level cover.* preference both
+// take the first match in it, and a fixture built from a Go map would
+// shuffle that per run.
+type comicEntry struct {
+	name string
+	data []byte
+}
+
+// comicFixtureEntries is the comic every container fixture holds, so "the
+// same comic packed three ways produces the same row" is a comparison of
+// like with like. Matches what testdata/comic.cb7 and testdata/comic.cbr
+// were packed from, entry for entry and in this order.
+//
+// No cover.* here on purpose: the cover has to come from the natural
+// sort, and page10 before page2 is what makes that visible (lexically the
+// other way round).
+func comicFixtureEntries() []comicEntry {
+	return []comicEntry{
+		{name: "ComicInfo.xml", data: []byte(comicInfoFixtureXML)},
+		{name: "notes.txt", data: []byte("skip")},
+		{name: "page10.png", data: []byte("ten")},
+		{name: "page2.png", data: []byte("page-two")},
+	}
+}
+
+// comicCoverFixtureEntries is the other order-sensitive shape: several
+// pages *and* a top-level cover.png that is neither the first entry nor
+// the first page, so a container that lost the preference would answer
+// with page1.png and be caught. Matches testdata/comic-cover.cb7.
+func comicCoverFixtureEntries() []comicEntry {
+	return []comicEntry{
+		{name: "ComicInfo.xml", data: []byte(comicInfoFixtureXML)},
+		{name: "page10.png", data: []byte("ten")},
+		{name: "page1.png", data: []byte("one")},
+		{name: "cover.png", data: []byte("the-cover")},
+		{name: "page2.png", data: []byte("two")},
+	}
+}
+
 // The requirement #310 is really made of: a comic packed as ZIP, RAR or
 // 7z is the same comic, so the three processors must produce the same
 // Metadata down to the cover bytes. Asserted against each other rather
@@ -45,43 +86,67 @@ func assertComicInfoFixture(t *testing.T, meta Metadata) {
 // agreement that is the requirement — a rule that changed in comic.go
 // would move all three answers together and this would still hold, while
 // a rule that grew a second copy in one container would not.
+//
+// Both order-sensitive rules are covered: natural sort picking the cover
+// out of several pages, and a top-level cover.* beating the first page.
 func TestComicContainersAgree(t *testing.T) {
-	entries := map[string][]byte{
-		"ComicInfo.xml": []byte(comicInfoFixtureXML),
-		"notes.txt":     []byte("skip"),
-		"page10.png":    []byte("ten"),
-		"page2.png":     []byte("page-two"),
+	cases := []struct {
+		name      string
+		entries   []comicEntry
+		cb7       string
+		wantCover string
+	}{
+		{
+			name:      "cover by natural sort",
+			entries:   comicFixtureEntries(),
+			cb7:       cb7Fixture,
+			wantCover: "page-two",
+		},
+		{
+			name:      "top-level cover.png wins",
+			entries:   comicCoverFixtureEntries(),
+			cb7:       cb7CoverFixture,
+			wantCover: "the-cover",
+		},
 	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cbz := cbzSourceInOrder(t, c.entries)
+			defer func() { _ = cbz.Close() }()
+			cbr := cbrSource(t, rarEntriesFrom(c.entries)...)
+			defer func() { _ = cbr.Close() }()
+			cb7 := memSourceFromFile(t, c.cb7)
+			defer func() { _ = cb7.Close() }()
 
-	cbz := cbzSource(t, entries)
-	defer func() { _ = cbz.Close() }()
-	cbr := cbrSource(t, comicFixtureEntries()...)
-	defer func() { _ = cbr.Close() }()
-	cb7 := memSourceFromFile(t, cb7Fixture)
-	defer func() { _ = cb7.Close() }()
+			ctx := context.Background()
+			fromCBZ, err := CBZProcessor{}.Extract(ctx, cbz)
+			if err != nil {
+				t.Fatalf("cbz: %v", err)
+			}
+			fromCBR, err := CBRProcessor{}.Extract(ctx, cbr)
+			if err != nil {
+				t.Fatalf("cbr: %v", err)
+			}
+			fromCB7, err := CB7Processor{}.Extract(ctx, cb7)
+			if err != nil {
+				t.Fatalf("cb7: %v", err)
+			}
 
-	ctx := context.Background()
-	fromCBZ, err := CBZProcessor{}.Extract(ctx, cbz)
-	if err != nil {
-		t.Fatalf("cbz: %v", err)
-	}
-	fromCBR, err := CBRProcessor{}.Extract(ctx, cbr)
-	if err != nil {
-		t.Fatalf("cbr: %v", err)
-	}
-	fromCB7, err := CB7Processor{}.Extract(ctx, cb7)
-	if err != nil {
-		t.Fatalf("cb7: %v", err)
-	}
+			// The ZIP answer is the one the other two are held to, so it is
+			// checked against the expectation first — three containers
+			// agreeing on the wrong page would otherwise pass.
+			if string(fromCBZ.CoverBytes) != c.wantCover {
+				t.Fatalf("cbz cover = %q, want %q", fromCBZ.CoverBytes, c.wantCover)
+			}
+			assertComicInfoFixture(t, fromCBZ)
 
-	if string(fromCBZ.CoverBytes) != "page-two" {
-		t.Fatalf("cbz cover = %q — the fixtures disagree before the comparison starts", fromCBZ.CoverBytes)
-	}
-	if !reflect.DeepEqual(fromCBZ, fromCBR) {
-		t.Errorf("cbr metadata differs from cbz:\n cbz = %+v\n cbr = %+v", fromCBZ, fromCBR)
-	}
-	if !reflect.DeepEqual(fromCBZ, fromCB7) {
-		t.Errorf("cb7 metadata differs from cbz:\n cbz = %+v\n cb7 = %+v", fromCBZ, fromCB7)
+			if !reflect.DeepEqual(fromCBZ, fromCBR) {
+				t.Errorf("cbr metadata differs from cbz:\n cbz = %+v\n cbr = %+v", fromCBZ, fromCBR)
+			}
+			if !reflect.DeepEqual(fromCBZ, fromCB7) {
+				t.Errorf("cb7 metadata differs from cbz:\n cbz = %+v\n cb7 = %+v", fromCBZ, fromCB7)
+			}
+		})
 	}
 }
 
@@ -97,7 +162,7 @@ type fakeComicArchive struct {
 
 func (f *fakeComicArchive) entries() []string { return f.names }
 
-func (f *fakeComicArchive) read(want map[string]int64) (map[string][]byte, error) {
+func (f *fakeComicArchive) read(_ context.Context, want map[string]int64) (map[string][]byte, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -117,7 +182,7 @@ func TestExtractComic_UnreadableCoverDegrades(t *testing.T) {
 		names: []string{"01.png", "ComicInfo.xml"},
 		files: map[string][]byte{"ComicInfo.xml": []byte(comicInfoFixtureXML)},
 	}
-	meta, err := extractComic("cbz", a)
+	meta, err := extractComic(t.Context(), "cbz", a)
 	if err != nil {
 		t.Fatalf("extractComic: %v", err)
 	}
@@ -130,14 +195,14 @@ func TestExtractComic_UnreadableCoverDegrades(t *testing.T) {
 // An archive-wide failure is not degraded past — the item fails.
 func TestExtractComic_ArchiveErrorFailsTheExtraction(t *testing.T) {
 	a := &fakeComicArchive{names: []string{"01.png"}, err: errEncryptedArchive}
-	if _, err := extractComic("cb7", a); !errors.Is(err, errEncryptedArchive) {
+	if _, err := extractComic(t.Context(), "cb7", a); !errors.Is(err, errEncryptedArchive) {
 		t.Fatalf("err = %v, want errEncryptedArchive", err)
 	}
 }
 
 func TestExtractComic_NoImages(t *testing.T) {
 	a := &fakeComicArchive{names: []string{"readme.txt", "ComicInfo.xml"}}
-	_, err := extractComic("cb7", a)
+	_, err := extractComic(t.Context(), "cb7", a)
 	if err == nil {
 		t.Fatal("expected an error for an image-less archive")
 	}

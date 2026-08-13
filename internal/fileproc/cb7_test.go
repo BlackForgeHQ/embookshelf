@@ -26,11 +26,18 @@ import (
 //	7zz a -mx=9 -psecret comic-encrypted.cb7 <same four>
 //	7zz a -mx=9 -psecret -mhe=on comic-headers-encrypted.cb7 <same four>
 //
+// comic-cover.cb7 is the other order-sensitive shape — several pages plus
+// a top-level cover.png that is neither first entry nor first page, the
+// contents of comicCoverFixtureEntries:
+//
+//	7zz a -mx=9 comic-cover.cb7 ComicInfo.xml page10.png page1.png cover.png page2.png
+//
 // and comic-bomb.cb7 from ComicInfo.xml plus a 64 MiB 01.png of zeros
 // (`dd if=/dev/zero of=01.png bs=1m count=64`), which is 10 KB packed —
 // a decompression bomb small enough to commit.
 const (
 	cb7Fixture          = "testdata/comic.cb7"
+	cb7CoverFixture     = "testdata/comic-cover.cb7"
 	cb7EncryptedFixture = "testdata/comic-encrypted.cb7"
 	cb7HeaderEncFixture = "testdata/comic-headers-encrypted.cb7"
 	cb7BombFixture      = "testdata/comic-bomb.cb7"

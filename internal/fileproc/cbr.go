@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 
 	"github.com/nwaples/rardecode/v2"
 
@@ -34,7 +35,7 @@ import (
 // when it is an io.Seeker, which a SectionReader over a Source is — so
 // the listing costs the headers rather than the archive. Solid archives,
 // where each file continues the previous one's dictionary, are the one
-// case that cannot be skipped past; see readEntries.
+// case that cannot be skipped past; see rarComic.read.
 type CBRProcessor struct{}
 
 // cbrMaxSolidDrainBytes bounds what a solid archive may cost. In a solid
@@ -46,13 +47,11 @@ type CBRProcessor struct{}
 const cbrMaxSolidDrainBytes int64 = 512 << 20
 
 func (CBRProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, error) {
-	_ = ctx
-
 	a, err := newRARComic(src)
 	if err != nil {
 		return Metadata{}, err
 	}
-	return extractComic("cbr", a)
+	return extractComic(ctx, "cbr", a)
 }
 
 // rarComic is the RAR end of comicArchive: a listing taken up front, and
@@ -101,7 +100,7 @@ func newRARComic(src storage.Source) (*rarComic, error) {
 
 func (c *rarComic) entries() []string { return c.names }
 
-func (c *rarComic) read(want map[string]int64) (map[string][]byte, error) {
+func (c *rarComic) read(ctx context.Context, want map[string]int64) (map[string][]byte, error) {
 	r, err := rarReader(c.src)
 	if err != nil {
 		return nil, cbrError("open cbr", err)
@@ -112,6 +111,13 @@ func (c *rarComic) read(want map[string]int64) (map[string][]byte, error) {
 	var drained int64
 
 	for remaining > 0 {
+		// Per entry, because a solid archive's walk is the one thing here
+		// that can run long: the drain below decodes whatever the archive
+		// put in front of the cover.
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("cbr: %w", err)
+		}
+
 		h, err := r.Next()
 		if errors.Is(err, io.EOF) {
 			break
@@ -120,38 +126,53 @@ func (c *rarComic) read(want map[string]int64) (map[string][]byte, error) {
 			return nil, cbrError("read cbr entries", err)
 		}
 
+		// A duplicate name is read once: the first entry wins, the same
+		// way the listing's first match chose it.
 		max, wanted := want[h.Name]
-		if wanted {
-			// A duplicate name is read once: the first entry wins, the
-			// same way the listing's first match chose it.
-			if _, done := out[h.Name]; done {
-				wanted = false
-			}
+		if _, done := out[h.Name]; done {
+			wanted = false
 		}
 
 		if wanted {
 			b, rerr := readCappedEntry(r, h.Name, max)
-			if rerr != nil {
-				if isRARPasswordError(rerr) {
-					return nil, fmt.Errorf("cbr: %w", errEncryptedArchive)
-				}
-				// An entry that will not decode is one missing field, not
-				// a failed import: comic.go degrades around it.
-				continue
+			switch {
+			case rerr == nil:
+				out[h.Name] = b
+				remaining--
+			case isRARPasswordError(rerr):
+				return nil, fmt.Errorf("cbr: %w", errEncryptedArchive)
+			default:
+				// An entry that will not decode is one missing field, not a
+				// failed import: comic.go degrades around it. No `continue`
+				// here — the drain below still has to run, because this is
+				// exactly the case that leaves the reader mid-entry.
+				slog.Warn("comic entry unreadable, dropped", "container", "cbr", "entry", h.Name, "err", rerr)
 			}
-			out[h.Name] = b
-			remaining--
 		}
 
-		// In a solid archive the decoder's window is the previous files'
-		// output, so every entry ahead of the one we want has to be
-		// decoded even though nothing reads it — including the rest of an
-		// entry we stopped short of under its cap. Non-solid archives
-		// skip by seeking and never come through here.
+		// In a solid archive each file's output continues the previous
+		// file's decoder window (rardecode resets that window only for
+		// non-solid files), so an entry that is stepped over has to be
+		// decoded anyway — and so does the tail of one we stopped short of,
+		// which is why this sits after the read on every path rather than
+		// inside its success branch. Non-solid archives skip by seeking and
+		// never come through here at all.
 		if c.solid && remaining > 0 {
 			n, derr := io.Copy(io.Discard, io.LimitReader(r, cbrMaxSolidDrainBytes-drained))
 			drained += n
-			if derr != nil || drained >= cbrMaxSolidDrainBytes {
+			if derr != nil {
+				// An entry we were only stepping over will not decode, so
+				// nothing behind it can be trusted either. Still a
+				// degradation rather than a failed item — the same answer a
+				// bad entry inside a ZIP gets — so stop and return what was
+				// already read.
+				slog.Warn("comic entry would not decode; stopping the solid walk",
+					"container", "cbr", "entry", h.Name, "err", derr, "missing", remaining)
+				break
+			}
+			if drained >= cbrMaxSolidDrainBytes {
+				slog.Warn("solid cbr exceeded the decode budget; giving up on the remaining entries",
+					"drainedBytes", drained, "capBytes", cbrMaxSolidDrainBytes, "missing", remaining)
 				break
 			}
 		}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/bodgit/sevenzip"
@@ -28,8 +29,6 @@ import (
 type CB7Processor struct{}
 
 func (CB7Processor) Extract(ctx context.Context, src storage.Source) (Metadata, error) {
-	_ = ctx
-
 	// The whole Source as a ReaderAt, which is what 7z wants: the header
 	// is at the tail, so opening costs a read of the tail rather than of
 	// the object, and each entry costs its own block.
@@ -37,10 +36,16 @@ func (CB7Processor) Extract(ctx context.Context, src storage.Source) (Metadata, 
 	if err != nil {
 		return Metadata{}, cb7Error("open cb7", err)
 	}
+	// A rejection, not a bound: sevenzip has already parsed the header and
+	// materialised this slice by the time we look, so the allocation the
+	// cap is about has happened. What it buys is that the pass above does
+	// not go on to sort and scan a list that size — and that an archive
+	// this shape is refused with a sentence rather than worked on.
+	// Bounding the parse itself is sevenzip's business, one layer down.
 	if len(zr.File) > comicMaxEntries {
 		return Metadata{}, fmt.Errorf("cb7: archive holds more than %d entries", comicMaxEntries)
 	}
-	return extractComic("cb7", &sevenzipComic{zr: zr})
+	return extractComic(ctx, "cb7", &sevenzipComic{zr: zr})
 }
 
 // sevenzipComic is the 7z end of comicArchive.
@@ -59,7 +64,7 @@ func (c *sevenzipComic) entries() []string {
 	return names
 }
 
-func (c *sevenzipComic) read(want map[string]int64) (map[string][]byte, error) {
+func (c *sevenzipComic) read(ctx context.Context, want map[string]int64) (map[string][]byte, error) {
 	out := make(map[string][]byte, len(want))
 	for _, f := range c.zr.File {
 		name := cb7Name(f)
@@ -70,6 +75,11 @@ func (c *sevenzipComic) read(want map[string]int64) (map[string][]byte, error) {
 		if _, done := out[name]; done {
 			continue
 		}
+		// Opening an entry in a solid block decodes the block up to it,
+		// so a read here is not free either.
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("cb7: %w", err)
+		}
 
 		rc, err := f.Open()
 		if err != nil {
@@ -78,6 +88,7 @@ func (c *sevenzipComic) read(want map[string]int64) (map[string][]byte, error) {
 			}
 			// An entry that will not open is one missing field, not a
 			// failed import: comic.go degrades around it.
+			slog.Warn("comic entry would not open, dropped", "container", "cb7", "entry", name, "err", err)
 			continue
 		}
 		b, rerr := readCappedEntry(rc, name, max)
@@ -88,6 +99,7 @@ func (c *sevenzipComic) read(want map[string]int64) (map[string][]byte, error) {
 			if cb7Encrypted(rerr) {
 				return nil, fmt.Errorf("cb7: %w", errEncryptedArchive)
 			}
+			slog.Warn("comic entry unreadable, dropped", "container", "cb7", "entry", name, "err", rerr)
 			continue
 		}
 		out[name] = b

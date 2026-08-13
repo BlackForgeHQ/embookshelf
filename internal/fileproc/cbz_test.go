@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -81,6 +82,30 @@ func cbzSource(t *testing.T, entries map[string][]byte) *memSource {
 			t.Fatal(err)
 		}
 		if _, err := w.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b := buf.Bytes()
+	return &memSource{Reader: bytes.NewReader(b), size: int64(len(b))}
+}
+
+// cbzSourceInOrder is cbzSource with the entries written in the order
+// given rather than in Go's map order — which the cross-container parity
+// test needs, since the ComicInfo and cover.* rules take the first match
+// in archive order.
+func cbzSourceInOrder(t *testing.T, entries []comicEntry) *memSource {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, e := range entries {
+		w, err := zw.Create(e.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(e.data); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -170,6 +195,49 @@ func TestCBZExtract_NoImagesFails(t *testing.T) {
 	defer func() { _ = src.Close() }()
 	if _, err := (CBZProcessor{}).Extract(context.Background(), src); err == nil {
 		t.Fatal("expected error for image-less archive")
+	}
+}
+
+// The page reader tells "these bytes are not a ZIP" from "this ZIP will
+// not open", because the handler turns the first into a 415 saying pages
+// come from .cbz only and the second into a 500. Since #310 both are
+// reachable from a book stamped CBZ: the comic aliases ingest now, so a
+// RAR on the shelf opens the comic reader, and a damaged .cbz must not be
+// told it is a RAR.
+func TestCBZPagesClassifiesNonZIPFromDamagedZIP(t *testing.T) {
+	good := incompressibleCBZ(t, []string{"01.png"}, 64)
+
+	cases := []struct {
+		name     string
+		raw      []byte
+		wantKind bool // true: reads as ErrComicNotZIP
+	}{
+		{name: "rar bytes", raw: append([]byte("Rar!\x1a\x07\x01\x00"), bytes.Repeat([]byte{0}, 64)...), wantKind: true},
+		{name: "7z bytes", raw: append([]byte("7z\xbc\xaf\x27\x1c"), bytes.Repeat([]byte{0}, 64)...), wantKind: true},
+		{name: "empty", raw: nil, wantKind: true},
+		{name: "truncated zip", raw: good[:len(good)/2], wantKind: false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := memSourceFromBytes(c.raw)
+			defer func() { _ = src.Close() }()
+
+			_, err := CBZPages(src)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if got := errors.Is(err, ErrComicNotZIP); got != c.wantKind {
+				t.Errorf("errors.Is(err, ErrComicNotZIP) = %v, want %v (err = %v)", got, c.wantKind, err)
+			}
+
+			_, err = CBZPage(src, 0, io.Discard)
+			if err == nil {
+				t.Fatal("expected an error from the page read too")
+			}
+			if got := errors.Is(err, ErrComicNotZIP); got != c.wantKind {
+				t.Errorf("page: errors.Is(err, ErrComicNotZIP) = %v, want %v (err = %v)", got, c.wantKind, err)
+			}
+		})
 	}
 }
 

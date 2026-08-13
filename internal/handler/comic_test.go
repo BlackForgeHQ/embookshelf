@@ -289,6 +289,29 @@ func TestComicEndpointsRefuseANonZIPComic(t *testing.T) {
 	}
 }
 
+// The other half of that classification: a .cbz that IS a ZIP and is
+// damaged keeps the answer it always had — a 500 — because "this file is
+// broken" and "this file is in a container the reader does not page" are
+// different things to be told, and the 415's sentence would send the
+// owner of a damaged comic looking for a conversion they do not need.
+func TestComicEndpointsOnADamagedZIPStillFail500(t *testing.T) {
+	good := cbzBytes(t, comicPages)
+	store := &objectStore{objects: map[string][]byte{
+		// Still a ZIP by its magic; the central directory at the tail is
+		// gone, so archive/zip cannot open it.
+		comicLocation: good[:len(good)/2],
+	}}
+	f := newComicFixture(t, store, "")
+
+	rec := comicRequest(t, f, f.h.ComicPagesIndex, "/api/v1/books/x/comic/pages", "")
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("pages index status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), ".cbz only") {
+		t.Errorf("body = %s — a damaged .cbz was told it is not a .cbz", rec.Body.String())
+	}
+}
+
 // A book whose object is not in the store answers 404 rather than a 500
 // or a truncated body.
 func TestComicPagesMissingObjectIsNotFound(t *testing.T) {
