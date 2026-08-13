@@ -63,8 +63,12 @@ func TestFB2Extract_BasicMetadataAndCover(t *testing.T) {
 		!strings.Contains(meta.Description, "Spice must flow.") {
 		t.Errorf("Description = %q, want the annotation paragraphs", meta.Description)
 	}
-	if !strings.Contains(meta.Description, "sf") || !strings.Contains(meta.Description, "adventure") {
-		t.Errorf("Description = %q, want the genres folded in", meta.Description)
+	// Genres are parsed (so their presence doesn't fail extraction) but
+	// intentionally not persisted anywhere — there is no genre/tags slot
+	// on the BookDrop path for any format, and Description carries the
+	// annotation only.
+	if strings.Contains(meta.Description, "sf") || strings.Contains(meta.Description, "Genres") {
+		t.Errorf("Description = %q, genres must not be folded in", meta.Description)
 	}
 	if meta.Language != "en" {
 		t.Errorf("Language = %q, want en", meta.Language)
@@ -151,6 +155,27 @@ func TestFB2Extract_TruncatedFileFails(t *testing.T) {
 
 	if _, err := (FB2Processor{}).Extract(context.Background(), src); err == nil {
 		t.Fatal("expected an error for truncated XML")
+	}
+}
+
+// A file over the processing cap fails with a clear error rather than
+// being read into memory in full — the filesystem-watcher intake path
+// has no upload-size cap of its own, unlike the HTTP path's
+// http.MaxBytesReader, so this processor has to refuse on its own.
+func TestFB2Extract_OverCapFails(t *testing.T) {
+	raw := make([]byte, fb2MaxBytes+1)
+	for i := range raw {
+		raw[i] = 'A'
+	}
+	src := memSourceFromBytes(raw)
+	defer func() { _ = src.Close() }()
+
+	_, err := (FB2Processor{}).Extract(context.Background(), src)
+	if err == nil {
+		t.Fatal("expected an error for a file over the processing cap")
+	}
+	if !strings.Contains(err.Error(), "cap") {
+		t.Errorf("err = %q, want a message naming the cap", err)
 	}
 }
 

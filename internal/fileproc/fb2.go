@@ -27,6 +27,20 @@ import (
 // namespace at all (common in the wild) and ones that declare both.
 type FB2Processor struct{}
 
+// fb2MaxBytes bounds how much of a single .fb2 this processor will
+// buffer in memory. FB2 is one XML document — unlike PDF (pdf.go's 1 MB
+// head + 256 KB tail windows), there's no partial-read shape that still
+// parses, so the whole file has to be read to extract anything. The
+// HTTP upload path already caps a single BookDrop upload at 1 GiB
+// (handler/bookdrop.go's maxUploadBytes), but the filesystem-watcher
+// intake path has no such cap, so without one here a large dropped
+// file would be slurped whole with no limit. 64 MiB is comfortably
+// above any real FictionBook — even a sizeable collection with an
+// embedded cover rarely clears a few MB of text plus a couple more of
+// base64 image data — while still bounding worst-case memory for a
+// format this processor cannot stream a window of.
+const fb2MaxBytes int64 = 64 << 20 // 64 MiB
+
 type fb2Document struct {
 	XMLName     xml.Name       `xml:"FictionBook"`
 	Description fb2Description `xml:"description"`
@@ -80,9 +94,16 @@ func (FB2Processor) Extract(ctx context.Context, src storage.Source) (Metadata, 
 	_ = ctx
 
 	f := io.NewSectionReader(src, 0, src.Size())
-	raw, err := io.ReadAll(f)
+	// Read one byte past the cap so an over-cap file is distinguished
+	// from one that lands exactly on it, then fail with a clear error
+	// instead of silently parsing a truncated document.
+	lr := &io.LimitedReader{R: f, N: fb2MaxBytes + 1}
+	raw, err := io.ReadAll(lr)
 	if err != nil {
 		return Metadata{}, fmt.Errorf("read fb2: %w", err)
+	}
+	if int64(len(raw)) > fb2MaxBytes {
+		return Metadata{}, fmt.Errorf("fb2: file exceeds the %d byte processing cap", fb2MaxBytes)
 	}
 
 	var doc fb2Document
@@ -103,7 +124,7 @@ func (FB2Processor) Extract(ctx context.Context, src storage.Source) (Metadata, 
 		m.Author = fb2AuthorName(ti.Authors[0])
 	}
 
-	m.Description = fb2BuildDescription(ti)
+	m.Description = fb2AnnotationText(ti)
 
 	// Cover extraction is best-effort, like EPUB's: a coverpage that
 	// points at a missing or malformed binary never fails the whole
@@ -136,36 +157,25 @@ func fb2AuthorName(a fb2Author) string {
 	return strings.TrimSpace(a.Nickname)
 }
 
-// fb2Description2 renders the annotation and genre list into Metadata's
-// single Description field. Metadata has no Genre slot — folding it in
-// here, clearly labelled, is the same move CBZ makes folding
-// ComicInfo's Series/Number into Title when there's no dedicated field:
-// the data is still ingested rather than silently dropped.
-func fb2BuildDescription(ti *fb2TitleInfo) string {
+// fb2AnnotationText joins the annotation's paragraphs into Metadata's
+// Description field. title-info's <genre> elements are parsed (so a
+// document that has them doesn't fail) but intentionally not persisted
+// anywhere: Metadata/ExtractResult/BookDropItem and the bookdrop_items
+// schema have no genre slot on the BookDrop path for any format, and
+// folding them into another field would be inventing storage for data
+// this ingest path doesn't otherwise carry. A first-class genre/tags
+// field is left to a future issue.
+func fb2AnnotationText(ti *fb2TitleInfo) string {
+	if ti.Annotation == nil {
+		return ""
+	}
 	var paras []string
-	if ti.Annotation != nil {
-		for _, p := range ti.Annotation.P {
-			if p = strings.TrimSpace(p); p != "" {
-				paras = append(paras, p)
-			}
+	for _, p := range ti.Annotation.P {
+		if p = strings.TrimSpace(p); p != "" {
+			paras = append(paras, p)
 		}
 	}
-	desc := strings.Join(paras, "\n\n")
-
-	var genres []string
-	for _, g := range ti.Genres {
-		if g = strings.TrimSpace(g); g != "" {
-			genres = append(genres, g)
-		}
-	}
-	if len(genres) == 0 {
-		return desc
-	}
-	genreLine := "Genres: " + strings.Join(genres, ", ")
-	if desc == "" {
-		return genreLine
-	}
-	return desc + "\n\n" + genreLine
+	return strings.Join(paras, "\n\n")
 }
 
 // fb2CoverHref returns the binary id referenced by <coverpage><image
