@@ -90,11 +90,11 @@ func (h *Handler) Engine() *gin.Engine {
 
 			// Cross-entity search powering the global command palette
 			// and the library page combobox.
-			authed.GET("/search", h.Search)
+			authed.GET("/search", h.userScoped(h.Search))
 
 			// Library + catalog
 			authed.GET("/libraries", h.Libraries)
-			authed.GET("/books", h.Books)
+			authed.GET("/books", h.userScoped(h.Books))
 			authed.GET("/books/:id", h.bookScoped(h.BookDetail))
 			authed.GET("/books/:id/cover", h.bookScoped(h.BookCover))
 			authed.GET("/books/:id/file", h.bookScoped(h.BookFile))
@@ -110,27 +110,27 @@ func (h *Handler) Engine() *gin.Engine {
 			// is folded into the same paths via the `public:<slug>`
 			// prefix (ADR-0017); the publish toggle is a separate
 			// admin-gated endpoint.
-			authed.GET("/shelves", h.Shelves)
-			authed.POST("/shelves", h.ShelfCreate)
-			authed.PATCH("/shelves/:slug", h.ShelfUpdate)
-			authed.DELETE("/shelves/:slug", h.ShelfDelete)
+			authed.GET("/shelves", h.userScoped(h.Shelves))
+			authed.POST("/shelves", h.userScoped(h.ShelfCreate))
+			authed.PATCH("/shelves/:slug", h.userScoped(h.ShelfUpdate))
+			authed.DELETE("/shelves/:slug", h.userScoped(h.ShelfDelete))
 			authed.PUT("/shelves/:slug/publish", h.ShelfPublish)
 
 			// BookDrop ingest queue
-			authed.GET("/bookdrop", h.BookDropList)
-			authed.GET("/bookdrop/:id/cover", h.BookDropCover)
-			authed.PUT("/bookdrop/:id/cover", h.BookDropPutCover)
-			authed.GET("/bookdrop/:id/file", h.BookDropFile)
-			authed.POST("/bookdrop/upload", h.BookDropUpload)
-			authed.POST("/bookdrop/:id/approve", h.BookDropApprove)
-			authed.POST("/bookdrop/:id/reject", h.BookDropReject)
+			authed.GET("/bookdrop", h.userScoped(h.BookDropList))
+			authed.GET("/bookdrop/:id/cover", h.userScoped(h.BookDropCover))
+			authed.PUT("/bookdrop/:id/cover", h.userScoped(h.BookDropPutCover))
+			authed.GET("/bookdrop/:id/file", h.userScoped(h.BookDropFile))
+			authed.POST("/bookdrop/upload", h.userScoped(h.BookDropUpload))
+			authed.POST("/bookdrop/:id/approve", h.userScoped(h.BookDropApprove))
+			authed.POST("/bookdrop/:id/reject", h.userScoped(h.BookDropReject))
 
 			// Metadata enrichment
 			authed.GET("/books/:id/enrich", h.bookScoped(h.EnrichSearch))
 			authed.GET("/books/:id/enrich/stream", h.bookScoped(h.EnrichStream))
 			authed.PUT("/books/:id/metadata", h.bookScoped(h.EnrichApplyMatch))
 			authed.PUT("/books/:id/metadata/locks", h.bookScoped(h.EnrichToggleFieldLocks))
-			authed.POST("/books/metadata/isbn-lookup", h.EnrichISBNLookup)
+			authed.POST("/books/metadata/isbn-lookup", h.userScoped(h.EnrichISBNLookup))
 			authed.POST("/books/:id/cover-from-url", h.bookScoped(h.EnrichApplyCover))
 			authed.DELETE("/books/:id/cover", h.bookScoped(h.EnrichRemoveCover))
 
@@ -182,8 +182,8 @@ func (h *Handler) Engine() *gin.Engine {
 				auth.RequireRole(model.RoleAdmin), h.bookScoped(h.BookAudiobookDelete))
 
 			// Library statistics dashboard
-			authed.GET("/stats", h.Stats)
-			authed.GET("/stats/reading", h.ReadingStats)
+			authed.GET("/stats", h.userScoped(h.Stats))
+			authed.GET("/stats/reading", h.userScoped(h.ReadingStats))
 
 			// Send-to-Kindle delivery. Email subsystem must be on; the
 			// handler returns 503 EMAIL_DISABLED otherwise. ADR-0021.
@@ -191,17 +191,17 @@ func (h *Handler) Engine() *gin.Engine {
 
 			// Device sync (reMarkable Paper Pro, ...) — per-user
 			// destinations you can push books to.
-			authed.GET("/devices", h.Devices)
-			authed.POST("/devices", h.DevicePair)
-			authed.DELETE("/devices/:id", h.DeviceDelete)
+			authed.GET("/devices", h.userScoped(h.Devices))
+			authed.POST("/devices", h.userScoped(h.DevicePair))
+			authed.DELETE("/devices/:id", h.userScoped(h.DeviceDelete))
 			authed.POST("/books/:id/send/:deviceId", h.bookScoped(h.BookSendToDevice))
 
 			// Annotations (highlights + notes)
-			authed.GET("/annotations", h.AnnotationsRecent)
+			authed.GET("/annotations", h.userScoped(h.AnnotationsRecent))
 			authed.GET("/books/:id/annotations", h.bookScoped(h.AnnotationsForBook))
 			authed.POST("/books/:id/annotations", h.bookScoped(h.AnnotationCreate))
-			authed.PATCH("/annotations/:id", h.AnnotationPatch)
-			authed.DELETE("/annotations/:id", h.AnnotationDelete)
+			authed.PATCH("/annotations/:id", h.userScoped(h.AnnotationPatch))
+			authed.DELETE("/annotations/:id", h.userScoped(h.AnnotationDelete))
 
 			// Settings — instance-wide config surfaces. RequireRole
 			// stacks on top of RequireAuth so non-admins get 403 cleanly
@@ -262,9 +262,9 @@ func (h *Handler) Engine() *gin.Engine {
 
 				// BookDrop housekeeping (admin-only — wipe has cross-user
 				// blast radius). See ADR-0014.
-				admin.DELETE("/bookdrop/processed", h.BookDropClearProcessed)
-				admin.GET("/bookdrop/files", h.BookDropFilesPreview)
-				admin.DELETE("/bookdrop/files", h.BookDropWipeFiles)
+				admin.DELETE("/bookdrop/processed", h.userScoped(h.BookDropClearProcessed))
+				admin.GET("/bookdrop/files", h.userScoped(h.BookDropFilesPreview))
+				admin.DELETE("/bookdrop/files", h.userScoped(h.BookDropWipeFiles))
 			}
 		}
 	}

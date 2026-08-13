@@ -79,11 +79,7 @@ func (h *Handler) AnnotationsForBook(c *gin.Context, s bookScope) {
 // view. Default cap is 200 rows; `?limit=N` narrows further (clamped
 // server-side). Each row carries its bookId so the client can hydrate
 // the title / author from its cached books list.
-func (h *Handler) AnnotationsRecent(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) AnnotationsRecent(c *gin.Context, userID string) {
 	limit, _ := strconv.Atoi(c.Query("limit"))
 	list, err := h.annotations.ListRecent(c.Request.Context(), userID, limit)
 	if err != nil {
@@ -129,11 +125,7 @@ func (h *Handler) AnnotationCreate(c *gin.Context, s bookScope) {
 // AnnotationPatch lets the user edit the note text, selected-text copy,
 // or color. Everything else is immutable — moving a highlight is a
 // delete + re-create.
-func (h *Handler) AnnotationPatch(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) AnnotationPatch(c *gin.Context, userID string) {
 	id := c.Param("id")
 
 	var body patchAnnotationReq
@@ -156,11 +148,7 @@ func (h *Handler) AnnotationPatch(c *gin.Context) {
 }
 
 // AnnotationDelete removes one annotation. 204; `repo.ErrNotFound` → 404.
-func (h *Handler) AnnotationDelete(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) AnnotationDelete(c *gin.Context, userID string) {
 	id := c.Param("id")
 	if err := h.annotations.Delete(c.Request.Context(), userID, id); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {

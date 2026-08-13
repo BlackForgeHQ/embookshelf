@@ -63,11 +63,7 @@ func toBuckets(in []repo.StatsBucket) []bucketDTO {
 // Stats returns the full aggregate payload. One request → one page; the
 // react-query cache keeps the result around so reopening the route
 // feels instant.
-func (h *Handler) Stats(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) Stats(c *gin.Context, userID string) {
 	s, err := h.stats.Collect(c.Request.Context(), userID)
 	if err != nil {
 		writeServerError(c, "stats collect", err)

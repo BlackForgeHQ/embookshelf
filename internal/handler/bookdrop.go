@@ -71,11 +71,7 @@ func toBookDropDTO(item model.BookDropItem) bookdropDTO {
 // BookDropList returns every item currently in the ingest queue, including
 // terminal states so the UI can show "imported" / "rejected" history until
 // the user explicitly clears them.
-func (h *Handler) BookDropList(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) BookDropList(c *gin.Context, _ string) {
 	items, err := h.bookdrop.List(c.Request.Context())
 	if err != nil {
 		writeServerError(c, "bookdrop list", err)
@@ -91,11 +87,7 @@ func (h *Handler) BookDropList(c *gin.Context) {
 // BookDropCover streams the pre-approval cover image pulled out of the
 // ingest worker. Unlike the book cover handler, this reads out of the
 // bookdrop namespace and 404s cleanly when the extractor didn't find one.
-func (h *Handler) BookDropCover(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) BookDropCover(c *gin.Context, _ string) {
 	id := c.Param("id")
 	item, err := h.bookdrop.Get(c.Request.Context(), id)
 	if err != nil {
@@ -136,11 +128,7 @@ func (h *Handler) BookDropCover(c *gin.Context) {
 // rendering of a pre-approval cover (e.g. PDF page-1 rasterization in
 // the BookDrop preview). Mirrors BookDropCover's auth shape but reads
 // the original file from the staging directory.
-func (h *Handler) BookDropFile(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) BookDropFile(c *gin.Context, _ string) {
 	id := c.Param("id")
 	item, err := h.bookdrop.Get(c.Request.Context(), id)
 	if err != nil {
@@ -179,11 +167,7 @@ func (h *Handler) BookDropFile(c *gin.Context) {
 // Cap: 5 MB. Magic-sniff: PNG `89 50 4E 47` or JPEG `FF D8 FF`.
 // State gate: item must be in 'discovered', 'processing', or 'ready'.
 // Refuses 'imported' / 'rejected' / 'failed'.
-func (h *Handler) BookDropPutCover(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) BookDropPutCover(c *gin.Context, _ string) {
 	id := c.Param("id")
 
 	item, err := h.bookdrop.Get(c.Request.Context(), id)
@@ -252,11 +236,7 @@ type approveBookDropReq struct {
 // BookDropApprove promotes the queue item into a real book and returns the
 // resulting book detail DTO. An empty libraryId falls back to the first
 // library — mirrors the service-level default.
-func (h *Handler) BookDropApprove(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) BookDropApprove(c *gin.Context, userID string) {
 	id := c.Param("id")
 
 	var body approveBookDropReq
@@ -313,10 +293,7 @@ type bookdropUploadItem struct {
 // BookDropPath under a unique name so concurrent uploads of "book.epub"
 // don't stomp each other. Unsupported formats are rejected per-file; one
 // bad file never fails the whole batch.
-func (h *Handler) BookDropUpload(c *gin.Context) {
-	if requireUserID(c) == "" {
-		return
-	}
+func (h *Handler) BookDropUpload(c *gin.Context, _ string) {
 	if h.cfg.BookDropPath == "" {
 		writeError(c, http.StatusServiceUnavailable, service.ErrBookDropDisabled.Error())
 		return
@@ -382,11 +359,7 @@ func (h *Handler) acceptUpload(ctx context.Context, fh *multipart.FileHeader) (m
 //
 // Mounted under /api/v1/settings/bookdrop/processed (admin-only) — see
 // ADR-0014.
-func (h *Handler) BookDropClearProcessed(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) BookDropClearProcessed(c *gin.Context, _ string) {
 	n, err := h.bookdrop.ClearProcessed(c.Request.Context())
 	if err != nil {
 		writeServerError(c, "bookdrop clear processed", err)
@@ -398,11 +371,7 @@ func (h *Handler) BookDropClearProcessed(c *gin.Context) {
 // BookDropFilesPreview returns a snapshot of what the wipe op would
 // delete — count, bytes, and the count of in-flight files it would skip.
 // Mounted under /api/v1/settings/bookdrop/files (admin-only).
-func (h *Handler) BookDropFilesPreview(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) BookDropFilesPreview(c *gin.Context, _ string) {
 	preview, err := h.bookdrop.PreviewFiles(c.Request.Context())
 	if err != nil {
 		writeServerError(c, "bookdrop preview files", err)
@@ -414,11 +383,7 @@ func (h *Handler) BookDropFilesPreview(c *gin.Context) {
 // BookDropWipeFiles recursively deletes every file under BOOKDROP_PATH
 // (skipping files referenced by 'processing' rows) and drops orphan
 // rows. Cross-user blast radius — admin-only. See ADR-0014.
-func (h *Handler) BookDropWipeFiles(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) BookDropWipeFiles(c *gin.Context, _ string) {
 	res, err := h.bookdrop.WipeFiles(c.Request.Context())
 	if err != nil {
 		writeServerError(c, "bookdrop wipe files", err)
@@ -429,11 +394,7 @@ func (h *Handler) BookDropWipeFiles(c *gin.Context) {
 
 // BookDropReject marks an item as dismissed and cleans up the pre-approval
 // cover. Idempotent — rejecting a rejected item is a no-op.
-func (h *Handler) BookDropReject(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) BookDropReject(c *gin.Context, _ string) {
 	id := c.Param("id")
 	if err := h.bookdrop.Reject(c.Request.Context(), id); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {

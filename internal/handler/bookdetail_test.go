@@ -237,7 +237,7 @@ func TestBookDetailBodyShapeIsTheSameAtEveryEndpoint(t *testing.T) {
 			name: "POST /bookdrop/:id/approve", method: http.MethodPost,
 			target: "/api/v1/bookdrop/x/approve",
 			call: func(f detailFixture) (gin.HandlerFunc, string) {
-				return f.h.BookDropApprove, f.itemID
+				return f.h.userScoped(f.h.BookDropApprove), f.itemID
 			},
 			// The row that failed before the module existed: approve
 			// hard-coded an empty list, so it answered the same whether

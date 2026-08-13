@@ -40,11 +40,7 @@ func toDeviceDTO(d model.Device) deviceDTO {
 }
 
 // Devices lists the signed-in user's registered devices.
-func (h *Handler) Devices(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) Devices(c *gin.Context, userID string) {
 	devices, err := h.devices.ListForUser(c.Request.Context(), userID)
 	if err != nil {
 		writeServerError(c, "devices list", err)
@@ -69,11 +65,7 @@ type pairDeviceReq struct {
 //	{ "kind": "remarkable-paper-pro",
 //	  "name": "My Paper Pro",
 //	  "params": { "code": "abcd1234" } }
-func (h *Handler) DevicePair(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) DevicePair(c *gin.Context, userID string) {
 	var body pairDeviceReq
 	if !bindJSON(c, &body) {
 		return
@@ -101,11 +93,7 @@ func (h *Handler) DevicePair(c *gin.Context) {
 }
 
 // DeviceDelete removes a device from the user's list.
-func (h *Handler) DeviceDelete(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) DeviceDelete(c *gin.Context, userID string) {
 	err := h.devices.Delete(c.Request.Context(), userID, c.Param("id"))
 	switch {
 	case err == nil:

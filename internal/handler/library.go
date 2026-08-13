@@ -226,12 +226,7 @@ func (h *Handler) Libraries(c *gin.Context) {
 //	?format=EPUB,PDF  comma-separated format filter
 //	?sort=            title|author|recent|year|rating (default: title)
 //	?limit=           client-side hint; server caps at 500 today
-func (h *Handler) Books(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-
+func (h *Handler) Books(c *gin.Context, userID string) {
 	// Shelf filter short-circuits the library search — shelf membership is
 	// a per-user concept that lives in its own join table.
 	if shelfSlug := strings.TrimSpace(c.Query("shelf")); shelfSlug != "" {

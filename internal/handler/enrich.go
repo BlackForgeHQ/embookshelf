@@ -280,10 +280,7 @@ type isbnLookupReq struct {
 // EnrichISBNLookup runs the ISBN chain and returns the best candidate
 // or 404 if no provider has a hit. Used by bulk import flows that want
 // a one-shot metadata fetch from a bare ISBN.
-func (h *Handler) EnrichISBNLookup(c *gin.Context) {
-	if id := requireUserID(c); id == "" {
-		return
-	}
+func (h *Handler) EnrichISBNLookup(c *gin.Context, _ string) {
 	var body isbnLookupReq
 	if !bindJSON(c, &body) {
 		return

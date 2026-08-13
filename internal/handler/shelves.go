@@ -62,11 +62,7 @@ func toShelfDTO(s model.Shelf) shelfDTO {
 
 // Shelves returns the current user's shelves with book counts. Smart
 // shelves' counts are evaluated live in the service layer.
-func (h *Handler) Shelves(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) Shelves(c *gin.Context, userID string) {
 	list, err := h.shelf.List(c.Request.Context(), userID)
 	if err != nil {
 		writeServerError(c, "shelves list", err)
@@ -97,11 +93,7 @@ type createShelfReq struct {
 // ShelfCreate creates a regular shelf when `rule` is absent, or a smart
 // shelf when it's present. The repo generates the slug from the name
 // and handles collisions by appending -N; callers don't provide a slug.
-func (h *Handler) ShelfCreate(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) ShelfCreate(c *gin.Context, userID string) {
 	var body createShelfReq
 	if !bindJSON(c, &body) {
 		return
@@ -148,11 +140,7 @@ type patchShelfReq struct {
 // transition cleanly. A `public:<slug>` URL form is accepted (and
 // stripped) because owners use the canonical public-prefixed URL for
 // the same row both before and after publishing (ADR-0017).
-func (h *Handler) ShelfUpdate(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) ShelfUpdate(c *gin.Context, userID string) {
 	slug, _ := service.SplitPublicSlug(c.Param("slug"))
 	var body patchShelfReq
 	if !bindJSON(c, &body) {
@@ -187,11 +175,7 @@ func (h *Handler) ShelfUpdate(c *gin.Context) {
 // ShelfDelete removes a user shelf. 404 when the slug doesn't belong to
 // the current user (or doesn't exist). A `public:<slug>` form is
 // accepted and stripped — owners use the canonical URL.
-func (h *Handler) ShelfDelete(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) ShelfDelete(c *gin.Context, userID string) {
 	slug, _ := service.SplitPublicSlug(c.Param("slug"))
 	if err := h.shelf.Delete(c.Request.Context(), userID, slug); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
