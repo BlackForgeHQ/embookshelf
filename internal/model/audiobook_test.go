@@ -88,6 +88,21 @@ func TestStateStringsRendersEveryMemberInOrder(t *testing.T) {
 	}
 }
 
+// TestAudiobookStateCanBeStale is the parallel of RenditionState's gate:
+// only a ready run was ever compared against anything, so it is the
+// only state a staleness verdict can be computed for. Quantified over
+// every state because the bug this closes was exactly a missing
+// opinion here — the preflight wrapper had no state gate at all, so a
+// failed or canceled run got a verdict computed against it (#322).
+func TestAudiobookStateCanBeStale(t *testing.T) {
+	for _, state := range AllAudiobookStates() {
+		want := state == AudiobookReady
+		if got := state.CanBeStale(); got != want {
+			t.Errorf("%q.CanBeStale() = %v, want %v", state, got, want)
+		}
+	}
+}
+
 // The two dispositions over every declared state × every shape Coverage
 // can take. Quantified rather than sampled: the expectation for a state
 // missing from a row is not "the zero value", it is a failure, so adding

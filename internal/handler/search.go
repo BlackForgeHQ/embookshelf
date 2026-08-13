@@ -45,11 +45,7 @@ type searchResponse struct {
 //
 //	?q=<text>       required, trimmed; empty → 400
 //	?limit=<int>    optional, default 8, capped at 20 by the service
-func (h *Handler) Search(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) Search(c *gin.Context, userID string) {
 	q := strings.TrimSpace(c.Query("q"))
 	if q == "" {
 		writeError(c, http.StatusBadRequest, "q is required")

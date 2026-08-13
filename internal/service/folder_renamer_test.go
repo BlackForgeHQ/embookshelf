@@ -223,6 +223,61 @@ func TestRelocateMigrationMovesOnlyThisBooksFiles(t *testing.T) {
 	}
 }
 
+// A target folder that is not inside the library is refused before
+// anything moves (#323). It used to be trimmed by hand: the trim did
+// not match, the absolute path came back, MovePrefix moved the library
+// root itself, and books.folder_path was written absolute — one of the
+// two producers of such rows ADR-0030 names.
+func TestRelocateRefusesATargetOutsideTheLibraryInsteadOfWritingItAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	fs, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	oldDir := filepath.Join(dir, "Tolkien", "Hobbit")
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	handle := &LibraryHandle{
+		Library: model.Library{ID: "lib1", Path: dir},
+		Storage: fs,
+	}
+	store := &fakeBookWriter{}
+	r := NewFolderRenamer(FolderRenamerDeps{Store: store, Files: &fakeFileRepo{}})
+	folder := "Tolkien/Hobbit"
+	book := model.Book{
+		ID: "b1", LibraryID: "lib1", Format: "EPUB",
+		Path: folder + "/hobbit.epub", FolderPath: &folder,
+	}
+
+	// Empty and ".." both resolve to something that is not a folder
+	// inside the library; the rename arm and the flat-layout migration
+	// arm each get one.
+	for _, tc := range []struct{ oldFolder, newFolder string }{
+		{"Tolkien/Hobbit", ""},
+		{"", "../escaped"},
+	} {
+		res := r.Relocate(context.Background(), book, handle, tc.oldFolder, tc.newFolder)
+
+		if res.Done {
+			t.Errorf("relocate to %q reported done", tc.newFolder)
+		}
+		if res.Err == nil {
+			t.Errorf("relocate to %q reported no error", tc.newFolder)
+		}
+	}
+
+	if len(store.folderPathCalls) != 0 {
+		t.Errorf("folder_path was written anyway: %+v", store.folderPathCalls)
+	}
+	if _, err := os.Stat(oldDir); err != nil {
+		t.Errorf("the book's folder moved: %v", err)
+	}
+	if _, err := os.Stat(dir + " (2)"); err == nil {
+		t.Error("the library root itself was probed and renamed to a sibling")
+	}
+}
+
 // brokenMover fails the move and nothing else.
 type brokenMover struct {
 	storage.Storage

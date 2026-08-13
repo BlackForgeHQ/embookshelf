@@ -293,17 +293,25 @@ Opaque change token from a backend (S3 returns one; LocalFS leaves it empty). Us
 
 ### Library scan
 
-`task.LibraryScan`; on-demand walk-then-diff over a Library, scoped to drift detection only (ADR-0018). Acts on two diff buckets: **New** entries get a hash + `Files.GetByContentHash` lookup — a same-library hash match means external rename, update the row's `location`; no match means ignore (no `books` row materialised, scan is never an ingest path). **Missing** entries are soft-flagged via `MarkMissing` for the 24h purge sweeper. Changed and Unchanged are no-ops apart from clearing `missing_since` on reappearance. No periodic timer — admin triggers the worker explicitly. Distinct from earlier scan-as-ingest behavior (ADR-0004, superseded).
+`task.LibraryScan`; on-demand snapshot-then-walk-then-reconcile over a Library, scoped to drift detection only (ADR-0018). The worker is wiring — resolve the handle via [[LibraryStore]], hand [[Reconcile]] the walk and the files repo, touch-scan, log — and its one policy decision is which walk failures abort the scan: `ErrNoWalkRoot` aborts before anything is written, because reconciling an empty listing flags every row in the Library missing, while a walk that failed partway is logged and its partial listing reconciled. No periodic timer — admin triggers the worker explicitly. Distinct from earlier scan-as-ingest behavior (ADR-0004, superseded).
+
+### Reconcile
+
+`scan.Reconcile(ctx, ReconcileInput) (ReconcileReport, error)`; the drift policy itself, over one seam — `scan.FileState`, five methods on the files table (list by library, get by content hash, update location, mark missing, clear missing). Acts on all four Differ buckets: **New** entries go to [[Relocate by hash]]; **Missing** entries are soft-flagged via `MarkMissing` for the 24h purge sweeper, skipping rows this same scan relocated and rows already flagged; **Changed** and **Unchanged** are no-ops apart from clearing `missing_since` on reappearance. Reading the files table and walking return errors; per-row write failures are logged and skipped.
+
+**The walk is a function Reconcile calls, not a listing it is handed, because the order is part of the policy: the files snapshot must be taken *before* the walk starts.** Bookdrop places a book's bytes and only then inserts its row (`BookDropService.Approve`), so the two straddle a walk that has already passed the destination folder — snapshot afterwards and that row is present while the walk that could not have seen the file says Missing, so it gets flagged and the 24h sweeper deletes it: a [[Book]] with no [[Files row]] pointing at bytes that are right there, the #264 shape again. Snapshot first and the row is simply not in it, so it cannot be classified at all and the next scan picks it up. Scans are admin-triggered with no periodic timer, so "some later scan will clear the flag" is not a guarantee. Pinned DB-free by `TestReconcileIgnoresARowCreatedDuringTheWalk`, which inserts mid-walk exactly where Approve does.
+
+`FileState` has no create method, which is how ADR-0018 stops being only a comment: a scan cannot materialise a `files` row without widening the interface in a diff someone has to read, and an in-memory fake pins the four drift rules — and the absence of creates — with no database in the test.
 
 ### Walker
 
-`internal/scan.Walk`; streams `WalkEntry{Location, Key, Size, Mtime, ETag}` from a Storage. It has no Library, so it reports the listing key in both `Location` and `Key`.
+`service.LibraryHandle.Walk`; the whole listing side, returning `[]scan.WalkEntry{Location, Key, Size, Mtime, ETag}`. It answers the rooting question once and yields **library-relative** `Location`s for both kinds of Backend — an object store from the top of its own prefix, a local Backend from the Library root under a `/`-rooted LocalFS (ADR-0030 §1) — while carrying through the `Key` the object was listed under, so a caller reading the bytes does not re-derive one. Returns `service.ErrNoWalkRoot` for a local Library with no root, which must never be confused with an empty walk: that reads as "every file is gone". A walk that fails partway returns what it collected *and* the error, for the same reason.
 
-The walk workers actually use is `service.LibraryHandle.Walk`, which answers the rooting question once and yields **library-relative** `Location`s for both kinds of Backend — an object store from the top of its own prefix, a local Backend from the Library root under a `/`-rooted LocalFS (ADR-0030 §1) — while carrying through the `Key` the object was listed under, so a caller reading the bytes does not re-derive one. Returns `service.ErrNoWalkRoot` for a local Library with no root, which must never be confused with an empty walk: that reads as "every file is gone".
+There is no `scan.Walk`: it used to be a channel pair plus a drain invariant whose only caller drained it straight into this slice. Cancellation still surfaces — storage iterators check `ctx` themselves.
 
 ### Differ
 
-`internal/scan.Diff`; pure function classifying walk × DB rows into `Changeset{Unchanged, Changed, New, Missing}`.
+`internal/scan.Diff`; pure function classifying walk × DB rows into the four buckets `{Unchanged, Changed, New, Missing}`. The changeset type is package-private — acting on it is [[Reconcile]]'s job, and no caller outside `scan` has one.
 
 A row is matched in **either vocabulary `files.location` is written in**: the library-relative form the walk reports as `Location`, and failing that the backend key it reports as `Key`. The second exists because a location seeded by `migrator.seedFilesFromBooks` is absolute, which on a `/`-rooted local Backend *is* the key — the same equivalence `LibraryHandle.StorageKey`'s absolute branch rests on. Only the leading slash is normalised (`storagetest.KeyShapesNameTheSameObject`); nothing else is cleaned, because a wrong match here reattaches a [[Book]] to someone else's bytes. Where both forms exist as two rows — the `UNIQUE (library_id, location)` collision ADR-0030 anticipates — the relative row takes the match and the absolute duplicate reads Missing, which is the resolution that ADR already agreed to.
 
@@ -487,7 +495,7 @@ It is an error because the alternative was proven not to work: both pipelines us
 
 ### Folder layout
 
-Every Book lives in its own folder named `{Author}/{Title}/{filename}` under the library root. Sentinels: empty Author → `Unknown Author`, empty Title → `Untitled`. Path segments sanitized by `internal/layout/sanitize.go` (replace `/ \ : * ? " < > |`, NFC-normalize, cap 200 bytes). Multi-author authors stay one string. Collisions resolved by `uniqueDestination` ` (2)`, ` (3)` suffix on the title segment.
+Every Book lives in its own folder named `{Author}/{Title}/{filename}` under the library root. Sentinels: empty Author → `Unknown Author`, empty Title → `Untitled`. Path segments sanitized by `internal/layout/sanitize.go` (replace `/ \ : * ? " < > |`, NFC-normalize, cap 200 bytes). Multi-author authors stay one string. Collisions resolved by a ` (2)`, ` (3)` suffix on the title segment — `libRoot.freeDir` on a filesystem, `freeDirBackend` on an object store, both in `internal/service/placement_helpers.go`, which also owns the absolute ⇄ library-relative conversion the Placer and the FolderRenamer persist (#323).
 
 ### LeafBook
 

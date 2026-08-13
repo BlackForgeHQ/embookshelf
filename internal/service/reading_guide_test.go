@@ -342,6 +342,7 @@ func TestGuideUsesMarkdownRenditionForPDF(t *testing.T) {
 		Open: func(context.Context, model.Book, string) (io.ReadCloser, error) {
 			return io.NopCloser(strings.NewReader("# Sand and spice, in markdown.")), nil
 		},
+		CurrentHash: func(context.Context, model.Book) []byte { return nil },
 	}
 	b := epubBook()
 	b.Format = "PDF"

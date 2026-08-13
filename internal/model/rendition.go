@@ -37,6 +37,19 @@ func Stale(current, recorded []byte) bool {
 	return !bytes.Equal(current, recorded)
 }
 
+// CanBeStale reports whether a row in this state may receive a
+// staleness verdict at all — ready only. Every other state has no
+// artifact anything was made from a comparison against: a pending or
+// running row has not produced one yet, and a failed row's recorded
+// hash (if any) describes an attempt, not a result. Declared beside
+// Stale so every caller asks the same question instead of restating
+// its own gate — the handler used to gate on ready, the feed relied on
+// an upstream switch reaching the same answer implicitly, and neither
+// agreed in writing with the other (#322).
+func (s RenditionState) CanBeStale() bool {
+	return s == RenditionReady
+}
+
 // RenditionTransition is one worker write of a rendition row, with the
 // states it may move the row out of — the audiobook Transition's shape,
 // for the audiobook Transition's reason: a write that arrives late must

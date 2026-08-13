@@ -30,6 +30,24 @@ type PasswordResetToken struct {
 	UsedAt    *time.Time
 }
 
+// passwordResetTokenProjection is the password_reset_tokens row,
+// declared once. Consume's RETURNING and Verify's SELECT used to retype
+// "user_id, created_at, expires_at, used_at" separately — created_at,
+// expires_at and used_at are three adjacent timestamptz columns, and a
+// crossed pair would compile, run, and answer "when was this issued" or
+// "is this expired" from the wrong column, on the very code path that
+// decides whether a password reset link still works.
+var passwordResetTokenProjection = projection[PasswordResetToken]{
+	{name: "user_id", dest: func(t *PasswordResetToken) any { return &t.UserID }},
+	{name: "created_at", dest: func(t *PasswordResetToken) any { return &t.CreatedAt }},
+	{name: "expires_at", dest: func(t *PasswordResetToken) any { return &t.ExpiresAt }},
+	{name: "used_at", dest: func(t *PasswordResetToken) any { return &t.UsedAt }},
+}
+
+// passwordResetTokenCols is the projection rendered for the unaliased
+// password_reset_tokens queries below.
+var passwordResetTokenCols = passwordResetTokenProjection.returningList("password_reset_tokens")
+
 // Create inserts a fresh row. Hash is the sha256 of the plaintext
 // token (32 bytes); expiry is the absolute deadline. The plaintext
 // is the caller's responsibility to mail and forget.
@@ -49,17 +67,17 @@ func (r *PasswordResetTokenRepo) Create(ctx context.Context, hash []byte, userID
 // path is one statement so a concurrent double-submit can only land
 // once.
 func (r *PasswordResetTokenRepo) Consume(ctx context.Context, hash []byte, now time.Time) (PasswordResetToken, error) {
-	const q = `
+	q := `
 		UPDATE password_reset_tokens
 		SET used_at = $2
 		WHERE token_hash = $1
 		  AND used_at IS NULL
 		  AND expires_at > $2
-		RETURNING user_id, created_at, expires_at, used_at
+		RETURNING ` + passwordResetTokenCols + `
 	`
 	var t PasswordResetToken
 	row := r.db.SQL.QueryRowContext(ctx, q, hash, now.UTC())
-	if err := row.Scan(&t.UserID, &t.CreatedAt, &t.ExpiresAt, &t.UsedAt); err != nil {
+	if err := passwordResetTokenProjection.scan(row, &t); err != nil {
 		if dberr.IsNotFound(err) {
 			return PasswordResetToken{}, ErrNotFound
 		}
@@ -73,14 +91,14 @@ func (r *PasswordResetTokenRepo) Consume(ctx context.Context, hash []byte, now t
 // "link expired" before the user types a new password. Read-only —
 // does not mark used.
 func (r *PasswordResetTokenRepo) Verify(ctx context.Context, hash []byte, now time.Time) (PasswordResetToken, error) {
-	const q = `
-		SELECT user_id, created_at, expires_at, used_at
+	q := `
+		SELECT ` + passwordResetTokenCols + `
 		FROM password_reset_tokens
 		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2
 	`
 	var t PasswordResetToken
 	row := r.db.SQL.QueryRowContext(ctx, q, hash, now.UTC())
-	if err := row.Scan(&t.UserID, &t.CreatedAt, &t.ExpiresAt, &t.UsedAt); err != nil {
+	if err := passwordResetTokenProjection.scan(row, &t); err != nil {
 		if dberr.IsNotFound(err) {
 			return PasswordResetToken{}, ErrNotFound
 		}

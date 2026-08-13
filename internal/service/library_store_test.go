@@ -208,6 +208,38 @@ func TestWalkRefusesALocalLibraryWithNoRoot(t *testing.T) {
 	}
 }
 
+// A cancelled walk has to come back as an error, not as a short listing
+// with a nil error. The scan worker reads "walked fine, saw nothing" as
+// "every file in this library is gone" and soft-flags the whole of it
+// for the purge sweeper, so silence is the one answer this must never
+// give. It used to be the walker's select-on-send that noticed; now it
+// is the storage iterator, which checks ctx itself.
+func TestWalkSurfacesACancelledContext(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile(t, root, "Author/Title/book.epub", "bytes")
+	rootedAtSlash, err := local.New("/")
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	h := &service.LibraryHandle{
+		Library: model.Library{ID: "lib1", Root: &root},
+		Storage: rootedAtSlash,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	entries, err := h.Walk(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Walk on a cancelled context = %v, want context.Canceled", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("a cancelled walk collected %d entries", len(entries))
+	}
+}
+
 // tempSource is a file in the shape placement is always handed one: a
 // temp file somewhere outside the library, named by whoever produced the
 // bytes rather than by where they are going.

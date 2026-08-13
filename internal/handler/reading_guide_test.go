@@ -3,11 +3,13 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -16,6 +18,37 @@ import (
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 )
+
+// fakeReadingGuideStore is the readingGuideStore fake: get-by-book and
+// save-edit, driven against maps rather than Postgres — same reasoning
+// as fakeRenditions next door.
+type fakeReadingGuideStore struct {
+	row     model.ReadingGuide
+	missing bool
+	// saveMissing answers SaveEdit's own not-found: a book with no guide
+	// row yet has nothing to edit.
+	saveMissing bool
+	saved       *model.ReadingGuideText
+}
+
+func (f *fakeReadingGuideStore) GetByBookID(context.Context, string) (model.ReadingGuide, error) {
+	if f.missing {
+		return model.ReadingGuide{}, repo.ErrNotFound
+	}
+	return f.row, nil
+}
+
+func (f *fakeReadingGuideStore) SaveEdit(_ context.Context, _ string, t model.ReadingGuideText) error {
+	if f.saveMissing {
+		return repo.ErrNotFound
+	}
+	f.saved = &t
+	f.row.ReadingGuideText = t
+	f.row.EditedByUser = true
+	return nil
+}
+
+var _ readingGuideStore = (*fakeReadingGuideStore)(nil)
 
 func guideCtx(t *testing.T, method, target string, body string) (*gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
@@ -73,6 +106,155 @@ func TestBookGuideEditRejectsEmpty(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestBookGuideGetReturnsTheStoredGuide pins the read path's success
+// shape — untested before the seam existed, because reaching it meant a
+// real BookReadingGuideRepo over Postgres.
+func TestBookGuideGetReturnsTheStoredGuide(t *testing.T) {
+	generatedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	h := &Handler{guides: &fakeReadingGuideStore{row: model.ReadingGuide{
+		BookID: "b1",
+		ReadingGuideText: model.ReadingGuideText{
+			About: "A quiet heist novel.", Audience: "fans of slow burns",
+			NotFor: "action readers", Problems: "no problems",
+		},
+		SourceKind:  model.GuideSourceFullText,
+		Model:       "gpt-4o-mini",
+		Language:    "en",
+		GeneratedAt: generatedAt,
+	}}}
+
+	c, rec := settingsCtx(t, http.MethodGet, "/api/v1/books/b1/guide", "")
+	h.BookGuideGet(c, bookScope{UserID: "u1", Book: model.Book{ID: "b1"}})
+
+	if httpStatus(c, rec) != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Guide readingGuideDTO `json:"guide"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v (body %s)", err, rec.Body.String())
+	}
+	if got.Guide.About != "A quiet heist novel." || got.Guide.SourceKind != string(model.GuideSourceFullText) {
+		t.Errorf("guide = %+v, want the stored row's text and provenance", got.Guide)
+	}
+	if got.Guide.GeneratedAt != generatedAt.Format(time.RFC3339) {
+		t.Errorf("generatedAt = %q, want %q", got.Guide.GeneratedAt, generatedAt.Format(time.RFC3339))
+	}
+}
+
+// TestBookGuideGetIsNotFoundForAVirginBook — 404, not an empty guide:
+// there is no such thing as an empty stored guide, so the two cases
+// cannot be confused on the wire.
+func TestBookGuideGetIsNotFoundForAVirginBook(t *testing.T) {
+	h := &Handler{guides: &fakeReadingGuideStore{missing: true}}
+
+	c, rec := settingsCtx(t, http.MethodGet, "/api/v1/books/b1/guide", "")
+	h.BookGuideGet(c, bookScope{UserID: "u1", Book: model.Book{ID: "b1"}})
+
+	if httpStatus(c, rec) != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "no reading guide for this book yet") {
+		t.Errorf("body = %s", rec.Body.String())
+	}
+}
+
+// TestBookGuideGetNilStoreAnswers503 pins the acceptance criterion
+// directly: a Handler built with no reading-guide repo answers the
+// documented unavailable response rather than reaching into a nil
+// interface, which is exactly what the concrete field this seam replaces
+// let happen unguarded.
+func TestBookGuideGetNilStoreAnswers503(t *testing.T) {
+	h := &Handler{}
+
+	c, rec := settingsCtx(t, http.MethodGet, "/api/v1/books/b1/guide", "")
+	h.BookGuideGet(c, bookScope{UserID: "u1", Book: model.Book{ID: "b1"}})
+
+	if httpStatus(c, rec) != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), guidesUnavailableMsg) {
+		t.Errorf("body = %s, want %q", rec.Body.String(), guidesUnavailableMsg)
+	}
+}
+
+// TestBookGuideEditSavesThenReloads pins the write path's success shape:
+// SaveEdit runs, then the row is reloaded so the response carries what
+// is now stored — including EditedByUser flipping true.
+func TestBookGuideEditSavesThenReloads(t *testing.T) {
+	store := &fakeReadingGuideStore{row: model.ReadingGuide{
+		BookID: "b1", SourceKind: model.GuideSourceFullText, Model: "gpt-4o-mini",
+	}}
+	h := &Handler{guides: store}
+	c, rec := guideCtx(t, http.MethodPut, "/api/v1/books/b1/guide",
+		`{"about":" hand-written ","audience":"","notFor":"","problems":""}`)
+	c.Params = gin.Params{{Key: "id", Value: "b1"}}
+	c.Request = c.Request.WithContext(
+		auth.WithUser(c.Request.Context(), &model.User{ID: "u1"}))
+
+	h.BookGuideEdit(c, bookScope{UserID: "u1", Book: model.Book{ID: "b1"}})
+
+	if httpStatus(c, rec) != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if store.saved == nil || store.saved.About != "hand-written" {
+		t.Fatalf("SaveEdit got %+v, want the trimmed text", store.saved)
+	}
+	var got struct {
+		Guide readingGuideDTO `json:"guide"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v (body %s)", err, rec.Body.String())
+	}
+	if got.Guide.About != "hand-written" || !got.Guide.EditedByUser {
+		t.Errorf("guide = %+v, want the reloaded, now hand-edited row", got.Guide)
+	}
+}
+
+// TestBookGuideEditIsNotFoundWithNoGuideToEdit — SaveEdit's own
+// not-found, distinct from the empty-body 400: a well-formed edit for a
+// book that has never had a guide generated.
+func TestBookGuideEditIsNotFoundWithNoGuideToEdit(t *testing.T) {
+	h := &Handler{guides: &fakeReadingGuideStore{saveMissing: true}}
+	c, rec := guideCtx(t, http.MethodPut, "/api/v1/books/b1/guide",
+		`{"about":"hand-written","audience":"","notFor":"","problems":""}`)
+	c.Params = gin.Params{{Key: "id", Value: "b1"}}
+	c.Request = c.Request.WithContext(
+		auth.WithUser(c.Request.Context(), &model.User{ID: "u1"}))
+
+	h.BookGuideEdit(c, bookScope{UserID: "u1", Book: model.Book{ID: "b1"}})
+
+	if httpStatus(c, rec) != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "no reading guide for this book yet") {
+		t.Errorf("body = %s", rec.Body.String())
+	}
+}
+
+// TestBookGuideEditNilStoreAnswers503 — the empty-body 400 in
+// TestBookGuideEditRejectsEmpty already proves that check runs with no
+// store at all; this proves a well-formed edit past that check answers
+// the documented unavailable response rather than a nil dereference.
+func TestBookGuideEditNilStoreAnswers503(t *testing.T) {
+	h := &Handler{}
+	c, rec := guideCtx(t, http.MethodPut, "/api/v1/books/b1/guide",
+		`{"about":"hand-written","audience":"","notFor":"","problems":""}`)
+	c.Params = gin.Params{{Key: "id", Value: "b1"}}
+	c.Request = c.Request.WithContext(
+		auth.WithUser(c.Request.Context(), &model.User{ID: "u1"}))
+
+	h.BookGuideEdit(c, bookScope{UserID: "u1", Book: model.Book{ID: "b1"}})
+
+	if httpStatus(c, rec) != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), guidesUnavailableMsg) {
+		t.Errorf("body = %s, want %q", rec.Body.String(), guidesUnavailableMsg)
 	}
 }
 
@@ -226,6 +408,58 @@ func TestBookGuideGenerateIsA503WhenGuidesAreOff(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), CodeGuidesDisabled) {
 		t.Errorf("body carries no %s code: %s", CodeGuidesDisabled, rec.Body.String())
+	}
+}
+
+// TestBookGuideGenerateNilStoreAnswersSameCodeAsDisabled — a Handler
+// with the admin row on but no reading-guide repo wired answers the same
+// CodeGuidesDisabled refusal as one the admin switched off, rather than
+// enqueueing work no GET or PUT could ever read back. Pins the
+// acceptance criterion for the generate leg: availability there folds
+// the store's presence into the same spec field the admin row already
+// used.
+func TestBookGuideGenerateNilStoreAnswersSameCodeAsDisabled(t *testing.T) {
+	h := &Handler{appSettings: &fakeAppSettings{guide: repo.ReadingGuideConfig{Enabled: true}}}
+
+	c, rec := settingsCtx(t, http.MethodPost, "/api/v1/books/b1/guide", "")
+	h.BookGuideGenerate(c, bookScope{UserID: "u1", Book: model.Book{ID: "b1"}})
+
+	if httpStatus(c, rec) != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), CodeGuidesDisabled) {
+		t.Errorf("body carries no %s code: %s", CodeGuidesDisabled, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), guidesDisabledMsg) {
+		t.Errorf("body = %s, want %q", rec.Body.String(), guidesDisabledMsg)
+	}
+}
+
+// TestBookGuideGenerateNonConvertibleFormatReachesTheQueue pins the
+// guide's own format rule against the shared chain's built-in one: a
+// non-Convertible book (EPUB, native text) is not refused the way
+// markdown's and the EPUB's own generate routes refuse it — a
+// metadata-only guide asks nothing of the converter, so it reaches the
+// queue like any other format.
+func TestBookGuideGenerateNonConvertibleFormatReachesTheQueue(t *testing.T) {
+	q := &captureQueue{}
+	h := &Handler{
+		guides:      &fakeReadingGuideStore{missing: true},
+		appSettings: &fakeAppSettings{guide: repo.ReadingGuideConfig{Enabled: true}},
+		queue:       q,
+	}
+
+	c, rec := settingsCtx(t, http.MethodPost, "/api/v1/books/b1/guide", "")
+	h.BookGuideGenerate(c, bookScope{UserID: "u1", Book: model.Book{ID: "b1", Format: "EPUB"}})
+
+	if httpStatus(c, rec) != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body %s)", rec.Code, rec.Body.String())
+	}
+	if len(q.enqueued) != 1 {
+		t.Fatalf("enqueued = %d jobs, want 1", len(q.enqueued))
+	}
+	if _, ok := q.enqueued[0].(jobs.ReadingGuideArgs); !ok {
+		t.Fatalf("enqueued %T, want jobs.ReadingGuideArgs", q.enqueued[0])
 	}
 }
 

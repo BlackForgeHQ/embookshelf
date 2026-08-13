@@ -34,7 +34,7 @@ type Handler struct {
 	enrich         *service.EnrichmentService
 	providerCfg    *service.ProviderSettingsService
 	annotations    *service.AnnotationService
-	guides         *repo.BookReadingGuideRepo
+	guides         readingGuideStore
 	guideRunner    *service.GuideRunner
 	renditions     markdownRenditionStore
 	epubRenditions epubRenditionStore
@@ -295,7 +295,7 @@ func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailD
 
 		enrich: d.enrich, providerCfg: d.providerCfg, search: d.search,
 		stats: d.stats, readingStats: d.readingStats, annotations: d.annotations,
-		guides: d.guides, guideRunner: d.guideRunner,
+		guides: newReadingGuideStore(d.guides), guideRunner: d.guideRunner,
 		renditions:     newMarkdownRenditionStore(d.renditions.Markdown),
 		epubRenditions: newEpubRenditionStore(d.renditions.Epub),
 		mdRequests:     d.renditions.MarkdownRequests,

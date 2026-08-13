@@ -45,6 +45,7 @@ func readyFeed(text string) *service.MarkdownFeed {
 		Open: func(context.Context, model.Book, string) (io.ReadCloser, error) {
 			return io.NopCloser(strings.NewReader(text)), nil
 		},
+		CurrentHash: func(context.Context, model.Book) []byte { return nil },
 	}
 }
 

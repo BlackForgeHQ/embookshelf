@@ -1,29 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package scan orchestrates the two-phase library scan: walk, diff,
-// then act on the changeset. The walker yields entries via a
-// channel so the iterator API of storage.Storage doesn't leak into
-// the differ.
+// Package scan is library drift detection: diff a listing of a
+// library's storage against the files table and act on the difference.
+// It is never an ingest path (ADR-0018) — Reconcile's seam, FileState,
+// has no way to create a row.
+//
+// The listing itself is not here. Where a library's walk starts and how
+// its keys become library-relative are questions about the Library's
+// Backend, and service.LibraryHandle.Walk answers them; what arrives
+// here is the answer, as a slice of WalkEntry.
 package scan
 
-import (
-	"context"
-	"errors"
-	"io"
-	"time"
-
-	"github.com/blackforge/embookshelf/internal/storage"
-)
+import "time"
 
 // WalkEntry is one observation from a storage backend during the
 // cheap walk phase. Hashes are NOT computed here.
 type WalkEntry struct {
 	// Location is what the files table stores: a location relative to
-	// the library root (CONTEXT, "Files row"). Walk itself has no
-	// library to be relative to, so it reports the listing key here and
-	// leaves the rooting to whoever knows it —
-	// service.LibraryHandle.Walk, which rewrites this field and is the
-	// only walk the scan worker uses.
+	// the library root (CONTEXT, "Files row"). Producing it is
+	// service.LibraryHandle.Walk's job — it is the only thing that knows
+	// the root the listing ran under.
 	Location string
 	// Key is what the backend answers to for these bytes: the key it
 	// listed the object under, carried through untouched. A caller that
@@ -34,46 +30,4 @@ type WalkEntry struct {
 	Size  int64
 	Mtime time.Time
 	ETag  string
-}
-
-// Walk lists every object under root in store and forwards each as a
-// WalkEntry. Errors during iteration go to errc; the caller MUST
-// consume both channels to completion.
-func Walk(ctx context.Context, store storage.Storage, root string) (<-chan WalkEntry, <-chan error) {
-	out := make(chan WalkEntry, 64)
-	errc := make(chan error, 1)
-	go func() {
-		defer close(out)
-		defer close(errc)
-		it, err := store.List(ctx, root)
-		if err != nil {
-			errc <- err
-			return
-		}
-		defer func() { _ = it.Close() }()
-		for {
-			obj, err := it.Next(ctx)
-			if errors.Is(err, io.EOF) {
-				return
-			}
-			if err != nil {
-				errc <- err
-				return
-			}
-			entry := WalkEntry{
-				Location: obj.Key,
-				Key:      obj.Key,
-				Size:     obj.Size,
-				Mtime:    obj.ModTime,
-				ETag:     obj.ETag,
-			}
-			select {
-			case out <- entry:
-			case <-ctx.Done():
-				errc <- ctx.Err()
-				return
-			}
-		}
-	}()
-	return out, errc
 }

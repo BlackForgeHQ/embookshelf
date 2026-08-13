@@ -143,6 +143,100 @@ func TestFileProjection_RendersOneBareForm(t *testing.T) {
 	}
 }
 
+// The derived-artifact cluster's golden forms (#314). None of these five
+// tables' queries alias the table, so each has one bare rendering that
+// serves every SELECT site — the same shape fileCols uses.
+
+func TestAudiobookProjection_RendersOneBareForm(t *testing.T) {
+	const want = `book_id, state, generation, engine, voice, model, segment_chars, source_content_hash, ` +
+		`file_id, error, total_chars, duration_ms, created_at, updated_at`
+	if audiobookCols != want {
+		t.Fatalf("audiobookCols =\n%s\nwant\n%s", audiobookCols, want)
+	}
+}
+
+func TestAudiobookSegmentProjection_RendersOneBareForm(t *testing.T) {
+	const want = `id, book_id, seq, chapter_index, chapter_title, char_start, char_end, ` +
+		`start_ms, duration_ms, staged_path, state, error`
+	if segmentCols != want {
+		t.Fatalf("segmentCols =\n%s\nwant\n%s", segmentCols, want)
+	}
+}
+
+func TestReadingGuideProjection_RendersOneBareForm(t *testing.T) {
+	const want = `book_id, about, audience, not_for, problems, ` +
+		`source_kind, model, language, generated_at, edited_by_user`
+	if readingGuideCols != want {
+		t.Fatalf("readingGuideCols =\n%s\nwant\n%s", readingGuideCols, want)
+	}
+}
+
+func TestMarkdownRenditionProjection_RendersOneBareForm(t *testing.T) {
+	const want = `book_id, state, error, location, size_bytes, ` +
+		`source_content_hash, converter_version, created_at, updated_at`
+	if markdownRenditionCols != want {
+		t.Fatalf("markdownRenditionCols =\n%s\nwant\n%s", markdownRenditionCols, want)
+	}
+}
+
+func TestEpubRenditionProjection_RendersOneBareForm(t *testing.T) {
+	const want = `book_id, state, error, file_id, ` +
+		`source_content_hash, converter_version, created_at, updated_at`
+	if epubRenditionCols != want {
+		t.Fatalf("epubRenditionCols =\n%s\nwant\n%s", epubRenditionCols, want)
+	}
+}
+
+// The remaining hand-kept lists (#315): the placement view, the
+// password-reset tokens' two inline scans, storage_backends' three call
+// sites, and pending_orphans' due-row query.
+
+// The placement view had zero direct tests before this — only the
+// recovery integration test exercised it. Its golden string is what
+// gains it direct, DB-free shape coverage: a reorder or a swap between
+// the two tables' columns now surfaces here as a diff a reviewer has to
+// accept on purpose.
+func TestPlacementProjection_RendersTheJoinedSelect(t *testing.T) {
+	const want = `b.id, b.title, b.author, b.format, b.path, ` +
+		`f.id, f.location, COALESCE(f.size, 0), f.content_hash`
+	if placementCols != want {
+		t.Fatalf("placementCols =\n%s\nwant\n%s", placementCols, want)
+	}
+}
+
+func TestPasswordResetTokenProjection_RendersOneBareForm(t *testing.T) {
+	const want = `user_id, created_at, expires_at, used_at`
+	if passwordResetTokenCols != want {
+		t.Fatalf("passwordResetTokenCols =\n%s\nwant\n%s", passwordResetTokenCols, want)
+	}
+}
+
+// storage_backends had three sites carrying the same four columns: this
+// file's own bare form (Create/Get/List) and LibraryBackend's "sb"-aliased
+// join, which used to retype the list and re-decode the JSONB by hand
+// under a comment promising it matched the first.
+func TestStorageBackendProjection_RendersBothBareAndAliasedForms(t *testing.T) {
+	const wantBare = `id, kind, config, created_at`
+	if storageBackendCols != wantBare {
+		t.Fatalf("storageBackendCols =\n%s\nwant\n%s", storageBackendCols, wantBare)
+	}
+	const wantAliased = `sb.id, sb.kind, sb.config, sb.created_at`
+	if got := storageBackendProjection.selectList("sb"); got != wantAliased {
+		t.Fatalf("storageBackendProjection.selectList(\"sb\") =\n%s\nwant\n%s", got, wantAliased)
+	}
+}
+
+func TestDuePendingOrphanProjection_RendersTheAliasedSelect(t *testing.T) {
+	const want = `po.id, po.library_id, po.key, po.eligible_at, po.reason, po.book_id, po.created_at, ` +
+		`EXISTS (
+		           SELECT 1 FROM files f
+		           WHERE f.library_id = po.library_id AND f.location = po.key
+		       ) AS referenced`
+	if got := duePendingOrphanProjection.selectList("po"); got != want {
+		t.Fatalf("duePendingOrphanProjection.selectList(\"po\") =\n%s\nwant\n%s", got, want)
+	}
+}
+
 // with() must leave the column in place, or a query using the variant
 // would feed the scanner a differently-ordered row.
 func TestProjectionWith_ReplacesOneEntryInPlace(t *testing.T) {
@@ -186,6 +280,15 @@ func TestProjections_HaveOneDistinctDestinationPerColumn(t *testing.T) {
 	checkProjection(t, "users", userProjection, &model.User{})
 	checkProjection(t, "user_devices", deviceProjection, &model.Device{})
 	checkProjection(t, "user_identities", identityProjection, &model.Identity{})
+	checkProjection(t, "book_audiobooks", audiobookProjection, &model.Audiobook{})
+	checkProjection(t, "book_audiobook_segments", audiobookSegmentProjection, &model.AudiobookSegment{})
+	checkProjection(t, "book_reading_guides", readingGuideProjection, &model.ReadingGuide{})
+	checkProjection(t, "book_markdown_renditions", markdownRenditionProjection, &model.MarkdownRendition{})
+	checkProjection(t, "book_epub_renditions", epubRenditionProjection, &model.EpubRendition{})
+	checkProjection(t, "books⋈files placement", placementProjection, &Placement{})
+	checkProjection(t, "password_reset_tokens", passwordResetTokenProjection, &PasswordResetToken{})
+	checkProjection(t, "storage_backends", storageBackendProjection, &model.StorageBackend{})
+	checkProjection(t, "pending_orphans due", duePendingOrphanProjection, &DuePendingOrphan{})
 }
 
 // The identity cluster's golden forms (#313). As above, the restatement

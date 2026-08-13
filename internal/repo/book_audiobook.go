@@ -27,22 +27,62 @@ func NewBookAudiobookRepo(d *db.DB) *BookAudiobookRepo {
 	return &BookAudiobookRepo{db: d}
 }
 
-// generation sits between two TEXT columns on purpose. The list below and
-// the Scan destinations in GetByBookID are hand-kept — this table has no
-// projection — so the hazard is a *same-type adjacent* swap, which
-// compiles and silently crosses two fields (CONTEXT.md §Column-order
-// coupling). Wedged between state and engine, a swap in one list and not
-// the other is a scan type error rather than a run reporting somebody
-// else's generation.
-const audiobookCols = `
-	book_id, state, generation, engine, voice, model, segment_chars, source_content_hash,
-	file_id, error, total_chars, duration_ms, created_at, updated_at
-`
+// audiobookProjection is the book_audiobooks row, declared once. The
+// SELECT list and the Scan destinations in GetByBookID both render from
+// here. generation used to sit wedged between the state and engine TEXT
+// columns on purpose, as a tripwire: with two hand-kept lists, a
+// same-type adjacent swap compiled and silently crossed two fields
+// (CONTEXT.md §Column-order coupling), and only an int landing where a
+// string was expected turned that into a scan type error instead. The
+// projection retires the wedge — a column's position and its
+// destination are one declaration now, so a swap moves both at once and
+// cannot be represented at all.
+var audiobookProjection = projection[model.Audiobook]{
+	{name: "book_id", dest: func(a *model.Audiobook) any { return &a.BookID }},
+	{name: "state", dest: func(a *model.Audiobook) any { return &a.State }},
+	{name: "generation", dest: func(a *model.Audiobook) any { return &a.Generation }},
+	{name: "engine", dest: func(a *model.Audiobook) any { return &a.Engine }},
+	{name: "voice", dest: func(a *model.Audiobook) any { return &a.Voice }},
+	{name: "model", dest: func(a *model.Audiobook) any { return &a.Model }},
+	{name: "segment_chars", dest: func(a *model.Audiobook) any { return &a.SegmentChars }},
+	{name: "source_content_hash", dest: func(a *model.Audiobook) any { return &a.SourceContentHash }},
+	{name: "file_id", dest: func(a *model.Audiobook) any { return &a.FileID }},
+	{name: "error", dest: func(a *model.Audiobook) any { return &a.Error }},
+	{name: "total_chars", dest: func(a *model.Audiobook) any { return &a.TotalChars }},
+	{name: "duration_ms", dest: func(a *model.Audiobook) any { return &a.DurationMS }},
+	{name: "created_at", dest: func(a *model.Audiobook) any { return &a.CreatedAt }},
+	{name: "updated_at", dest: func(a *model.Audiobook) any { return &a.UpdatedAt }},
+}
 
-const segmentCols = `
-	id, book_id, seq, chapter_index, chapter_title, char_start, char_end,
-	start_ms, duration_ms, staged_path, state, error
-`
+// audiobookCols is the projection rendered for the unaliased
+// book_audiobooks queries.
+var audiobookCols = audiobookProjection.returningList("book_audiobooks")
+
+// audiobookSegmentProjection is the book_audiobook_segments row,
+// declared once. char_start, char_end, start_ms and duration_ms are
+// four adjacent int64 columns — the schema's worst run of the
+// Column-order coupling hazard: a crossed pair compiles, runs, and
+// silently mis-offsets every chapter it touches, in a run long enough
+// that a hand-kept SELECT list and Scan can drift two positions apart
+// undetected. One declaration removes the seam a drift could open in.
+var audiobookSegmentProjection = projection[model.AudiobookSegment]{
+	{name: "id", dest: func(s *model.AudiobookSegment) any { return &s.ID }},
+	{name: "book_id", dest: func(s *model.AudiobookSegment) any { return &s.BookID }},
+	{name: "seq", dest: func(s *model.AudiobookSegment) any { return &s.Seq }},
+	{name: "chapter_index", dest: func(s *model.AudiobookSegment) any { return &s.ChapterIndex }},
+	{name: "chapter_title", dest: func(s *model.AudiobookSegment) any { return nullText{Dst: &s.ChapterTitle} }},
+	{name: "char_start", dest: func(s *model.AudiobookSegment) any { return &s.CharStart }},
+	{name: "char_end", dest: func(s *model.AudiobookSegment) any { return &s.CharEnd }},
+	{name: "start_ms", dest: func(s *model.AudiobookSegment) any { return &s.StartMS }},
+	{name: "duration_ms", dest: func(s *model.AudiobookSegment) any { return &s.DurationMS }},
+	{name: "staged_path", dest: func(s *model.AudiobookSegment) any { return &s.StagedPath }},
+	{name: "state", dest: func(s *model.AudiobookSegment) any { return &s.State }},
+	{name: "error", dest: func(s *model.AudiobookSegment) any { return &s.Error }},
+}
+
+// segmentCols is the projection rendered for the unaliased
+// book_audiobook_segments queries.
+var segmentCols = audiobookSegmentProjection.returningList("book_audiobook_segments")
 
 // ErrRunInProgress refuses a start over a run that has not concluded.
 //
@@ -155,30 +195,22 @@ func (r *BookAudiobookRepo) Start(
 }
 
 func (r *BookAudiobookRepo) GetByBookID(ctx context.Context, bookID string) (model.Audiobook, error) {
-	const q = `SELECT ` + audiobookCols + ` FROM book_audiobooks WHERE book_id = $1`
+	q := `SELECT ` + audiobookCols + ` FROM book_audiobooks WHERE book_id = $1`
 
-	var (
-		ab    model.Audiobook
-		state string
-	)
+	var ab model.Audiobook
 	row := r.db.SQL.QueryRowContext(ctx, q, bookID)
-	if err := row.Scan(
-		&ab.BookID, &state, &ab.Generation, &ab.Engine, &ab.Voice, &ab.Model,
-		&ab.SegmentChars, &ab.SourceContentHash,
-		&ab.FileID, &ab.Error, &ab.TotalChars, &ab.DurationMS, &ab.CreatedAt, &ab.UpdatedAt,
-	); err != nil {
+	if err := audiobookProjection.scan(row, &ab); err != nil {
 		if dberr.IsNotFound(err) {
 			return model.Audiobook{}, ErrNotFound
 		}
 		return model.Audiobook{}, err
 	}
-	ab.State = model.AudiobookState(state)
 	return ab, nil
 }
 
 // ListSegments returns every segment in playback order.
 func (r *BookAudiobookRepo) ListSegments(ctx context.Context, bookID string) ([]model.AudiobookSegment, error) {
-	const q = `SELECT ` + segmentCols + ` FROM book_audiobook_segments WHERE book_id = $1 ORDER BY seq`
+	q := `SELECT ` + segmentCols + ` FROM book_audiobook_segments WHERE book_id = $1 ORDER BY seq`
 	rows, err := r.db.SQL.QueryContext(ctx, q, bookID)
 	if err != nil {
 		return nil, err
@@ -188,7 +220,7 @@ func (r *BookAudiobookRepo) ListSegments(ctx context.Context, bookID string) ([]
 
 // GetSegment reads one segment by (book, seq) — the address a job carries.
 func (r *BookAudiobookRepo) GetSegment(ctx context.Context, bookID string, seq int) (model.AudiobookSegment, error) {
-	const q = `SELECT ` + segmentCols + ` FROM book_audiobook_segments WHERE book_id = $1 AND seq = $2`
+	q := `SELECT ` + segmentCols + ` FROM book_audiobook_segments WHERE book_id = $1 AND seq = $2`
 	s, err := scanSegment(r.db.SQL.QueryRowContext(ctx, q, bookID, seq))
 	if err != nil {
 		if dberr.IsNotFound(err) {
@@ -209,7 +241,7 @@ func (r *BookAudiobookRepo) GetSegment(ctx context.Context, bookID string, seq i
 // discarding it, a restart losing it — leaves a row nothing else will
 // move, and Retry is the route back (ADR-0032).
 func (r *BookAudiobookRepo) ListUnfinishedSegments(ctx context.Context, bookID string) ([]model.AudiobookSegment, error) {
-	const q = `SELECT ` + segmentCols + `
+	q := `SELECT ` + segmentCols + `
 		FROM book_audiobook_segments
 		WHERE book_id = $1 AND state <> 'done'
 		ORDER BY seq`
@@ -509,19 +541,9 @@ func (r *BookAudiobookRepo) ListStaleStaging(ctx context.Context, olderThanDays 
 }
 
 func scanSegment(s scanner) (model.AudiobookSegment, error) {
-	var (
-		seg   model.AudiobookSegment
-		state string
-		title sql.NullString
-	)
-	if err := s.Scan(
-		&seg.ID, &seg.BookID, &seg.Seq, &seg.ChapterIndex, &title,
-		&seg.CharStart, &seg.CharEnd, &seg.StartMS, &seg.DurationMS,
-		&seg.StagedPath, &state, &seg.Error,
-	); err != nil {
+	var seg model.AudiobookSegment
+	if err := audiobookSegmentProjection.scan(s, &seg); err != nil {
 		return model.AudiobookSegment{}, err
 	}
-	seg.ChapterTitle = title.String
-	seg.State = model.SegmentState(state)
 	return seg, nil
 }

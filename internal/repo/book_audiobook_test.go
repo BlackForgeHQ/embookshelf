@@ -722,11 +722,9 @@ func TestStartRoundTripsTheSegmentationCap(t *testing.T) {
 
 	audiobooks := repo.NewBookAudiobookRepo(d)
 	// Every field distinct from every other field of its type, so a
-	// crossing between two adjacent same-type columns surfaces as a
-	// mismatch rather than compiling and running. This list and the Scan
-	// destinations in GetByBookID are hand-kept — book_audiobooks has no
-	// projection — which is exactly the hazard CONTEXT.md §Column-order
-	// coupling describes.
+	// crossing between two adjacent same-type columns in
+	// audiobookProjection surfaces as a mismatch rather than compiling
+	// and running (CONTEXT.md §Column-order coupling).
 	if _, err := audiobooks.Start(ctx, model.Audiobook{
 		BookID: b.ID, Engine: "openai", Voice: "alloy", Model: "tts-1",
 		SegmentChars: 12_345, TotalChars: 777, SourceContentHash: []byte{0xDE, 0xAD},
@@ -759,6 +757,77 @@ func TestStartRoundTripsTheSegmentationCap(t *testing.T) {
 	}
 	if string(run.SourceContentHash) != "\xde\xad" || run.Error != "" || run.FileID != nil || run.DurationMS != 0 {
 		t.Errorf("run = %+v, want the hash it was planned from and nothing finalize writes", run)
+	}
+}
+
+// TestSegmentRoundTripsFourAdjacentInt64Offsets is the schema's worst
+// run of the Column-order coupling hazard: char_start, char_end,
+// start_ms and duration_ms are four adjacent int64 columns in
+// audiobookSegmentProjection, and a crossed pair among them would
+// compile, run, and silently mis-offset every chapter it touches rather
+// than fail loudly. Every one of the four is given a distinct value, so
+// a swap surfaces as a mismatch instead of being masked by two fields
+// sharing a value.
+func TestSegmentRoundTripsFourAdjacentInt64Offsets(t *testing.T) {
+	d := repotest.New(t)
+	ctx := context.Background()
+
+	lib, err := repo.NewLibraryRepo(d).CreateLibrary(ctx, "Narration", "narration-offsets", "/tmp/narration-offsets", nil)
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	b, err := repo.NewBookRepo(d).Create(ctx, model.Book{
+		LibraryID: lib.ID, Title: "Dune", Author: "Frank Herbert", Format: "EPUB", Path: "dune-offsets.epub",
+	})
+	if err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+
+	audiobooks := repo.NewBookAudiobookRepo(d)
+	if _, err := audiobooks.Start(ctx, model.Audiobook{
+		BookID: b.ID, Engine: "openai", Voice: "alloy", Model: "tts-1", TotalChars: 400,
+	}, []model.AudiobookSegment{
+		{
+			BookID: b.ID, Seq: 0, ChapterIndex: 0, ChapterTitle: "Chapter One", State: model.SegmentPending,
+			CharStart: 1_111, CharEnd: 2_222,
+		},
+	}); err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	// start_ms is written by finalize, once char_start/char_end are
+	// already on the row from Start; duration_ms lands with the
+	// segment's own result. Both are unconditional column writes, so the
+	// order here does not matter — what matters is that all four land in
+	// their own column.
+	if err := audiobooks.SetSegmentStart(ctx, b.ID, 0, 3_333); err != nil {
+		t.Fatalf("SetSegmentStart: %v", err)
+	}
+	if _, err := audiobooks.RecordSegment(ctx, b.ID, 0, runGeneration, model.SegmentResult{
+		State: model.SegmentDone, StagedPath: "/staging/seg-0.mp3", DurationMS: 4_444,
+	}); err != nil {
+		t.Fatalf("RecordSegment: %v", err)
+	}
+
+	seg, err := audiobooks.GetSegment(ctx, b.ID, 0)
+	if err != nil {
+		t.Fatalf("GetSegment: %v", err)
+	}
+	if seg.CharStart != 1_111 || seg.CharEnd != 2_222 || seg.StartMS != 3_333 || seg.DurationMS != 4_444 {
+		t.Fatalf("segment offsets = start=%d end=%d startMS=%d durationMS=%d, want 1111/2222/3333/4444 — "+
+			"a crossed pair among the four adjacent int64 columns would mis-offset the chapter",
+			seg.CharStart, seg.CharEnd, seg.StartMS, seg.DurationMS)
+	}
+
+	// ListSegments scans through the same scanSegment, so the second call
+	// site sharing the projection is guarded by the same check.
+	segs, err := audiobooks.ListSegments(ctx, b.ID)
+	if err != nil {
+		t.Fatalf("ListSegments: %v", err)
+	}
+	if len(segs) != 1 || segs[0].CharStart != 1_111 || segs[0].CharEnd != 2_222 ||
+		segs[0].StartMS != 3_333 || segs[0].DurationMS != 4_444 {
+		t.Fatalf("ListSegments offsets = %+v, want the same four distinct values", segs)
 	}
 }
 

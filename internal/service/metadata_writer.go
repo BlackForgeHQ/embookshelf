@@ -442,7 +442,7 @@ func (w *MetadataWriter) folderDelta(b model.Book) (changed bool, oldFolder, new
 }
 
 // collisionSuffix matches the " (2)", " (3)" … the placer appends when
-// two books sanitize to the same folder (uniqueDirectory).
+// two books sanitize to the same folder (freeDir on libRoot).
 var collisionSuffix = regexp.MustCompile(`^(.*) \(\d+\)$`)
 
 // folderMatches reports whether folder is where this author and title

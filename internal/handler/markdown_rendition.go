@@ -5,10 +5,8 @@ package handler
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -77,12 +75,22 @@ func (h *Handler) BookMarkdownGet(c *gin.Context, s bookScope) {
 }
 
 // sourceStale answers a rendition badge's staleness for both artifact
-// shapes: only a ready row can be stale, and the comparison itself is
-// model.Stale over the shared warn-and-degrade hash lookup.
+// shapes: state.CanBeStale gates on ready — the same gate the feed and
+// the audiobook preflight's wrappers now share (#322) — and the
+// comparison itself is model.Stale over the shared warn-and-degrade
+// hash lookup.
+//
+// h.primaryHash == nil is kept, and is the one nil-hash-func branch
+// that still holds: it is nil exactly when libStore is nil, a real
+// installs-without-a-library-store state documented on the field
+// itself, not a defensive check against something the Primary hash
+// constructor already degrades. The feed's and the audiobook's own
+// hash funcs carry no such install-time nil case — see their stale
+// methods — so this is the one place the branch earns its keep.
 func (h *Handler) sourceStale(
 	ctx context.Context, book model.Book, state model.RenditionState, recorded []byte,
 ) bool {
-	if state != model.RenditionReady || h.primaryHash == nil {
+	if !state.CanBeStale() || h.primaryHash == nil {
 		return false
 	}
 	return model.Stale(h.primaryHash(ctx, book), recorded)
@@ -108,6 +116,14 @@ func newPrimaryHash(store service.LibraryStore) func(context.Context, model.Book
 // 404 for every non-ready state: the Versions row is only offered when
 // the rendition is ready, so a direct URL hit on a pending or failed
 // one answers not-found rather than a half-truth.
+// Deliberately its own chain rather than an adapter of renditionServe
+// (#316). What it shares with the two ?rendition= arms is the download
+// header, and that is what `attachment` is; the rest disagrees with them
+// at every step — 503 where they answer 404 because this route *is* the
+// feature, a read failure told apart from an empty row, its own open,
+// and an attachment every time rather than on ?download=. Expressed as a
+// spec those disagreements were four fields and a delivery override
+// nothing else used, and this body was longer for it.
 func (h *Handler) BookMarkdownDownload(c *gin.Context, s bookScope) {
 	ctx := c.Request.Context()
 	if h.renditions == nil || h.libStore == nil {
@@ -137,10 +153,7 @@ func (h *Handler) BookMarkdownDownload(c *gin.Context, s bookScope) {
 	}
 	defer func() { _ = src.Close() }()
 
-	filename := layout.SanitizeTitle(s.Book.Title) + ".md"
-	c.Header("Content-Disposition",
-		fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`,
-			asciiFallback(filename), url.PathEscape(filename)))
+	attachment(c, layout.SanitizeTitle(s.Book.Title)+".md")
 	c.DataFromReader(http.StatusOK, src.Size(), "text/markdown; charset=utf-8",
 		io.NewSectionReader(src, 0, src.Size()), nil)
 }

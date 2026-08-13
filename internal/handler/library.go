@@ -226,12 +226,7 @@ func (h *Handler) Libraries(c *gin.Context) {
 //	?format=EPUB,PDF  comma-separated format filter
 //	?sort=            title|author|recent|year|rating (default: title)
 //	?limit=           client-side hint; server caps at 500 today
-func (h *Handler) Books(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
-
+func (h *Handler) Books(c *gin.Context, userID string) {
 	// Shelf filter short-circuits the library search — shelf membership is
 	// a per-user concept that lives in its own join table.
 	if shelfSlug := strings.TrimSpace(c.Query("shelf")); shelfSlug != "" {
@@ -517,15 +512,7 @@ func (h *Handler) BookFile(c *gin.Context, s bookScope) {
 		writeError(c, http.StatusUnsupportedMediaType, "reader does not support this format")
 		return
 	}
-	if c.Query("download") != "" {
-		filename := downloadFilename(book)
-		// Standard RFC 6266: bare `filename=` for ASCII fallback +
-		// `filename*=UTF-8''…` for anything non-ASCII so browsers
-		// honour the suggested name when the title has diacritics.
-		c.Header("Content-Disposition",
-			fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`,
-				asciiFallback(filename), url.PathEscape(filename)))
-	}
+	attachIfRequested(c, downloadFilename(book))
 	if err := h.serveBookFile(c, book, mime); err != nil {
 		writeError(c, http.StatusForbidden, err.Error())
 		return
@@ -610,6 +597,31 @@ func sanitizeFilename(s string) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// attachment is the header that makes a browser save the response
+// instead of rendering it, written once for all four download surfaces:
+// the book file here, the generated EPUB, the narration and the
+// markdown rendition.
+//
+// Standard RFC 6266: bare `filename=` for the ASCII fallback plus the
+// extended UTF-8 form for the real name, so browsers honour the
+// suggested name when the title has diacritics and old ones still get
+// something usable.
+func attachment(c *gin.Context, filename string) {
+	c.Header("Content-Disposition",
+		fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`,
+			asciiFallback(filename), url.PathEscape(filename)))
+}
+
+// attachIfRequested is that header for the routes that are inline by
+// default — the reader opens the bytes in the browser, and ?download=…
+// is the caller asking to save them instead.
+func attachIfRequested(c *gin.Context, filename string) {
+	if c.Query("download") == "" {
+		return
+	}
+	attachment(c, filename)
 }
 
 // asciiFallback degrades a filename to printable ASCII for the bare

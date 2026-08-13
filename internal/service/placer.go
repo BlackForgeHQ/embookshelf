@@ -125,7 +125,13 @@ type LocalPlacer struct {
 }
 
 func (p LocalPlacer) Place(_ context.Context, src PlaceSource) (PlaceResult, error) {
-	if p.Root == "" {
+	// The Placer's reading of the root: whatever it was built with,
+	// which DefaultPlacerBuilder takes from libraryLocalRoot. The
+	// renamer reads Library.Path instead and the two stay apart
+	// (ADR-0030 Consequences); libRoot does the arithmetic, not the
+	// choosing.
+	root := newLibRoot(p.Root)
+	if root.empty() {
 		return PlaceResult{}, errors.New("local placer: empty root")
 	}
 	st, err := os.Stat(src.Path)
@@ -136,27 +142,40 @@ func (p LocalPlacer) Place(_ context.Context, src PlaceSource) (PlaceResult, err
 	authorSeg := layout.SanitizeAuthor(src.Author)
 	titleSeg := layout.SanitizeTitle(src.Title)
 
-	authorDir := filepath.Join(p.Root, authorSeg)
-	if err := os.MkdirAll(authorDir, 0o755); err != nil {
+	if err := os.MkdirAll(root.abs(authorSeg), 0o755); err != nil {
 		return PlaceResult{}, fmt.Errorf("mkdir author dir: %w", err)
 	}
 
-	bookDir := uniqueDirectory(filepath.Join(authorDir, titleSeg))
+	// Both forms at once: the absolute one to create and move into, the
+	// relative one for the files row. Nothing here trims a root back off
+	// a path it just joined one onto.
+	bookDir, folderPath, err := root.freeDir(path.Join(authorSeg, titleSeg))
+	if err != nil {
+		return PlaceResult{}, fmt.Errorf("book dir: %w", err)
+	}
 	if err := os.MkdirAll(bookDir, 0o755); err != nil {
 		return PlaceResult{}, fmt.Errorf("mkdir book dir: %w", err)
 	}
 
 	dest := filepath.Join(bookDir, filepath.Base(src.Path))
 	if dest != src.Path {
-		dest = uniqueDestination(dest)
+		dest = freeFilePath(dest)
 		if err := moveFile(src.Path, dest); err != nil {
 			return PlaceResult{}, fmt.Errorf("move: %w", err)
 		}
 	}
 
+	location, err := root.rel(dest)
+	if err != nil {
+		// The bytes are at dest and the row is not written: better a
+		// failed import the caller can retry than a files row holding an
+		// absolute location, which is what the old fallback wrote.
+		return PlaceResult{}, fmt.Errorf("location: %w", err)
+	}
+
 	return PlaceResult{
-		Location:   relativeToRoot(dest, p.Root),
-		FolderPath: relativeToRoot(bookDir, p.Root),
+		Location:   location,
+		FolderPath: folderPath,
 		Size:       st.Size(),
 		Mtime:      st.ModTime(),
 	}, nil
@@ -183,8 +202,13 @@ func (p BackendPlacer) Place(ctx context.Context, src PlaceSource) (PlaceResult,
 
 	authorSeg := layout.SanitizeAuthor(src.Author)
 	titleSeg := layout.SanitizeTitle(src.Title)
-	folderKey := path.Join(authorSeg, titleSeg)
-	folderKey = uniqueBackendFolder(ctx, p.Store, folderKey)
+	// backendRoot, not a root of its own: the backend encodes any
+	// per-library prefix (Plan F), so the folder this probe returns is
+	// already both the key and the library-relative location.
+	folderKey, err := backendRoot().freeDirBackend(ctx, p.Store, path.Join(authorSeg, titleSeg))
+	if err != nil {
+		return PlaceResult{}, fmt.Errorf("book folder: %w", err)
+	}
 	key := path.Join(folderKey, filepath.Base(src.Path))
 
 	opts := []storage.PutOption{}
@@ -210,19 +234,11 @@ func (p BackendPlacer) Place(ctx context.Context, src PlaceSource) (PlaceResult,
 	}, nil
 }
 
-// relativeToRoot strips a library root prefix. Falls back to abs when
-// the path doesn't sit under root (defensive — should not happen for
-// LocalPlacer outputs).
-func relativeToRoot(abs, root string) string {
-	prefix := root
-	if !strings.HasSuffix(prefix, "/") {
-		prefix += "/"
-	}
-	if strings.HasPrefix(abs, prefix) {
-		return abs[len(prefix):]
-	}
-	return abs
-}
+// relativeToRoot is gone into libRoot.rel, with the renamer's hand-rolled
+// prefix trim. Both fell through to returning the absolute path when the
+// prefix did not match — ADR-0030's Consequences names the pair as the
+// live producers of absolute locations — and there is now one of them,
+// which answers with an error instead (#323).
 
 // storageMIMEForFormat is the Content-Type a presigned URL should serve
 // the bytes under. Used by BackendPlacer on Put.

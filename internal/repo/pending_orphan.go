@@ -105,6 +105,31 @@ type DuePendingOrphan struct {
 	Referenced bool
 }
 
+// duePendingOrphanProjection is the SelectDue row, declared once:
+// pending_orphans' own six columns plus the EXISTS join that answers
+// Referenced. library_id, key and reason are three adjacent TEXT
+// columns — a crossed pair would compile, run, and hand the sweeper a
+// row addressing the wrong library or the wrong key, which is exactly
+// the write a delete-by-key sweep must not make against a key still in
+// use.
+var duePendingOrphanProjection = projection[DuePendingOrphan]{
+	{name: "id", dest: func(o *DuePendingOrphan) any { return &o.ID }},
+	{name: "library_id", dest: func(o *DuePendingOrphan) any { return &o.LibraryID }},
+	{name: "key", dest: func(o *DuePendingOrphan) any { return &o.Key }},
+	{name: "eligible_at", dest: func(o *DuePendingOrphan) any { return &o.EligibleAt }},
+	{name: "reason", dest: func(o *DuePendingOrphan) any { return &o.Reason }},
+	{name: "book_id", dest: func(o *DuePendingOrphan) any { return &o.BookID }},
+	{name: "created_at", dest: func(o *DuePendingOrphan) any { return &o.CreatedAt }},
+	{
+		name: "referenced",
+		expr: `EXISTS (
+		           SELECT 1 FROM files f
+		           WHERE f.library_id = {alias}.library_id AND f.location = {alias}.key
+		       ) AS referenced`,
+		dest: func(o *DuePendingOrphan) any { return &o.Referenced },
+	},
+}
+
 // SelectDue returns up to limit rows whose EligibleAt has passed,
 // ordered by EligibleAt ASC. Used by the sweeper to pull a batch
 // of work each tick.
@@ -117,12 +142,8 @@ type DuePendingOrphan struct {
 // kind that enqueues here — files.location *is* the storage key, which
 // is what DeleteBookBytes relies on when it queues locations verbatim.
 func (r *PendingOrphanRepo) SelectDue(ctx context.Context, now time.Time, limit int) ([]DuePendingOrphan, error) {
-	const q = `
-		SELECT po.id, po.library_id, po.key, po.eligible_at, po.reason, po.book_id, po.created_at,
-		       EXISTS (
-		           SELECT 1 FROM files f
-		           WHERE f.library_id = po.library_id AND f.location = po.key
-		       ) AS referenced
+	q := `
+		SELECT ` + duePendingOrphanProjection.selectList("po") + `
 		FROM pending_orphans po
 		WHERE po.eligible_at <= $1
 		ORDER BY po.eligible_at ASC
@@ -137,8 +158,7 @@ func (r *PendingOrphanRepo) SelectDue(ctx context.Context, now time.Time, limit 
 	}
 	return collect(rows, nil, func(s scanner) (DuePendingOrphan, error) {
 		var po DuePendingOrphan
-		err := s.Scan(&po.ID, &po.LibraryID, &po.Key, &po.EligibleAt, &po.Reason, &po.BookID,
-			&po.CreatedAt, &po.Referenced)
+		err := duePendingOrphanProjection.scan(s, &po)
 		return po, err
 	})
 }

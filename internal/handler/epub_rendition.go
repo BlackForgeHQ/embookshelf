@@ -4,14 +4,10 @@ package handler
 
 import (
 	"context"
-	"fmt"
-	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/blackforge/embookshelf/internal/layout"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 )
@@ -83,46 +79,32 @@ func (h *Handler) BookEpubGenerate(c *gin.Context, s bookScope) {
 	})
 }
 
+// noEpubRenditionMsg is the generated EPUB's one not-found sentence.
+const noEpubRenditionMsg = "this book has no generated EPUB"
+
 // serveEpubRendition streams a book's generated EPUB — BookFile's
-// ?rendition=epub arm, mirroring serveNarrationRendition: resolve the
-// row, insist on ready-and-pointing-at-a-file, then let the library's
-// own delivery decision serve the bytes.
+// ?rendition=epub arm, and one adapter of the shared serve chain:
+// the row's ready-and-pointing-at-a-file gate, the files row it points
+// at, and the library's own delivery decision.
 func (h *Handler) serveEpubRendition(c *gin.Context, book model.Book) {
-	if h.libStore == nil || h.epubRenditions == nil {
-		writeError(c, http.StatusNotFound, "this book has no generated EPUB")
-		return
-	}
-	ctx := c.Request.Context()
-
-	rendition, err := h.epubRenditions.GetByBookID(ctx, book.ID)
-	if err != nil || rendition.State != model.RenditionReady || rendition.FileID == nil {
-		writeError(c, http.StatusNotFound, "this book has no generated EPUB")
-		return
-	}
-	handle, err := h.libStore.For(ctx, book.LibraryID)
-	if err != nil {
-		writeServerError(c, "epub library handle", err)
-		return
-	}
-	f, ok := handle.BookFile(ctx, book.ID, *rendition.FileID)
-	if !ok {
-		writeError(c, http.StatusNotFound, "this book has no generated EPUB")
-		return
-	}
-
-	if c.Query("download") != "" {
-		filename := layout.SanitizeTitle(book.Title) + ".epub"
-		c.Header("Content-Disposition",
-			fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`,
-				asciiFallback(filename), url.PathEscape(filename)))
-	}
-
-	src, err := handle.FileSource(ctx, f.Location)
-	if err != nil {
-		writeError(c, http.StatusNotFound, "this book has no generated EPUB")
-		return
-	}
-	if err := h.serveBookSource(c, src, model.MIMEForFormat("EPUB")); err != nil {
-		writeError(c, http.StatusForbidden, err.Error())
-	}
+	h.renditionServe(c, book, renditionServeSpec{
+		noneMsg:   noEpubRenditionMsg,
+		resolveOp: "epub library handle",
+		ready: func(ctx context.Context) (string, bool) {
+			// No rendition store wired is the deliberate degrade, and it
+			// gets the same answer as a book that has no generated EPUB:
+			// this route must not claim otherwise.
+			if h.epubRenditions == nil {
+				return "", false
+			}
+			rendition, err := h.epubRenditions.GetByBookID(ctx, book.ID)
+			if err != nil || rendition.State != model.RenditionReady || rendition.FileID == nil {
+				return "", false
+			}
+			return *rendition.FileID, true
+		},
+		locate: renditionFileLocation,
+		ext:    ".epub",
+		mime:   model.MIMEForFormat("EPUB"),
+	})
 }

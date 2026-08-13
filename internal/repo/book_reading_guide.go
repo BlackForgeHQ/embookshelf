@@ -22,10 +22,28 @@ func NewBookReadingGuideRepo(d *db.DB) *BookReadingGuideRepo {
 	return &BookReadingGuideRepo{db: d}
 }
 
-const readingGuideCols = `
-	book_id, about, audience, not_for, problems,
-	source_kind, model, language, generated_at, edited_by_user
-`
+// readingGuideProjection is the book_reading_guides row, declared once.
+// about, audience, not_for and problems are four adjacent TEXT columns —
+// Upsert restates all ten columns and SaveEdit restates these four —
+// so a crossed pair used to compile, run, and answer one of a reader's
+// four questions with another's text. Stating a column's position and
+// its destination together makes that swap unrepresentable.
+var readingGuideProjection = projection[model.ReadingGuide]{
+	{name: "book_id", dest: func(g *model.ReadingGuide) any { return &g.BookID }},
+	{name: "about", dest: func(g *model.ReadingGuide) any { return &g.About }},
+	{name: "audience", dest: func(g *model.ReadingGuide) any { return &g.Audience }},
+	{name: "not_for", dest: func(g *model.ReadingGuide) any { return &g.NotFor }},
+	{name: "problems", dest: func(g *model.ReadingGuide) any { return &g.Problems }},
+	{name: "source_kind", dest: func(g *model.ReadingGuide) any { return &g.SourceKind }},
+	{name: "model", dest: func(g *model.ReadingGuide) any { return &g.Model }},
+	{name: "language", dest: func(g *model.ReadingGuide) any { return &g.Language }},
+	{name: "generated_at", dest: func(g *model.ReadingGuide) any { return &g.GeneratedAt }},
+	{name: "edited_by_user", dest: func(g *model.ReadingGuide) any { return &g.EditedByUser }},
+}
+
+// readingGuideCols is the projection rendered for the unaliased
+// book_reading_guides queries.
+var readingGuideCols = readingGuideProjection.returningList("book_reading_guides")
 
 // Upsert writes a freshly generated guide, replacing whatever was there.
 //
@@ -73,23 +91,16 @@ func (r *BookReadingGuideRepo) SaveEdit(ctx context.Context, bookID string, t mo
 }
 
 func (r *BookReadingGuideRepo) GetByBookID(ctx context.Context, bookID string) (model.ReadingGuide, error) {
-	const q = `SELECT ` + readingGuideCols + ` FROM book_reading_guides WHERE book_id = $1`
+	q := `SELECT ` + readingGuideCols + ` FROM book_reading_guides WHERE book_id = $1`
 
-	var (
-		g          model.ReadingGuide
-		sourceKind string
-	)
+	var g model.ReadingGuide
 	row := r.db.SQL.QueryRowContext(ctx, q, bookID)
-	if err := row.Scan(
-		&g.BookID, &g.About, &g.Audience, &g.NotFor, &g.Problems,
-		&sourceKind, &g.Model, &g.Language, &g.GeneratedAt, &g.EditedByUser,
-	); err != nil {
+	if err := readingGuideProjection.scan(row, &g); err != nil {
 		if dberr.IsNotFound(err) {
 			return model.ReadingGuide{}, ErrNotFound
 		}
 		return model.ReadingGuide{}, err
 	}
-	g.SourceKind = model.GuideSource(sourceKind)
 	return g, nil
 }
 

@@ -25,11 +25,7 @@ type readingStatsDTO struct {
 // ReadingStats returns aggregate reading-session data for the current
 // user. Heatmap length is configurable via ?days=<n> (clamped 7..180);
 // default is 84 (12 weeks) to match the Dashboard layout.
-func (h *Handler) ReadingStats(c *gin.Context) {
-	userID := requireUserID(c)
-	if userID == "" {
-		return
-	}
+func (h *Handler) ReadingStats(c *gin.Context, userID string) {
 	days, _ := strconv.Atoi(c.Query("days"))
 	if days <= 0 {
 		days = 84

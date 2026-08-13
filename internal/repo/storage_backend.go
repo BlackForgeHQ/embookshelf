@@ -4,7 +4,6 @@ package repo
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +29,27 @@ func NewStorageBackendRepo(d *db.DB) *StorageBackendRepo {
 	return &StorageBackendRepo{db: d}
 }
 
+// storageBackendProjection is the storage_backends row, declared once.
+// Three call sites used to retype "id, kind, config, created_at" and
+// re-decode the config JSONB by hand — this file's own scanBackend, plus
+// a second copy LibraryRepo.LibraryBackend carried under a comment
+// promising it stayed in sync ("re-use the same scan logic ... to avoid
+// duplication", which was aspirational, not enforced). A crossed id/kind
+// pair — both TEXT, adjacent in every one of those lists — would compile
+// and run, and a library's backend would report another backend's kind
+// under its own id.
+var storageBackendProjection = projection[model.StorageBackend]{
+	{name: "id", dest: func(b *model.StorageBackend) any { return &b.ID }},
+	{name: "kind", dest: func(b *model.StorageBackend) any { return &b.Kind }},
+	{name: "config", dest: func(b *model.StorageBackend) any { return storageBackendConfigJSON{Dst: &b.Config} }},
+	{name: "created_at", dest: func(b *model.StorageBackend) any { return &b.CreatedAt }},
+}
+
+// storageBackendCols is the projection rendered for the unaliased
+// storage_backends queries below. LibraryBackend's join renders the same
+// projection aliased as "sb" instead.
+var storageBackendCols = storageBackendProjection.returningList("storage_backends")
+
 // Create inserts a new storage backend row and returns the persisted record.
 // The id is generated app-side rather than relying on a column default so the
 // value is known before the round-trip completes.
@@ -43,10 +63,10 @@ func (r *StorageBackendRepo) Create(ctx context.Context, kind string, config map
 
 	// The config column is JSONB; we cast the parameter explicitly so the
 	// driver does not have to guess the target OID.
-	const q = `
+	q := `
 		INSERT INTO storage_backends (id, kind, config)
 		VALUES ($1, $2, $3::jsonb)
-		RETURNING id, kind, config, created_at
+		RETURNING ` + storageBackendCols + `
 	`
 
 	row := r.db.SQL.QueryRowContext(ctx, q, id, kind, string(cfgJSON))
@@ -55,8 +75,8 @@ func (r *StorageBackendRepo) Create(ctx context.Context, kind string, config map
 
 // Get returns the backend with the given id. Returns ErrNotFound when missing.
 func (r *StorageBackendRepo) Get(ctx context.Context, id string) (model.StorageBackend, error) {
-	const q = `
-		SELECT id, kind, config, created_at
+	q := `
+		SELECT ` + storageBackendCols + `
 		FROM storage_backends
 		WHERE id = $1
 	`
@@ -74,7 +94,7 @@ func (r *StorageBackendRepo) Get(ctx context.Context, id string) (model.StorageB
 // List returns all backends ordered by created_at ASC.
 func (r *StorageBackendRepo) List(ctx context.Context) ([]model.StorageBackend, error) {
 	rows, err := r.db.SQL.QueryContext(ctx, `
-		SELECT id, kind, config, created_at
+		SELECT `+storageBackendCols+`
 		FROM storage_backends
 		ORDER BY created_at ASC
 	`)
@@ -114,29 +134,8 @@ func (r *StorageBackendRepo) Delete(ctx context.Context, id string) error {
 
 func (r *StorageBackendRepo) scanBackend(s scanner) (model.StorageBackend, error) {
 	var b model.StorageBackend
-	var configRaw any
-
-	err := s.Scan(&b.ID, &b.Kind, &configRaw, &b.CreatedAt)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return b, sql.ErrNoRows
-		}
-		return b, err
-	}
-
-	// Decode JSON config. A JSONB column normally arrives as []byte, but the
-	// driver may hand it over as a string; both are valid JSON.
-	var raw []byte
-	switch v := configRaw.(type) {
-	case []byte:
-		raw = v
-	case string:
-		raw = []byte(v)
-	default:
-		return b, fmt.Errorf("unexpected type for config column: %T", configRaw)
-	}
-	if err := json.Unmarshal(raw, &b.Config); err != nil {
-		return b, fmt.Errorf("decode config: %w", err)
+	if err := storageBackendProjection.scan(s, &b); err != nil {
+		return model.StorageBackend{}, err
 	}
 	return b, nil
 }

@@ -24,9 +24,25 @@ func NewBookMarkdownRenditionRepo(d *db.DB) *BookMarkdownRenditionRepo {
 	return &BookMarkdownRenditionRepo{renditionLifecycle{db: d, table: "book_markdown_renditions"}}
 }
 
-const markdownRenditionCols = `
-	book_id, state, error, location, size_bytes,
-	source_content_hash, converter_version, created_at, updated_at`
+// markdownRenditionProjection is the book_markdown_renditions row,
+// declared once. The lifecycle columns (state, error, provenance) are
+// shared with the EPUB rendition's projection; location and size_bytes
+// are markdown's own artifact columns.
+var markdownRenditionProjection = projection[model.MarkdownRendition]{
+	{name: "book_id", dest: func(m *model.MarkdownRendition) any { return &m.BookID }},
+	{name: "state", dest: func(m *model.MarkdownRendition) any { return &m.State }},
+	{name: "error", dest: func(m *model.MarkdownRendition) any { return &m.Error }},
+	{name: "location", dest: func(m *model.MarkdownRendition) any { return &m.Location }},
+	{name: "size_bytes", dest: func(m *model.MarkdownRendition) any { return &m.SizeBytes }},
+	{name: "source_content_hash", dest: func(m *model.MarkdownRendition) any { return &m.SourceContentHash }},
+	{name: "converter_version", dest: func(m *model.MarkdownRendition) any { return &m.ConverterVersion }},
+	{name: "created_at", dest: func(m *model.MarkdownRendition) any { return &m.CreatedAt }},
+	{name: "updated_at", dest: func(m *model.MarkdownRendition) any { return &m.UpdatedAt }},
+}
+
+// markdownRenditionCols is the projection rendered for the unaliased
+// book_markdown_renditions queries.
+var markdownRenditionCols = markdownRenditionProjection.returningList("book_markdown_renditions")
 
 // MarkReady records a finished conversion: where the bytes landed and
 // the provenance that decides staleness later.
@@ -38,23 +54,16 @@ func (r *BookMarkdownRenditionRepo) MarkReady(
 
 // GetByBookID loads the row, ErrNotFound when the book has none.
 func (r *BookMarkdownRenditionRepo) GetByBookID(ctx context.Context, bookID string) (model.MarkdownRendition, error) {
-	const q = `SELECT ` + markdownRenditionCols + ` FROM book_markdown_renditions WHERE book_id = $1`
+	q := `SELECT ` + markdownRenditionCols + ` FROM book_markdown_renditions WHERE book_id = $1`
 
-	var (
-		m     model.MarkdownRendition
-		state string
-	)
+	var m model.MarkdownRendition
 	row := r.db.SQL.QueryRowContext(ctx, q, bookID)
-	if err := row.Scan(
-		&m.BookID, &state, &m.Error, &m.Location, &m.SizeBytes,
-		&m.SourceContentHash, &m.ConverterVersion, &m.CreatedAt, &m.UpdatedAt,
-	); err != nil {
+	if err := markdownRenditionProjection.scan(row, &m); err != nil {
 		if dberr.IsNotFound(err) {
 			return model.MarkdownRendition{}, ErrNotFound
 		}
 		return model.MarkdownRendition{}, err
 	}
-	m.State = model.RenditionState(state)
 	return m, nil
 }
 
