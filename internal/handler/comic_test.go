@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -259,6 +260,55 @@ func TestComicEndpointsRefuseANonComic(t *testing.T) {
 	rec = comicRequest(t, f, f.h.ComicPage, "/api/v1/books/x/comic/pages/0", "0")
 	if rec.Code != http.StatusUnsupportedMediaType {
 		t.Errorf("page status = %d, want 415", rec.Code)
+	}
+}
+
+// A RAR- or 7z-packed comic is stamped CBZ like every other comic
+// (model.FormatSpecs) and reaches the shelf since #310, but its pages are
+// in a container these endpoints do not page through. That is the
+// format's answer — 415 with a sentence saying so — not a 500 carrying a
+// zip parser's complaint, and not a 404 implying the page might exist.
+func TestComicEndpointsRefuseANonZIPComic(t *testing.T) {
+	store := &objectStore{objects: map[string][]byte{
+		// A RAR signature is enough: what matters is that it is not a ZIP.
+		comicLocation: append([]byte("Rar!\x1a\x07\x01\x00"), bytes.Repeat([]byte{0}, 128)...),
+	}}
+	f := newComicFixture(t, store, "")
+
+	rec := comicRequest(t, f, f.h.ComicPagesIndex, "/api/v1/books/x/comic/pages", "")
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("pages index status = %d, want 415 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), ".cbz") {
+		t.Errorf("body = %s, want it to say which comics can be paged", rec.Body.String())
+	}
+
+	rec = comicRequest(t, f, f.h.ComicPage, "/api/v1/books/x/comic/pages/0", "0")
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("page status = %d, want 415 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// The other half of that classification: a .cbz that IS a ZIP and is
+// damaged keeps the answer it always had — a 500 — because "this file is
+// broken" and "this file is in a container the reader does not page" are
+// different things to be told, and the 415's sentence would send the
+// owner of a damaged comic looking for a conversion they do not need.
+func TestComicEndpointsOnADamagedZIPStillFail500(t *testing.T) {
+	good := cbzBytes(t, comicPages)
+	store := &objectStore{objects: map[string][]byte{
+		// Still a ZIP by its magic; the central directory at the tail is
+		// gone, so archive/zip cannot open it.
+		comicLocation: good[:len(good)/2],
+	}}
+	f := newComicFixture(t, store, "")
+
+	rec := comicRequest(t, f, f.h.ComicPagesIndex, "/api/v1/books/x/comic/pages", "")
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("pages index status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), ".cbz only") {
+		t.Errorf("body = %s — a damaged .cbz was told it is not a .cbz", rec.Body.String())
 	}
 }
 

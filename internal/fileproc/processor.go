@@ -63,15 +63,24 @@ var ErrUnsupportedFormat = errors.New("unsupported file format")
 // else — which extensions are admitted, what format they stamp, which
 // formats are audio — derives from the table (#308). Keyed by extension
 // rather than format because the alias and the canonical form need not
-// share an implementation: .cbr is stamped CBZ but is a RAR archive the
-// zip processor cannot open, so it has no entry until #310 wires one.
+// share an implementation: the three comic extensions all stamp CBZ and
+// all read the same pages, but a .cbr is a RAR and a .cb7 a 7z, which the
+// zip processor cannot open — so each has its own entry here and they
+// meet again in comic.go, above the container (#310).
 var processors = map[string]func() Processor{
 	".epub": func() Processor { return &EPUBProcessor{} },
 	".pdf":  func() Processor { return &PDFProcessor{} },
 	".cbz":  func() Processor { return &CBZProcessor{} },
+	".cbr":  func() Processor { return &CBRProcessor{} },
+	".cb7":  func() Processor { return &CB7Processor{} },
 	".mp3":  func() Processor { return &AudioProcessor{} },
 	".m4a":  func() Processor { return &AudioProcessor{} },
 	".m4b":  func() Processor { return &AudioProcessor{} },
+	".fb2":  func() Processor { return &FB2Processor{} },
+	// Two formats, one processor: AZW3 (KF8) is the same PalmDB container
+	// and EXTH layout as MOBI, and the file version inside says which.
+	".mobi": func() Processor { return &MOBIProcessor{} },
+	".azw3": func() Processor { return &MOBIProcessor{} },
 }
 
 // NoProcessorError is Dispatch's answer for an extension the table

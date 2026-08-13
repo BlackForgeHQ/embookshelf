@@ -40,11 +40,17 @@ func TestFormatForExtAgreesWithModel(t *testing.T) {
 }
 
 // TestDispatchCoversEveryProcessorExt — an extension with a processor
-// dispatches to it and stamps the table's format.
+// dispatches to it and stamps the table's format, and the set below is
+// every admitted extension: since #310 wired the comic aliases there is
+// no admitted extension left without a processor, and the exhaustiveness
+// check is what keeps a newly admitted one from arriving unwired and
+// unnoticed.
 func TestDispatchCoversEveryProcessorExt(t *testing.T) {
 	cases := map[string]string{
-		".epub": "EPUB", ".pdf": "PDF", ".cbz": "CBZ",
+		".epub": "EPUB", ".pdf": "PDF",
+		".cbz": "CBZ", ".cbr": "CBZ", ".cb7": "CBZ",
 		".mp3": "MP3", ".m4a": "M4B", ".m4b": "M4B",
+		".fb2": "FB2", ".mobi": "MOBI", ".azw3": "AZW3",
 	}
 	for ext, wantFormat := range cases {
 		p, format, err := Dispatch("x" + ext)
@@ -56,50 +62,47 @@ func TestDispatchCoversEveryProcessorExt(t *testing.T) {
 			t.Errorf("Dispatch(%q) format = %q, want %q", ext, format, wantFormat)
 		}
 	}
-}
-
-// TestDispatchNoProcessorIsPerFormatAndPermanent — an admitted
-// extension with no processor fails with a message naming the format,
-// not the generic unsupported answer, and still reads as
-// ErrUnsupportedFormat so the ingest worker's terminal-failure branch
-// keeps firing (no retry for a file that will refuse identically in
-// thirty seconds).
-//
-// This set is the interim ADR-0033-style loud state; #310 (.cbr/.cb7),
-// #311 (.mobi/.azw3) and #312 (.fb2) each shrink it by wiring a
-// processor, at which point the entry moves to the covers-every-ext
-// test above.
-func TestDispatchNoProcessorIsPerFormatAndPermanent(t *testing.T) {
-	noProcessor := map[string]string{
-		".cbr":  "CBZ",
-		".cb7":  "CBZ",
-		".mobi": "MOBI",
-		".azw3": "AZW3",
-		".fb2":  "FB2",
-	}
-	for ext, format := range noProcessor {
-		_, _, err := Dispatch("x" + ext)
-		if err == nil {
-			t.Errorf("Dispatch(%q) succeeded — a processor exists; move %q to the covered table", ext, ext)
-			continue
-		}
-		if !errors.Is(err, ErrUnsupportedFormat) {
-			t.Errorf("Dispatch(%q) err = %v, want it to read as ErrUnsupportedFormat for the terminal-failure branch", ext, err)
-		}
-		if !strings.Contains(err.Error(), "no processor") || !strings.Contains(err.Error(), format) {
-			t.Errorf("Dispatch(%q) err = %q, want a per-format no-processor message naming %s", ext, err, format)
-		}
-	}
-
-	// Exhaustiveness: admitted extensions are exactly covered + no-processor.
-	covered := map[string]bool{
-		".epub": true, ".pdf": true, ".cbz": true,
-		".mp3": true, ".m4a": true, ".m4b": true,
+	if len(cases) != len(SupportedExts) {
+		t.Errorf("%d extensions covered here, %d admitted by the table (%v)",
+			len(cases), len(SupportedExts), SupportedExts)
 	}
 	for _, ext := range SupportedExts {
-		if _, ok := noProcessor[ext]; ok == covered[ext] {
-			t.Errorf("extension %q is in neither or both of the covered/no-processor sets", ext)
+		if _, ok := cases[ext]; !ok {
+			t.Errorf("extension %q is admitted at intake but not covered here — wire a processor for it", ext)
 		}
+	}
+}
+
+// TestDispatchNoProcessorIsPerFormatAndPermanent — a format the table
+// knows but nothing extracts fails with a message naming the format, not
+// the generic unsupported answer, and still reads as ErrUnsupportedFormat
+// so the ingest worker's terminal-failure branch keeps firing (no retry
+// for a file that will refuse identically in thirty seconds).
+//
+// The interim state this guarded on the extension axis is over: #310
+// (.cbr/.cb7), #311 (.mobi/.azw3) and #312 (.fb2) wired the last three,
+// and the covers-every-ext test above now holds every admitted extension.
+// What is left is the slug axis, where the legacy tags the download path
+// meets on old rows still have no extractor — TXT is the live case, and
+// the refusal's shape has to keep working for the next format admitted
+// before its processor lands.
+func TestDispatchNoProcessorIsPerFormatAndPermanent(t *testing.T) {
+	_, err := DispatchFormat("TXT")
+	if err == nil {
+		t.Fatal("DispatchFormat(TXT) succeeded — nothing extracts plain text; move it to the covered set")
+	}
+	if !errors.Is(err, ErrUnsupportedFormat) {
+		t.Errorf("err = %v, want it to read as ErrUnsupportedFormat for the terminal-failure branch", err)
+	}
+	var npe *NoProcessorError
+	if !errors.As(err, &npe) {
+		t.Fatalf("err = %T, want a *NoProcessorError", err)
+	}
+	if npe.Format != "TXT" || npe.Ext != ".txt" {
+		t.Errorf("NoProcessorError = %+v, want the format and its extension", npe)
+	}
+	if !strings.Contains(err.Error(), "no processor") || !strings.Contains(err.Error(), "TXT") {
+		t.Errorf("err = %q, want a per-format no-processor message naming TXT", err)
 	}
 }
 
@@ -120,8 +123,13 @@ func TestDispatchUnknownExtensionStaysGeneric(t *testing.T) {
 
 // TestDispatchFormatAgreesWithDispatch — the slug-keyed twin answers
 // with the same processor type as the extension entry point.
+//
+// CBR is in the set because it is the legacy tag books.format carries on
+// rows written before the aliases folded onto CBZ. Its .cbr bytes are a
+// RAR archive, and since #310 something opens them — so the slug resolves
+// like any other and those old rows extract rather than refuse.
 func TestDispatchFormatAgreesWithDispatch(t *testing.T) {
-	for _, format := range []string{"EPUB", "PDF", "CBZ", "MP3", "M4B"} {
+	for _, format := range []string{"EPUB", "PDF", "CBZ", "CBR", "MP3", "M4B", "FB2", "MOBI", "AZW3"} {
 		byFormat, err := DispatchFormat(format)
 		if err != nil {
 			t.Errorf("DispatchFormat(%q): %v", format, err)
@@ -136,9 +144,6 @@ func TestDispatchFormatAgreesWithDispatch(t *testing.T) {
 		if fmt.Sprintf("%T", byFormat) != fmt.Sprintf("%T", byExt) {
 			t.Errorf("DispatchFormat(%q) = %T, Dispatch = %T", format, byFormat, byExt)
 		}
-	}
-	if _, err := DispatchFormat("MOBI"); !errors.Is(err, ErrUnsupportedFormat) {
-		t.Errorf("DispatchFormat(MOBI) err = %v, want ErrUnsupportedFormat while no processor exists", err)
 	}
 }
 

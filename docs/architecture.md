@@ -396,8 +396,9 @@ SHA-256 dedup since `000027`); presence + MIME live on
 | `PDFProcessor` | **Built** | `pdfcpu` info pull | `pdf_embed.go` writes Info dictionary updates |
 | `CBZProcessor` | **Built** | `archive/zip` page count + first-image cover | — (read-only format) |
 | `AudioProcessor` | **Built** | `dhowden/tag` for MP3/M4A/M4B (title, artist, narrator, duration) | — (deferred) |
-| CBR | Deferred | needs `nwaples/rardecode` | — |
-| AZW3 / MOBI / FB2 | Deferred | parser TBD | — |
+| `CBRProcessor` / `CB7Processor` | **Built** | `nwaples/rardecode` (RAR) and `bodgit/sevenzip` (7z) over `comic.go`'s one cover + ComicInfo pass, shared with CBZ | — (read-only format) |
+| `MOBIProcessor` | **Built** | stdlib PalmDB record index + EXTH walk; MOBI and AZW3/KF8 share it | — (read-only format) |
+| `FB2Processor` | **Built** | stdlib `encoding/xml` over the one FictionBook document | — (read-only format) |
 
 Unsupported files dropped today are queued, surface
 `ErrUnsupportedFormat` in the review UI, and can still be approved
@@ -924,7 +925,7 @@ network dependency on first paint.
 |--------|--------|-------|
 | EPUB | **Built** | [`EpubReader`](../ui/src/components/EpubReader.tsx) wraps epub.js with an imperative handle (`next` / `prev` / `goTo`). Paginated flow, `book.locations.generate(1024)` powers the percentage scrubber, `relocated` event reports `{percent, cfi}`. Typography overrides via `rendition.themes.default` so font/size changes survive chapter transitions. TOC tree flattened for the Contents panel. |
 | PDF | **Built** | [`PdfReader`](../ui/src/components/PdfReader.tsx) uses pdfjs-dist 5. Worker URL resolved via `new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url)` so Vite emits a hashed worker. Scroll container with one `<canvas>` per page; only current ± 1 page are rasterized (others cleared) to keep memory flat on large PDFs. |
-| Comic / CBZ | **Built** | [`ComicReader`](../ui/src/components/ComicReader.tsx) reads per-page images from `/api/v1/books/:id/pages/:n` (server reads the one page it was asked for, ranged, straight out of the archive — nothing is expanded or cached). Keyboard nav + double-page spread + manga mode. CBR + cb7 deferred. |
+| Comic / CBZ | **Built** | [`ComicReader`](../ui/src/components/ComicReader.tsx) reads per-page images from `/api/v1/books/:id/pages/:n` (server reads the one page it was asked for, ranged, straight out of the archive — nothing is expanded or cached). Keyboard nav + double-page spread + manga mode. `.cbr` and `.cb7` ingest (cover + ComicInfo) since #310, but the page endpoints stay ZIP-only: neither container serves a random page for the price a ZIP does, so those books download rather than open in the reader. |
 | Audiobook (MP3/M4B) | **Built** | [`AudioReader`](../ui/src/components/AudioReader.tsx) over the native `<audio>` element. Server delivers bytes via the same `/files` path (range requests). Duration + narrator pulled by `dhowden/tag` at ingest. Chapter markers from M4B containers TBD. |
 
 #### 5.6.1 Progress tokens

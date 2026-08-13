@@ -45,8 +45,9 @@ type FormatSpec struct {
 	Reader ReaderKind
 	// Narratable is whether the format carries text an engine can read
 	// aloud. EPUB alone: there is no PDF text library in go.mod, CBZ is
-	// images, MP3/M4B are already audio, and MOBI/AZW3/FB2 have no
-	// extractor (ADR-0028 §4).
+	// images, MP3/M4B are already audio, and MOBI/AZW3/FB2 have no *text*
+	// extractor (ADR-0028 §4) — their processors read metadata and a
+	// cover, which is a different question from having text to read.
 	//
 	// The set has three enforcement points — the UI button, the handler
 	// and the worker — because a re-import can change a book's format
@@ -118,9 +119,10 @@ var FormatSpecs = []FormatSpec{
 		IngestExts: []string{".m4b", ".m4a"}, Audio: true,
 	},
 	// Admitted and downloadable, but nothing reads them in-app: no
-	// reader, so an extension and no MIME. Their processors are #311 and
-	// #312; until then dispatch refuses them with the per-format
-	// no-processor answer.
+	// reader, so an extension and no MIME. Their ingest processors landed
+	// in #311 (MOBI/AZW3) and #312 (FB2) — metadata and cover only, which
+	// is why they still join none of the Narratable, KindleEligible or
+	// Convertible sets above.
 	{Format: "MOBI", Ext: ".mobi", IngestExts: []string{".mobi"}},
 	{Format: "AZW3", Ext: ".azw3", IngestExts: []string{".azw3"}},
 	{Format: "FB2", Ext: ".fb2", IngestExts: []string{".fb2"}},

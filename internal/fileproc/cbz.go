@@ -4,16 +4,69 @@ package fileproc
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
-	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"path"
-	"sort"
-	"strings"
 
 	"github.com/blackforge/embookshelf/internal/storage"
 )
+
+// ErrComicNotZIP is what the page reader answers for a comic whose bytes
+// are not a ZIP at all. It exists because the three comic extensions all
+// stamp books.format = CBZ (model.FormatSpecs) and all reach the shelf
+// since #310, while only the ZIP one can serve a numbered page cheaply —
+// so a .cbr book opens the comic reader and this is the answer it gets. A
+// distinct error rather than a 500 with a zip parser's complaint in it:
+// "we cannot page through this comic" is a fact about the file, and the
+// reader UI can say so.
+//
+// Reserved for bytes that are not a ZIP. A damaged .cbz is a ZIP that
+// would not open, which is a different sentence and a different status —
+// telling its owner the file "isn't a .cbz" would send them looking for a
+// conversion they do not need. openComicZip is where the two are told
+// apart, by the archive's own magic rather than by the parser's mood.
+var ErrComicNotZIP = errors.New("not a ZIP-packed comic: pages can be served from .cbz only")
+
+// zipLocalFileMagic and zipEmptyMagic are the two signatures a ZIP can
+// start with: a first local file header, or the end-of-central-directory
+// record of an archive with no entries. (The third, PK\x07\x08, only
+// heads a spanned archive's first segment, which is not a comic anyone
+// ships.) Read from the front rather than from the central directory at
+// the tail, because the question here is what the file *is*, and a
+// truncated ZIP has lost its tail — which is exactly the case that must
+// not be mistaken for a RAR.
+var (
+	zipLocalFileMagic = []byte{'P', 'K', 0x03, 0x04}
+	zipEmptyMagic     = []byte{'P', 'K', 0x05, 0x06}
+)
+
+// openComicZip opens a comic archive and classifies the failure: bytes
+// that are not a ZIP get ErrComicNotZIP (415 at the handler — the file is
+// a comic in a container the page endpoints do not serve), and a ZIP that
+// would not open keeps the error it always had (500 — the file is the
+// right shape and damaged).
+func openComicZip(src storage.Source) (*zip.Reader, error) {
+	zr, err := zip.NewReader(src, src.Size())
+	if err == nil {
+		return zr, nil
+	}
+	if hasZipMagic(src) {
+		return nil, fmt.Errorf("open cbz: %w", err)
+	}
+	return nil, fmt.Errorf("%w (%v)", ErrComicNotZIP, err)
+}
+
+func hasZipMagic(src storage.Source) bool {
+	var head [4]byte
+	if _, err := src.ReadAt(head[:], 0); err != nil {
+		return false
+	}
+	return bytes.Equal(head[:], zipLocalFileMagic) || bytes.Equal(head[:], zipEmptyMagic)
+}
 
 // CBZProcessor extracts metadata and cover image from a CBZ comic archive.
 //
@@ -23,27 +76,12 @@ import (
 // library UI shows useful info without manual enrichment.
 //
 // Cover = the first page after natural sort, OR a file matching `cover.*`
-// at the archive root if present.
+// at the archive root if present. Those rules, and the ComicInfo mapping,
+// live in comic.go: they are the same for a comic packed as RAR or 7z
+// (#310), and this file is only the ZIP end of them.
 type CBZProcessor struct{}
 
-type comicInfoXML struct {
-	XMLName     xml.Name `xml:"ComicInfo"`
-	Title       string   `xml:"Title"`
-	Series      string   `xml:"Series"`
-	Number      string   `xml:"Number"`
-	Year        string   `xml:"Year"`
-	Summary     string   `xml:"Summary"`
-	Writer      string   `xml:"Writer"`
-	Penciller   string   `xml:"Penciller"`
-	Inker       string   `xml:"Inker"`
-	Colorist    string   `xml:"Colorist"`
-	LanguageISO string   `xml:"LanguageISO"`
-	PageCount   string   `xml:"PageCount"`
-}
-
 func (CBZProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, error) {
-	_ = ctx
-
 	zr, err := zip.NewReader(src, src.Size())
 	if err != nil {
 		return Metadata{}, fmt.Errorf("open cbz: %w", err)
@@ -51,168 +89,54 @@ func (CBZProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, 
 	// zr is *zip.Reader (not *zip.ReadCloser); no Close needed.
 	// The caller is responsible for closing the Source.
 
-	pages := comicPages(zr)
-	if len(pages) == 0 {
-		return Metadata{}, fmt.Errorf("cbz contains no images")
-	}
-
-	m := Metadata{Format: "CBZ"}
-
-	// ComicInfo.xml is optional. Match case-insensitively because some
-	// authoring tools save as `comicinfo.xml`.
-	for _, f := range zr.File {
-		base := strings.ToLower(path.Base(f.Name))
-		if base != "comicinfo.xml" {
-			continue
-		}
-		if b, err := readZipFile(zr, f.Name); err == nil {
-			var info comicInfoXML
-			if xml.Unmarshal(b, &info) == nil {
-				applyComicInfo(&m, info)
-			}
-		}
-		break
-	}
-
-	// Cover: prefer a top-level `cover.*` if present, otherwise first
-	// page after natural sort.
-	coverName := preferredCoverName(zr)
-	if coverName == "" {
-		coverName = pages[0]
-	}
-	if b, err := readZipFile(zr, coverName); err == nil {
-		m.HasCover = true
-		m.CoverBytes = b
-		m.CoverMime = mimeFromExt(path.Ext(coverName))
-	}
-
-	return m, nil
+	return extractComic(ctx, "cbz", &zipComic{zr: zr})
 }
 
-func applyComicInfo(m *Metadata, info comicInfoXML) {
-	title := strings.TrimSpace(info.Title)
-	series := strings.TrimSpace(info.Series)
-	number := strings.TrimSpace(info.Number)
-	switch {
-	case title != "":
-		m.Title = title
-	case series != "" && number != "":
-		m.Title = fmt.Sprintf("%s #%s", series, number)
-	case series != "":
-		m.Title = series
-	}
-	// "Writer" is the closest to "author" for comics; fall back to penciller.
-	if w := strings.TrimSpace(info.Writer); w != "" {
-		m.Author = w
-	} else if p := strings.TrimSpace(info.Penciller); p != "" {
-		m.Author = p
-	}
-	if s := strings.TrimSpace(info.Summary); s != "" {
-		m.Description = s
-	}
-	if l := strings.TrimSpace(info.LanguageISO); l != "" {
-		m.Language = l
-	}
+// zipComic is the ZIP end of comicArchive. Random access, so a read is a
+// direct lookup per wanted entry.
+type zipComic struct {
+	zr *zip.Reader
 }
 
-// comicPages returns a naturally-sorted list of image entry names inside
-// the archive. ComicInfo.xml and other non-image entries are filtered out.
-func comicPages(zr *zip.Reader) []string {
-	var pages []string
-	for _, f := range zr.File {
+func (z *zipComic) entries() []string {
+	names := make([]string, 0, len(z.zr.File))
+	for _, f := range z.zr.File {
 		if f.FileInfo().IsDir() {
 			continue
 		}
-		if !isImageExt(path.Ext(f.Name)) {
-			continue
-		}
-		pages = append(pages, f.Name)
+		names = append(names, f.Name)
 	}
-	sort.Slice(pages, func(i, j int) bool {
-		return naturalLess(pages[i], pages[j])
-	})
-	return pages
+	return names
 }
 
-// preferredCoverName returns the archive entry name for a top-level
-// `cover.{jpg,jpeg,png,webp}` file, if present. Empty string otherwise.
-func preferredCoverName(zr *zip.Reader) string {
-	for _, f := range zr.File {
-		if f.FileInfo().IsDir() {
+func (z *zipComic) read(ctx context.Context, want map[string]int64) (map[string][]byte, error) {
+	out := make(map[string][]byte, len(want))
+	for _, f := range z.zr.File {
+		max, ok := want[f.Name]
+		if !ok {
 			continue
 		}
-		base := strings.ToLower(path.Base(f.Name))
-		// Only a top-level file (no directory component) qualifies; we
-		// don't want to grab a chapter-internal "cover.jpg".
-		if path.Dir(f.Name) != "." && path.Dir(f.Name) != "" {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("cbz: %w", err)
+		}
+		rc, err := f.Open()
+		if err != nil {
+			slog.Warn("comic entry would not open, dropped", "container", "cbz", "entry", f.Name, "err", err)
 			continue
 		}
-		switch base {
-		case "cover.jpg", "cover.jpeg", "cover.png", "cover.webp":
-			return f.Name
-		}
-	}
-	return ""
-}
-
-func isImageExt(ext string) bool {
-	switch strings.ToLower(ext) {
-	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
-		return true
-	}
-	return false
-}
-
-// naturalLess compares two strings such that embedded numeric runs sort
-// numerically (so "page2.jpg" < "page10.jpg"). Falls back to byte order
-// outside of digit runs.
-func naturalLess(a, b string) bool {
-	i, j := 0, 0
-	for i < len(a) && j < len(b) {
-		ai, aj := a[i], b[j]
-		if isDigit(ai) && isDigit(aj) {
-			// Walk both digit runs and compare as integers (without
-			// converting — leading-zero-safe).
-			is, ie := i, i
-			for ie < len(a) && isDigit(a[ie]) {
-				ie++
-			}
-			js, je := j, j
-			for je < len(b) && isDigit(b[je]) {
-				je++
-			}
-			ar := stripLeadingZeros(a[is:ie])
-			br := stripLeadingZeros(b[js:je])
-			if len(ar) != len(br) {
-				return len(ar) < len(br)
-			}
-			if ar != br {
-				return ar < br
-			}
-			i, j = ie, je
+		b, err := readCappedEntry(rc, f.Name, max)
+		_ = rc.Close()
+		if err != nil {
+			slog.Warn("comic entry unreadable, dropped", "container", "cbz", "entry", f.Name, "err", err)
 			continue
 		}
-		if ai != aj {
-			return ai < aj
-		}
-		i++
-		j++
+		out[f.Name] = b
 	}
-	return len(a) < len(b)
-}
-
-func isDigit(b byte) bool { return b >= '0' && b <= '9' }
-
-func stripLeadingZeros(s string) string {
-	for i := 0; i < len(s)-1; i++ {
-		if s[i] != '0' {
-			return s[i:]
-		}
-	}
-	if len(s) > 0 && s[len(s)-1] == '0' && len(s) > 1 {
-		return "0"
-	}
-	return s
+	// No archive-wide failure mode: a ZIP that opened has a directory,
+	// and a bad entry inside it is the per-entry degradation above.
+	// Encrypted ZIPs are not a case archive/zip can even report — it
+	// refuses them at Open, one level up.
+	return out, nil
 }
 
 // CBZPages returns the archive's page entry names in natural sort order.
@@ -229,12 +153,17 @@ func stripLeadingZeros(s string) string {
 // directory sits at the tail, so listing costs a read of the tail rather
 // than of the object. The caller owns the Source and may reuse one across
 // a list and several page reads.
+//
+// ZIP only, deliberately: this is the reader's paging seam, and a RAR or
+// 7z comic reaches the shelf through the processors in cbr.go/cb7.go but
+// not through here — neither container serves a random page for the price
+// a ZIP does.
 func CBZPages(src storage.Source) ([]string, error) {
-	zr, err := zip.NewReader(src, src.Size())
+	zr, err := openComicZip(src)
 	if err != nil {
-		return nil, fmt.Errorf("open cbz: %w", err)
+		return nil, err
 	}
-	return comicPages(zr), nil
+	return comicPages((&zipComic{zr: zr}).entries()), nil
 }
 
 // CBZPage copies the n-th page (0-indexed, natural sort order) into w.
@@ -245,12 +174,12 @@ func CBZPages(src storage.Source) ([]string, error) {
 // read of that page's bytes plus the directory, so serving page 400 of a
 // 600 MB archive does not cost 600 MB.
 func CBZPage(src storage.Source, n int, w io.Writer) (mime string, err error) {
-	zr, err := zip.NewReader(src, src.Size())
+	zr, err := openComicZip(src)
 	if err != nil {
-		return "", fmt.Errorf("open cbz: %w", err)
+		return "", err
 	}
 
-	pages := comicPages(zr)
+	pages := comicPages((&zipComic{zr: zr}).entries())
 	if n < 0 || n >= len(pages) {
 		return "", fmt.Errorf("page %d out of range (0..%d)", n, len(pages)-1)
 	}

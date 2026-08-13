@@ -27,11 +27,14 @@ func TestDispatchFormat(t *testing.T) {
 		{format: "epub"},
 		{format: " PDF "},
 		{format: "CBZ"},
+		// The legacy comic tag, whose .cbr bytes a processor opens since
+		// #310 — old rows extract rather than refuse.
+		{format: "CBR"},
 		{format: "MP3"},
 		{format: "M4B"},
-		{format: "AZW3", wantErr: true},
-		{format: "MOBI", wantErr: true},
-		{format: "FB2", wantErr: true},
+		{format: "AZW3"},
+		{format: "MOBI"},
+		{format: "FB2"},
 		{format: "", wantErr: true},
 		{format: "unknown", wantErr: true},
 	}
@@ -67,7 +70,12 @@ func TestDispatchKeyOrFormat(t *testing.T) {
 		{name: "slug lowercased", format: "mp3", wantFormat: "MP3"},
 		{name: "unknown key falls back to slug", key: "books/h.bin", format: "EPUB", wantFormat: "EPUB"},
 		{name: "neither", wantErr: true},
-		{name: "unsupported slug", format: "AZW3", wantErr: true},
+		// TXT is the tag with no extractor left: recognised by the table,
+		// refused by dispatch.
+		{name: "unsupported slug", format: "TXT", wantErr: true},
+		// A comic alias resolves through its own processor now (#310) and
+		// still stamps the format the table folds it onto.
+		{name: "comic alias key", key: "books/h.cbr", wantFormat: "CBZ"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

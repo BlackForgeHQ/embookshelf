@@ -16,8 +16,9 @@ import (
 
 // ErrNotNarratable is returned for a book whose format has no text to
 // read. EPUB is the only Narratable format: there is no PDF library in
-// go.mod, CBZ is images, and MOBI/AZW3/FB2 have no extractor (ADR-0028
-// §4).
+// go.mod, CBZ is images, and MOBI/AZW3/FB2 have no text extractor
+// (ADR-0028 §4) — their processors read metadata and a cover, nothing an
+// engine could read aloud.
 //
 // Unlike a reading guide, there is no degraded mode to fall back to —
 // nobody wants a narrated blurb — so this is a gate, not a downgrade.

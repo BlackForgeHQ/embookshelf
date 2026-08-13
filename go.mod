@@ -10,6 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.34
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.106.0
 	github.com/aws/smithy-go v1.27.6
+	github.com/bodgit/sevenzip v1.6.5
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/gin-contrib/cors v1.7.7
 	github.com/gin-gonic/gin v1.12.0
@@ -18,6 +19,7 @@ require (
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
+	github.com/nwaples/rardecode/v2 v2.3.0
 	github.com/riverqueue/river v0.41.1
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.41.1
 	github.com/sony/gobreaker/v2 v2.4.0
@@ -58,13 +60,21 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.38.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.45.4 // indirect
 	github.com/bits-and-blooms/bitset v1.24.5 // indirect
+	github.com/bodgit/plumbing v1.3.0 // indirect
+	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/gohugoio/hashstructure v0.6.0 // indirect
+	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
+	github.com/klauspost/compress v1.19.0 // indirect
+	github.com/pierrec/lz4/v4 v4.1.27 // indirect
+	github.com/stangelandcl/ppmd v0.1.1 // indirect
+	github.com/ulikunitz/xz v0.5.15 // indirect
+	go4.org v0.0.0-20260112195520-a5071408f32f // indirect
 )
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/air-verse/air v1.67.3 // indirect
-	github.com/andybalholm/brotli v1.2.0 // indirect
+	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/andybalholm/cascadia v1.3.4 // indirect
 	github.com/bep/godartsass/v2 v2.5.0 // indirect
 	github.com/bep/golibsass v1.2.0 // indirect
