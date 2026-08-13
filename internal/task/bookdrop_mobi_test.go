@@ -7,11 +7,11 @@ package task
 // real fileproc.Dispatch + ExtractBook pass — the thing that used to
 // answer "no processor for MOBI yet" before this issue wired one), and
 // Approve (placement + the books row). A real Postgres schema throughout
-// and a real local storage backend, the same harness
-// TestBookDropIngest_FB2_IntakeIngestApprove uses, run with the two
-// PalmDB-container formats so the processor is exercised by the pipeline
-// that actually calls it in production rather than only by fileproc's own
-// unit tests.
+// and a real local storage backend, via bookDropPipeline
+// (bookdrop_pipeline_test.go) — the same harness the comic and FB2
+// pipeline tests use, run with the two PalmDB-container formats so the
+// processor is exercised by the pipeline that actually calls it in
+// production rather than only by fileproc's own unit tests.
 
 import (
 	"context"
@@ -22,11 +22,6 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/repo/repotest"
-	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/storage"
-	"github.com/blackforge/embookshelf/internal/storage/local"
 )
 
 // mobiFixture builds a small but structurally complete MOBI/AZW3 file:
@@ -111,64 +106,11 @@ func TestBookDropIngest_MOBI_IntakeIngestApprove(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			ctx := context.Background()
-			d := repotest.New(t)
-
-			instanceRoot := t.TempDir()
-			libRoot := filepath.Join(instanceRoot, "library")
-			if err := os.MkdirAll(libRoot, 0o755); err != nil {
-				t.Fatalf("mkdir library root: %v", err)
-			}
-
-			libRepo := repo.NewLibraryRepo(d)
-			lib, err := libRepo.CreateLibrary(ctx, "Test Library", "test-library", libRoot, nil)
-			if err != nil {
-				t.Fatalf("CreateLibrary: %v", err)
-			}
-			// migrator.seedStorageBackends + wireLibraries: one kind=local
-			// backend per distinct path, wired onto the library — the shape a
-			// real boot leaves, mirrored here rather than assumed.
-			backend, err := repo.NewStorageBackendRepo(d).Create(ctx, "local",
-				map[string]any{"root": libRoot})
-			if err != nil {
-				t.Fatalf("Create backend: %v", err)
-			}
-			if _, err := d.SQL.ExecContext(ctx,
-				`UPDATE libraries SET backend_id = $1, root = path WHERE id = $2`,
-				backend.ID, lib.ID,
-			); err != nil {
-				t.Fatalf("wire library to backend: %v", err)
-			}
-
-			fs, err := local.New("/")
-			if err != nil {
-				t.Fatalf("local.New: %v", err)
-			}
-			resolver := &storage.MapResolver{
-				Default:  fs,
-				Backends: map[string]storage.Storage{backend.ID: fs},
-			}
-
-			staging := t.TempDir()
-			path := filepath.Join(staging, c.file)
-			if err := os.WriteFile(path, mobiFixture("Dune", "Frank Herbert", c.fileVersion), 0o644); err != nil {
-				t.Fatalf("write staged %s: %v", c.file, err)
-			}
-
-			bdropRepo := repo.NewBookDropRepo(d)
-			bookRepo := repo.NewBookRepo(d)
-			fileRepo := repo.NewFileRepo(d)
-
-			svc := service.NewBookDropService(bdropRepo, libRepo, bookRepo, nil, nil, fileRepo, &jobs.Deferred{}).
-				WithLibraryStore(service.NewLibraryStore(service.LibraryStoreDeps{
-					Libs:      libRepo,
-					Resolver:  resolver,
-					NewPlacer: service.DefaultPlacerBuilder(resolver),
-					Files:     fileRepo,
-				})).
-				WithBookDropPath(staging)
+			p := newBookDropPipeline(t)
+			path := p.stage(t, c.file, mobiFixture("Dune", "Frank Herbert", c.fileVersion))
 
 			// --- intake: the watcher's path -----------------------------------
-			item, created, err := svc.Intake(ctx, path)
+			item, created, err := p.svc.Intake(ctx, path)
 			if err != nil {
 				t.Fatalf("Intake: %v", err)
 			}
@@ -183,13 +125,13 @@ func TestBookDropIngest_MOBI_IntakeIngestApprove(t *testing.T) {
 			// Before #311 this failed the item with fileproc.NoProcessorError;
 			// this is the call that would have produced that refusal.
 			if err := BookDropIngest(ctx, jobs.BookDropIngestArgs{ItemID: item.ID}, BookDropDeps{
-				Svc:      svc,
-				Resolver: resolver,
+				Svc:      p.svc,
+				Resolver: p.resolver,
 			}); err != nil {
 				t.Fatalf("BookDropIngest: %v", err)
 			}
 
-			ingested, err := svc.Get(ctx, item.ID)
+			ingested, err := p.svc.Get(ctx, item.ID)
 			if err != nil {
 				t.Fatalf("Get after ingest: %v", err)
 			}
@@ -210,7 +152,7 @@ func TestBookDropIngest_MOBI_IntakeIngestApprove(t *testing.T) {
 			}
 
 			// --- approve: placement + the books row ---------------------------
-			book, err := svc.Approve(ctx, item.ID, lib.ID)
+			book, err := p.svc.Approve(ctx, item.ID, p.lib.ID)
 			if err != nil {
 				t.Fatalf("Approve: %v", err)
 			}
@@ -231,11 +173,11 @@ func TestBookDropIngest_MOBI_IntakeIngestApprove(t *testing.T) {
 			if book.Path != wantLocation {
 				t.Errorf("book.Path = %q, want %q", book.Path, wantLocation)
 			}
-			if _, err := os.Stat(filepath.Join(libRoot, wantLocation)); err != nil {
+			if _, err := os.Stat(filepath.Join(p.libRoot, wantLocation)); err != nil {
 				t.Errorf("approved bytes are not inside the library: %v", err)
 			}
 
-			final, err := svc.Get(ctx, item.ID)
+			final, err := p.svc.Get(ctx, item.ID)
 			if err != nil {
 				t.Fatalf("Get after approve: %v", err)
 			}
@@ -252,57 +194,13 @@ func TestBookDropIngest_MOBI_IntakeIngestApprove(t *testing.T) {
 // records the file does not contain.
 func TestBookDropIngest_MOBI_MalformedFailsTheItem(t *testing.T) {
 	ctx := context.Background()
-	d := repotest.New(t)
-
-	instanceRoot := t.TempDir()
-	libRoot := filepath.Join(instanceRoot, "library")
-	if err := os.MkdirAll(libRoot, 0o755); err != nil {
-		t.Fatalf("mkdir library root: %v", err)
-	}
-
-	libRepo := repo.NewLibraryRepo(d)
-	lib, err := libRepo.CreateLibrary(ctx, "Test Library", "test-library", libRoot, nil)
-	if err != nil {
-		t.Fatalf("CreateLibrary: %v", err)
-	}
-	backend, err := repo.NewStorageBackendRepo(d).Create(ctx, "local", map[string]any{"root": libRoot})
-	if err != nil {
-		t.Fatalf("Create backend: %v", err)
-	}
-	if _, err := d.SQL.ExecContext(ctx,
-		`UPDATE libraries SET backend_id = $1, root = path WHERE id = $2`, backend.ID, lib.ID); err != nil {
-		t.Fatalf("wire library to backend: %v", err)
-	}
-
-	fs, err := local.New("/")
-	if err != nil {
-		t.Fatalf("local.New: %v", err)
-	}
-	resolver := &storage.MapResolver{
-		Default:  fs,
-		Backends: map[string]storage.Storage{backend.ID: fs},
-	}
+	p := newBookDropPipeline(t)
 
 	raw := mobiFixture("Dune", "Frank Herbert", 6)
 	binary.BigEndian.PutUint16(raw[76:], 60000) // a record count the file cannot hold
+	path := p.stage(t, "broken.mobi", raw)
 
-	staging := t.TempDir()
-	path := filepath.Join(staging, "broken.mobi")
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
-		t.Fatalf("write staged mobi: %v", err)
-	}
-
-	svc := service.NewBookDropService(repo.NewBookDropRepo(d), libRepo, repo.NewBookRepo(d), nil, nil,
-		repo.NewFileRepo(d), &jobs.Deferred{}).
-		WithLibraryStore(service.NewLibraryStore(service.LibraryStoreDeps{
-			Libs:      libRepo,
-			Resolver:  resolver,
-			NewPlacer: service.DefaultPlacerBuilder(resolver),
-			Files:     repo.NewFileRepo(d),
-		})).
-		WithBookDropPath(staging)
-
-	item, _, err := svc.Intake(ctx, path)
+	item, _, err := p.svc.Intake(ctx, path)
 	if err != nil {
 		t.Fatalf("Intake: %v", err)
 	}
@@ -310,11 +208,11 @@ func TestBookDropIngest_MOBI_MalformedFailsTheItem(t *testing.T) {
 	// The worker call must return — with or without an error — rather than
 	// panic; the item's own state is where the failure is recorded.
 	_ = BookDropIngest(ctx, jobs.BookDropIngestArgs{ItemID: item.ID}, BookDropDeps{
-		Svc:      svc,
-		Resolver: resolver,
+		Svc:      p.svc,
+		Resolver: p.resolver,
 	})
 
-	failed, err := svc.Get(ctx, item.ID)
+	failed, err := p.svc.Get(ctx, item.ID)
 	if err != nil {
 		t.Fatalf("Get after ingest: %v", err)
 	}

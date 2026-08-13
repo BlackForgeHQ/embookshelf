@@ -7,8 +7,9 @@ package task
 // real fileproc.Dispatch + ExtractBook pass — the thing that used to
 // answer "no processor for CBZ yet" for both extensions before this issue
 // wired one), and Approve (placement + the books row). A real Postgres
-// schema and a real local storage backend throughout, the same harness
-// the MOBI and FB2 pipeline tests use.
+// schema and a real local storage backend throughout, via
+// bookDropPipeline (bookdrop_pipeline_test.go) — the same harness the
+// MOBI and FB2 pipeline tests use.
 //
 // The archives come from internal/fileproc/testdata rather than from a
 // copy here: they are the fixtures that package's unit tests are written
@@ -26,11 +27,6 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/repo/repotest"
-	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/storage"
-	"github.com/blackforge/embookshelf/internal/storage/local"
 )
 
 const (
@@ -38,88 +34,6 @@ const (
 	comicFixtureCB7          = "../fileproc/testdata/comic.cb7"
 	comicFixtureEncryptedCB7 = "../fileproc/testdata/comic-encrypted.cb7"
 )
-
-// comicPipeline is one library, one local backend wired to it the way a
-// real boot leaves things, and a BookDrop service pointed at a staging
-// directory.
-type comicPipeline struct {
-	svc      *service.BookDropService
-	resolver *storage.MapResolver
-	lib      model.Library
-	libRoot  string
-	staging  string
-}
-
-func newComicPipeline(t *testing.T) comicPipeline {
-	t.Helper()
-	ctx := context.Background()
-	d := repotest.New(t)
-
-	libRoot := filepath.Join(t.TempDir(), "library")
-	if err := os.MkdirAll(libRoot, 0o755); err != nil {
-		t.Fatalf("mkdir library root: %v", err)
-	}
-
-	libRepo := repo.NewLibraryRepo(d)
-	lib, err := libRepo.CreateLibrary(ctx, "Test Library", "test-library", libRoot, nil)
-	if err != nil {
-		t.Fatalf("CreateLibrary: %v", err)
-	}
-	// migrator.seedStorageBackends + wireLibraries: one kind=local backend
-	// per distinct path, wired onto the library.
-	backend, err := repo.NewStorageBackendRepo(d).Create(ctx, "local", map[string]any{"root": libRoot})
-	if err != nil {
-		t.Fatalf("Create backend: %v", err)
-	}
-	if _, err := d.SQL.ExecContext(ctx,
-		`UPDATE libraries SET backend_id = $1, root = path WHERE id = $2`, backend.ID, lib.ID,
-	); err != nil {
-		t.Fatalf("wire library to backend: %v", err)
-	}
-
-	fs, err := local.New("/")
-	if err != nil {
-		t.Fatalf("local.New: %v", err)
-	}
-	resolver := &storage.MapResolver{
-		Default:  fs,
-		Backends: map[string]storage.Storage{backend.ID: fs},
-	}
-
-	fileRepo := repo.NewFileRepo(d)
-	staging := t.TempDir()
-	svc := service.NewBookDropService(repo.NewBookDropRepo(d), libRepo, repo.NewBookRepo(d),
-		nil, nil, fileRepo, &jobs.Deferred{}).
-		WithLibraryStore(service.NewLibraryStore(service.LibraryStoreDeps{
-			Libs:      libRepo,
-			Resolver:  resolver,
-			NewPlacer: service.DefaultPlacerBuilder(resolver),
-			Files:     fileRepo,
-		})).
-		WithBookDropPath(staging)
-
-	return comicPipeline{svc: svc, resolver: resolver, lib: lib, libRoot: libRoot, staging: staging}
-}
-
-// stage copies fixture bytes into the drop directory under name and
-// returns the staged path, the way a watcher would find them.
-func (p comicPipeline) stage(t *testing.T, name string, raw []byte) string {
-	t.Helper()
-	path := filepath.Join(p.staging, name)
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
-		t.Fatalf("write staged %s: %v", name, err)
-	}
-	return path
-}
-
-func readComicFixture(t *testing.T, path string) []byte {
-	t.Helper()
-	b, err := os.ReadFile(filepath.FromSlash(path))
-	if err != nil {
-		t.Fatalf("read fixture: %v", err)
-	}
-	return b
-}
 
 func TestBookDropIngest_Comic_IntakeIngestApprove(t *testing.T) {
 	cases := []struct {
@@ -133,8 +47,8 @@ func TestBookDropIngest_Comic_IntakeIngestApprove(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			ctx := context.Background()
-			p := newComicPipeline(t)
-			path := p.stage(t, c.file, readComicFixture(t, c.fixture))
+			p := newBookDropPipeline(t)
+			path := p.stage(t, c.file, readFixtureFile(t, c.fixture))
 
 			// --- intake: the watcher's path -------------------------------
 			item, created, err := p.svc.Intake(ctx, path)
@@ -219,7 +133,7 @@ func TestBookDropIngest_Comic_IntakeIngestApprove(t *testing.T) {
 // password-protected file is a good file we will not open and a truncated
 // one is a bad file to replace.
 func TestBookDropIngest_Comic_UnreadableArchivesFailTheItem(t *testing.T) {
-	truncated := readComicFixture(t, comicFixtureCBR)
+	truncated := readFixtureFile(t, comicFixtureCBR)
 	truncated = truncated[:len(truncated)/2]
 
 	cases := []struct {
@@ -231,7 +145,7 @@ func TestBookDropIngest_Comic_UnreadableArchivesFailTheItem(t *testing.T) {
 		{
 			name:     "password-protected cb7",
 			file:     "locked.cb7",
-			raw:      readComicFixture(t, comicFixtureEncryptedCB7),
+			raw:      readFixtureFile(t, comicFixtureEncryptedCB7),
 			wantWord: "password",
 		},
 		{
@@ -246,7 +160,7 @@ func TestBookDropIngest_Comic_UnreadableArchivesFailTheItem(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			ctx := context.Background()
-			p := newComicPipeline(t)
+			p := newBookDropPipeline(t)
 			path := p.stage(t, c.file, c.raw)
 
 			item, _, err := p.svc.Intake(ctx, path)
