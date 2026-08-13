@@ -38,6 +38,10 @@ func (h *Handler) ComicPagesIndex(c *gin.Context, s bookScope) {
 
 	pages, err := fileproc.CBZPages(src)
 	if err != nil {
+		if errors.Is(err, fileproc.ErrComicNotZIP) {
+			writeError(c, http.StatusUnsupportedMediaType, err.Error())
+			return
+		}
 		writeServerError(c, "list comic pages", err)
 		return
 	}
@@ -82,6 +86,13 @@ func (h *Handler) ComicPage(c *gin.Context, s bookScope) {
 		// clean error before any body bytes were written.
 		if c.Writer.Written() {
 			writeServerError(c, "stream comic page", err)
+			return
+		}
+		// A RAR- or 7z-packed comic is on the shelf and readable as a
+		// download (#310) but has no page to serve: that is the format's
+		// answer, not a missing page.
+		if errors.Is(err, fileproc.ErrComicNotZIP) {
+			writeError(c, http.StatusUnsupportedMediaType, err.Error())
 			return
 		}
 		writeError(c, http.StatusNotFound, err.Error())

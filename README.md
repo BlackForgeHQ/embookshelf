@@ -508,8 +508,10 @@ encrypts the LLM and text-to-speech keys you paste into the panels.
 See [docs/prd.md § 11 — Planned](docs/prd.md) for the full greenfield
 backlog. Near-term candidates:
 
-- **CBR + AZW3/MOBI/FB2 ingest** — CBZ + audio shipped; CBR needs a
-  rar decoder, the rest need format parsers.
+- **CBR/CB7 comic reading** — every admitted format now ingests
+  (metadata + cover), but the comic page endpoints read ZIP only, so a
+  RAR- or 7z-packed comic lands on the shelf and downloads rather than
+  opening in the reader.
 - **Per-library permissions** — the user model is currently binary
   (admin / user); a shared instance with mixed audiences needs
   finer-grained library ACLs.
