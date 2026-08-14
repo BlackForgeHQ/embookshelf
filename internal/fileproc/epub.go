@@ -110,24 +110,38 @@ func (EPUBProcessor) Extract(ctx context.Context, src storage.Source) (Metadata,
 
 	// Cover extraction is best-effort: a malformed or missing cover never
 	// fails the whole extraction.
-	if href, mime := findCover(pkg); href != "" {
-		if bytes, mt, err := readCover(zr, opfPath, href, mime); err == nil {
-			m.HasCover = true
-			m.CoverBytes = bytes
-			m.CoverMime = mt
+	//
+	// The manifest's media-type is read to find the cover but never to
+	// describe it. It is a string the EPUB's author chose, and the cover
+	// route serves it back as a Content-Type — an <item
+	// properties="cover-image" media-type="text/html"> pointing at a
+	// document was stored XSS (#330). The type comes from the bytes, and
+	// bytes that are not a recognized image leave the book cover-less.
+	if href := findCover(pkg); href != "" {
+		if b, err := readCover(zr, opfPath, href); err == nil {
+			if mime := SniffImageMime(b); mime != "" {
+				m.HasCover = true
+				m.CoverBytes = b
+				m.CoverMime = mime
+			}
 		}
 	}
 
 	return m, nil
 }
 
-// findCover returns the href (relative to the OPF) and declared MIME type of
-// the cover image. Either may be empty.
-func findCover(pkg opfPackage) (href, mime string) {
+// findCover returns the href (relative to the OPF) of the cover image, or
+// "" when the package declares none.
+//
+// The manifest's media-type is a selector here, not an answer: the EPUB 2
+// branch uses it to pick which of several manifest items the <meta
+// name="cover"> id refers to. Neither branch returns it, because the
+// caller types the cover from its bytes.
+func findCover(pkg opfPackage) (href string) {
 	// EPUB 3: item with properties="cover-image".
 	for _, it := range pkg.Manifest.Items {
 		if strings.Contains(it.Properties, "cover-image") {
-			return it.Href, it.MediaType
+			return it.Href
 		}
 	}
 	// EPUB 2: <meta name="cover" content="<id>"/> pointing at a manifest item.
@@ -141,45 +155,19 @@ func findCover(pkg opfPackage) (href, mime string) {
 	if coverID != "" {
 		for _, it := range pkg.Manifest.Items {
 			if it.ID == coverID && strings.HasPrefix(it.MediaType, "image/") {
-				return it.Href, it.MediaType
+				return it.Href
 			}
 		}
 	}
-	return "", ""
+	return ""
 }
 
 // readCover resolves href against the OPF's directory and reads the image
-// bytes out of the archive. MIME type falls back to an extension guess if
-// the manifest didn't declare one.
-func readCover(zr *zip.Reader, opfPath, href, declaredMime string) ([]byte, string, error) {
+// bytes out of the archive.
+func readCover(zr *zip.Reader, opfPath, href string) ([]byte, error) {
 	opfDir := path.Dir(opfPath)
 	entry := path.Clean(path.Join(opfDir, href))
-	bytes, err := readZipFile(zr, entry)
-	if err != nil {
-		return nil, "", err
-	}
-	mime := strings.TrimSpace(declaredMime)
-	if mime == "" {
-		mime = mimeFromExt(path.Ext(entry))
-	}
-	return bytes, mime, nil
-}
-
-// mimeFromExt covers the image formats EPUBs actually ship with.
-func mimeFromExt(ext string) string {
-	switch strings.ToLower(ext) {
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".png":
-		return "image/png"
-	case ".gif":
-		return "image/gif"
-	case ".webp":
-		return "image/webp"
-	case ".svg":
-		return "image/svg+xml"
-	}
-	return "application/octet-stream"
+	return readZipFile(zr, entry)
 }
 
 func rootfilePath(zr *zip.Reader) (string, error) {

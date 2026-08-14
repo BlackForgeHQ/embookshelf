@@ -3,6 +3,7 @@
 package fileproc
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -48,6 +49,15 @@ type comicEntry struct {
 	data []byte
 }
 
+// comicPage is a page body: a real PNG header with a label glued on, so
+// an assertion can still say which page won while the bytes remain
+// something the pipeline's cover sniff will accept as an image (#330).
+// A page whose body was just the label used to reach the database as a
+// cover typed from its filename.
+func comicPage(label string) []byte {
+	return append(append([]byte{}, fakePNG...), label...)
+}
+
 // comicFixtureEntries is the comic every container fixture holds, so "the
 // same comic packed three ways produces the same row" is a comparison of
 // like with like. Matches what testdata/comic.cb7 and testdata/comic.cbr
@@ -60,8 +70,8 @@ func comicFixtureEntries() []comicEntry {
 	return []comicEntry{
 		{name: "ComicInfo.xml", data: []byte(comicInfoFixtureXML)},
 		{name: "notes.txt", data: []byte("skip")},
-		{name: "page10.png", data: []byte("ten")},
-		{name: "page2.png", data: []byte("page-two")},
+		{name: "page10.png", data: comicPage("ten")},
+		{name: "page2.png", data: comicPage("page-two")},
 	}
 }
 
@@ -72,10 +82,10 @@ func comicFixtureEntries() []comicEntry {
 func comicCoverFixtureEntries() []comicEntry {
 	return []comicEntry{
 		{name: "ComicInfo.xml", data: []byte(comicInfoFixtureXML)},
-		{name: "page10.png", data: []byte("ten")},
-		{name: "page1.png", data: []byte("one")},
-		{name: "cover.png", data: []byte("the-cover")},
-		{name: "page2.png", data: []byte("two")},
+		{name: "page10.png", data: comicPage("ten")},
+		{name: "page1.png", data: comicPage("one")},
+		{name: "cover.png", data: comicPage("the-cover")},
+		{name: "page2.png", data: comicPage("two")},
 	}
 }
 
@@ -94,19 +104,19 @@ func TestComicContainersAgree(t *testing.T) {
 		name      string
 		entries   []comicEntry
 		cb7       string
-		wantCover string
+		wantCover []byte
 	}{
 		{
 			name:      "cover by natural sort",
 			entries:   comicFixtureEntries(),
 			cb7:       cb7Fixture,
-			wantCover: "page-two",
+			wantCover: comicPage("page-two"),
 		},
 		{
 			name:      "top-level cover.png wins",
 			entries:   comicCoverFixtureEntries(),
 			cb7:       cb7CoverFixture,
-			wantCover: "the-cover",
+			wantCover: comicPage("the-cover"),
 		},
 	}
 	for _, c := range cases {
@@ -135,7 +145,7 @@ func TestComicContainersAgree(t *testing.T) {
 			// The ZIP answer is the one the other two are held to, so it is
 			// checked against the expectation first — three containers
 			// agreeing on the wrong page would otherwise pass.
-			if string(fromCBZ.CoverBytes) != c.wantCover {
+			if !bytes.Equal(fromCBZ.CoverBytes, c.wantCover) {
 				t.Fatalf("cbz cover = %q, want %q", fromCBZ.CoverBytes, c.wantCover)
 			}
 			assertComicInfoFixture(t, fromCBZ)

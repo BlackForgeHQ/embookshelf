@@ -3,6 +3,7 @@
 package fileproc
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -18,9 +19,13 @@ import (
 // install sevenzip`) from four files:
 //
 //	ComicInfo.xml  the comicInfoFixtureXML constant, verbatim
-//	notes.txt      "skip"        — a non-image, to be ignored
-//	page10.png     "ten"         — sorts after page2 naturally, before it lexically
-//	page2.png      "page-two"    — therefore the cover
+//	notes.txt      "skip"              — a non-image, to be ignored
+//	page10.png     comicPage("ten")    — sorts after page2 naturally, before it lexically
+//	page2.png      comicPage("page-two") — therefore the cover
+//
+// The pages are comicPage bodies — a real PNG header plus a label — not
+// the bare labels they used to be: the ingest pipeline types a cover by
+// sniffing it (#330), so a page that is not an image is not a cover.
 //
 //	7zz a -mx=9 comic.cb7 ComicInfo.xml notes.txt page10.png page2.png
 //	7zz a -mx=9 -psecret comic-encrypted.cb7 <same four>
@@ -61,7 +66,7 @@ func TestCB7Extract_CoverAndComicInfo(t *testing.T) {
 	if !meta.HasCover {
 		t.Fatal("expected HasCover")
 	}
-	if string(meta.CoverBytes) != "page-two" {
+	if !bytes.Equal(meta.CoverBytes, comicPage("page-two")) {
 		t.Errorf("CoverBytes = %q, want page2.png's bytes — natural sort failed", meta.CoverBytes)
 	}
 	if meta.CoverMime != "image/png" {

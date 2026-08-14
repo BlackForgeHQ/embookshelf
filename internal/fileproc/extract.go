@@ -99,6 +99,15 @@ func ExtractBook(
 		}
 	}
 
+	// The cover's content type is re-derived from its own bytes here,
+	// after every processor and the Sidecar overlay have had their say
+	// and before anything is persisted. Whatever a processor put in
+	// CoverMime came from the file's author — a manifest media-type, an
+	// ID3 MIME field, an archive entry's extension — and the cover
+	// routes serve that string back as the response Content-Type. This
+	// is the seam where that stops being true (#330).
+	meta = normalizeCover(meta)
+
 	out := ExtractResult{
 		Format:      format,
 		Title:       meta.Title,

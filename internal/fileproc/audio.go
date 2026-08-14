@@ -98,14 +98,18 @@ func applyAudioTags(m *Metadata, t tag.Metadata) {
 		m.Description = c
 	}
 
+	// pic.MIMEType is a string the tagger wrote into the APIC frame, and
+	// the cover route serves it back as the response Content-Type — a
+	// frame declaring "text/html" over a document was stored XSS (#330).
+	// Sniffing the picture data instead also retires the hardcoded
+	// "image/jpeg" default for frames with no declared type: those are
+	// almost always JPEG, and now they are typed as such only when they
+	// actually are.
 	if pic := t.Picture(); pic != nil && len(pic.Data) > 0 {
-		m.HasCover = true
-		m.CoverBytes = pic.Data
-		switch strings.ToLower(pic.MIMEType) {
-		case "":
-			m.CoverMime = "image/jpeg" // common default for ID3 APIC w/o MIME
-		default:
-			m.CoverMime = pic.MIMEType
+		if mime := SniffImageMime(pic.Data); mime != "" {
+			m.HasCover = true
+			m.CoverBytes = pic.Data
+			m.CoverMime = mime
 		}
 	}
 }

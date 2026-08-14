@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -113,10 +114,7 @@ func (h *Handler) BookDropCover(c *gin.Context, _ string) {
 	}
 	defer func() { _ = f.Close() }()
 
-	mime := item.CoverMime
-	if mime == "" {
-		mime = "application/octet-stream"
-	}
+	mime := coverContentType(item.CoverMime)
 	c.Header("Content-Type", mime)
 	c.Header("Cache-Control", "private, max-age=3600")
 	if _, err := io.Copy(c.Writer, f); err != nil {
@@ -219,12 +217,15 @@ func (h *Handler) BookDropPutCover(c *gin.Context, _ string) {
 // sniffCoverMime returns ("image/png", true) for a PNG magic header,
 // ("image/jpeg", true) for a JPEG SOI, and ("", false) for anything else.
 // Used by BookDropPutCover to gate user-supplied bytes.
+//
+// Narrower than fileproc.SniffImageMime on purpose — the only producer is
+// the BookDrop preview's page-1 raster, which is a canvas export — but it
+// asks the same sniffer rather than carrying a second magic-byte table
+// that could drift from it (#330).
 func sniffCoverMime(b []byte) (string, bool) {
-	switch {
-	case len(b) >= 4 && b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47:
-		return "image/png", true
-	case len(b) >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF:
-		return "image/jpeg", true
+	switch mime := fileproc.SniffImageMime(b); mime {
+	case "image/png", "image/jpeg":
+		return mime, true
 	}
 	return "", false
 }
