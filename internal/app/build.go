@@ -74,6 +74,7 @@ type wiring struct {
 	cfg     config.Config
 	hub     *sse.Hub
 	covers  *coverstore.Store
+	comics  *fileproc.PageCache
 	staging task.Staging
 	// enq is the one late-bound enqueuer for the whole composition root,
 	// created before any of its consumers. bdropSvc, guideRunner and
@@ -151,11 +152,20 @@ func buildWiring(p prepared, cfg config.Config) (wiring, error) {
 	if err != nil {
 		return wiring{}, fmt.Errorf("cover store: %w", err)
 	}
+	// The comic reader's page cache (#329) is the third on-disk area for
+	// derived bytes, and derives its location the same way for the same
+	// reason. Disposable: wiped on first use, capped on admission, no
+	// sweeper.
+	comicPagesDir, err := cfg.DataPath.ComicPages()
+	if err != nil {
+		return wiring{}, fmt.Errorf("comic page cache: %w", err)
+	}
 	return wiring{
 		prepared: p,
 		cfg:      cfg,
 		hub:      sse.NewHub(),
 		covers:   coverstore.New(coversDir),
+		comics:   fileproc.NewPageCache(comicPagesDir, fileproc.DefaultPageCacheBytes),
 		staging:  task.NewStaging(cfg.DataPath),
 		enq:      &jobs.Deferred{},
 	}, nil
@@ -591,6 +601,7 @@ func buildHTTP(w wiring, r repos, s services, q queue.Client, version, commit st
 			OIDC:          s.oidc,
 			Identities:    r.identity,
 			Covers:        w.covers,
+			Comics:        w.comics,
 			Queue:         q,
 			FwdAuthHolder: s.fwdAuthHolder,
 			FwdAuth:       s.fwdAuth,

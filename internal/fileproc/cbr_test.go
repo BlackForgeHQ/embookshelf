@@ -151,41 +151,74 @@ func rarEntriesFrom(entries []comicEntry) []rarEntry {
 	return out
 }
 
-// TestComicFixture_Generate writes testdata/comic.cbr, the RAR half of
-// the pair the BookDrop end-to-end test in internal/task feeds through
-// the pipeline. Run:
+// solidRAREntriesFrom is rarEntriesFrom with every file continuing the
+// previous one's dictionary — the shape a page reader cannot walk by
+// skipping, and therefore the one the reader's page cache exists for
+// (#329).
+func solidRAREntriesFrom(entries []comicEntry) []rarEntry {
+	out := rarEntriesFrom(entries)
+	for i := range out {
+		out[i].solid = true
+	}
+	return out
+}
+
+// comicFixtures are the RAR archives committed under testdata/ for the
+// packages that cannot call this writer: the BookDrop end-to-end test in
+// internal/task feeds the plain one through the pipeline, and the comic
+// reader's handler tests page the solid one — which is where "a solid
+// archive is decoded once, not once per page" has to be true over real
+// HTTP rather than only in this package.
+var comicFixtures = []struct {
+	path  string
+	build func() []byte
+}{
+	{path: cbrFixture, build: func() []byte { return rarArchive(rarEntriesFrom(comicFixtureEntries())...) }},
+	{path: cbrSolidFixture, build: func() []byte {
+		return rarArchive(solidRAREntriesFrom(comicFixtureEntries())...)
+	}},
+}
+
+// TestComicFixture_Generate writes them. Run:
 //
 //	EMBED_FIXTURE_UPDATE=1 go test ./internal/fileproc/ -run TestComicFixture_Generate
 //
 // Skipped by default — every test in this file builds its archive in
-// memory, and the committed copy exists only because a package two
+// memory, and the committed copies exist only because a package two
 // directories away cannot call this writer.
 func TestComicFixture_Generate(t *testing.T) {
 	if os.Getenv("EMBED_FIXTURE_UPDATE") == "" {
-		t.Skip("set EMBED_FIXTURE_UPDATE=1 to refresh testdata/comic.cbr")
+		t.Skip("set EMBED_FIXTURE_UPDATE=1 to refresh the committed .cbr fixtures")
 	}
 	if err := os.MkdirAll("testdata", 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(cbrFixture, rarArchive(rarEntriesFrom(comicFixtureEntries())...), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
+	for _, f := range comicFixtures {
+		if err := os.WriteFile(f.path, f.build(), 0o644); err != nil {
+			t.Fatalf("write %s: %v", f.path, err)
+		}
 	}
 }
 
-const cbrFixture = "testdata/comic.cbr"
+const (
+	cbrFixture      = "testdata/comic.cbr"
+	cbrSolidFixture = "testdata/comic-solid.cbr"
+)
 
-// The committed fixture is the archive this writer produces — if the two
-// drift, the pipeline test two packages away is exercising bytes nothing
+// The committed fixtures are the archives this writer produces — if the
+// two drift, the tests in other packages are exercising bytes nothing
 // here has ever looked at.
-func TestCBRFixtureMatchesTheWriter(t *testing.T) {
-	want := rarArchive(rarEntriesFrom(comicFixtureEntries())...)
-	got, err := os.ReadFile(cbrFixture)
-	if err != nil {
-		t.Fatalf("read fixture: %v — regenerate it with EMBED_FIXTURE_UPDATE=1", err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Errorf("testdata/comic.cbr is %d bytes, the writer produces %d — regenerate it with EMBED_FIXTURE_UPDATE=1",
-			len(got), len(want))
+func TestCBRFixturesMatchTheWriter(t *testing.T) {
+	for _, f := range comicFixtures {
+		want := f.build()
+		got, err := os.ReadFile(f.path)
+		if err != nil {
+			t.Fatalf("read %s: %v — regenerate it with EMBED_FIXTURE_UPDATE=1", f.path, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("%s is %d bytes, the writer produces %d — regenerate it with EMBED_FIXTURE_UPDATE=1",
+				f.path, len(got), len(want))
+		}
 	}
 }
 

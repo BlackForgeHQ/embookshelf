@@ -198,50 +198,56 @@ func TestCBZExtract_NoImagesFails(t *testing.T) {
 	}
 }
 
-// The page reader tells "these bytes are not a ZIP" from "this ZIP will
-// not open", because the handler turns the first into a 415 saying pages
-// come from .cbz only and the second into a 500. Since #310 both are
-// reachable from a book stamped CBZ: the comic aliases ingest now, so a
-// RAR on the shelf opens the comic reader, and a damaged .cbz must not be
-// told it is a RAR.
-func TestCBZPagesClassifiesNonZIPFromDamagedZIP(t *testing.T) {
+// openPagesFor drives the paging seam over bytes already in hand. The
+// opener hands back a source the set is free to close, so a caller can
+// open the same archive twice — which is what a second request does.
+func openPagesFor(cache *PageCache, key string, raw []byte) (*ComicPageSet, error) {
+	return OpenComicPages(context.Background(), cache, key, func() (storage.Source, error) {
+		return memSourceFromBytes(raw), nil
+	})
+}
+
+// The page reader tells "these bytes are not a comic archive" from "this
+// archive will not open", because the handler turns the first into a 415
+// naming the containers it can page and the second into a 500. Since
+// #310 every one of these is reachable from a book stamped CBZ: the
+// comic aliases ingest, so a RAR on the shelf opens the comic reader —
+// and since #329 it is *paged*, so a damaged RAR must get a damaged
+// archive's answer rather than the one that says to convert the file.
+func TestComicPagingTellsAnUnknownContainerFromADamagedOne(t *testing.T) {
 	good := incompressibleCBZ(t, []string{"01.png"}, 64)
 
 	cases := []struct {
-		name     string
-		raw      []byte
-		wantKind bool // true: reads as ErrComicNotZIP
+		name        string
+		raw         []byte
+		wantUnknown bool // true: reads as ErrComicContainer
 	}{
-		{name: "rar bytes", raw: append([]byte("Rar!\x1a\x07\x01\x00"), bytes.Repeat([]byte{0}, 64)...), wantKind: true},
-		{name: "7z bytes", raw: append([]byte("7z\xbc\xaf\x27\x1c"), bytes.Repeat([]byte{0}, 64)...), wantKind: true},
-		{name: "empty", raw: nil, wantKind: true},
-		{name: "truncated zip", raw: good[:len(good)/2], wantKind: false},
+		// Nothing declares itself, so nothing can page it.
+		{name: "not an archive at all", raw: bytes.Repeat([]byte("garbage!"), 8), wantUnknown: true},
+		{name: "empty", raw: nil, wantUnknown: true},
+		// Each container's own magic followed by nothing usable: a
+		// damaged archive of a container we page, which keeps the
+		// decoder's error rather than being told it is not a comic.
+		{name: "damaged rar", raw: append([]byte("Rar!\x1a\x07\x01\x00"), bytes.Repeat([]byte{0}, 64)...), wantUnknown: false},
+		{name: "damaged 7z", raw: append([]byte("7z\xbc\xaf\x27\x1c"), bytes.Repeat([]byte{0}, 64)...), wantUnknown: false},
+		{name: "truncated zip", raw: good[:len(good)/2], wantUnknown: false},
 		// The other magic a ZIP can start with — an archive with no
 		// entries — truncated so the end-of-central-directory record it
 		// heads is incomplete. Still a ZIP by its signature, so it takes
-		// the damaged-archive route, which is the second half of
-		// hasZipMagic that the cases above leave untouched.
-		{name: "truncated empty-archive record", raw: append([]byte("PK\x05\x06"), bytes.Repeat([]byte{0}, 8)...), wantKind: false},
+		// the damaged-archive route.
+		{name: "truncated empty-archive record", raw: append([]byte("PK\x05\x06"), bytes.Repeat([]byte{0}, 8)...), wantUnknown: false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			src := memSourceFromBytes(c.raw)
-			defer func() { _ = src.Close() }()
-
-			_, err := CBZPages(src)
+			cache := NewPageCache(t.TempDir(), 1<<20)
+			set, err := openPagesFor(cache, "k", c.raw)
 			if err == nil {
+				_ = set.Close()
 				t.Fatal("expected an error")
 			}
-			if got := errors.Is(err, ErrComicNotZIP); got != c.wantKind {
-				t.Errorf("errors.Is(err, ErrComicNotZIP) = %v, want %v (err = %v)", got, c.wantKind, err)
-			}
-
-			_, err = CBZPage(src, 0, io.Discard)
-			if err == nil {
-				t.Fatal("expected an error from the page read too")
-			}
-			if got := errors.Is(err, ErrComicNotZIP); got != c.wantKind {
-				t.Errorf("page: errors.Is(err, ErrComicNotZIP) = %v, want %v (err = %v)", got, c.wantKind, err)
+			if got := errors.Is(err, ErrComicContainer); got != c.wantUnknown {
+				t.Errorf("errors.Is(err, ErrComicContainer) = %v, want %v (err = %v)",
+					got, c.wantUnknown, err)
 			}
 		})
 	}
@@ -264,28 +270,40 @@ func TestCBZPagesAndPageOverAnObjectStore(t *testing.T) {
 	store.objects[key] = incompressibleCBZ(t, []string{"03.png", "01.png", "02.png"}, 128<<10)
 	archiveSize := int64(len(store.objects[key]))
 
-	src, err := store.Open(context.Background(), key)
-	if err != nil {
-		t.Fatalf("open object: %v", err)
-	}
-	defer func() { _ = src.Close() }()
+	// A cache is wired and must stay untouched: ZIP does not join the
+	// containers that need extracting, because expanding an archive that
+	// already answers a numbered page with a range read would cost more
+	// than it saves.
+	cacheRoot := t.TempDir()
+	cache := NewPageCache(cacheRoot, 1<<20)
 
-	pages, err := CBZPages(src)
+	set, err := OpenComicPages(context.Background(), cache, "k", func() (storage.Source, error) {
+		return store.Open(context.Background(), key)
+	})
 	if err != nil {
-		t.Fatalf("CBZPages: %v", err)
+		t.Fatalf("OpenComicPages: %v", err)
 	}
-	if len(pages) != 3 {
-		t.Fatalf("len(pages) = %d, want 3", len(pages))
+	defer func() { _ = set.Close() }()
+
+	if set.Len() != 3 {
+		t.Fatalf("Len() = %d, want 3", set.Len())
 	}
-	if pages[0] != "01.png" || pages[1] != "02.png" || pages[2] != "03.png" {
-		t.Errorf("page order wrong: %v", pages)
+	if set.TypedFromBytes() {
+		t.Error("the ZIP arm claims to type pages from their bytes")
+	}
+	if got := set.names; got[0] != "01.png" || got[1] != "02.png" || got[2] != "03.png" {
+		t.Errorf("page order wrong: %v", got)
 	}
 
+	rc, mime, err := set.Page(1)
+	if err != nil {
+		t.Fatalf("Page(1): %v", err)
+	}
 	var buf bytes.Buffer
-	mime, err := CBZPage(src, 1, &buf)
-	if err != nil {
-		t.Fatalf("CBZPage(1): %v", err)
+	if _, err := io.Copy(&buf, rc); err != nil {
+		t.Fatalf("copy page: %v", err)
 	}
+	_ = rc.Close()
 	if mime != "image/png" {
 		t.Errorf("mime = %q, want image/png", mime)
 	}
@@ -293,8 +311,12 @@ func TestCBZPagesAndPageOverAnObjectStore(t *testing.T) {
 		t.Errorf("page 1 body is not the bytes of 02.png (%d bytes read)", len(got))
 	}
 
-	if _, err := CBZPage(src, 99, io.Discard); err == nil {
+	if _, _, err := set.Page(99); err == nil {
 		t.Error("expected an error for an out-of-range page")
+	}
+
+	if ents, rerr := os.ReadDir(cacheRoot); rerr == nil && len(ents) != 0 {
+		t.Errorf("the ZIP arm wrote %d entries into the page cache", len(ents))
 	}
 
 	// One page out of three, plus two directory reads — a third of the
@@ -399,28 +421,30 @@ func TestCBZPagesAndPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("local.New: %v", err)
 	}
-	src, err := fs.Open(context.Background(), "test.cbz")
+	set, err := OpenComicPages(context.Background(), nil, "", func() (storage.Source, error) {
+		return fs.Open(context.Background(), "test.cbz")
+	})
 	if err != nil {
-		t.Fatalf("open cbz: %v", err)
+		t.Fatalf("OpenComicPages: %v", err)
 	}
-	defer func() { _ = src.Close() }()
+	defer func() { _ = set.Close() }()
 
-	pages, err := CBZPages(src)
-	if err != nil {
-		t.Fatalf("CBZPages: %v", err)
+	if set.Len() != 3 {
+		t.Fatalf("Len() = %d, want 3", set.Len())
 	}
-	if len(pages) != 3 {
-		t.Fatalf("len(pages) = %d, want 3", len(pages))
-	}
-	if pages[0] != "01.png" || pages[2] != "03.png" {
-		t.Errorf("page order wrong: %v", pages)
+	if got := set.names; got[0] != "01.png" || got[2] != "03.png" {
+		t.Errorf("page order wrong: %v", got)
 	}
 
+	rc, mime, err := set.Page(1)
+	if err != nil {
+		t.Fatalf("Page(1): %v", err)
+	}
 	var buf bytes.Buffer
-	mime, err := CBZPage(src, 1, &buf)
-	if err != nil {
-		t.Fatalf("CBZPage(1): %v", err)
+	if _, err := io.Copy(&buf, rc); err != nil {
+		t.Fatalf("copy page: %v", err)
 	}
+	_ = rc.Close()
 	if mime != "image/png" {
 		t.Errorf("mime = %q", mime)
 	}
@@ -428,7 +452,7 @@ func TestCBZPagesAndPage(t *testing.T) {
 		t.Errorf("page 1 body = %q, want 'two'", buf.String())
 	}
 
-	if _, err := CBZPage(src, 99, io.Discard); err == nil {
+	if _, _, err := set.Page(99); err == nil {
 		t.Error("expected error for out-of-range page")
 	}
 }

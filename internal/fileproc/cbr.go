@@ -180,6 +180,72 @@ func (c *rarComic) read(ctx context.Context, want map[string]int64) (map[string]
 	return out, nil
 }
 
+// stream hands every wanted entry's bytes to the sink in one walk, for
+// the page cache to write out (#329).
+//
+// Sibling of read rather than a use of it: read buffers each entry whole
+// to hand back a []byte, which is right for one cover and wrong for
+// every page of a comic. The walk is the same walk — one pass, the solid
+// drain in the same place and for the same reason — because it is the
+// archive's shape that dictates it, not what the caller wants at the
+// end.
+//
+// Extracting *every* page means the drain almost never runs: consecutive
+// wanted entries continue each other's dictionary as they are read, so
+// only the non-image entries between them (a ComicInfo.xml, a thumbs
+// directory) are stepped over.
+func (c *rarComic) stream(ctx context.Context, want map[string]bool, sink pageSink) error {
+	r, err := rarReader(c.src)
+	if err != nil {
+		return cbrError("open cbr", err)
+	}
+
+	done := make(map[string]bool, len(want))
+	remaining := len(want)
+	var drained int64
+
+	for remaining > 0 {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("cbr: %w", err)
+		}
+
+		h, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return cbrError("read cbr entries", err)
+		}
+
+		if want[h.Name] && !done[h.Name] {
+			if err := sink(h.Name, r); err != nil {
+				return err
+			}
+			done[h.Name] = true
+			remaining--
+		}
+
+		// Same rule as read: in a solid archive an entry stepped over
+		// still has to be decoded, and so does the tail of one the sink
+		// stopped short of, so this sits after the sink on every path.
+		if c.solid && remaining > 0 {
+			n, derr := io.Copy(io.Discard, io.LimitReader(r, cbrMaxSolidDrainBytes-drained))
+			drained += n
+			if derr != nil {
+				slog.Warn("comic entry would not decode; stopping the solid walk",
+					"container", "cbr", "entry", h.Name, "err", derr, "missing", remaining)
+				break
+			}
+			if drained >= cbrMaxSolidDrainBytes {
+				slog.Warn("solid cbr exceeded the decode budget; giving up on the remaining pages",
+					"drainedBytes", drained, "capBytes", cbrMaxSolidDrainBytes, "missing", remaining)
+				break
+			}
+		}
+	}
+	return nil
+}
+
 func rarReader(src storage.Source) (*rardecode.Reader, error) {
 	// A SectionReader, not the Source itself: rardecode wants an
 	// io.Reader it can also seek forward on to skip packed data, and a

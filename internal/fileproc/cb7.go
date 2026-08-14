@@ -29,28 +29,79 @@ import (
 type CB7Processor struct{}
 
 func (CB7Processor) Extract(ctx context.Context, src storage.Source) (Metadata, error) {
-	// The whole Source as a ReaderAt, which is what 7z wants: the header
-	// is at the tail, so opening costs a read of the tail rather than of
-	// the object, and each entry costs its own block.
-	zr, err := sevenzip.NewReader(src, src.Size())
+	a, err := newSevenzipComic(src)
 	if err != nil {
-		return Metadata{}, cb7Error("open cb7", err)
+		return Metadata{}, err
 	}
-	// A rejection, not a bound: sevenzip has already parsed the header and
-	// materialised this slice by the time we look, so the allocation the
-	// cap is about has happened. What it buys is that the pass above does
-	// not go on to sort and scan a list that size — and that an archive
-	// this shape is refused with a sentence rather than worked on.
-	// Bounding the parse itself is sevenzip's business, one layer down.
-	if len(zr.File) > comicMaxEntries {
-		return Metadata{}, fmt.Errorf("cb7: archive holds more than %d entries", comicMaxEntries)
-	}
-	return extractComic(ctx, "cb7", &sevenzipComic{zr: zr})
+	return extractComic(ctx, "cb7", a)
 }
 
 // sevenzipComic is the 7z end of comicArchive.
 type sevenzipComic struct {
 	zr *sevenzip.Reader
+}
+
+// newSevenzipComic opens a 7z comic. The whole Source as a ReaderAt,
+// which is what 7z wants: the header is at the tail, so opening costs a
+// read of the tail rather than of the object.
+//
+// The entry-count check is a rejection, not a bound: sevenzip has
+// already parsed the header and materialised this slice by the time we
+// look, so the allocation the cap is about has happened. What it buys is
+// that the passes above do not go on to sort and scan a list that size —
+// and that an archive this shape is refused with a sentence rather than
+// worked on. Bounding the parse itself is sevenzip's business, one layer
+// down.
+func newSevenzipComic(src storage.Source) (*sevenzipComic, error) {
+	zr, err := sevenzip.NewReader(src, src.Size())
+	if err != nil {
+		return nil, cb7Error("open cb7", err)
+	}
+	if len(zr.File) > comicMaxEntries {
+		return nil, fmt.Errorf("cb7: archive holds more than %d entries", comicMaxEntries)
+	}
+	return &sevenzipComic{zr: zr}, nil
+}
+
+// stream hands every wanted entry's bytes to the sink, walking the
+// archive in its own order (#329).
+//
+// Archive order, not page order, and that is the whole trick: a comic's
+// pages usually sit in one solid folder, and sevenzip's folder-reader
+// pool hands a request for offset N the open decoder that stopped just
+// below it. Walked forwards, the entire extraction is one decode of the
+// folder; walked in natural sort order — or one entry per request, with
+// a fresh Reader each time, which is what paging without a cache would
+// do — it is one decode per page.
+func (c *sevenzipComic) stream(ctx context.Context, want map[string]bool, sink pageSink) error {
+	done := make(map[string]bool, len(want))
+	for _, f := range c.zr.File {
+		name := cb7Name(f)
+		if !want[name] || done[name] {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("cb7: %w", err)
+		}
+		rc, err := f.Open()
+		if err != nil {
+			if cb7Encrypted(err) {
+				return fmt.Errorf("cb7: %w", errEncryptedArchive)
+			}
+			// One page that will not open is one page missing, not a
+			// failed comic: the sink is not called and the slot stays
+			// empty, so the pages around it still answer.
+			slog.Warn("comic entry would not open, dropped", "container", "cb7", "entry", name, "err", err)
+			continue
+		}
+		serr := sink(name, rc)
+		_ = rc.Close()
+		if serr != nil {
+			return serr
+		}
+		done[name] = true
+	}
+	return nil
 }
 
 func (c *sevenzipComic) entries() []string {

@@ -391,6 +391,33 @@ func (h *LibraryHandle) BookFile(ctx context.Context, bookID, fileID string) (mo
 	return model.File{}, false
 }
 
+// PrimaryFile returns the book's own files row — the one whose format
+// matches books.format, the same choice PrimaryContentHash makes.
+//
+// found separates "this book has no files rows at all" — a legacy row
+// carrying only books.path, which callers degrade for — from an error,
+// which is a lookup that broke and must not be read as an absent file.
+// PrimaryContentHash folds both into nil because a hash is advisory
+// there; a caller deciding where to read bytes from cannot.
+func (h *LibraryHandle) PrimaryFile(ctx context.Context, book model.Book) (model.File, bool, error) {
+	if h.files == nil {
+		return model.File{}, false, nil
+	}
+	list, err := h.files.ListByBook(ctx, book.ID)
+	if err != nil {
+		return model.File{}, false, err
+	}
+	for _, f := range list {
+		if f.Format == book.Format {
+			return f, true, nil
+		}
+	}
+	if len(list) > 0 {
+		return list[0], true, nil
+	}
+	return model.File{}, false, nil
+}
+
 // PrimaryContentHash is the hash of the book's own file — the one whose
 // format matches books.format, i.e. the thing a narration is made from
 // rather than the narration itself.
