@@ -686,16 +686,20 @@ func TestComicPagesFollowAReplacedFile(t *testing.T) {
 // is what the reader is told about it.
 func TestComicErrorsMapToStatuses(t *testing.T) {
 	cases := []struct {
-		name string
-		err  error
-		want int
-		says string
+		name  string
+		err   error
+		want  int
+		says  string
+		retry string
 	}{
 		{
 			name: "page cache full",
 			err:  fmt.Errorf("open: %w", fileproc.ErrPageCacheFull),
 			want: http.StatusServiceUnavailable,
 			says: "try again",
+			// The reader has no other way to guess how long to wait, and
+			// hammering the endpoint is what keeps the cache full.
+			retry: "5",
 		},
 		{
 			name: "unknown container",
@@ -733,6 +737,9 @@ func TestComicErrorsMapToStatuses(t *testing.T) {
 			}
 			if tc.says != "" && !strings.Contains(rec.Body.String(), tc.says) {
 				t.Errorf("body = %s, want it to mention %q", rec.Body.String(), tc.says)
+			}
+			if got := rec.Header().Get("Retry-After"); got != tc.retry {
+				t.Errorf("Retry-After = %q, want %q", got, tc.retry)
 			}
 		})
 	}

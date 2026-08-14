@@ -9,9 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // fillerOfSize returns a page filler that writes one file of n bytes and
@@ -121,10 +123,12 @@ func TestPageCacheEvictsLeastRecentlyUsedPastTheCap(t *testing.T) {
 }
 
 // Eviction must not delete pages out from under a request that is
-// streaming them. A referenced entry is passed over — the cap is a
-// budget the cache spends down when it can, not an invariant it enforces
-// against a response in flight — and becomes evictable the moment its
-// last reader lets go.
+// streaming them. A referenced entry is passed over and becomes
+// evictable the moment its last reader lets go. (The cap itself is an
+// invariant, not a target: when passing over the referenced entries
+// leaves too little room, the admission is refused rather than allowed
+// through — see
+// TestPageCacheRefusesAComicItCannotFitRatherThanExceedingTheCap.)
 func TestPageCacheDoesNotEvictAnEntryStillBeingRead(t *testing.T) {
 	c := NewPageCache(t.TempDir(), 250)
 	c.archiveBudget = 100
@@ -543,5 +547,162 @@ func TestPageCacheArchiveBudgetIsWellUnderTheCap(t *testing.T) {
 	c := NewPageCache(t.TempDir(), DefaultPageCacheBytes)
 	if c.archiveBudget >= c.maxBytes/2 || c.archiveBudget <= 0 {
 		t.Errorf("archiveBudget = %d against a %d byte cap", c.archiveBudget, c.maxBytes)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Review fixes, round 2
+// ---------------------------------------------------------------------------
+
+// A panic out of the extractor must land as an ordinary failed fill.
+//
+// The decoders are third-party and the input is a file from the
+// internet, so this is a reachable state, not a theoretical one — and
+// the damage was not to the request that hit it. A skipped settle leaves
+// the entry in the index with its budget charged and its done channel
+// never closed: the key is poisoned forever, every waiter on it blocks
+// until its own context expires, and four such files take the whole cap
+// so that every RAR and 7z comic answers 503 until a restart.
+func TestPageCachePanickingExtractorDoesNotPoisonTheKey(t *testing.T) {
+	root := t.TempDir()
+	c := NewPageCache(root, 1<<20)
+
+	entered := make(chan struct{})
+	boom := func(_ context.Context, dir string) ([]cachedPage, int64, error) {
+		close(entered)
+		// Half a comic on disk first, so the staged directory has
+		// something in it to leak.
+		if err := os.WriteFile(filepath.Join(dir, "0"), []byte("half"), 0o600); err != nil {
+			t.Error(err)
+		}
+		panic("rardecode: index out of range [7] with length 4")
+	}
+
+	// A waiter attaches while the doomed fill is in flight, because the
+	// waiter hanging forever was the worst of it.
+	waiter := make(chan error, 1)
+	go func() {
+		<-entered
+		_, err := c.acquire(context.Background(), "k", fillerOfSize(t, 8, &atomic.Int64{}))
+		waiter <- err
+	}()
+
+	if _, err := c.acquire(context.Background(), "k", boom); err == nil {
+		t.Fatal("a panicking extractor returned no error")
+	} else if !strings.Contains(err.Error(), "panicked") {
+		t.Errorf("err = %v, want it to name the panic", err)
+	}
+
+	select {
+	case err := <-waiter:
+		// Either it waited on the doomed fill and got its error, or it
+		// arrived after and filled successfully. Both are fine; hanging
+		// is not.
+		if err != nil && !strings.Contains(err.Error(), "panicked") {
+			t.Errorf("waiter err = %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a waiter on the panicked key never woke — its done channel was not closed")
+	}
+
+	// The books balance and the key is usable again.
+	c.mu.Lock()
+	_, stillIndexed := c.entries["k"]
+	c.mu.Unlock()
+	if stillIndexed {
+		// The waiter above may have legitimately re-filled it; only a
+		// leaked *reservation* is the bug, checked below.
+		t.Log("key re-filled by the waiter, as expected")
+	}
+
+	var calls atomic.Int64
+	e, err := c.acquire(context.Background(), "k", fillerOfSize(t, 8, &calls))
+	if err != nil {
+		t.Fatalf("the key was not re-attemptable: %v", err)
+	}
+	c.release(e)
+
+	c.mu.Lock()
+	bytes, entries := c.bytes, len(c.entries)
+	c.mu.Unlock()
+	if entries != 1 || bytes != 8 {
+		t.Errorf("cache holds %d entries / %d bytes, want the one 8-byte entry — "+
+			"the panicked fill leaked its reservation", entries, bytes)
+	}
+
+	// And nothing of the panicked fill is left on disk.
+	ents, rerr := os.ReadDir(root)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if len(ents) != 1 {
+		t.Errorf("root holds %d entries, want only the re-filled one — a staged directory leaked", len(ents))
+	}
+}
+
+// A panicking extractor with no cache to poison still answers rather
+// than unwinding into the caller.
+func TestPageCachePanickingExtractorOnAnUnkeyedFill(t *testing.T) {
+	root := t.TempDir()
+	c := NewPageCache(root, 1<<20)
+
+	_, err := c.acquire(context.Background(), "", func(_ context.Context, dir string) ([]cachedPage, int64, error) {
+		if werr := os.WriteFile(filepath.Join(dir, "0"), []byte("half"), 0o600); werr != nil {
+			t.Error(werr)
+		}
+		panic("sevenzip: malformed header")
+	})
+	if err == nil || !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("err = %v, want the panic as an error", err)
+	}
+	ents, rerr := os.ReadDir(root)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if len(ents) != 0 {
+		t.Errorf("root holds %d entries after a panicked private fill, want none", len(ents))
+	}
+}
+
+// A refusal must cost nobody anything. The first version evicted its way
+// down the list and only then discovered there was not enough room, so a
+// comic that could not be admitted took several warm ones with it and
+// still failed.
+func TestPageCacheRefusedAdmissionLeavesTheVictimsAlone(t *testing.T) {
+	c := NewPageCache(t.TempDir(), 300)
+	c.archiveBudget = 200
+	var calls atomic.Int64
+
+	// A small, evictable entry...
+	small, err := c.acquire(context.Background(), "small", fillerOfSize(t, 50, &calls))
+	if err != nil {
+		t.Fatalf("acquire small: %v", err)
+	}
+	smallDir := small.dir
+	c.release(small)
+
+	// ...and a big one nobody can evict, because it is being read.
+	big, err := c.acquire(context.Background(), "big", fillerOfSize(t, 200, &calls))
+	if err != nil {
+		t.Fatalf("acquire big: %v", err)
+	}
+	defer c.release(big)
+
+	before := c.bytes
+
+	// 250 held, 200 wanted, 300 cap: evicting everything evictable (the
+	// 50-byte entry) still leaves it 150 short.
+	if _, err := c.acquire(context.Background(), "third", fillerOfSize(t, 200, &calls)); !errors.Is(err, ErrPageCacheFull) {
+		t.Fatalf("third comic err = %v, want ErrPageCacheFull", err)
+	}
+
+	if _, ok := c.entries["small"]; !ok {
+		t.Error("a refused admission evicted an entry on its way to failing")
+	}
+	if _, serr := os.Stat(filepath.Join(smallDir, "0")); serr != nil {
+		t.Errorf("the collateral entry's pages were deleted: %v", serr)
+	}
+	if c.bytes != before {
+		t.Errorf("cache accounts %d bytes after a refusal, was %d", c.bytes, before)
 	}
 }

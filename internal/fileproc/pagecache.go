@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -252,35 +253,79 @@ func (c *PageCache) acquire(ctx context.Context, key string, fill pageExtractor)
 	c.mu.Unlock()
 	removeAll(trash)
 
-	fillCtx, endFill := fillContext(ctx)
-	dir, pages, size, err := c.publish(fillCtx, key, fill)
-	endFill()
+	if err := c.fillEntry(ctx, key, e, fill); err != nil {
+		c.release(e)
+		return nil, err
+	}
+	return e, nil
+}
 
+// fillEntry runs the extraction for a freshly inserted entry and settles
+// the cache's books afterwards, whatever happens.
+//
+// The settle is deferred rather than merely written after the fill, and
+// that is the difference between a bad file and a poisoned cache. From
+// before the extraction starts, the entry is in the index, holding a
+// reservation, with waiters parked on its done channel. A panic out of
+// one of the third-party decoders — handed, let us remember, a file from
+// the internet — would skip a sequential settle and leave all three:
+// the key unusable forever, its budget charged until restart, and every
+// waiter blocked until its own context expired. Four such files would
+// take the whole cap and every RAR and 7z comic on the shelf would
+// answer 503.
+//
+// The panic becomes an error rather than being re-raised. It is the same
+// class of input ingest already promises not to crash on, the caller has
+// a perfectly good way to say "this comic would not open", and the
+// failed-fill path already does exactly the right thing with it: nothing
+// is remembered, so a file that panics is retried rather than
+// blacklisted, and the stack is in the log either way.
+func (c *PageCache) fillEntry(
+	ctx context.Context, key string, e *cacheEntry, fill pageExtractor,
+) (err error) {
+	var (
+		dir   string
+		pages []cachedPage
+		size  int64
+	)
+	defer func() {
+		if r := recover(); r != nil {
+			err = extractPanic(r)
+			dir, pages, size = "", nil, 0
+		}
+		c.settle(e, dir, pages, size, err)
+	}()
+
+	fillCtx, endFill := fillContext(ctx)
+	defer endFill()
+	dir, pages, size, err = c.publish(fillCtx, key, fill)
+	return err
+}
+
+// settle turns an entry's reservation into its real size, wakes its
+// waiters and either keeps it or drops it. Runs exactly once per filled
+// entry, on every path out of fillEntry.
+func (c *PageCache) settle(e *cacheEntry, dir string, pages []cachedPage, size int64, err error) {
 	c.mu.Lock()
 	e.dir, e.pages, e.err = dir, pages, err
 	// The reservation stops being an estimate. It can only shrink — the
 	// extractor is bounded by the same budget — so nothing needs
-	// evicting to make the result fit; the guard below is for a filler
+	// evicting to make the result fit; the trim below is for a filler
 	// that ignored its budget, which is a test, not a container.
 	c.bytes += size - e.size
 	e.size = size
 	close(e.done)
+	var trash []string
 	if err != nil {
 		// Not remembered as a failure: the archive may have been
 		// mid-upload, or the disk briefly full, and the next reader
 		// deserves a fresh attempt rather than a cached refusal.
 		trash = c.dropLocked(e)
 	} else {
-		trash, _ = c.admitLocked(0)
+		trash = c.trimLocked()
 	}
 	c.mu.Unlock()
 	removeAll(trash)
-
-	if err != nil {
-		c.release(e)
-		return nil, err
-	}
-	return e, nil
 }
 
 // pageExtractTimeout bounds a fill that has been cut loose from its
@@ -345,9 +390,19 @@ func (c *PageCache) publish(
 	if err != nil {
 		return "", nil, 0, fmt.Errorf("comic page cache: stage: %w", err)
 	}
+	// Cleared once the directory is published and is no longer ours to
+	// remove. Deferred rather than written on each failing path so that
+	// a panic out of the extractor unwinds through it too, which is the
+	// only reason a half-written comic could otherwise be left behind.
+	staged := tmp
+	defer func() {
+		if staged != "" {
+			_ = os.RemoveAll(staged)
+		}
+	}()
+
 	pages, size, err = fill(ctx, tmp)
 	if err != nil {
-		_ = os.RemoveAll(tmp)
 		return "", nil, 0, err
 	}
 	final := filepath.Join(c.root, pageCacheDirName(key))
@@ -356,38 +411,63 @@ func (c *PageCache) publish(
 	// Clearing it is cheaper than failing the read over it.
 	_ = os.RemoveAll(final)
 	if err := os.Rename(tmp, final); err != nil {
-		_ = os.RemoveAll(tmp)
 		return "", nil, 0, fmt.Errorf("comic page cache: publish: %w", err)
 	}
+	staged = ""
 	return final, pages, size, nil
 }
 
 // fillPrivate extracts into a directory nobody else can find, for the
 // unkeyed case. It never enters the index, so it is neither shared nor
-// counted against the cap — its whole lifetime is one caller's.
-func (c *PageCache) fillPrivate(ctx context.Context, fill pageExtractor) (*cacheEntry, error) {
+// counted against the cap — its whole lifetime is one caller's, which is
+// also why this one keeps the caller's context: there is nobody else
+// depending on the work to cancel it out from under.
+func (c *PageCache) fillPrivate(ctx context.Context, fill pageExtractor) (e *cacheEntry, err error) {
 	root := ""
 	if c != nil {
 		c.mu.Lock()
-		err := c.initLocked()
+		ierr := c.initLocked()
 		root = c.root
 		c.mu.Unlock()
-		if err != nil {
-			return nil, err
+		if ierr != nil {
+			return nil, ierr
 		}
 	}
 	dir, err := os.MkdirTemp(root, ".private-")
 	if err != nil {
 		return nil, fmt.Errorf("comic page cache: stage: %w", err)
 	}
-	pages, size, err := fill(ctx, dir)
-	if err != nil {
-		_ = os.RemoveAll(dir)
-		return nil, err
+	// Cleared once the entry owns the directory. Deferred so a panic out
+	// of the extractor unwinds through it, the same reason publish does
+	// it that way.
+	staged := dir
+	defer func() {
+		if r := recover(); r != nil {
+			e, err = nil, extractPanic(r)
+		}
+		if staged != "" {
+			_ = os.RemoveAll(staged)
+		}
+	}()
+
+	pages, size, ferr := fill(ctx, dir)
+	if ferr != nil {
+		return nil, ferr
 	}
-	e := &cacheEntry{done: make(chan struct{}), dir: dir, pages: pages, size: size, refs: 1, unkeyed: true}
+	staged = ""
+	e = &cacheEntry{done: make(chan struct{}), dir: dir, pages: pages, size: size, refs: 1, unkeyed: true}
 	close(e.done)
 	return e, nil
+}
+
+// extractPanic converts a recovered panic into the error a failed
+// extraction returns, and puts the stack somewhere it can be read.
+//
+// One spelling for the two places a decoder is invoked. Converting
+// rather than re-raising is deliberate — see fillEntry.
+func extractPanic(r any) error {
+	slog.Error("comic page extraction panicked", "panic", r, "stack", string(debug.Stack()))
+	return fmt.Errorf("comic page extraction panicked: %v", r)
 }
 
 // release drops one reference.
@@ -419,37 +499,72 @@ func (c *PageCache) release(e *cacheEntry) {
 // admitLocked makes room for want more bytes, returning the directories
 // to unlink and whether the room was found.
 //
-// Entries with readers are never victims — a page cannot be deleted out
-// from under a response that is streaming it — so "no room" is a real
-// state and not a warning to sail past: with every entry referenced, the
-// only way to honour the cap is to refuse. want is 0 when the caller is
-// simply settling up after a fill, which cannot fail.
+// All or nothing. Victims are chosen before any of them is touched,
+// because a refusal must leave the cache exactly as it found it: the
+// earlier version evicted its way down the list and *then* discovered
+// there was not enough, so a comic that could not be admitted cost
+// several other readers their warm ones on the way out — the worst of
+// both answers.
+//
+// Entries with readers are never victims: a page cannot be deleted out
+// from under a response streaming it. So "no room" is a real state and
+// not a warning to sail past — with every entry referenced, the only way
+// to honour the cap is to refuse.
 func (c *PageCache) admitLocked(want int64) ([]string, bool) {
-	var trash []string
-	for c.bytes+want > c.maxBytes {
-		victim := c.oldestEvictableLocked()
-		if victim == nil {
-			if want > 0 {
-				slog.Warn("comic page cache full, refusing a comic",
-					"bytes", c.bytes, "wantBytes", want,
-					"capBytes", c.maxBytes, "entries", len(c.entries))
-			}
-			return trash, false
-		}
-		trash = append(trash, c.dropLocked(victim)...)
+	need := c.bytes + want - c.maxBytes
+	if need <= 0 {
+		return nil, true
 	}
-	return trash, true
+	victims, freed := c.evictableLocked(need)
+	if freed < need {
+		slog.Warn("comic page cache full, refusing a comic",
+			"bytes", c.bytes, "wantBytes", want, "freeableBytes", freed,
+			"capBytes", c.maxBytes, "entries", len(c.entries))
+		return nil, false
+	}
+	return c.dropAllLocked(victims), true
 }
 
-func (c *PageCache) oldestEvictableLocked() *cacheEntry {
-	for el := c.lru.Back(); el != nil; el = el.Prev() {
+// trimLocked brings the cache back under its cap as far as it can,
+// returning the directories to unlink.
+//
+// Best effort, unlike admitLocked: settling up after a fill is not an
+// admission that can be declined, so freeing some of the overage beats
+// freeing none of it.
+func (c *PageCache) trimLocked() []string {
+	need := c.bytes - c.maxBytes
+	if need <= 0 {
+		return nil
+	}
+	victims, _ := c.evictableLocked(need)
+	return c.dropAllLocked(victims)
+}
+
+// evictableLocked picks entries from the least recently used end until
+// their sizes cover need, or there are no more to pick. It mutates
+// nothing, so a caller that does not like the answer can walk away.
+func (c *PageCache) evictableLocked(need int64) ([]*cacheEntry, int64) {
+	var (
+		victims []*cacheEntry
+		freed   int64
+	)
+	for el := c.lru.Back(); el != nil && freed < need; el = el.Prev() {
 		e, _ := el.Value.(*cacheEntry)
 		if e == nil || e.refs > 0 {
 			continue
 		}
-		return e
+		victims = append(victims, e)
+		freed += e.size
 	}
-	return nil
+	return victims, freed
+}
+
+func (c *PageCache) dropAllLocked(victims []*cacheEntry) []string {
+	trash := make([]string, 0, len(victims))
+	for _, v := range victims {
+		trash = append(trash, c.dropLocked(v)...)
+	}
+	return trash
 }
 
 // dropLocked takes an entry out of the index and returns its directory

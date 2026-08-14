@@ -5,8 +5,10 @@ package fileproc
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -338,4 +340,122 @@ func TestComicPagingRefusesAComicOverOneArchivesBudget(t *testing.T) {
 	if _, ok := cache.entries["k"]; ok {
 		t.Error("the refused comic was left in the index")
 	}
+}
+
+// fakeComicWalker is a container that already has its entries in hand,
+// so a test can drive the extraction without a real archive.
+type fakeComicWalker struct {
+	names []string
+	data  map[string][]byte
+}
+
+func (f fakeComicWalker) entries() []string { return f.names }
+
+func (f fakeComicWalker) stream(_ context.Context, want map[string]bool, sink pageSink) error {
+	for _, n := range f.names {
+		if !want[n] {
+			continue
+		}
+		if err := sink(n, bytes.NewReader(f.data[n])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// The budget is a bound on what is on disk, not on what is discovered to
+// have been written. Checking it after each page let every in-flight
+// extraction overshoot by a whole page cap — four concurrent fills
+// putting an extra 128 MiB between them, against a cap that claimed
+// otherwise.
+//
+// Driven at the extraction directly, because that is the only level at
+// which the directory survives the failure and can be weighed.
+func TestExtractComicPagesNeverWritesPastTheBudget(t *testing.T) {
+	const budget = 300 << 10
+	page := func(label string) []byte {
+		return append(append([]byte{}, fakePNG...), pageFiller(label, 200<<10)...)
+	}
+	w := fakeComicWalker{
+		names: []string{"01.png", "02.png", "03.png"},
+		data: map[string][]byte{
+			"01.png": page("one"), "02.png": page("two"), "03.png": page("three"),
+		},
+	}
+
+	dir := t.TempDir()
+	_, _, err := extractComicPages(context.Background(), "cbr", w, dir, budget)
+	if err == nil {
+		t.Fatal("three pages of 200 KiB fitted a 300 KiB budget")
+	}
+	if !strings.Contains(err.Error(), "budget") {
+		t.Errorf("err = %v, want the budget error", err)
+	}
+
+	// The directory is the evidence: this is what was physically on disk
+	// at the moment the extraction gave up.
+	var onDisk int64
+	ents, rerr := os.ReadDir(dir)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	for _, e := range ents {
+		info, ierr := e.Info()
+		if ierr != nil {
+			t.Fatal(ierr)
+		}
+		onDisk += info.Size()
+	}
+	// One byte of slack: the copy reads one past its limit to tell a
+	// page landing exactly on the bound from one over it.
+	if onDisk > budget+1 {
+		t.Errorf("extraction left %d bytes on disk against a %d byte budget", onDisk, budget)
+	}
+}
+
+// The two bounds a page is written under answer differently, because
+// they mean different things: an oversized page is dropped and the comic
+// carries on, a spent budget ends the extraction.
+func TestWriteCachedPageTellsAnOversizedPageFromASpentBudget(t *testing.T) {
+	body := bytes.Repeat([]byte{0x7f}, 1024)
+
+	t.Run("over the page cap", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "p")
+		_, _, err := writeCachedPage(path, bytes.NewReader(body), 100, 1<<20)
+		if err == nil || errors.Is(err, errPageBudget) {
+			t.Fatalf("err = %v, want the page cap error", err)
+		}
+		if !strings.Contains(err.Error(), "100 byte cap") {
+			t.Errorf("err = %v, want it to name the page cap", err)
+		}
+		if _, serr := os.Stat(path); !errors.Is(serr, os.ErrNotExist) {
+			t.Error("a refused page was left on disk")
+		}
+	})
+
+	t.Run("over the remaining budget", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "p")
+		if _, _, err := writeCachedPage(path, bytes.NewReader(body), 1<<20, 100); !errors.Is(err, errPageBudget) {
+			t.Fatalf("err = %v, want errPageBudget", err)
+		}
+	})
+
+	t.Run("no budget left at all", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "p")
+		if _, _, err := writeCachedPage(path, bytes.NewReader(body), 1<<20, -5); !errors.Is(err, errPageBudget) {
+			t.Fatalf("err = %v, want errPageBudget", err)
+		}
+	})
+
+	t.Run("within both", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "p")
+		png := append(append([]byte{}, fakePNG...), body...)
+		n, mime, err := writeCachedPage(path, bytes.NewReader(png), 1<<20, 1<<20)
+		if err != nil {
+			t.Fatalf("writeCachedPage: %v", err)
+		}
+		if n != int64(len(png)) || mime != "image/png" {
+			t.Errorf("n = %d, mime = %q, want %d and image/png", n, mime, len(png))
+		}
+	})
 }

@@ -335,7 +335,15 @@ func extractComicPages(
 			return nil
 		}
 		file := strconv.Itoa(i)
-		n, mime, werr := writeCachedPage(filepath.Join(dir, file), r, comicMaxPageBytes)
+		// Two bounds, and the copy stops at the tighter one. Checking
+		// the budget *after* writing would let each in-flight extraction
+		// overshoot by a whole page — four concurrent fills putting an
+		// extra 128 MiB on disk between them, which is the cap not
+		// meaning what it says.
+		n, mime, werr := writeCachedPage(filepath.Join(dir, file), r, comicMaxPageBytes, budget-total)
+		if errors.Is(werr, errPageBudget) {
+			return fmt.Errorf("%s expands past the %d byte page cache budget", kind, budget)
+		}
 		if werr != nil {
 			pages[i].fail = werr.Error()
 			slog.Warn("comic page unreadable, dropped",
@@ -343,9 +351,6 @@ func extractComicPages(
 			return nil
 		}
 		total += n
-		if total > budget {
-			return fmt.Errorf("%s expands past the %d byte page cache budget", kind, budget)
-		}
 		pages[i].file, pages[i].mime, pages[i].size, pages[i].fail = file, mime, n, ""
 		return nil
 	})
@@ -361,13 +366,34 @@ func extractComicPages(
 	return pages, total, nil
 }
 
-// writeCachedPage copies one page to disk, refusing one that runs past
-// max, and types it from its own first bytes.
+// errPageBudget says a page was stopped because the comic had used up
+// its share of the cache, not because the page itself was too big. The
+// two are different answers: one page is dropped and the comic goes on,
+// a spent budget ends the extraction.
+var errPageBudget = errors.New("the comic's page cache budget is spent")
+
+// writeCachedPage copies one page to disk and types it from its own
+// first bytes, refusing one that runs past either bound it is given:
+// pageMax, which is what a single page may be, and budgetLeft, which is
+// what the whole comic has left.
 //
-// The cap is on the copy rather than on any declared size, because a
+// Both are on the copy rather than on any declared size, because a
 // declared size is a number the archive chose: this is what stands
-// between a decompression bomb and the data root.
-func writeCachedPage(path string, r io.Reader, max int64) (n int64, mime string, err error) {
+// between a decompression bomb and the data root. Stopping at the
+// tighter of the two is also what keeps the cache's cap physical rather
+// than notional — nothing is written that the budget has not already
+// been checked against.
+func writeCachedPage(
+	path string, r io.Reader, pageMax, budgetLeft int64,
+) (n int64, mime string, err error) {
+	max, spent := pageMax, false
+	if budgetLeft < max {
+		max, spent = budgetLeft, true
+	}
+	if max < 0 {
+		max = 0
+	}
+
 	f, err := os.Create(path)
 	if err != nil {
 		return 0, "", err
@@ -409,7 +435,10 @@ func writeCachedPage(path string, r io.Reader, max int64) (n int64, mime string,
 	}
 	n = int64(hn) + rest
 	if n > max {
-		return 0, "", fmt.Errorf("page expands past the %d byte cap", max)
+		if spent {
+			return 0, "", errPageBudget
+		}
+		return 0, "", fmt.Errorf("page expands past the %d byte cap", pageMax)
 	}
 	return n, mime, nil
 }

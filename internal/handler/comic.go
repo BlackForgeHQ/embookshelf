@@ -275,7 +275,10 @@ func writeComicError(c *gin.Context, op string, err error) {
 	case errors.Is(err, fileproc.ErrPageCacheFull):
 		// Nothing is wrong with the book or the server: every slot in
 		// the page cache is being read by somebody else right now. A
-		// retry, and the status that says so.
+		// retry, and the status that says so — plus how long to wait,
+		// since the reader has no other way to guess and hammering the
+		// endpoint is what keeps the cache full.
+		c.Header("Retry-After", "5")
 		writeError(c, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, service.ErrPathOutsideRoots):
 		writeError(c, http.StatusForbidden, err.Error())
