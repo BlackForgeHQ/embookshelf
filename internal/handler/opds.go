@@ -137,10 +137,7 @@ func (h *Handler) OPDSCover(c *gin.Context, s bookScope) {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	mime := book.CoverMime
-	if mime == "" {
-		mime = "application/octet-stream"
-	}
+	mime := coverContentType(book.CoverMime)
 
 	rc, err := h.covers.Open(book)
 	if err != nil {

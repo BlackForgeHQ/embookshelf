@@ -495,7 +495,7 @@ func mobiCover(src storage.Source, db *palmDB, h mobiHeader, exth exthRecords) (
 		// in imagesniff.go) is the only check standing between a cover
 		// pointer that is wrong (or hostile) and a text record served to
 		// the UI as an image.
-		if mime := sniffImageMime(b); mime != "" {
+		if mime := SniffImageMime(b); mime != "" {
 			return b, mime, true
 		}
 	}

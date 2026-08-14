@@ -27,6 +27,7 @@ func (h *Handler) Engine() *gin.Engine {
 	}
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
+	r.Use(noSniff())
 
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     h.cfg.AllowedOrigins,
@@ -297,6 +298,32 @@ func (h *Handler) Engine() *gin.Engine {
 	h.mountSPA(r)
 
 	return r
+}
+
+// noSniff sets X-Content-Type-Options on every response the engine
+// produces.
+//
+// The header exists here for the cover routes: a cover's Content-Type is
+// derived from bytes a book's author supplied, and while fileproc now
+// sniffs that type rather than believing the file (#330), a browser that
+// re-types the body for itself would make the sniff moot. Cover bytes
+// that begin with markup must not be renderable as a document no matter
+// what the response claims.
+//
+// Global rather than scoped to the cover routes because the failure mode
+// of nosniff is a response whose declared type is wrong, and nothing
+// this engine serves has a wrong one: the API answers JSON it encodes
+// itself, downloads and covers carry types this codebase chose, and the
+// embedded SPA is typed by net/http from the asset's extension. The
+// alternative — a header a future cover-serving route has to remember —
+// is the shape the vulnerability came in. The one claim here that could
+// break the shell, that the bundle's scripts and stylesheets are typed
+// correctly, is pinned in nosniff_test.go.
+func noSniff() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Next()
+	}
 }
 
 // mountSPA serves the compiled React bundle from the embedded filesystem.

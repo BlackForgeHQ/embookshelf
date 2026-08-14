@@ -142,13 +142,43 @@ func extractComic(ctx context.Context, kind string, a comicArchive) (Metadata, e
 		}
 	}
 
+	// The entry's extension picked which page is the cover; it does not
+	// get to say what that page is. An archive's entry names are chosen
+	// by whoever packed it, and the cover route serves the resulting type
+	// back as a Content-Type (#330), so the type comes from the bytes and
+	// a "page" that is not an image leaves the book cover-less — the same
+	// refusal epub.go, audio.go, fb2.go and mobi.go make at their own
+	// layer.
 	if b, ok := got[coverName]; ok {
-		m.HasCover = true
-		m.CoverBytes = b
-		m.CoverMime = mimeFromExt(path.Ext(coverName))
+		if mime := SniffImageMime(b); mime != "" {
+			m.HasCover = true
+			m.CoverBytes = b
+			m.CoverMime = mime
+		}
 	}
 
 	return m, nil
+}
+
+// mimeFromExt covers the image formats comic archives actually ship with.
+//
+// Extension-derived and therefore never a cover's persisted type — see
+// SniffImageMime. It survives as the content type for a comic *page*,
+// which is streamed straight out of the archive by CBZPage and never
+// buffered to sniff; the page filter admits only .jpg/.jpeg/.png/.webp/.gif,
+// so the answer is always one of the raster types.
+func mimeFromExt(ext string) string {
+	switch strings.ToLower(ext) {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	}
+	return "application/octet-stream"
 }
 
 func applyComicInfo(m *Metadata, info comicInfoXML) {

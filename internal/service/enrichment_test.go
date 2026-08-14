@@ -316,6 +316,12 @@ func TestApplyMatchPropagatesWriteFailure(t *testing.T) {
 // Cover intake — the security gates
 // ---------------------------------------------------------------------------
 
+// jpegBody is what an allow-listed host is supposed to return: bytes that
+// actually start with a JPEG SOI. The stored type is sniffed from them
+// (#330), so a stub that returns a label instead of an image is now a
+// stub for the rejection path, not the happy one.
+var jpegBody = []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F'}
+
 func TestImportCoverRejectsNonHTTPS(t *testing.T) {
 	t.Parallel()
 	svc, _, _ := newEnrichForTest(t)
@@ -352,7 +358,7 @@ func TestImportCoverRejectsHostOutsideAllowList(t *testing.T) {
 func TestImportCoverAcceptsSuffixAllowListedHost(t *testing.T) {
 	t.Parallel()
 	svc, books, covers := newEnrichForTest(t)
-	svc.WithHTTPClient(&stubHTTP{status: 200, ctype: "image/jpeg", body: []byte("jpegbytes")})
+	svc.WithHTTPClient(&stubHTTP{status: 200, ctype: "image/jpeg", body: jpegBody})
 
 	// ".gr-assets.com" is a suffix entry — subdomains must be admitted.
 	mime, err := svc.ImportCoverFromURL(context.Background(), "b1", "https://i.gr-assets.com/x.jpg")
@@ -362,7 +368,7 @@ func TestImportCoverAcceptsSuffixAllowListedHost(t *testing.T) {
 	if mime != "image/jpeg" {
 		t.Errorf("mime = %q, want image/jpeg", mime)
 	}
-	if string(covers.saved) != "jpegbytes" {
+	if !bytes.Equal(covers.saved, jpegBody) {
 		t.Errorf("cover bytes not stored: %q", covers.saved)
 	}
 	if books.coverMime != "image/jpeg" || len(books.coverHash) == 0 {
@@ -383,6 +389,29 @@ func TestImportCoverRejectsNonImageContentType(t *testing.T) {
 	}
 	if covers.saved != nil {
 		t.Error("nothing should be stored for a rejected content type")
+	}
+}
+
+// An allow-listed provider is trusted to be a cover source, not to be
+// honest: a response labelled image/jpeg whose body is a document must
+// not be stored, because the label it was given is what the cover route
+// would hand back to a browser (#330).
+func TestImportCoverRejectsImageLabelOverNonImageBytes(t *testing.T) {
+	t.Parallel()
+	svc, books, covers := newEnrichForTest(t)
+	svc.WithHTTPClient(&stubHTTP{
+		status: 200, ctype: "image/jpeg",
+		body: []byte("<html><script>alert(document.domain)</script></html>"),
+	})
+
+	if _, err := svc.ImportCoverFromURL(context.Background(), "b1", "https://books.google.com/x.jpg"); err == nil {
+		t.Fatal("bytes that are not an image must be refused whatever the header said")
+	}
+	if covers.saved != nil {
+		t.Errorf("nothing should be stored: %q", covers.saved)
+	}
+	if books.coverMime != "" {
+		t.Errorf("book row stamped with %q", books.coverMime)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/provider"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -846,8 +847,7 @@ func (s *EnrichmentService) ImportCoverFromURL(ctx context.Context, bookID, rawU
 		return "", errors.New("cover fetch non-200")
 	}
 
-	mime := resp.Header.Get("Content-Type")
-	if !strings.HasPrefix(mime, "image/") {
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "image/") {
 		return "", errors.New("not an image")
 	}
 
@@ -857,6 +857,16 @@ func (s *EnrichmentService) ImportCoverFromURL(ctx context.Context, bookID, rawU
 	}
 	if len(body) > maxCoverBytes {
 		return "", errors.New("cover too large")
+	}
+
+	// The type stored on the row and served back by the cover route comes
+	// from the bytes, not from the header the upstream sent: an
+	// allow-listed host is trusted to be a cover provider, not to be
+	// honest about what it just returned (#330). The header check above
+	// stays as an early-out on a plainly wrong response.
+	mime := fileproc.SniffImageMime(body)
+	if mime == "" {
+		return "", errors.New("not an image")
 	}
 
 	sum := sha256.Sum256(body)

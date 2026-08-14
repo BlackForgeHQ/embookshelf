@@ -242,7 +242,7 @@ func fb2ReadCover(binaries []fb2Binary, id string) (data []byte, mime string, ok
 		// Sniff the decoded bytes instead and use that; a declared type
 		// that doesn't match a recognized image format degrades to no
 		// cover rather than being served at all.
-		mime = sniffImageMime(decoded)
+		mime = SniffImageMime(decoded)
 		if mime == "" {
 			return nil, "", false
 		}

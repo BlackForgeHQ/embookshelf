@@ -250,8 +250,7 @@ func (EPUBEmbedder) Embed(ctx context.Context, src storage.Source, in EmbedInput
 	if in.CoverBytes != nil {
 		var pkg opfPackage
 		if err := xml.Unmarshal(opfBytes, &pkg); err == nil {
-			href, _ := findCover(pkg)
-			if href != "" {
+			if href := findCover(pkg); href != "" {
 				// findCover returns href relative to the OPF; resolve
 				// against the OPF's directory.
 				coverHref = path.Join(path.Dir(opfPath), href)
