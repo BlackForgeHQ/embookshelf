@@ -7,11 +7,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // The comic page cache: extract a comic's pages once, serve them many
@@ -60,6 +62,18 @@ const DefaultPageCacheBytes int64 = 1 << 30
 // the reader's numbering does not shift under it.
 const comicMaxPageBytes int64 = comicMaxCoverBytes
 
+// ErrPageCacheFull is the answer when a comic cannot be admitted without
+// pushing the cache past its cap and there is nothing evictable left —
+// every other entry is being read right now.
+//
+// A refusal rather than an overrun, because the alternative is worse
+// than a failed request: N readers each opening a different cold comic
+// would each be allowed their own archive budget, and the "cap" would
+// describe nothing. Transient by construction — the readers holding the
+// cache down finish — so it is a retry, and the handler says so with a
+// 503.
+var ErrPageCacheFull = errors.New("the comic page cache is full; try again shortly")
+
 // PageCache is the extract-once page store. The zero value is not
 // usable; NewPageCache builds one. A nil *PageCache is usable and means
 // "no sharing": every acquire extracts privately and throws the result
@@ -67,6 +81,12 @@ const comicMaxPageBytes int64 = comicMaxCoverBytes
 type PageCache struct {
 	root     string
 	maxBytes int64
+	// archiveBudget is the most one comic's extracted pages may occupy,
+	// and the amount reserved up front for a fill that has not finished
+	// yet. Well below maxBytes on purpose: it is what makes the cap hold
+	// under concurrency, because a reservation is what the next caller
+	// is admitted against.
+	archiveBudget int64
 
 	mu sync.Mutex
 	// ready is whether root has been created (and wiped, once).
@@ -78,8 +98,14 @@ type PageCache struct {
 	// lru orders entries most-recently-acquired first. Values are
 	// *cacheEntry.
 	lru *list.List
-	// bytes is the sum of the sizes of the entries in the index.
+	// bytes is the sum of the sizes of the entries in the index, counting
+	// a fill in flight at its reservation. Never above maxBytes: that is
+	// the invariant admitLocked keeps.
 	bytes int64
+	// trashSeq names the directories waiting to be unlinked. Unique
+	// because a victim is renamed out of its published name while the
+	// lock is still held — see dropLocked.
+	trashSeq uint64
 }
 
 // cacheEntry is one comic's extracted pages.
@@ -97,12 +123,11 @@ type cacheEntry struct {
 
 	// elem is this entry's place in the LRU list, nil once evicted.
 	elem *list.Element
-	// refs counts callers currently reading the entry. Eviction takes an
-	// entry out of the index immediately but leaves its bytes until the
-	// last reader lets go, so a page cannot be deleted mid-stream.
+	// refs counts callers currently reading the entry, which is what
+	// keeps eviction off it: a referenced entry is never a victim, so a
+	// page cannot be deleted mid-stream.
 	refs int
-	// dead is set when the entry has left the index. Its directory is
-	// removed on the release that drops refs to zero.
+	// dead is set when the entry has left the index.
 	dead bool
 	// unkeyed marks an entry that was never shared: released means gone.
 	unkeyed bool
@@ -141,8 +166,15 @@ func NewPageCache(root string, maxBytes int64) *PageCache {
 	return &PageCache{
 		root:     root,
 		maxBytes: maxBytes,
-		entries:  make(map[string]*cacheEntry),
-		lru:      list.New(),
+		// A quarter of the cap. The number itself is arbitrary; what is
+		// not is that it be well below maxBytes, because it is charged
+		// to the cache for the whole length of a fill and four
+		// simultaneous cold comics are a reader opening four tabs, not
+		// an attack. At the default that is 256 MiB per comic, which is
+		// above any real volume's expanded pages.
+		archiveBudget: maxBytes / 4,
+		entries:       make(map[string]*cacheEntry),
+		lru:           list.New(),
 	}
 }
 
@@ -187,7 +219,10 @@ func (c *PageCache) tryAcquire(ctx context.Context, key string) (*cacheEntry, er
 // amortised — rather than a shared entry keyed on something that cannot
 // tell one file's bytes from another's.
 func (c *PageCache) acquire(ctx context.Context, key string, fill pageExtractor) (*cacheEntry, error) {
-	if c == nil || key == "" {
+	// A cache with no root has nowhere to publish to, so it shares
+	// nothing — the same answer an absent cache and an unkeyed comic
+	// get, and the reason the three are one branch.
+	if c == nil || c.root == "" || key == "" {
 		return c.fillPrivate(ctx, fill)
 	}
 
@@ -201,28 +236,42 @@ func (c *PageCache) acquire(ctx context.Context, key string, fill pageExtractor)
 		c.mu.Unlock()
 		return c.wait(ctx, e)
 	}
-	e := &cacheEntry{key: key, done: make(chan struct{}), refs: 1}
+	// Room for the whole archive budget before a byte is written, so
+	// that the caller after this one is admitted against a fill that has
+	// not landed yet rather than against a stale zero.
+	trash, ok := c.admitLocked(c.archiveBudget)
+	if !ok {
+		c.mu.Unlock()
+		removeAll(trash)
+		return nil, ErrPageCacheFull
+	}
+	e := &cacheEntry{key: key, done: make(chan struct{}), refs: 1, size: c.archiveBudget}
+	c.bytes += c.archiveBudget
 	c.entries[key] = e
 	e.elem = c.lru.PushFront(e)
 	c.mu.Unlock()
+	removeAll(trash)
 
-	dir, pages, size, err := c.publish(ctx, key, fill)
+	fillCtx, endFill := fillContext(ctx)
+	dir, pages, size, err := c.publish(fillCtx, key, fill)
+	endFill()
 
 	c.mu.Lock()
 	e.dir, e.pages, e.err = dir, pages, err
-	if err == nil {
-		e.size = size
-		c.bytes += size
-	}
+	// The reservation stops being an estimate. It can only shrink — the
+	// extractor is bounded by the same budget — so nothing needs
+	// evicting to make the result fit; the guard below is for a filler
+	// that ignored its budget, which is a test, not a container.
+	c.bytes += size - e.size
+	e.size = size
 	close(e.done)
-	var trash []string
 	if err != nil {
 		// Not remembered as a failure: the archive may have been
 		// mid-upload, or the disk briefly full, and the next reader
 		// deserves a fresh attempt rather than a cached refusal.
 		trash = c.dropLocked(e)
 	} else {
-		trash = c.evictLocked()
+		trash, _ = c.admitLocked(0)
 	}
 	c.mu.Unlock()
 	removeAll(trash)
@@ -232,6 +281,31 @@ func (c *PageCache) acquire(ctx context.Context, key string, fill pageExtractor)
 		return nil, err
 	}
 	return e, nil
+}
+
+// pageExtractTimeout bounds a fill that has been cut loose from its
+// requester. Generous: it covers downloading and expanding a gibibyte of
+// comic over an object store, and exists only so a wedged backend cannot
+// hold a reservation forever.
+const pageExtractTimeout = 15 * time.Minute
+
+// fillContext is the context an extraction runs under.
+//
+// Deliberately not the requester's. A fill is shared work: every waiter
+// on the key is depending on it, and the first requester closing their
+// tab must not cancel the extraction out from under them — which it did,
+// aborting the walk, dropping the entry and answering every waiter with
+// context.Canceled. Worse, it meant a comic whose first reader tends to
+// give up (a big archive, a slow backend — exactly the case the cache is
+// for) could never warm at all, because each attempt cancelled the one
+// that would have fixed it.
+//
+// WithoutCancel rather than context.Background so the request's values —
+// logging and tracing scope — survive into the work it started. Waiters
+// still wait under their own context and give up whenever they like; it
+// is only the fill that is no longer theirs to stop.
+func fillContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), pageExtractTimeout)
 }
 
 // hold takes a reference and marks the entry most recently used. Called
@@ -316,10 +390,16 @@ func (c *PageCache) fillPrivate(ctx context.Context, fill pageExtractor) (*cache
 	return e, nil
 }
 
-// release drops one reference. The last release of an entry that has
-// left the index — evicted, failed, or private — is what removes its
-// bytes, so a page can never be deleted out from under a response that
-// is still streaming it.
+// release drops one reference.
+//
+// It never unlinks a shared entry, and that is not an omission: a shared
+// entry's bytes go away in dropLocked, which can only run when nothing
+// holds a reference, so by the time the last release happens there is
+// nothing left to clean up. Dropping the reference is what makes the
+// entry evictable at all.
+//
+// An unkeyed entry has exactly one owner and no index to leave, so
+// release is where it goes.
 func (c *PageCache) release(e *cacheEntry) {
 	if e == nil {
 		return
@@ -333,32 +413,32 @@ func (c *PageCache) release(e *cacheEntry) {
 	}
 	c.mu.Lock()
 	e.refs--
-	var trash string
-	if e.dead && e.refs <= 0 && e.dir != "" {
-		trash, e.dir = e.dir, ""
-	}
 	c.mu.Unlock()
-	if trash != "" {
-		_ = os.RemoveAll(trash)
-	}
 }
 
-// evictLocked brings the cache back under its cap, returning the
-// directories to remove. Entries with readers are skipped rather than
-// waited for: the cap is a budget, not an invariant to enforce against
-// a request in flight.
-func (c *PageCache) evictLocked() []string {
+// admitLocked makes room for want more bytes, returning the directories
+// to unlink and whether the room was found.
+//
+// Entries with readers are never victims — a page cannot be deleted out
+// from under a response that is streaming it — so "no room" is a real
+// state and not a warning to sail past: with every entry referenced, the
+// only way to honour the cap is to refuse. want is 0 when the caller is
+// simply settling up after a fill, which cannot fail.
+func (c *PageCache) admitLocked(want int64) ([]string, bool) {
 	var trash []string
-	for c.bytes > c.maxBytes {
+	for c.bytes+want > c.maxBytes {
 		victim := c.oldestEvictableLocked()
 		if victim == nil {
-			slog.Warn("comic page cache over its cap with nothing evictable",
-				"bytes", c.bytes, "capBytes", c.maxBytes, "entries", len(c.entries))
-			break
+			if want > 0 {
+				slog.Warn("comic page cache full, refusing a comic",
+					"bytes", c.bytes, "wantBytes", want,
+					"capBytes", c.maxBytes, "entries", len(c.entries))
+			}
+			return trash, false
 		}
 		trash = append(trash, c.dropLocked(victim)...)
 	}
-	return trash
+	return trash, true
 }
 
 func (c *PageCache) oldestEvictableLocked() *cacheEntry {
@@ -373,7 +453,21 @@ func (c *PageCache) oldestEvictableLocked() *cacheEntry {
 }
 
 // dropLocked takes an entry out of the index and returns its directory
-// for removal when nobody is reading it.
+// for unlinking.
+//
+// The directory is *renamed* out of its published name here, while the
+// lock is still held, rather than handed over under that name for the
+// caller to unlink after unlocking. That gap is a real bug: between
+// dropping the entry and unlinking it, another goroutine can re-fill the
+// same key, and publish would RemoveAll+Rename onto the very path the
+// stalled unlink is about to delete — leaving a live index entry
+// pointing at nothing and every page 500ing until it was evicted again.
+// Renaming under the lock means the published name is free the instant
+// the entry leaves the index, so no unlink can ever race a publish.
+//
+// Only ever called for an entry nobody is reading: the evictor skips
+// referenced entries, and the other caller is a failed fill, which has
+// no directory to leave behind.
 func (c *PageCache) dropLocked(e *cacheEntry) []string {
 	if e.dead {
 		return nil
@@ -388,12 +482,22 @@ func (c *PageCache) dropLocked(e *cacheEntry) []string {
 	}
 	c.bytes -= e.size
 	e.size = 0
-	if e.refs > 0 || e.dir == "" {
+	if e.dir == "" {
 		return nil
 	}
 	dir := e.dir
 	e.dir = ""
-	return []string{dir}
+	c.trashSeq++
+	trash := filepath.Join(c.root, fmt.Sprintf(".trash-%d", c.trashSeq))
+	if err := os.Rename(dir, trash); err != nil {
+		// The rename is the safety, not the unlink, so a failure here
+		// is worth saying out loud — and unlinking the original name is
+		// still better than leaking it.
+		slog.Warn("comic page cache could not stage an evicted entry for removal",
+			"dir", dir, "err", err)
+		return []string{dir}
+	}
+	return []string{trash}
 }
 
 // initLocked creates the cache root, wiping whatever a previous process

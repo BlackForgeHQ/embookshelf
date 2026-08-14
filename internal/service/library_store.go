@@ -403,19 +403,7 @@ func (h *LibraryHandle) PrimaryFile(ctx context.Context, book model.Book) (model
 	if h.files == nil {
 		return model.File{}, false, nil
 	}
-	list, err := h.files.ListByBook(ctx, book.ID)
-	if err != nil {
-		return model.File{}, false, err
-	}
-	for _, f := range list {
-		if f.Format == book.Format {
-			return f, true, nil
-		}
-	}
-	if len(list) > 0 {
-		return list[0], true, nil
-	}
-	return model.File{}, false, nil
+	return lookUpPrimaryFile(ctx, h.files, book)
 }
 
 // PrimaryContentHash is the hash of the book's own file — the one whose
@@ -987,17 +975,34 @@ func (s *defaultLibraryStore) For(ctx context.Context, libraryID string) (*Libra
 // format match exists; returns an error when there are no rows yet
 // (pre-files-backfill installs).
 func primaryFile(ctx context.Context, files bookFileLister, book model.Book) (model.File, error) {
-	list, err := files.ListByBook(ctx, book.ID)
+	f, found, err := lookUpPrimaryFile(ctx, files, book)
 	if err != nil {
 		return model.File{}, err
 	}
+	if !found {
+		return model.File{}, fmt.Errorf("no files row for book %s", book.ID)
+	}
+	return f, nil
+}
+
+// lookUpPrimaryFile is the choice itself: the row whose format matches
+// the book, else whatever row there is. One copy, because the two
+// callers differ only in what they make of "the book has no files row" —
+// an error for primaryFile, a state for PrimaryFile.
+func lookUpPrimaryFile(
+	ctx context.Context, files bookFileLister, book model.Book,
+) (model.File, bool, error) {
+	list, err := files.ListByBook(ctx, book.ID)
+	if err != nil {
+		return model.File{}, false, err
+	}
 	for _, f := range list {
 		if f.Format == book.Format {
-			return f, nil
+			return f, true, nil
 		}
 	}
 	if len(list) > 0 {
-		return list[0], nil
+		return list[0], true, nil
 	}
-	return model.File{}, fmt.Errorf("no files row for book %s", book.ID)
+	return model.File{}, false, nil
 }

@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -670,5 +671,69 @@ func TestComicPagesFollowAReplacedFile(t *testing.T) {
 	}
 	if got := rec.Body.String(); got != "replaced" {
 		t.Errorf("after the file was replaced the reader was served %q", got)
+	}
+}
+
+// A cache with no room left is a retry, not a failure of the book. It
+// happens when every entry is being read by somebody else, which is
+// transient by construction, so the status has to say "come back" rather
+// than "something broke" — and it must not be flattened into the generic
+// 500, which hides the sentence explaining it.
+//
+// The refusal itself is exercised under real concurrency in fileproc
+// (TestPageCacheRefusesAComicItCannotFitRatherThanExceedingTheCap);
+// what is asserted here is the only part that lives at this tier, which
+// is what the reader is told about it.
+func TestComicErrorsMapToStatuses(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want int
+		says string
+	}{
+		{
+			name: "page cache full",
+			err:  fmt.Errorf("open: %w", fileproc.ErrPageCacheFull),
+			want: http.StatusServiceUnavailable,
+			says: "try again",
+		},
+		{
+			name: "unknown container",
+			err:  fmt.Errorf("open: %w", fileproc.ErrComicContainer),
+			want: http.StatusUnsupportedMediaType,
+			says: ".cbr",
+		},
+		{
+			name: "no bytes stored",
+			err:  fmt.Errorf("open: %w", storage.ErrNotFound),
+			want: http.StatusNotFound,
+		},
+		{
+			name: "outside the sandbox",
+			err:  fmt.Errorf("open: %w", service.ErrPathOutsideRoots),
+			want: http.StatusForbidden,
+		},
+		{
+			name: "anything else",
+			err:  errors.New("rardecode: bad block header"),
+			want: http.StatusInternalServerError,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodGet, "/x", nil)
+
+			writeComicError(c, "open comic archive", tc.err)
+
+			if rec.Code != tc.want {
+				t.Errorf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
+			}
+			if tc.says != "" && !strings.Contains(rec.Body.String(), tc.says) {
+				t.Errorf("body = %s, want it to mention %q", rec.Body.String(), tc.says)
+			}
+		})
 	}
 }

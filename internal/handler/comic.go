@@ -272,6 +272,11 @@ func writeComicError(c *gin.Context, op string, err error) {
 		// stamps CBZ) but its bytes are none of the containers the
 		// reader pages. A fact about the file, and one the UI can say.
 		writeError(c, http.StatusUnsupportedMediaType, err.Error())
+	case errors.Is(err, fileproc.ErrPageCacheFull):
+		// Nothing is wrong with the book or the server: every slot in
+		// the page cache is being read by somebody else right now. A
+		// retry, and the status that says so.
+		writeError(c, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, service.ErrPathOutsideRoots):
 		writeError(c, http.StatusForbidden, err.Error())
 	case errors.Is(err, storage.ErrNotFound), errors.Is(err, os.ErrNotExist):

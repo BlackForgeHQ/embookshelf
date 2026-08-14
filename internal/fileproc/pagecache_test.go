@@ -5,6 +5,7 @@ package fileproc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -36,9 +37,9 @@ func TestPageCacheFillsAKeyOnceUnderConcurrency(t *testing.T) {
 	c := NewPageCache(t.TempDir(), 1<<20)
 	var calls atomic.Int64
 
-	// The filler blocks until every goroutine has been released, so the
-	// window a second caller could squeeze a second fill into is held
-	// open for the whole test rather than left to scheduling luck.
+	// The filler blocks until every goroutine has arrived, so the window
+	// a second caller could squeeze a second fill into is held open for
+	// the whole test rather than left to scheduling luck.
 	start := make(chan struct{})
 	fill := func(ctx context.Context, dir string) ([]cachedPage, int64, error) {
 		calls.Add(1)
@@ -48,11 +49,15 @@ func TestPageCacheFillsAKeyOnceUnderConcurrency(t *testing.T) {
 
 	const readers = 16
 	dirs := make([]string, readers)
-	var wg sync.WaitGroup
+	var wg, arrived sync.WaitGroup
+	arrived.Add(readers)
 	for i := range readers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// Signalled immediately before the call, so the fill is
+			// still blocked when the last goroutine enters acquire.
+			arrived.Done()
 			e, err := c.acquire(context.Background(), "k", fill)
 			if err != nil {
 				t.Errorf("acquire: %v", err)
@@ -62,6 +67,9 @@ func TestPageCacheFillsAKeyOnceUnderConcurrency(t *testing.T) {
 			c.release(e)
 		}()
 	}
+	arrived.Wait()
+	// Every goroutine is inside (or about to enter) acquire, and the one
+	// that won is parked in the filler. Only now let it finish.
 	close(start)
 	wg.Wait()
 
@@ -80,6 +88,10 @@ func TestPageCacheFillsAKeyOnceUnderConcurrency(t *testing.T) {
 // map — a page cache that only forgot would fill the data root.
 func TestPageCacheEvictsLeastRecentlyUsedPastTheCap(t *testing.T) {
 	c := NewPageCache(t.TempDir(), 250)
+	// The reservation a fill is admitted against. Set to what these
+	// fillers actually write, so the test is about eviction order rather
+	// than about the default quarter-of-the-cap estimate.
+	c.archiveBudget = 100
 	var calls atomic.Int64
 
 	dirs := map[string]string{}
@@ -115,6 +127,7 @@ func TestPageCacheEvictsLeastRecentlyUsedPastTheCap(t *testing.T) {
 // last reader lets go.
 func TestPageCacheDoesNotEvictAnEntryStillBeingRead(t *testing.T) {
 	c := NewPageCache(t.TempDir(), 250)
+	c.archiveBudget = 100
 	var calls atomic.Int64
 
 	held, err := c.acquire(context.Background(), "a", fillerOfSize(t, 100, &calls))
@@ -334,5 +347,201 @@ func TestPageCacheWipesStaleDirectoriesOnFirstUse(t *testing.T) {
 	defer c.release(e)
 	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a previous process's page directory survived: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Review fixes
+// ---------------------------------------------------------------------------
+
+// A fill is shared work, so the requester who started it does not get to
+// cancel it. Before this, the first reader closing their tab mid-
+// extraction aborted the walk, dropped the entry and answered every
+// waiter with context.Canceled — and since the comics worth caching are
+// exactly the ones whose first reader gives up waiting, a cache could be
+// kept permanently cold by the very requests that would have warmed it.
+func TestPageCacheFillOutlivesTheRequesterThatStartedIt(t *testing.T) {
+	c := NewPageCache(t.TempDir(), 1<<20)
+
+	entered := make(chan struct{})
+	finish := make(chan struct{})
+	var fillErr error
+	fill := func(ctx context.Context, dir string) ([]cachedPage, int64, error) {
+		close(entered)
+		<-finish
+		// The requester is already gone by now. If the fill were running
+		// under their context this would be context.Canceled, which is
+		// what the extraction walks check between entries.
+		// Exactly what the extraction walks do between entries: give up
+		// when the context is done. That is the mechanism by which a
+		// requester's cancel used to destroy everyone else's fill.
+		fillErr = ctx.Err()
+		if fillErr != nil {
+			return nil, 0, fmt.Errorf("extract: %w", fillErr)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "0"), []byte("page"), 0o600); err != nil {
+			return nil, 0, err
+		}
+		return []cachedPage{{file: "0", size: 4}}, 4, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	winner := make(chan error, 1)
+	go func() {
+		e, err := c.acquire(ctx, "k", fill)
+		c.release(e)
+		winner <- err
+	}()
+	<-entered
+
+	waiter := make(chan *cacheEntry, 1)
+	waiterErr := make(chan error, 1)
+	go func() {
+		e, err := c.acquire(context.Background(), "k", fill)
+		waiter <- e
+		waiterErr <- err
+	}()
+
+	// The requester gives up while the extraction is parked.
+	cancel()
+	close(finish)
+
+	if err := <-waiterErr; err != nil {
+		t.Fatalf("the waiter got %v — the requester's cancel took the fill with it", err)
+	}
+	e := <-waiter
+	if e == nil {
+		t.Fatal("the waiter got no entry")
+	}
+	if _, err := os.Stat(filepath.Join(e.dir, "0")); err != nil {
+		t.Errorf("the published entry has no page: %v", err)
+	}
+	c.release(e)
+	<-winner
+
+	if fillErr != nil {
+		t.Errorf("the fill ran under a cancelled context (%v)", fillErr)
+	}
+	// And it is in the cache, so the next reader is warm.
+	if _, ok := c.entries["k"]; !ok {
+		t.Error("the entry was not published")
+	}
+}
+
+// The unlink of an evicted entry happens after the lock is released, so
+// a re-fill of the same key can be publishing while it is still pending.
+// The victim is therefore renamed out of its published name *under the
+// lock*: without that, the stalled unlink deletes the fresh entry's
+// directory and leaves the index pointing at nothing.
+//
+// Driven directly rather than through timing, so the interleaving is the
+// test rather than something the test hopes for.
+func TestPageCachePendingUnlinkCannotDeleteARepublishedKey(t *testing.T) {
+	root := t.TempDir()
+	c := NewPageCache(root, 1<<20)
+	var calls atomic.Int64
+
+	first, err := c.acquire(context.Background(), "k", fillerOfSize(t, 8, &calls))
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	published := first.dir
+	c.release(first)
+
+	// Evict it, and stall before unlinking — the window the bug lived in.
+	c.mu.Lock()
+	trash := c.dropLocked(c.entries["k"])
+	c.mu.Unlock()
+
+	if len(trash) != 1 {
+		t.Fatalf("dropLocked returned %d directories, want 1", len(trash))
+	}
+	if trash[0] == published {
+		t.Errorf("the victim is still under its published name %q — a re-fill would publish onto it", published)
+	}
+	if _, serr := os.Stat(published); !errors.Is(serr, os.ErrNotExist) {
+		t.Errorf("the published name is still taken while the unlink is pending: %v", serr)
+	}
+
+	// Same key, filled again, while the unlink above has not run yet.
+	second, err := c.acquire(context.Background(), "k", fillerOfSize(t, 8, &calls))
+	if err != nil {
+		t.Fatalf("re-acquire: %v", err)
+	}
+	defer c.release(second)
+	if second.dir != published {
+		t.Fatalf("the re-fill published to %q, want the canonical %q", second.dir, published)
+	}
+
+	// Now the stalled unlink lands.
+	removeAll(trash)
+
+	if _, serr := os.Stat(filepath.Join(second.dir, "0")); serr != nil {
+		t.Errorf("the pending unlink deleted the freshly published entry: %v", serr)
+	}
+}
+
+// The cap is a cap, not an average. Every fill is charged its archive
+// budget for as long as it runs, and a comic that cannot be admitted is
+// refused — because the alternative, warning and carrying on, meant N
+// concurrent cold comics could each put a whole cache's worth on disk.
+func TestPageCacheRefusesAComicItCannotFitRatherThanExceedingTheCap(t *testing.T) {
+	root := t.TempDir()
+	c := NewPageCache(root, 200)
+	c.archiveBudget = 150
+
+	entered := make(chan struct{})
+	finish := make(chan struct{})
+	slow := func(ctx context.Context, dir string) ([]cachedPage, int64, error) {
+		close(entered)
+		<-finish
+		return fillerOfSize(t, 150, &atomic.Int64{})(ctx, dir)
+	}
+
+	firstDone := make(chan error, 1)
+	var first *cacheEntry
+	go func() {
+		e, err := c.acquire(context.Background(), "a", slow)
+		first = e
+		firstDone <- err
+	}()
+	<-entered
+
+	// "a" holds a 150-byte reservation against a 200-byte cap and cannot
+	// be evicted (it is being filled), so there is no room for "b".
+	var calls atomic.Int64
+	if _, err := c.acquire(context.Background(), "b", fillerOfSize(t, 150, &calls)); !errors.Is(err, ErrPageCacheFull) {
+		t.Errorf("second comic err = %v, want ErrPageCacheFull", err)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Errorf("the refused comic was extracted anyway (%d fills)", got)
+	}
+
+	close(finish)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first comic: %v", err)
+	}
+	if c.bytes > c.maxBytes {
+		t.Errorf("cache holds %d bytes over a %d byte cap", c.bytes, c.maxBytes)
+	}
+
+	// Once the first reader lets go, the second comic fits.
+	c.release(first)
+	second, err := c.acquire(context.Background(), "b", fillerOfSize(t, 150, &calls))
+	if err != nil {
+		t.Fatalf("second comic after release: %v", err)
+	}
+	defer c.release(second)
+	if c.bytes > c.maxBytes {
+		t.Errorf("cache holds %d bytes over a %d byte cap", c.bytes, c.maxBytes)
+	}
+}
+
+// The per-archive budget is well under the whole cap, so the reservation
+// that keeps the cap honest cannot itself be the cap.
+func TestPageCacheArchiveBudgetIsWellUnderTheCap(t *testing.T) {
+	c := NewPageCache(t.TempDir(), DefaultPageCacheBytes)
+	if c.archiveBudget >= c.maxBytes/2 || c.archiveBudget <= 0 {
+		t.Errorf("archiveBudget = %d against a %d byte cap", c.archiveBudget, c.maxBytes)
 	}
 }

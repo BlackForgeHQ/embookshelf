@@ -300,3 +300,42 @@ func TestComicPagingRefusesAnArchiveWithNoPages(t *testing.T) {
 		t.Errorf("err = %v, want it to say the archive has no images", err)
 	}
 }
+
+// A comic whose expanded pages would not fit one archive's share of the
+// cache is refused with a sentence rather than written out anyway.
+//
+// The budget is the cache's *per-archive* share, not its whole capacity:
+// the capacity is shared with every other comic being read right now, so
+// spending all of it on one archive is how N concurrent cold comics put
+// N capacities on disk. The cap here is four times the archive budget,
+// and this comic sits between the two — it would have been admitted
+// under the old rule.
+func TestComicPagingRefusesAComicOverOneArchivesBudget(t *testing.T) {
+	page := func(label string) []byte {
+		return append(append([]byte{}, fakePNG...), pageFiller(label, 400<<10)...)
+	}
+	o := &openCounter{raw: rarArchive(
+		rarEntry{name: "01.png", data: page("one")},
+		rarEntry{name: "02.png", data: page("two")},
+		rarEntry{name: "03.png", data: page("three")},
+	)}
+	// 4 MiB cap, so a 1 MiB archive budget; the three pages are ~1.2 MiB.
+	cache := NewPageCache(t.TempDir(), 4<<20)
+
+	set, err := OpenComicPages(context.Background(), cache, "k", o.open)
+	if err == nil {
+		_ = set.Close()
+		t.Fatal("a comic over one archive's budget was extracted")
+	}
+	if !strings.Contains(err.Error(), "budget") {
+		t.Errorf("err = %v, want it to say the comic is over the budget", err)
+	}
+	// And nothing of it was kept: the failed fill is not remembered, and
+	// its bytes are not charged to the cache.
+	if cache.bytes != 0 {
+		t.Errorf("the refused comic left %d bytes charged to the cache", cache.bytes)
+	}
+	if _, ok := cache.entries["k"]; ok {
+		t.Error("the refused comic was left in the index")
+	}
+}

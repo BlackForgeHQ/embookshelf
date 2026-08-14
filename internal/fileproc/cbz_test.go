@@ -45,7 +45,7 @@ var fakePNG = []byte{
 }
 
 // writeCBZ writes a CBZ archive to a temp file and returns its path.
-// Used by tests that need a real path (CBZPages, CBZPage).
+// Used by tests that need the archive on disk rather than in memory.
 func writeCBZ(t *testing.T, dir string, entries map[string][]byte) string {
 	t.Helper()
 	p := filepath.Join(dir, "test.cbz")

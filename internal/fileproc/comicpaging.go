@@ -166,9 +166,13 @@ func OpenComicPages(
 	// caller's extraction of the same key wins the race.
 	defer func() { _ = src.Close() }()
 
-	budget := DefaultPageCacheBytes
+	// What one comic may expand to. The cache's per-archive budget, not
+	// its whole capacity: the capacity is shared with every other comic
+	// being read right now, and a budget equal to it would mean N
+	// concurrent cold comics could put N capacities on disk.
+	budget := DefaultPageCacheBytes / 4
 	if cache != nil {
-		budget = cache.maxBytes
+		budget = cache.archiveBudget
 	}
 	var fill pageExtractor
 	switch kind {
