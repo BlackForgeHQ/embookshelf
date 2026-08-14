@@ -93,6 +93,15 @@ func (r DataRoot) AudiobookStaging(bookID string) (string, error) {
 	return r.join("audiobooks", bookID)
 }
 
+// ComicPages is where the reader keeps the pages it has expanded out of
+// RAR- and 7z-packed comics (#329). Local disk, outside storage.Storage,
+// following the same coverstore precedent audiobook staging does — and
+// like staging, disposable: the directory is wiped on first use, because
+// the index naming what is in it lives in the process that wrote it.
+func (r DataRoot) ComicPages() (string, error) {
+	return r.join("comic-pages")
+}
+
 func (r DataRoot) join(parts ...string) (string, error) {
 	if !r.IsSet() {
 		return "", ErrDataRootUnset

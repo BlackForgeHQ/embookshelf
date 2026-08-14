@@ -12,6 +12,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/coverstore"
 	"github.com/blackforge/embookshelf/internal/crypto"
 	"github.com/blackforge/embookshelf/internal/email"
+	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/queue"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -58,8 +59,14 @@ type Handler struct {
 	// with a fake — see settings.go.
 	appSettings appSettingsStore
 	covers      *coverstore.Store
-	hub         *sse.Hub
-	queue       queue.Client
+	// comics is the extract-once page cache behind the comic reader, for
+	// the two containers that cannot serve a numbered page cheaply
+	// (#329). nil is usable and means "no sharing": every request
+	// extracts privately, which is what an install with no data root
+	// gets.
+	comics *fileproc.PageCache
+	hub    *sse.Hub
+	queue  queue.Client
 	// platform answers the Instance panel's process-health questions and
 	// backs the healthcheck's database ping. nil disables both: the
 	// healthcheck reports unavailable and the panel shows an unknown row.
@@ -272,6 +279,10 @@ type Options struct {
 	Identities *repo.IdentityRepo
 	// Covers is the pre-approval cover store; nil disables cover serving.
 	Covers *coverstore.Store
+	// Comics is the comic page cache. nil still pages every container —
+	// unshared, one extraction per request — so a deployment without a
+	// data root loses the amortisation and nothing else.
+	Comics *fileproc.PageCache
 	// Queue is the worker pool. nil means jobs are not dispatched.
 	Queue queue.Client
 	// FwdAuthHolder carries the runtime CIDR/header config, atomically
@@ -311,7 +322,7 @@ func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailD
 		libStore: opts.LibStore, primaryHash: newPrimaryHash(opts.LibStore),
 		oidc: opts.OIDC, identities: opts.Identities,
 		oidcSettings: newOIDCSettingsService(a.appSettings, opts.OIDC),
-		covers:       opts.Covers, queue: opts.Queue,
+		covers:       opts.Covers, comics: opts.Comics, queue: opts.Queue,
 		fwdAuthHolder: opts.FwdAuthHolder, fwdAuth: opts.FwdAuth,
 	}
 }
