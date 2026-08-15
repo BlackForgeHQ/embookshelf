@@ -62,6 +62,12 @@ jobs:
   go-test:
     name: go-test
     runs-on: ubuntu-latest
+    # The embedded-bundle tests (#330's nosniff sweep) fail rather than
+    # skip when internal/staticfs/dist is empty — deliberately, so "the
+    # bundle did not build" cannot read as green. That means go-test
+    # needs the real bundle: ui-build's artifact, the same way
+    # binary-smoke takes it.
+    needs: ui-build
     timeout-minutes: 10
     services:
       postgres:
@@ -101,6 +107,11 @@ jobs:
       # bring the store up one way instead of two that drift.
       - name: Start object store
         run: make s3-up
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ui-dist
+          path: internal/staticfs/dist
 
       - run: go test -race -coverprofile=coverage.out ./...
 
