@@ -74,11 +74,21 @@ type LibraryHandle struct {
 	presignFallback string
 }
 
-// bookFileLister is the slice of FileRepo a handle actually needs to
-// find a book's bytes. Narrow so the delivery logic is testable
-// without a database.
-type bookFileLister interface {
+// BookFileLister is the slice of FileRepo a handle actually needs to
+// find a book's bytes. Narrow so the delivery logic is testable without
+// a database — and exported because it is LibraryStoreDeps' Files seam:
+// two adapters make it real, the Postgres FileRepo in production and
+// servicetest's in-memory rows in tests (#338).
+type BookFileLister interface {
 	ListByBook(ctx context.Context, bookID string) ([]model.File, error)
+}
+
+// bookFileLister is the historical in-package spelling.
+type bookFileLister = BookFileLister
+
+// LibraryByIDReader is the one LibraryRepo read For makes.
+type LibraryByIDReader interface {
+	GetByID(ctx context.Context, id string) (model.Library, error)
 }
 
 // IsObjectStore reports whether this library's bytes live in a remote
@@ -896,11 +906,16 @@ type Presigner interface {
 // LibraryStoreDeps groups everything LibraryStore needs to build a
 // LibraryHandle. PresignTTL and PresignFallback feed BookSource; pass
 // zero values to disable presign (handle will always pick local).
+// Libs and Files are the narrow interfaces the store actually reads —
+// the Postgres repos in production, servicetest fakes in tests. Hand
+// them concrete values through a nil check where the concrete type is a
+// pointer: a typed nil stored in an interface field is a non-nil
+// interface, and the absence guards below would silently stop working.
 type LibraryStoreDeps struct {
-	Libs      *repo.LibraryRepo
+	Libs      LibraryByIDReader
 	Resolver  storage.Resolver
 	NewPlacer PlacerBuilder
-	Files     *repo.FileRepo
+	Files     BookFileLister
 	// Orphans defers byte deletion on backend-backed libraries. Optional:
 	// when nil, DeleteBookBytes degrades to leaving the bytes for a human
 	// rather than deleting something a presigned URL may still be serving.
