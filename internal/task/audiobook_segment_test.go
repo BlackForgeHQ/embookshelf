@@ -40,6 +40,10 @@ type fakeSegmentRuns struct {
 	getErr     error
 	gets       int
 	onGet      func(n int) model.Audiobook
+	// onGetErr fails the n-th run read only. The cancel guard re-reads the
+	// run before every engine chunk, so a test proving a mid-run read
+	// failure stops the spend has to break the read partway through.
+	onGetErr func(n int) error
 	claim      bool
 	claimErr   error
 	claims     int
@@ -58,6 +62,11 @@ func (f *fakeSegmentRuns) GetByBookID(context.Context, string) (model.Audiobook,
 	f.gets++
 	if f.getErr != nil {
 		return model.Audiobook{}, f.getErr
+	}
+	if f.onGetErr != nil {
+		if err := f.onGetErr(f.gets); err != nil {
+			return model.Audiobook{}, err
+		}
 	}
 	if f.onGet != nil {
 		return f.onGet(f.gets), nil
@@ -587,6 +596,40 @@ func TestSegmentStopsSpendingWhenCancelLandsBetweenChunks(t *testing.T) {
 	}
 	if h.staged(0) {
 		t.Error("an abandoned segment was staged")
+	}
+}
+
+// A cancel check that cannot read the run must stop the spend, not shrug
+// the error off. That read is the only stop-loss on a running bill, and a
+// DB blip read as "not cancelled" keeps buying audio for a run the user
+// already stopped (#333). The segment stops, is recorded as awaiting its
+// retry, and the error goes back to River — a genuinely cancelled run
+// refuses the retried job at its own state check.
+func TestSegmentStopsSpendingWhenTheCancelCheckCannotRead(t *testing.T) {
+	h := newSegmentHarness(t)
+	h.engine.chunks = 3
+	// Reads: 1 is the worker's own state check, 2 guards the first chunk,
+	// 3 is the blip. One chunk was bought; the second must not be.
+	h.runs.onGetErr = func(n int) error {
+		if n >= 3 {
+			return errors.New("db unavailable")
+		}
+		return nil
+	}
+
+	err := h.run(t, 0)
+
+	if err == nil {
+		t.Fatal("AudiobookSegment returned nil when the cancel check could not read the run")
+	}
+	if h.engine.calls != 1 {
+		t.Errorf("engine called %d times, want the spend to stop after the first chunk", h.engine.calls)
+	}
+	if len(h.runs.recorded) != 1 || h.runs.recorded[0].State != model.SegmentRetrying {
+		t.Fatalf("recorded %+v, want one segment awaiting its retry", h.runs.recorded)
+	}
+	if h.staged(0) {
+		t.Error("an interrupted segment was staged")
 	}
 }
 

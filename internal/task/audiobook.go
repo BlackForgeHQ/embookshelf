@@ -42,12 +42,20 @@ var errCanceled = errors.New("audiobook run canceled")
 
 // canceled reports whether the run has been stopped since the job began.
 // A read per engine call is cheap next to the call it guards.
-func canceled(ctx context.Context, bookID string, deps SegmentDeps) bool {
+//
+// A read that fails is an error, never "not cancelled". This check is the
+// only stop-loss on a running spend, so it is the one degrade in the
+// cluster that must not fail toward buying more audio: a transient DB
+// blip read as "keep going" kept billing a run the user had already
+// stopped (#333). The caller stops synthesis and hands the error to
+// River; a genuinely cancelled run refuses the retried job at its own
+// state check, and a live one resumes where the claim left it.
+func canceled(ctx context.Context, bookID string, deps SegmentDeps) (bool, error) {
 	run, err := deps.Runs.GetByBookID(ctx, bookID)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("audiobook cancel check: %w", err)
 	}
-	return run.State == model.AudiobookCanceled
+	return run.State == model.AudiobookCanceled, nil
 }
 
 // segmentStore is the slice of BookAudiobookRepo the segment worker
@@ -293,7 +301,11 @@ func synthesizeSegment(
 		Voice: run.Voice,
 		Model: run.Model,
 		BeforeChunk: func(ctx context.Context) error {
-			if canceled(ctx, a.BookID, deps) {
+			stopped, err := canceled(ctx, a.BookID, deps)
+			if err != nil {
+				return err
+			}
+			if stopped {
 				return errCanceled
 			}
 			return nil
