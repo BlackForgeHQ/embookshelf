@@ -16,24 +16,25 @@ import (
 	"github.com/blackforge/embookshelf/internal/storage"
 )
 
-// s3ReadTimeout bounds a single ReadAt end to end — the GetObject round
-// trip plus draining its body — so a stalled or slow S3 endpoint errors
-// out instead of hanging the caller forever. ReadAt implements
+// DefaultReadTimeout bounds a single ReadAt end to end — the GetObject
+// round trip plus draining its body — so a stalled or slow S3 endpoint
+// errors out instead of hanging the caller forever (#332; the contract
+// is stated on storage.Source since #343). ReadAt implements
 // io.ReaderAt, which carries no context, so a fixed deadline derived
 // from context.Background() is the only shape available here; deriving
 // it from the ctx passed to Open instead would tie a page-cache fill's
 // reads to the request that happened to trigger it, and the fill must
 // outlive that request (see TestPageCacheFillOutlivesTheRequesterThatStartedIt).
 //
-// Sizing: the largest single range read this application issues is a
-// full-size comic page or cover, capped at 32 MiB elsewhere in
-// fileproc. At a deliberately pessimistic 256 KB/s (2 Mbit/s — well
-// below what anyone would call broadband) that read takes 32 MiB /
-// 256 KB/s = 128s. 3 minutes (180s) leaves ~1.4x headroom over that
-// worst case (180/128 ≈ 1.41), enough for the SDK's own internal
-// retry/backoff on a merely slow endpoint while still bounding a
-// genuinely stalled one.
-const s3ReadTimeout = 3 * time.Minute
+// Operators dial it with Config.ReadTimeout. Sizing of the default: the
+// largest single range read this application issues is a full-size
+// comic page or cover, capped at 32 MiB elsewhere in fileproc. At a
+// deliberately pessimistic 256 KB/s (2 Mbit/s — well below what anyone
+// would call broadband) that read takes 32 MiB / 256 KB/s = 128s. 3
+// minutes (180s) leaves ~1.4x headroom over that worst case (180/128 ≈
+// 1.41), enough for the SDK's own internal retry/backoff on a merely
+// slow endpoint while still bounding a genuinely stalled one.
+const DefaultReadTimeout = 3 * time.Minute
 
 // s3Source is a random-access view of an S3 object. Each ReadAt
 // issues a GetObject with a Range header.
@@ -48,21 +49,13 @@ type s3Source struct {
 	size   int64
 	closed bool
 
-	// readTimeout overrides s3ReadTimeout when non-zero. Test-only knob:
-	// nothing sets this outside the s3 package's own tests.
+	// readTimeout is the resolved per-read deadline — Config.ReadTimeout,
+	// or DefaultReadTimeout when the config left it zero. Always set by
+	// Open; never zero.
 	readTimeout time.Duration
 }
 
 func (s *s3Source) Size() int64 { return s.size }
-
-// timeout returns the deadline ReadAt applies, falling back to the
-// package default when readTimeout hasn't been overridden.
-func (s *s3Source) timeout() time.Duration {
-	if s.readTimeout > 0 {
-		return s.readTimeout
-	}
-	return s3ReadTimeout
-}
 
 func (s *s3Source) ReadAt(p []byte, off int64) (int, error) {
 	if s.closed {
@@ -81,7 +74,7 @@ func (s *s3Source) ReadAt(p []byte, off int64) (int, error) {
 	// inside this function before the context can be cancelled by
 	// anything other than the timeout itself, so there is no live
 	// streaming body left holding a dying context when ReadAt returns.
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout())
+	ctx, cancel := context.WithTimeout(context.Background(), s.readTimeout)
 	defer cancel()
 	out, err := s.cli.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: &s.bucket,

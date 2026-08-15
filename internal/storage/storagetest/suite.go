@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blackforge/embookshelf/internal/storage"
 )
@@ -855,5 +856,37 @@ func testOpenRandomAccess(t *testing.T, mk MakeBackend) {
 	}
 	if n != 3 || string(buf) != "FGH" {
 		t.Errorf("got %q at offset 5", buf[:n])
+	}
+}
+
+// RunSourceReadBound is the conformance arm for the Source read
+// contract (#343): ReadAt carries no context, so every remote
+// implementation must bound a single read itself — a stalled endpoint
+// surfaces as an error, never as a caller hung forever (#332).
+//
+// newStalled builds a Source whose backing store never answers a read;
+// how a backend arranges that is its own business (the S3 arm points
+// its client at a listener that accepts and stalls). The arm requires
+// ReadAt to return an error well inside limit, which the caller sizes
+// generously above the backend's configured deadline.
+func RunSourceReadBound(t *testing.T, newStalled func(t *testing.T) storage.Source, limit time.Duration) {
+	t.Helper()
+	src := newStalled(t)
+	defer func() { _ = src.Close() }()
+
+	done := make(chan error, 1)
+	go func() {
+		var buf [64]byte
+		_, err := src.ReadAt(buf[:], 0)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("ReadAt returned nil against a stalled store — the bound fired but ate the error")
+		}
+	case <-time.After(limit):
+		t.Fatalf("ReadAt still hanging after %v — the Source read contract requires every single read to be bounded (#343)", limit)
 	}
 }

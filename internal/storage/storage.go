@@ -26,6 +26,16 @@ import (
 //
 // Size is the total object size in bytes. Implementations must return
 // the same value for repeated calls.
+//
+// The read contract (#343): ReadAt carries no context — io.ReaderAt has
+// none — so a remote implementation must bound every single read
+// itself; a stalled endpoint has to surface as an error, never as a
+// caller hung forever (#332, the S3 adapter; storagetest's
+// RunSourceReadBound is the conformance arm). The local adapter returns
+// a bare *os.File and carries no deadline: over a network filesystem
+// (NFS/SMB as a library root) a read can hang exactly as an unbounded
+// S3 read did — a known gap, stated here rather than silently assumed
+// away, because the fix belongs to whoever mounts such a root.
 type Source interface {
 	io.ReaderAt
 	io.Closer
