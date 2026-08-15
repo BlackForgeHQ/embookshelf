@@ -4,10 +4,8 @@ package task
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
@@ -56,13 +54,6 @@ type MarkdownRenditionDeps struct {
 // writing the row before any failure returns (ADR-0033 §5) and mapping
 // permanent verdicts onto ErrDoNotRetry.
 func MarkdownRendition(ctx context.Context, a jobs.MarkdownRenditionArgs, deps MarkdownRenditionDeps) error {
-	var result service.ConvertResult
-	defer func() {
-		if result.Path != "" {
-			_ = os.Remove(result.Path)
-		}
-	}()
-
 	book, cfg, err := renditionJob{
 		Rows:   deps.Renditions,
 		Books:  deps.Books,
@@ -75,36 +66,22 @@ func MarkdownRendition(ctx context.Context, a jobs.MarkdownRenditionArgs, deps M
 		return err
 	}
 
+	// The shared finishing tail (#341): staged-file lifetime, rejection
+	// verdict and hash-before-Record ordering live there, not here.
+	fin := &renditionFinish{book: book, sourceHash: deps.SourceHash, record: deps.Record}
+	defer fin.cleanup()
+
 	return renditionRun(ctx, deps.Renditions, a.BookID,
-		func(ctx context.Context) (string, bool, error) {
+		fin.convert(func(ctx context.Context) (service.ConvertResult, error) {
 			body, _, closer, err := deps.Open(ctx, book)
 			if err != nil {
-				return "open book file: " + err.Error(), false, fmt.Errorf("open book %s: %w", a.BookID, err)
+				return service.ConvertResult{}, fmt.Errorf("open book file: %w", err)
 			}
-			var convertErr error
-			result, convertErr = deps.Convert(ctx, cfg.BaseURL, body)
-			_ = closer.Close()
-			if convertErr != nil {
-				var rejected *service.ConvertRejectedError
-				// A rejection is the document itself refused — same bytes,
-				// same answer — so it is permanent.
-				return convertErr.Error(), errors.As(convertErr, &rejected), convertErr
-			}
-			return "", false, nil
-		},
-		func(ctx context.Context) (string, bool, error) {
-			// The source hash is read before Record consumes the staged
-			// file — it is what answers "is this rendition still current".
-			sourceHash := deps.SourceHash(ctx, book)
-
-			rec, err := deps.Record(ctx, book, result.Path)
-			if err != nil {
-				return "place markdown: " + err.Error(), false, fmt.Errorf("place markdown for %s: %w", a.BookID, err)
-			}
-			if err := deps.Renditions.MarkReady(ctx, a.BookID, rec.Location, rec.Size, sourceHash, result.Version); err != nil {
-				return "", false, fmt.Errorf("mark ready: %w", err)
-			}
-			return "", false, nil
-		},
+			defer func() { _ = closer.Close() }()
+			return deps.Convert(ctx, cfg.BaseURL, body)
+		}),
+		fin.finish("place markdown", func(ctx context.Context, rec service.DerivedRecord, sourceHash []byte, version string) error {
+			return deps.Renditions.MarkReady(ctx, a.BookID, rec.Location, rec.Size, sourceHash, version)
+		}),
 	)
 }
