@@ -281,10 +281,7 @@ func (s *AudiobookService) DeleteNarration(ctx context.Context, book model.Book)
 // func returning nil when the caller leaves it unset, so a service
 // built the documented way never holds a nil one here.
 func (s *AudiobookService) stale(ctx context.Context, book model.Book, run model.Audiobook) bool {
-	if !run.State.CanBeStale() {
-		return false
-	}
-	return model.Stale(s.d.ContentHash(ctx, book), run.SourceContentHash)
+	return NewStaleness(s.d.ContentHash).Stale(ctx, book, run.State, run.SourceContentHash)
 }
 
 // RepoNarrationArtifacts adapts the two repos to what DeleteNarration
