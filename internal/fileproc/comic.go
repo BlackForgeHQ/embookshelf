@@ -12,6 +12,8 @@ import (
 	"path"
 	"sort"
 	"strings"
+
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // The comic pass, once, for the three containers a comic ships in: ZIP
@@ -28,6 +30,99 @@ import (
 // natural sort, the cover preference and the ComicInfo mapping, which is
 // exactly the shape the format table replaced one tier down (#308): the
 // day the cover rule changes, it must change once.
+
+// comicFile is one opened comic container, able to answer both passes:
+// the ingest pass (comicArchive — a listing and a bounded buffered read)
+// and the paging pass (comicPageWalker — the same listing and a one-pass
+// stream into a sink). One container satisfies both because the two
+// passes were only ever asking the same walk for different endings, and
+// keeping them on separate open paths is what let the entry cap cover
+// two containers of three and the classification disagree with itself
+// (#344).
+type comicFile interface {
+	comicArchive
+	comicPageWalker
+	// kind names the container in error messages and logs: "cbz", "cbr"
+	// or "cb7". From the bytes, not from the extension the file arrived
+	// under.
+	kind() string
+}
+
+// openComic classifies a comic's bytes and opens the matching container.
+// The bytes decide — the same rule DispatchFormat states for slugs: the
+// extension is what a name claims, the magic is what the file is. This
+// is the one classification; ingest and paging both open through it, so
+// a .cbz that is really a RAR ingests and pages as the RAR it is instead
+// of failing one pass and sailing through the other.
+//
+// Unknown bytes answer ErrComicContainer. A damaged archive of a known
+// container keeps its own error — a different sentence and a different
+// status (see ErrComicContainer's note).
+func openComic(src storage.Source) (comicFile, error) {
+	switch sniffComicContainer(src) {
+	case containerZIP:
+		return newZipComic(src)
+	case containerRAR:
+		return newRARComic(src)
+	case container7z:
+		return newSevenzipComic(src)
+	default:
+		return nil, ErrComicContainer
+	}
+}
+
+// walkerRead is the buffered read every container shares: one walk,
+// every wanted entry read whole under its own cap. It is comicArchive's
+// read expressed through comicPageWalker's stream, so the walk — and
+// with it each container's cap, drain and duplicate-name rules — is
+// stated exactly once per container (#344; the RAR drain used to be
+// written twice, and #310's bug was its placement).
+//
+// encrypted classifies a mid-entry failure as the container telling us
+// it wanted a password, which fails the archive; any other unreadable
+// entry is one missing field, the degradation comic.go works around.
+func walkerRead(
+	ctx context.Context, kind string, w comicPageWalker,
+	want map[string]int64, encrypted func(error) bool,
+) (map[string][]byte, error) {
+	names := make(map[string]bool, len(want))
+	for n := range want {
+		names[n] = true
+	}
+	out := make(map[string][]byte, len(want))
+	err := w.stream(ctx, names, func(name string, r io.Reader) error {
+		b, rerr := readCappedEntry(r, name, want[name])
+		if rerr != nil {
+			if encrypted != nil && encrypted(rerr) {
+				return fmt.Errorf("%s: %w", kind, errEncryptedArchive)
+			}
+			slog.Warn("comic entry unreadable, dropped",
+				"container", kind, "entry", name, "err", rerr)
+			return nil
+		}
+		out[name] = b
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ComicProcessor extracts metadata and the cover from a comic archive,
+// whichever of the three containers it arrived in. All three comic
+// extensions dispatch here; openComic reads the magic and the container
+// answers for itself, so the extension never chooses a parser the bytes
+// cannot back up.
+type ComicProcessor struct{}
+
+func (ComicProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, error) {
+	cf, err := openComic(src)
+	if err != nil {
+		return Metadata{}, err
+	}
+	return extractComic(ctx, cf.kind(), cf)
+}
 
 // comicArchive is a comic's container, reduced to what the pass above
 // needs from it.

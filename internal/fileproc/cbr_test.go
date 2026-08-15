@@ -236,7 +236,7 @@ func TestCBRExtract_BasicCover(t *testing.T) {
 	)
 	defer func() { _ = src.Close() }()
 
-	meta, err := CBRProcessor{}.Extract(context.Background(), src)
+	meta, err := ComicProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestCBRExtract_PreferredCover(t *testing.T) {
 	)
 	defer func() { _ = src.Close() }()
 
-	meta, err := CBRProcessor{}.Extract(context.Background(), src)
+	meta, err := ComicProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestCBRExtract_ComicInfo(t *testing.T) {
 	)
 	defer func() { _ = src.Close() }()
 
-	meta, err := CBRProcessor{}.Extract(context.Background(), src)
+	meta, err := ComicProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestCBRExtract_ComicInfoAfterTheCover(t *testing.T) {
 	)
 	defer func() { _ = src.Close() }()
 
-	meta, err := CBRProcessor{}.Extract(context.Background(), src)
+	meta, err := ComicProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestCBRExtract_SolidArchive(t *testing.T) {
 	)
 	defer func() { _ = src.Close() }()
 
-	meta, err := CBRProcessor{}.Extract(context.Background(), src)
+	meta, err := ComicProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestCBRExtract_SolidWalkDecodesWhatItStepsOver(t *testing.T) {
 	}
 
 	solid := build(true)
-	meta, err := CBRProcessor{}.Extract(context.Background(), solid)
+	meta, err := ComicProcessor{}.Extract(context.Background(), solid)
 	if err != nil {
 		t.Fatalf("solid Extract: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestCBRExtract_SolidWalkDecodesWhatItStepsOver(t *testing.T) {
 	}
 
 	plain := build(false)
-	if _, err := (CBRProcessor{}).Extract(context.Background(), plain); err != nil {
+	if _, err := (ComicProcessor{}).Extract(context.Background(), plain); err != nil {
 		t.Fatalf("non-solid Extract: %v", err)
 	}
 
@@ -423,7 +423,7 @@ func TestCBRExtract_SolidWalkDrainsAStoppedShortWantedEntry(t *testing.T) {
 	)
 	src := &countingComicSource{Reader: bytes.NewReader(raw), size: int64(len(raw))}
 
-	meta, err := CBRProcessor{}.Extract(context.Background(), src)
+	meta, err := ComicProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -457,7 +457,7 @@ func TestCBRExtract_CorruptPageDegradesToNoCover(t *testing.T) {
 	src := &memSource{Reader: bytes.NewReader(raw), size: int64(len(raw))}
 	defer func() { _ = src.Close() }()
 
-	meta, err := CBRProcessor{}.Extract(context.Background(), src)
+	meta, err := ComicProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -471,7 +471,7 @@ func TestCBRExtract_NoImagesFails(t *testing.T) {
 	src := cbrSource(t, rarEntry{name: "readme.txt", data: []byte("nothing here")})
 	defer func() { _ = src.Close() }()
 
-	if _, err := (CBRProcessor{}).Extract(context.Background(), src); err == nil {
+	if _, err := (ComicProcessor{}).Extract(context.Background(), src); err == nil {
 		t.Fatal("expected an error for an image-less archive")
 	}
 }
@@ -486,7 +486,7 @@ func TestCBRExtract_PasswordProtected(t *testing.T) {
 	)
 	defer func() { _ = src.Close() }()
 
-	_, err := CBRProcessor{}.Extract(context.Background(), src)
+	_, err := ComicProcessor{}.Extract(context.Background(), src)
 	if err == nil {
 		t.Fatal("expected an error for a password-protected archive")
 	}
@@ -527,7 +527,7 @@ func TestCBRExtract_CorruptFails(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			src := &memSource{Reader: bytes.NewReader(raw), size: int64(len(raw))}
 			defer func() { _ = src.Close() }()
-			meta, err := CBRProcessor{}.Extract(context.Background(), src)
+			meta, err := ComicProcessor{}.Extract(context.Background(), src)
 			if err == nil {
 				t.Fatalf("expected an error, got %+v", meta)
 			}
@@ -555,7 +555,7 @@ func TestCBRExtract_OversizedComicInfoIsDropped(t *testing.T) {
 	)
 	defer func() { _ = src.Close() }()
 
-	meta, err := CBRProcessor{}.Extract(context.Background(), src)
+	meta, err := ComicProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}

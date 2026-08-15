@@ -161,18 +161,19 @@ func OpenComicPages(
 	if err != nil {
 		return nil, err
 	}
-	kind := sniffComicContainer(src)
+	// The one classification, shared with ingest: the bytes say which
+	// container this is and the container answers for itself (#344).
+	cf, err := openComic(src)
+	if err != nil {
+		_ = src.Close()
+		return nil, err
+	}
 
-	if kind == containerZIP {
-		zr, zerr := zip.NewReader(src, src.Size())
-		if zerr != nil {
-			_ = src.Close()
-			return nil, fmt.Errorf("open cbz: %w", zerr)
-		}
+	if zc, ok := cf.(*zipComic); ok {
 		return &ComicPageSet{
 			src:   src,
-			zr:    zr,
-			names: comicPages((&zipComic{zr: zr}).entries()),
+			zr:    zc.zr,
+			names: comicPages(zc.entries()),
 		}, nil
 	}
 
@@ -189,26 +190,8 @@ func OpenComicPages(
 	if cache != nil {
 		budget = cache.archiveBudget
 	}
-	var fill pageExtractor
-	switch kind {
-	case containerRAR:
-		fill = func(ctx context.Context, dir string) ([]cachedPage, int64, error) {
-			a, aerr := newRARComic(src)
-			if aerr != nil {
-				return nil, 0, aerr
-			}
-			return extractComicPages(ctx, "cbr", a, dir, budget)
-		}
-	case container7z:
-		fill = func(ctx context.Context, dir string) ([]cachedPage, int64, error) {
-			a, aerr := newSevenzipComic(src)
-			if aerr != nil {
-				return nil, 0, aerr
-			}
-			return extractComicPages(ctx, "cb7", a, dir, budget)
-		}
-	default:
-		return nil, ErrComicContainer
+	fill := func(ctx context.Context, dir string) ([]cachedPage, int64, error) {
+		return extractComicPages(ctx, cf.kind(), cf, dir, budget)
 	}
 
 	e, err := cache.acquire(ctx, key, fill)

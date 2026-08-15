@@ -3,11 +3,14 @@
 package fileproc
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
 	"io"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -129,15 +132,15 @@ func TestComicContainersAgree(t *testing.T) {
 			defer func() { _ = cb7.Close() }()
 
 			ctx := context.Background()
-			fromCBZ, err := CBZProcessor{}.Extract(ctx, cbz)
+			fromCBZ, err := ComicProcessor{}.Extract(ctx, cbz)
 			if err != nil {
 				t.Fatalf("cbz: %v", err)
 			}
-			fromCBR, err := CBRProcessor{}.Extract(ctx, cbr)
+			fromCBR, err := ComicProcessor{}.Extract(ctx, cbr)
 			if err != nil {
 				t.Fatalf("cbr: %v", err)
 			}
-			fromCB7, err := CB7Processor{}.Extract(ctx, cb7)
+			fromCB7, err := ComicProcessor{}.Extract(ctx, cb7)
 			if err != nil {
 				t.Fatalf("cb7: %v", err)
 			}
@@ -157,6 +160,78 @@ func TestComicContainersAgree(t *testing.T) {
 				t.Errorf("cb7 metadata differs from cbz:\n cbz = %+v\n cb7 = %+v", fromCBZ, fromCB7)
 			}
 		})
+	}
+}
+
+// The bytes decide the container, never the extension: a .cbz that is
+// really a RAR used to fail ingest through the zip parser its name chose
+// while paging fine through the byte sniff — two classifications of the
+// same file that nothing held in agreement (#344). All three comic
+// extensions dispatch to the one processor, and openComic reads the
+// magic, so the mismatch case simply works.
+func TestComicIngestClassifiesByBytesNotExtension(t *testing.T) {
+	// The RAR fixture, arriving under the wrong name.
+	p, format, err := Dispatch("mislabeled.cbz")
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if format != "CBZ" {
+		t.Fatalf("format = %q, want CBZ — the stamp is the table's row, not the container", format)
+	}
+	src := cbrSource(t, rarEntriesFrom(comicFixtureEntries())...)
+	defer func() { _ = src.Close() }()
+
+	meta, err := p.Extract(context.Background(), src)
+	if err != nil {
+		t.Fatalf("Extract: %v — a RAR under a .cbz name must ingest as the RAR it is", err)
+	}
+	assertComicInfoFixture(t, meta)
+	if !bytes.Equal(meta.CoverBytes, comicPage("page-two")) {
+		t.Errorf("cover = %q, want the natural-sort first page", meta.CoverBytes)
+	}
+}
+
+// Bytes that are none of the three containers answer ErrComicContainer,
+// whatever the file was called — the same sentence the paging arm gives,
+// because since #344 they are the same classification.
+func TestComicIngestRefusesUnknownBytesWithTheContainerError(t *testing.T) {
+	src := memSourceFromBytes([]byte("%PDF-1.7 not a comic at all"))
+	defer func() { _ = src.Close() }()
+
+	_, err := ComicProcessor{}.Extract(context.Background(), src)
+	if !errors.Is(err, ErrComicContainer) {
+		t.Fatalf("err = %v, want ErrComicContainer", err)
+	}
+}
+
+// The entry cap covers all three containers. ZIP was the one without it
+// (#344): archive/zip materialises the list either way, but the cap is
+// what keeps the passes above from sorting and scanning a list that
+// size — and what refuses the archive with a sentence.
+func TestZipComicRefusesAnArchiveOverTheEntryCap(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for i := range comicMaxEntries + 1 {
+		w, err := zw.CreateHeader(&zip.FileHeader{Name: strconv.Itoa(i) + ".png", Method: zip.Store})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte{0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	src := memSourceFromBytes(buf.Bytes())
+	defer func() { _ = src.Close() }()
+
+	_, err := ComicProcessor{}.Extract(context.Background(), src)
+	if err == nil {
+		t.Fatal("a ZIP over the entry cap was accepted")
+	}
+	if !strings.Contains(err.Error(), "entries") {
+		t.Errorf("err = %v, want the entry-cap refusal", err)
 	}
 }
 
