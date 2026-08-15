@@ -679,14 +679,22 @@ func trimWalkBase(key, base string) string {
 	}
 }
 
-// Open opens a Source against the library's storage at the given
-// library-relative location. Errors when the handle has no Storage
-// (resolver failed at construction).
+// Open opens a Source at a library-relative location — a Markdown
+// rendition row's, or any other location this library's placements
+// recorded.
+//
+// Through StorageKey, always: the local backend is rooted at "/"
+// (ADR-0030), so a bare location would be read relative to nowhere and
+// miss. Backend-backed libraries pass through unchanged — their keys are
+// already object keys. Mirrors what OpenBook does for files rows. The
+// handle used to carry two opens — this one under the name OpenMarkdown
+// and a zero-caller twin that skipped StorageKey, which is exactly the
+// rooting mistake this one exists to prevent (#337).
 func (h *LibraryHandle) Open(ctx context.Context, location string) (storage.Source, error) {
 	if h.Storage == nil {
 		return nil, errors.New("library handle: no storage")
 	}
-	return h.Storage.Open(ctx, location)
+	return h.Storage.Open(ctx, h.StorageKey(location))
 }
 
 // ErrNoPlaceRoot says a local library has no root configured, so there

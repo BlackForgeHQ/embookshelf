@@ -146,7 +146,7 @@ func (h *Handler) BookMarkdownDownload(c *gin.Context, s bookScope) {
 		writeServerError(c, "resolve library", err)
 		return
 	}
-	src, err := handle.OpenMarkdown(ctx, rendition.Location)
+	src, err := handle.Open(ctx, rendition.Location)
 	if err != nil {
 		writeServerError(c, "open markdown rendition", err)
 		return
