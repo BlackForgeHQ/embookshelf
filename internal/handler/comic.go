@@ -65,6 +65,14 @@ func (h *Handler) ComicPage(c *gin.Context, s bookScope) {
 
 	rc, mime, err := set.Page(n)
 	if err != nil {
+		if errors.Is(err, fileproc.ErrComicPageNotImage) {
+			// The archive opened and named this entry a page, but its
+			// own bytes disagree — a different sentence from "missing"
+			// and routed through the same mapping every other
+			// page-set-level failure uses.
+			writeComicError(c, "serve comic page", err)
+			return
+		}
 		// The archive opened and this page did not: out of range, or an
 		// entry the extraction could not decode. Either way it is a
 		// missing page, not a broken comic.
@@ -77,24 +85,17 @@ func (h *Handler) ComicPage(c *gin.Context, s bookScope) {
 	// life of the underlying file. ETag would be more correct but the
 	// content rarely changes — a 1-day private cache is plenty.
 	c.Header("Cache-Control", "private, max-age=86400, immutable")
-	// Only when the type came from the page's own bytes. A ZIP page is
-	// streamed unbuffered and typed from its entry name, which is not a
-	// claim worth putting on the wire ahead of net/http's own sniff of
-	// the body — see ComicPageSet.TypedFromBytes.
-	if set.TypedFromBytes() {
-		c.Header("Content-Type", mime)
-	}
+	// Every container types its page from the page's own leading bytes
+	// now (#331): the extracted arms always did, and Page's ZIP arm
+	// sniffs its window before returning, so mime is never a guess from
+	// the entry's name here.
+	c.Header("Content-Type", mime)
 
 	if _, cerr := io.Copy(c.Writer, rc); cerr != nil {
 		// Headers, and possibly bytes, are already on the wire. This is
 		// a best effort at saying so rather than truncating in silence.
 		writeServerError(c, "stream comic page", cerr)
 		return
-	}
-	if !c.Writer.Written() {
-		// Belt-and-suspenders: if Copy wrote zero bytes (empty entry),
-		// still set the type so the browser knows what it got.
-		c.Header("Content-Type", mime)
 	}
 }
 
@@ -271,6 +272,14 @@ func writeComicError(c *gin.Context, op string, err error) {
 		// The book is on the shelf as a comic (every comic extension
 		// stamps CBZ) but its bytes are none of the containers the
 		// reader pages. A fact about the file, and one the UI can say.
+		writeError(c, http.StatusUnsupportedMediaType, err.Error())
+	case errors.Is(err, fileproc.ErrComicPageNotImage):
+		// The archive is a comic the reader pages, and this entry is
+		// one of its pages by name, but its own bytes are not a
+		// recognized image (#331). Same shape as ErrComicContainer one
+		// level up — a declared type the bytes do not back up — so it
+		// gets the same status rather than the generic 500 a decoder
+		// failure would.
 		writeError(c, http.StatusUnsupportedMediaType, err.Error())
 	case errors.Is(err, fileproc.ErrPageCacheFull):
 		// Nothing is wrong with the book or the server: every slot in

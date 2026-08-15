@@ -35,7 +35,7 @@ func TestNaturalLess(t *testing.T) {
 }
 
 // fakePNG is the minimal 1x1 PNG signature + IHDR + IDAT + IEND. Just
-// enough that mimeFromExt is happy and the cover bytes round-trip.
+// enough that SniffImageMime is happy and the cover bytes round-trip.
 var fakePNG = []byte{
 	0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a,
 	0x00, 0x00, 0x00, 0x0d, 'I', 'H', 'D', 'R',
@@ -288,9 +288,6 @@ func TestCBZPagesAndPageOverAnObjectStore(t *testing.T) {
 	if set.Len() != 3 {
 		t.Fatalf("Len() = %d, want 3", set.Len())
 	}
-	if set.TypedFromBytes() {
-		t.Error("the ZIP arm claims to type pages from their bytes")
-	}
 	if got := set.names; got[0] != "01.png" || got[1] != "02.png" || got[2] != "03.png" {
 		t.Errorf("page order wrong: %v", got)
 	}
@@ -307,7 +304,7 @@ func TestCBZPagesAndPageOverAnObjectStore(t *testing.T) {
 	if mime != "image/png" {
 		t.Errorf("mime = %q, want image/png", mime)
 	}
-	if got := buf.Bytes(); !bytes.Equal(got, pageFiller("02.png", 128<<10)) {
+	if got := buf.Bytes(); !bytes.Equal(got, imagePage("02.png", 128<<10)) {
 		t.Errorf("page 1 body is not the bytes of 02.png (%d bytes read)", len(got))
 	}
 
@@ -386,8 +383,15 @@ func pageFiller(name string, size int) []byte {
 	return out
 }
 
+// imagePage is pageFiller with a real PNG signature in front, so a page
+// built from it sniffs as image/png (#331) while staying large and
+// incompressible past the first 37 bytes.
+func imagePage(name string, size int) []byte {
+	return append(append([]byte{}, fakePNG...), pageFiller(name, size)...)
+}
+
 // incompressibleCBZ builds a CBZ whose entries are stored uncompressed,
-// each `size` bytes of filler.
+// each a PNG-signed, `size`-byte page of filler.
 func incompressibleCBZ(t *testing.T, names []string, size int) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -397,7 +401,7 @@ func incompressibleCBZ(t *testing.T, names []string, size int) []byte {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := w.Write(pageFiller(name, size)); err != nil {
+		if _, err := w.Write(imagePage(name, size)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -413,9 +417,9 @@ func incompressibleCBZ(t *testing.T, names []string, size int) []byte {
 func TestCBZPagesAndPage(t *testing.T) {
 	dir := t.TempDir()
 	writeCBZ(t, dir, map[string][]byte{
-		"03.png": []byte("three"),
-		"01.png": []byte("one"),
-		"02.png": []byte("two"),
+		"03.png": comicPage("three"),
+		"01.png": comicPage("one"),
+		"02.png": comicPage("two"),
 	})
 	fs, err := local.New(dir)
 	if err != nil {
@@ -448,11 +452,80 @@ func TestCBZPagesAndPage(t *testing.T) {
 	if mime != "image/png" {
 		t.Errorf("mime = %q", mime)
 	}
-	if buf.String() != "two" {
-		t.Errorf("page 1 body = %q, want 'two'", buf.String())
+	if want := comicPage("two"); !bytes.Equal(buf.Bytes(), want) {
+		t.Errorf("page 1 body = %q, want %q", buf.Bytes(), want)
 	}
 
 	if _, _, err := set.Page(99); err == nil {
 		t.Error("expected error for out-of-range page")
+	}
+}
+
+// A page whose entry name says image but whose bytes do not answers
+// ErrComicPageNotImage rather than a stream typed from the name (#331).
+// The .png name is what let this entry into comicPages' filter in the
+// first place; the point of the sniff is that the filter's say-so is
+// not enough to decide what a browser is told the bytes are.
+func TestCBZPageWithNonImageBytesRefuses(t *testing.T) {
+	dir := t.TempDir()
+	writeCBZ(t, dir, map[string][]byte{
+		"01.png": []byte("this is not an image, whatever its name claims"),
+	})
+	fs, err := local.New(dir)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	set, err := OpenComicPages(context.Background(), nil, "", func() (storage.Source, error) {
+		return fs.Open(context.Background(), "test.cbz")
+	})
+	if err != nil {
+		t.Fatalf("OpenComicPages: %v", err)
+	}
+	defer func() { _ = set.Close() }()
+
+	rc, _, err := set.Page(0)
+	if err == nil {
+		_ = rc.Close()
+		t.Fatal("expected an error for a page whose bytes are not an image")
+	}
+	if !errors.Is(err, ErrComicPageNotImage) {
+		t.Errorf("err = %v, want errors.Is(err, ErrComicPageNotImage)", err)
+	}
+}
+
+// A page entry shorter than the sniff window must still be typed
+// correctly rather than crashing on a short read: PNG's magic is 8
+// bytes and this entry is exactly that, nothing more.
+func TestCBZPageShorterThanTheSniffWindow(t *testing.T) {
+	dir := t.TempDir()
+	writeCBZ(t, dir, map[string][]byte{
+		"01.png": fakePNG[:8],
+	})
+	fs, err := local.New(dir)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	set, err := OpenComicPages(context.Background(), nil, "", func() (storage.Source, error) {
+		return fs.Open(context.Background(), "test.cbz")
+	})
+	if err != nil {
+		t.Fatalf("OpenComicPages: %v", err)
+	}
+	defer func() { _ = set.Close() }()
+
+	rc, mime, err := set.Page(0)
+	if err != nil {
+		t.Fatalf("Page(0): %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	if mime != "image/png" {
+		t.Errorf("mime = %q, want image/png", mime)
+	}
+	got, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("read page: %v", err)
+	}
+	if !bytes.Equal(got, fakePNG[:8]) {
+		t.Errorf("body = %x, want %x", got, fakePNG[:8])
 	}
 }

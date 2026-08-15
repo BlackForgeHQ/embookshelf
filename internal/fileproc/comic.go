@@ -160,30 +160,6 @@ func extractComic(ctx context.Context, kind string, a comicArchive) (Metadata, e
 	return m, nil
 }
 
-// mimeFromExt covers the image formats comic archives actually ship with.
-//
-// Extension-derived and therefore never a cover's persisted type — see
-// SniffImageMime. It survives as the content type for a *ZIP* comic
-// page, which ComicPageSet streams straight out of the archive without
-// ever buffering it, so there is nothing to sniff in time; the page
-// filter admits only .jpg/.jpeg/.png/.webp/.gif, so the answer is always
-// one of the raster types. The extracted containers do not use it — they
-// have the page on disk and type it from its own bytes (#329) — and
-// #331 is about closing the gap for ZIP.
-func mimeFromExt(ext string) string {
-	switch strings.ToLower(ext) {
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".png":
-		return "image/png"
-	case ".gif":
-		return "image/gif"
-	case ".webp":
-		return "image/webp"
-	}
-	return "application/octet-stream"
-}
-
 func applyComicInfo(m *Metadata, info comicInfoXML) {
 	title := strings.TrimSpace(info.Title)
 	series := strings.TrimSpace(info.Series)
