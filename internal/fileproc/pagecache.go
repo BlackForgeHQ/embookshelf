@@ -143,12 +143,18 @@ type cachedPage struct {
 	// does, and asking for it answers fail.
 	file string
 	// mime is the type sniffed from the page's own leading bytes, never
-	// from the entry name (SniffImageMime). Empty when the bytes are not
-	// an image this recognises.
+	// from the entry name (SniffImageMime). Always set when file is: an
+	// entry whose bytes are not a recognised image is refused at fill
+	// time and keeps no file (#334).
 	mime string
 	size int64
 	// fail says why this page has no file, when it has none.
 	fail string
+	// notImage marks the one refusal that is a contract, not an accident:
+	// the entry's bytes are not a recognised image, and Page answers
+	// ErrComicPageNotImage — the same sentinel the ZIP arm serves — so
+	// the two arms cannot be told apart by their error modes.
+	notImage bool
 }
 
 // pageExtractor extracts a comic's pages into dir and describes them. It
