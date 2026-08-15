@@ -10,14 +10,11 @@ import (
 	"log/slog"
 	"os"
 	"path"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/scan"
-	"github.com/blackforge/embookshelf/internal/sidecar"
 	"github.com/blackforge/embookshelf/internal/storage"
 )
 
@@ -100,7 +97,8 @@ type LibraryByIDReader interface {
 // ADR lives.
 //
 // The mechanical questions do not come here. Every question about *keys*
-// — walking, resolving a location, writing one — goes through keyRoot,
+// — walking, resolving a location, writing one — goes through the keys
+// seam (library_keys.go),
 // and every question about *serving* bytes goes through FileSource; both
 // ask this once on their caller's behalf. A caller reading the capability
 // to derive a key or a delivery mode is answering a question that already
@@ -126,36 +124,29 @@ func (h *LibraryHandle) IsObjectStore() bool {
 	return h.Storage.Capabilities()&storage.CapObjectStore != 0
 }
 
-// keyRoot is the prefix this library's own keys hang off, and whether it
-// has one at all.
-//
-// The single place the handle asks IsObjectStore to answer a question
-// about *keys*. An object store owns its own per-library prefix, so a
-// stored location is already the key it answers to and an empty root is
-// the correct answer. The local backend is rooted at "/" for the whole
-// instance (ADR-0030 §1), so a location means nothing until it is joined
-// onto the library's own root.
-//
-// Telling those two empties apart is why there is a second return value,
-// and it is not a formality: for an object store an empty root is by
-// design, while for a local library it means unconfigured, and every
-// caller that took the location as a key anyway did real damage — a walk
-// that did reported the whole library empty and flagged every row for
-// the purge sweeper (#203), and a write that did puts a book's file at
-// the filesystem root. Callers name that case in their own vocabulary
-// (ErrNoWalkRoot, ErrNoPlaceRoot) because what it costs differs.
-func (h *LibraryHandle) keyRoot() (string, bool) {
-	if h.IsObjectStore() {
-		return "", true
-	}
-	root := h.localRoot()
-	return root, root != ""
+// keys is the handle's key-arithmetic seam (#346): every question
+// about keys goes through this one pure value — see library_keys.go,
+// where the rules and their tests live. The single place the handle
+// asks IsObjectStore to answer a question about *keys*.
+func (h *LibraryHandle) keys() libraryKeys {
+	return libraryKeys{lib: h.Library, objectStore: h.IsObjectStore()}
 }
 
-// localRoot is the library's on-disk root, preferring the storage-v2
-// Root column and falling back to the legacy Path.
-func (h *LibraryHandle) localRoot() string {
-	return libraryLocalRoot(h.Library)
+// bookFiles is the handle's files-table seam (#346): the four lookups
+// and their one absence policy live in book_files.go.
+func (h *LibraryHandle) bookFiles() bookFiles {
+	return bookFiles{lister: h.files}
+}
+
+// delivery is the handle's delivery seam (#346): how bytes reach a
+// client, over the keys seam and the presign config — book_delivery.go.
+func (h *LibraryHandle) delivery() bookDelivery {
+	return bookDelivery{
+		store:           h.Storage,
+		keys:            h.keys(),
+		presignTTL:      h.presignTTL,
+		presignFallback: h.presignFallback,
+	}
 }
 
 // libraryLocalRoot is the one reading of "where does this library live on
@@ -229,11 +220,7 @@ func BookFileRoots(ctx context.Context, bookDropPath string, libs LibraryLister)
 // no filesystem to resolve against, and for a local library with no root
 // configured, which has nothing to resolve against yet.
 func (h *LibraryHandle) LocalPath(location string) string {
-	root, ok := h.keyRoot()
-	if !ok || root == "" {
-		return ""
-	}
-	return filepath.Join(root, filepath.FromSlash(location))
+	return h.keys().localPath(location)
 }
 
 // StorageKey turns a files.location into the key this library's Storage
@@ -263,23 +250,7 @@ func (h *LibraryHandle) LocalPath(location string) string {
 // LocalPath returning "" for them means here, rather than a second
 // reading of the same capability bit.
 func (h *LibraryHandle) StorageKey(location string) string {
-	// Already absolute: a legacy row. books.path predates storage-v2, and
-	// the storage-v2 backfill wrote files.location verbatim whenever the
-	// library root was unknown at seed time (migrator.seedFilesFromBooks,
-	// which its own tests pin). Such a string is already the key a
-	// "/"-rooted LocalFS wants; joining it onto the root asks for
-	// /lib/root/lib/root/… and finds nothing.
-	//
-	// This is what makes the shim total over both shapes, which is what
-	// lets the edit-side write pipeline read books.path — mixed to this
-	// day — through it (#168).
-	if filepath.IsAbs(location) {
-		return location
-	}
-	if abs := h.LocalPath(location); abs != "" {
-		return abs
-	}
-	return location
+	return h.keys().storageKey(location)
 }
 
 // OpenBook returns the book's bytes, wherever they live. Callers that
@@ -292,8 +263,8 @@ func (h *LibraryHandle) StorageKey(location string) string {
 //
 // The returned Closer is always non-nil on success and must be closed.
 func (h *LibraryHandle) OpenBook(ctx context.Context, book model.Book) (io.Reader, int64, io.Closer, error) {
-	if h.Storage != nil && h.files != nil {
-		if f, err := primaryFile(ctx, h.files, book); err == nil {
+	if h.Storage != nil {
+		if f, err := h.bookFiles().primaryRow(ctx, book); err == nil {
 			key := h.StorageKey(f.Location)
 			src, oerr := h.Storage.Open(ctx, key)
 			if oerr != nil {
@@ -317,6 +288,18 @@ func (h *LibraryHandle) OpenBook(ctx context.Context, book model.Book) (io.Reade
 	}
 	return file, info.Size(), file, nil
 }
+
+// errNoStorage is the one spelling of "this handle resolved no
+// Storage" — a transient backend failure at For time; the library is
+// still useful for metadata reads, and every byte-touching method
+// refuses with this rather than its own sentence (#346).
+var errNoStorage = errors.New("library handle: no storage")
+
+// ErrNoOrphanQueue says an object-store byte delete had no pending-
+// orphans queue to defer into, so the bytes were left behind. Rides the
+// bytes-step warning path of DeleteBookAndBytes / DeleteNarrationAndBytes
+// — never fails the row delete.
+var ErrNoOrphanQueue = errors.New("no orphan queue wired; bytes not scheduled for deletion")
 
 // BookDeleteGrace is how long a deleted book's bytes linger on a
 // backend-backed library before the sweeper removes them. Comfortably
@@ -367,67 +350,34 @@ func (h *LibraryHandle) DeleteBookAndBytes(
 // A nil error with no keys is the normal answer for a book whose files
 // were never backfilled.
 func (h *LibraryHandle) BookFileLocations(ctx context.Context, bookID string) ([]string, error) {
-	if h.files == nil {
-		return nil, nil
-	}
-	list, err := h.files.ListByBook(ctx, bookID)
-	if err != nil {
-		return nil, fmt.Errorf("list files for book %s: %w", bookID, err)
-	}
-	out := make([]string, 0, len(list))
-	for _, f := range list {
-		if f.Location != "" {
-			out = append(out, f.Location)
-		}
-	}
-	return out, nil
+	return h.bookFiles().locations(ctx, bookID)
 }
 
 // BookFile returns one of a book's files rows by id. Used by callers
 // that hold a pointer to a specific rendition rather than a format.
 func (h *LibraryHandle) BookFile(ctx context.Context, bookID, fileID string) (model.File, bool) {
-	if h.files == nil || fileID == "" {
-		return model.File{}, false
-	}
-	list, err := h.files.ListByBook(ctx, bookID)
-	if err != nil {
-		return model.File{}, false
-	}
-	for _, f := range list {
-		if f.ID == fileID {
-			return f, true
-		}
-	}
-	return model.File{}, false
+	return h.bookFiles().byID(ctx, bookID, fileID)
 }
 
 // PrimaryFile returns the book's own files row — the one whose format
-// matches books.format, the same choice PrimaryContentHash makes.
+// matches books.format, the same choice the primary-hash lookup makes.
 //
 // found separates "this book has no files rows at all" — a legacy row
 // carrying only books.path, which callers degrade for — from an error,
 // which is a lookup that broke and must not be read as an absent file.
-// PrimaryContentHash folds both into nil because a hash is advisory
+// The hash lookup folds both into nil because a hash is advisory
 // there; a caller deciding where to read bytes from cannot.
 func (h *LibraryHandle) PrimaryFile(ctx context.Context, book model.Book) (model.File, bool, error) {
-	if h.files == nil {
-		return model.File{}, false, nil
-	}
-	return lookUpPrimaryFile(ctx, h.files, book)
+	return h.bookFiles().primary(ctx, book)
 }
 
-// PrimaryContentHash is the hash of the book's own file — the one whose
-// format matches books.format, i.e. the thing a narration is made from
-// rather than the narration itself.
-func (h *LibraryHandle) PrimaryContentHash(ctx context.Context, book model.Book) []byte {
-	if h.files == nil {
-		return nil
-	}
-	f, err := primaryFile(ctx, h.files, book)
-	if err != nil {
-		return nil
-	}
-	return f.ContentHash
+// primaryContentHash is the hash of the book's own file — the one
+// whose format matches books.format, i.e. the thing a narration is made
+// from rather than the narration itself. Unexported since #346:
+// NewPrimaryHash is its one consumer, and every tier reaches the hash
+// through that constructor so the degrade policy stays shared.
+func (h *LibraryHandle) primaryContentHash(ctx context.Context, book model.Book) []byte {
+	return h.bookFiles().primaryHash(ctx, book)
 }
 
 // NewPrimaryHash is the "which bytes is this book, right now" lookup —
@@ -444,7 +394,7 @@ func NewPrimaryHash(store LibraryStore) func(context.Context, model.Book) []byte
 			slog.Warn("primary hash: resolve library", "book", book.ID, "err", err)
 			return nil
 		}
-		return handle.PrimaryContentHash(ctx, book)
+		return handle.primaryContentHash(ctx, book)
 	}
 }
 
@@ -473,7 +423,15 @@ func (h *LibraryHandle) DeleteBookBytes(ctx context.Context, bookID string, loca
 
 	if h.IsObjectStore() {
 		if h.orphans == nil {
-			return nil
+			// Without an orphan queue the byte delete cannot be deferred
+			// safely, and answering nil here was a silent leak of
+			// everything the book owned (#346). Callers treat this error
+			// as a warning beside the authoritative row delete — the
+			// delete still succeeds, the leak is on the record (#297's
+			// warn-not-absorb direction).
+			slog.Warn("delete book bytes: no orphan queue; object-store bytes left behind",
+				"book", bookID, "library", h.Library.ID, "keys", len(locations))
+			return fmt.Errorf("book %s: %w", bookID, ErrNoOrphanQueue)
 		}
 		id := bookID
 		rows := make([]repo.PendingOrphanInsert, 0, len(locations))
@@ -494,7 +452,10 @@ func (h *LibraryHandle) DeleteBookBytes(ctx context.Context, bookID string, loca
 	}
 
 	if h.Storage == nil {
-		return nil
+		// The same stated-degrade rule as the orphan arm: a handle whose
+		// backend did not resolve cannot delete anything, and answering
+		// nil would report bytes cleaned that are still there (#346).
+		return fmt.Errorf("book %s: %w", bookID, errNoStorage)
 	}
 	var failures []error
 	for _, location := range locations {
@@ -509,6 +470,36 @@ func (h *LibraryHandle) DeleteBookBytes(ctx context.Context, bookID string, loca
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// DeleteNarrationAndBytes removes one of a book's files rows and the bytes
+// it named, in the only order that works, by taking the row delete as its
+// middle step.
+//
+// The narration counterpart to DeleteBookAndBytes, and a separate
+// operation rather than a call to it because the book outlives its
+// narration: DeleteBookAndBytes snapshots every location the book owns,
+// which here would take the EPUB the narration was made from.
+//
+// A row whose location cannot be read is reported rather than passed over.
+// That silence is exactly how the audio came to outlive the narration: a
+// lookup that answers "not found" and a cleanup that declines look
+// identical to a caller, and one of them means half a gigabyte is still
+// being paid for.
+func (h *LibraryHandle) DeleteNarrationAndBytes(
+	ctx context.Context,
+	bookID, fileID string,
+	deleteRow func(context.Context) error,
+) (bytesErr error, err error) {
+	f, found := h.BookFile(ctx, bookID, fileID)
+	if err := deleteRow(ctx); err != nil {
+		return nil, err
+	}
+	if !found || f.Location == "" {
+		return fmt.Errorf("narration file %s of book %s has no readable location; its bytes are left behind",
+			fileID, bookID), nil
+	}
+	return h.DeleteBookBytes(ctx, bookID, []string{f.Location}), nil
 }
 
 // OpenBookSource is OpenBook for callers that need random access — the
@@ -544,13 +535,6 @@ type readerAtSource struct {
 
 func (s readerAtSource) Size() int64  { return s.size }
 func (s readerAtSource) Close() error { return s.closer.Close() }
-
-// SidecarKey returns the paired JSON sidecar storage key for a book
-// file's storage key. Delegates to sidecar.KeyFor so the derivation
-// rule lives in one place.
-func (h *LibraryHandle) SidecarKey(bookLocation string) string {
-	return sidecar.KeyFor(bookLocation)
-}
 
 // Relativize is gone with its only caller. The scan worker walked from
 // the library root and un-absolutized each entry against it; Walk below
@@ -615,9 +599,9 @@ var ErrNoWalkRoot = errors.New("library has no local root to walk")
 // ctx themselves, and the error comes back with the partial listing.
 func (h *LibraryHandle) Walk(ctx context.Context) ([]scan.WalkEntry, error) {
 	if h.Storage == nil {
-		return nil, errors.New("library handle: no storage")
+		return nil, errNoStorage
 	}
-	prefix, ok := h.keyRoot()
+	prefix, ok := h.keys().root()
 	if !ok {
 		return nil, ErrNoWalkRoot
 	}
@@ -652,43 +636,6 @@ func (h *LibraryHandle) Walk(ctx context.Context) ([]scan.WalkEntry, error) {
 	}
 }
 
-// walkBase is the prefix in the shape the backend reports keys under it:
-// cleaned, slash-separated, leading slash off, because a listing key is
-// relative to the backend's own root.
-func walkBase(prefix string) string {
-	if prefix == "" {
-		return ""
-	}
-	return strings.TrimPrefix(filepath.ToSlash(filepath.Clean(prefix)), "/")
-}
-
-// trimWalkBase turns a key the backend reported into a location relative
-// to the walked prefix.
-//
-// It compares with the leading slash off both sides for the same reason
-// the conformance suite does (storagetest.rebased.in): a "/"-rooted
-// backend answers to "/a/b" but reports "a/b". A key that does not sit
-// under the prefix at all comes back untouched — the backend only lists
-// what is under the prefix it was given, so there is no case for this to
-// paper over, and silently rewriting one would hide a backend that broke
-// that contract.
-func trimWalkBase(key, base string) string {
-	if base == "" {
-		return key
-	}
-	k := strings.TrimPrefix(key, "/")
-	switch {
-	case k == base:
-		// The library root is itself a file. Degenerate, but it must
-		// still name something.
-		return path.Base(k)
-	case strings.HasPrefix(k, base+"/"):
-		return k[len(base)+1:]
-	default:
-		return key
-	}
-}
-
 // Open opens a Source at a library-relative location — a Markdown
 // rendition row's, or any other location this library's placements
 // recorded.
@@ -702,7 +649,7 @@ func trimWalkBase(key, base string) string {
 // rooting mistake this one exists to prevent (#337).
 func (h *LibraryHandle) Open(ctx context.Context, location string) (storage.Source, error) {
 	if h.Storage == nil {
-		return nil, errors.New("library handle: no storage")
+		return nil, errNoStorage
 	}
 	return h.Storage.Open(ctx, h.StorageKey(location))
 }
@@ -745,7 +692,7 @@ var ErrNoPlaceRoot = errors.New("library has no local root to place into")
 // Approve lives with that; a write path being built today should not
 // inherit it. The mechanics are not duplicated either way: an object
 // store and a local library differ only in what their keys are rooted at,
-// which keyRoot already answers, and both write through the one Put.
+// which the keys seam already answers, and both write through the one Put.
 //
 // Going through the backend rather than moving the file by hand is also
 // what makes the failure clean. Both adapters write all-or-nothing —
@@ -766,9 +713,9 @@ var ErrNoPlaceRoot = errors.New("library has no local root to place into")
 // scan reads the file once and settles the row.
 func (h *LibraryHandle) PlaceAt(ctx context.Context, location, srcPath, format string) (PlaceResult, error) {
 	if h.Storage == nil {
-		return PlaceResult{}, errors.New("library handle: no storage")
+		return PlaceResult{}, errNoStorage
 	}
-	if _, ok := h.keyRoot(); !ok {
+	if _, ok := h.keys().root(); !ok {
 		return PlaceResult{}, ErrNoPlaceRoot
 	}
 	info, err := os.Stat(srcPath)
@@ -826,9 +773,9 @@ func (h *LibraryHandle) BookSource(ctx context.Context, book model.Book) (BookSo
 		return BookSource{Kind: BookDeliveryLocal, Path: book.Path}, nil
 	}
 
-	f, ferr := primaryFile(ctx, h.files, book)
+	f, ferr := h.bookFiles().primaryRow(ctx, book)
 	if ferr == nil {
-		return h.FileSource(ctx, f.Location)
+		return h.delivery().fileSource(ctx, f.Location)
 	}
 
 	if book.Path != "" {
@@ -837,49 +784,13 @@ func (h *LibraryHandle) BookSource(ctx context.Context, book model.Book) (BookSo
 	return BookSource{}, fmt.Errorf("book source: %w", ferr)
 }
 
-// FileSource is the delivery decision for one stored location, which is
-// the whole of the decision — BookSource above is this plus the question
-// of which of a book's files is the primary one.
-//
-// Split out because a book has more than one thing to serve. The reader
-// dispatches on the rendition the user picked rather than on books.format
-// (ADR-0025 §3), so the generated narration is served by location while
-// the EPUB is served by primaryFile, and the narration path answered the
-// delivery question a second time to get there: it read the object-store
-// capability itself and hardcoded a stream. Whatever the deployment
-// configured, the audio was piped through the app server — so an install
-// that turned presign on redirected its EPUBs and streamed its
-// half-gigabyte MP3s, which is the case presign exists for. One selector
-// must not mean two delivery policies.
-//
-// The key rule is not restated either: StorageKey answers it for both
-// kinds of backend, so an object store gets the location it already
-// answers to and a local library gets it rooted (#168).
+// FileSource is the delivery decision for one stored location, which
+// is the whole of the decision — BookSource above is this plus the
+// question of which of a book's files is the primary one. The policy —
+// presign vs stream vs local, and why one selector must not mean two
+// delivery policies — lives on the delivery seam (book_delivery.go).
 func (h *LibraryHandle) FileSource(ctx context.Context, location string) (BookSource, error) {
-	if location == "" {
-		return BookSource{}, errors.New("file source: no location")
-	}
-	if h.Storage == nil {
-		// No Storage resolved: the local filesystem is all that is left,
-		// and only a local library has a path to offer.
-		if path := h.LocalPath(location); path != "" {
-			return BookSource{Kind: BookDeliveryLocal, Path: path}, nil
-		}
-		return BookSource{}, errors.New("file source: library has no storage")
-	}
-
-	key := h.StorageKey(location)
-	if h.presignFallback == BookDeliveryPresign && h.Storage.Capabilities()&storage.CapPresign != 0 {
-		if ps, ok := h.Storage.(Presigner); ok {
-			// A failed signature falls through to streaming rather than
-			// failing the read: the bytes are reachable either way, and the
-			// redirect is an optimisation.
-			if url, err := ps.PresignGet(ctx, key, h.presignTTL); err == nil {
-				return BookSource{Kind: BookDeliveryPresign, URL: url, TTL: h.presignTTL}, nil
-			}
-		}
-	}
-	return BookSource{Kind: BookDeliveryStream, Storage: h.Storage, Key: key}, nil
+	return h.delivery().fileSource(ctx, location)
 }
 
 // BookSource describes how a book file should be delivered.

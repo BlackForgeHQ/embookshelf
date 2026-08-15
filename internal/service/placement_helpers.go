@@ -43,7 +43,7 @@ import (
 //
 // The zero value is the object-store root: empty, because such a
 // library has no filesystem and its stored locations are already the
-// keys its backend answers to (keyRoot, ADR-0030 §1). Only the
+// keys its backend answers to (the keys seam, ADR-0030 §1). Only the
 // collision probe is meaningful on it, and freeDirBackend is the one
 // method that accepts it.
 type libRoot struct {
