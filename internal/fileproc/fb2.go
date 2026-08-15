@@ -143,10 +143,8 @@ func (FB2Processor) Extract(ctx context.Context, src storage.Source) (Metadata, 
 	// points at a missing or malformed binary never fails the whole
 	// extraction, since the title/author/annotation are still good.
 	if href := fb2CoverHref(ti); href != "" {
-		if b, mime, ok := fb2ReadCover(doc.Binaries, href); ok {
-			m.HasCover = true
-			m.CoverBytes = b
-			m.CoverMime = mime
+		if b, _, ok := fb2ReadCover(doc.Binaries, href); ok {
+			m.setCover(b)
 		}
 	}
 

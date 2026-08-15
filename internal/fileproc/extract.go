@@ -13,28 +13,6 @@ import (
 	"github.com/blackforge/embookshelf/internal/storage"
 )
 
-// ExtractResult is the unified output of one extraction pass over a book
-// file: format-specific metadata from the embedded Processor, the cover
-// bytes (if any), audio-only fields, and the merged Sidecar overlay.
-//
-// Sole consumer is the BookDrop ingest path — under ADR-0018, Library
-// scan never extracts.
-type ExtractResult struct {
-	Format      string
-	Title       string
-	Author      string
-	Description string
-	Language    string
-	ISBN        string
-	HasCover    bool
-	CoverBytes  []byte
-	CoverMime   string
-	// DurationSeconds is non-nil only for audio formats with a readable
-	// header.
-	DurationSeconds *int
-	Narrator        string
-}
-
 // DispatchFormat returns the Processor for a books.format slug.
 //
 // The slug-keyed twin of Dispatch, which keys off a file extension. Both
@@ -58,13 +36,18 @@ func DispatchFormat(format string) (Processor, error) {
 }
 
 // ExtractBook runs the format-specific Processor against an open Source,
-// reads any Sidecar at the same key, and returns the merged result. No
+// reads any Sidecar at the same key, and returns the merged Metadata. No
 // DB, no queue, no service dependencies — just the I/O on src and store.
+// Sole consumer is the BookDrop ingest path — under ADR-0018, Library
+// scan never extracts. (It used to return its own 12-field copy of
+// Metadata; the copy carried one consumer and no behaviour — #335.)
 //
 // The file's own extension wins over the caller's format slug when the
 // key carries one, because the key is what the bytes actually are; the
 // slug is what a row claims they are. store may be nil and key may be
-// empty when the caller wants no Sidecar overlay.
+// empty when the caller wants no Sidecar overlay. The returned Format is
+// the caller's slug when one was given, the key-resolved format
+// otherwise.
 //
 // Errors are returned for transient failures (open, extract). A missing
 // Sidecar is not an error — the result simply lacks the overlay. A
@@ -75,14 +58,14 @@ func ExtractBook(
 	src storage.Source,
 	format string,
 	key string,
-) (ExtractResult, error) {
+) (Metadata, error) {
 	if src == nil {
-		return ExtractResult{}, errors.New("fileproc: nil source")
+		return Metadata{}, errors.New("fileproc: nil source")
 	}
 
 	proc, resolved, err := dispatchKeyOrFormat(key, format)
 	if err != nil {
-		return ExtractResult{}, fmt.Errorf("dispatch: %w", err)
+		return Metadata{}, fmt.Errorf("dispatch: %w", err)
 	}
 	if format == "" {
 		format = resolved
@@ -90,7 +73,7 @@ func ExtractBook(
 
 	meta, err := proc.Extract(ctx, src)
 	if err != nil {
-		return ExtractResult{}, fmt.Errorf("extract: %w", err)
+		return Metadata{}, fmt.Errorf("extract: %w", err)
 	}
 
 	if store != nil && key != "" {
@@ -108,25 +91,15 @@ func ExtractBook(
 	// is the seam where that stops being true (#330).
 	meta = normalizeCover(meta)
 
-	out := ExtractResult{
-		Format:      format,
-		Title:       meta.Title,
-		Author:      meta.Author,
-		Description: meta.Description,
-		Language:    meta.Language,
-		ISBN:        meta.ISBN,
-		HasCover:    meta.HasCover,
-		CoverBytes:  meta.CoverBytes,
-		CoverMime:   meta.CoverMime,
-	}
+	meta.Format = format
 	// Audio takes a different ingest path: duration and narrator come from
 	// tag metadata rather than a text extractor, and are meaningless on a
 	// format that has no tags to read.
-	if IsAudioFormat(format) {
-		out.DurationSeconds = meta.DurationSeconds
-		out.Narrator = meta.Narrator
+	if !IsAudioFormat(format) {
+		meta.DurationSeconds = nil
+		meta.Narrator = ""
 	}
-	return out, nil
+	return meta, nil
 }
 
 // dispatchKeyOrFormat resolves a Processor from the storage key's

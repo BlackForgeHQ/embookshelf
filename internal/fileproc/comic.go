@@ -245,11 +245,7 @@ func extractComic(ctx context.Context, kind string, a comicArchive) (Metadata, e
 	// refusal epub.go, audio.go, fb2.go and mobi.go make at their own
 	// layer.
 	if b, ok := got[coverName]; ok {
-		if mime := SniffImageMime(b); mime != "" {
-			m.HasCover = true
-			m.CoverBytes = b
-			m.CoverMime = mime
-		}
+		m.setCover(b)
 	}
 
 	return m, nil

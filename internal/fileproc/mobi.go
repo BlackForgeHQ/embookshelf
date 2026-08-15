@@ -164,10 +164,8 @@ func (MOBIProcessor) Extract(ctx context.Context, src storage.Source) (Metadata,
 	// Best-effort, like EPUB's and FB2's: a cover pointer into nowhere
 	// leaves the book cover-less rather than failing metadata that is
 	// otherwise perfectly good.
-	if b, mime, ok := mobiCover(src, db, h, exth); ok {
-		m.HasCover = true
-		m.CoverBytes = b
-		m.CoverMime = mime
+	if b, _, ok := mobiCover(src, db, h, exth); ok {
+		m.setCover(b)
 	}
 
 	return m, nil
