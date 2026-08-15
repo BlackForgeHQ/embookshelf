@@ -69,10 +69,24 @@ existing bulk conversion when they want old books re-converted; the
 recorded converter version already tells them which rows predate the
 switch.
 
-## Conditional
+## What the smoke test changed (2026-08-16)
 
-pdf-inspector's converter quality and its Mixed/Scanned line are
-README claims until smoke-tested against 2–3 real PDFs from a live
-library, compared with anydoc's current output. If quality disappoints,
-it stays as the classifier only (decision 4 reverts to anydoc
-conversion; everything else stands).
+The conditional ran and rewrote two decisions. **anydoc's PDF engine
+*is* pdf-inspector** — anydoc 0.1.9 depends on pdf-inspector 1.14.2,
+and their markdown output is byte-identical on every fixture tried. So:
+
+- Decision 4's "pdf-inspector's converter replaces anydoc" is moot:
+  bumping anydoc (the shipped lock held 0.1.7, three majors of
+  pdf-inspector behind) *is* the conversion improvement. anydoc stays
+  the one converter for every format.
+- Decision 5's two-engine fallback is moot for the same reason — there
+  is one engine. The gate instead **never blocks on its own failure**:
+  a PDF the inspector cannot read falls through to anydoc's own error.
+- The classifier's enum is three-way (TextBased/Scanned/Mixed — no
+  ImageBased), and its sampling waves through a mostly-image book with
+  a typed title page (classified TextBased, converts to a few bytes).
+  Hence a third gate half decision 4 didn't anticipate: the
+  **sparse-output gate** — after conversion, a PDF of ≥5 pages whose
+  markdown is under a per-page floor is refused with `class: "sparse"`;
+  the output is the proof, whatever the sampled verdict said. The
+  refusal classes are therefore `scanned` | `mixed` | `sparse`.

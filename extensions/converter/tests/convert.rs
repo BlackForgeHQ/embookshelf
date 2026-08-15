@@ -94,3 +94,49 @@ async fn healthz_answers_ok() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+// --- the PDF gate (ADR-0036) -----------------------------------------
+
+// A scanned PDF is refused before conversion, with the class a future
+// OCR stage routes on and the per-page evidence in the sentence — never
+// converted into an empty document that silently feeds the guide and
+// the generated EPUB.
+#[tokio::test]
+async fn refuses_a_scanned_pdf_with_class_and_evidence() {
+    let bytes = include_bytes!("fixtures/scanned.pdf");
+    let (status, _, body) = post_convert(bytes).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "got: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["class"], "scanned", "got: {body}");
+    let msg = json["error"].as_str().unwrap();
+    assert!(
+        msg.contains("3 pages") && msg.contains("OCR"),
+        "the sentence must carry the page evidence and name OCR, got: {msg}"
+    );
+}
+
+// The sparse-output gate: a typed title page ahead of nine no-text
+// pages reads TextBased to the sampling classifier, and used to convert
+// to a few bytes of markdown — the silent-degrade case the gate exists
+// for. The output is the proof, whatever the classifier said.
+#[tokio::test]
+async fn refuses_a_pdf_whose_conversion_is_effectively_empty() {
+    let bytes = include_bytes!("fixtures/sparse.pdf");
+    let (status, _, body) = post_convert(bytes).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "got: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["class"], "sparse", "got: {body}");
+    assert!(
+        json["error"].as_str().unwrap().contains("10 pages"),
+        "got: {body}"
+    );
+}
+
+// A text PDF of ordinary prose density sails through both gate halves.
+#[tokio::test]
+async fn converts_a_multipage_text_pdf_through_the_gate() {
+    let bytes = include_bytes!("fixtures/prose.pdf");
+    let (status, _, body) = post_convert(bytes).await;
+    assert_eq!(status, StatusCode::OK, "got: {body}");
+    assert!(body.contains("clocks were striking thirteen"), "got: {body}");
+}
