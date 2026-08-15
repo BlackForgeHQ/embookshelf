@@ -103,36 +103,6 @@ type narrationBytes interface {
 // DeleteNarrationAndBytes removes one of a book's files rows and the bytes
 // it named, in the only order that works, by taking the row delete as its
 // middle step.
-//
-// The narration counterpart to DeleteBookAndBytes, and a separate
-// operation rather than a call to it because the book outlives its
-// narration: DeleteBookAndBytes snapshots every location the book owns,
-// which here would take the EPUB the narration was made from.
-//
-// A row whose location cannot be read is reported rather than passed over.
-// That silence is exactly how the audio came to outlive the narration: a
-// lookup that answers "not found" and a cleanup that declines look
-// identical to a caller, and one of them means half a gigabyte is still
-// being paid for.
-//
-// Lives here, beside the narration delete it serves, rather than next to
-// DeleteBookAndBytes in library_store.go — worth moving when that file is
-// free to edit.
-func (h *LibraryHandle) DeleteNarrationAndBytes(
-	ctx context.Context,
-	bookID, fileID string,
-	deleteRow func(context.Context) error,
-) (bytesErr error, err error) {
-	f, found := h.BookFile(ctx, bookID, fileID)
-	if err := deleteRow(ctx); err != nil {
-		return nil, err
-	}
-	if !found || f.Location == "" {
-		return fmt.Errorf("narration file %s of book %s has no readable location; its bytes are left behind",
-			fileID, bookID), nil
-	}
-	return h.DeleteBookBytes(ctx, bookID, []string{f.Location}), nil
-}
 
 // Preflight resolves everything a run needs before it can start: the
 // settings row, the enabled gate, the engine selection, the Narratable

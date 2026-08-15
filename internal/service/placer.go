@@ -100,7 +100,10 @@ func DefaultPlacerBuilder(resolver storage.Resolver) PlacerBuilder {
 			if err != nil {
 				return nil, fmt.Errorf("resolve backend: %w", err)
 			}
-			if (&LibraryHandle{Library: lib, Storage: store}).IsObjectStore() {
+			// The capability bit directly — the same question
+			// IsObjectStore answers, without building a throwaway handle
+			// to ask it (#346).
+			if store.Capabilities()&storage.CapObjectStore != 0 {
 				return BackendPlacer{Store: store}, nil
 			}
 		}

@@ -16,6 +16,8 @@ import (
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/scan"
 	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/service/servicetest"
+	"github.com/blackforge/embookshelf/internal/sidecar"
 	"github.com/blackforge/embookshelf/internal/storage"
 	"github.com/blackforge/embookshelf/internal/storage/local"
 )
@@ -442,10 +444,9 @@ func TestPlaceAtLeavesNothingBehindWhenTheWriteFails(t *testing.T) {
 	}
 }
 
-func TestLibraryHandle_SidecarKey(t *testing.T) {
+func TestSidecarKeyPairing(t *testing.T) {
 	// Per ADR-0003 §8 sidecar lives at LeafBook folder root as
 	// `metadata.embookshelf.json`, one per Book.
-	h := &service.LibraryHandle{Library: model.Library{ID: "lib1"}}
 	cases := []struct {
 		bookKey string
 		want    string
@@ -456,8 +457,11 @@ func TestLibraryHandle_SidecarKey(t *testing.T) {
 		{"flat-file.epub", "metadata.embookshelf.json"},
 	}
 	for _, c := range cases {
-		if got := h.SidecarKey(c.bookKey); got != c.want {
-			t.Errorf("SidecarKey(%q) = %q, want %q", c.bookKey, got, c.want)
+		// The derivation rule has one home (sidecar.KeyFor); the handle
+		// stopped restating it (#346). This pins the pairing the write
+		// pipeline relies on.
+		if got := sidecar.KeyFor(c.bookKey); got != c.want {
+			t.Errorf("sidecar.KeyFor(%q) = %q, want %q", c.bookKey, got, c.want)
 		}
 	}
 }
@@ -607,4 +611,29 @@ type unresolvableStore struct{ err error }
 
 func (s unresolvableStore) For(context.Context, string) (*service.LibraryHandle, error) {
 	return nil, s.err
+}
+
+// An object-store book delete with no orphan queue cannot defer the
+// byte delete safely, and it used to answer nil having deleted nothing
+// — a silent leak of everything the book owned (#346). The bytes step
+// now says so; callers already treat its error as a warning beside an
+// authoritative row delete, so the delete still succeeds and the leak
+// stops being invisible.
+func TestDeleteBookBytesNamesTheLeakWhenNoOrphanQueueIsWired(t *testing.T) {
+	fs, err := local.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	h, err := servicetest.Handle(context.Background(), servicetest.StoreOptions{
+		Libraries: []model.Library{{ID: "lib1"}},
+		Storage:   servicetest.ObjectStore{Storage: fs},
+	}, "lib1")
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	err = h.DeleteBookBytes(context.Background(), "b1", []string{"Author/Title/book.epub"})
+	if !errors.Is(err, service.ErrNoOrphanQueue) {
+		t.Fatalf("err = %v, want ErrNoOrphanQueue — a silent nil is the leak this names", err)
+	}
 }
