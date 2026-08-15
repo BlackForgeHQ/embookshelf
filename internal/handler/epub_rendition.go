@@ -44,8 +44,11 @@ type epubRenditionDTO struct {
 // BookEpubGet answers the generated EPUB's state for the Versions tab —
 // the shared status shape with the EPUB's projector.
 func (h *Handler) BookEpubGet(c *gin.Context, s bookScope) {
-	h.renditionStatus(c, h.epubRenditions != nil, "generated EPUBs are unavailable", "read epub rendition",
-		func(ctx context.Context) (any, error) {
+	h.renditionStatus(c, renditionStatusSpec{
+		available:      h.epubRenditions != nil,
+		unavailableMsg: "generated EPUBs are unavailable",
+		readOp:         "read epub rendition",
+		load: func(ctx context.Context) (any, error) {
 			rendition, err := h.epubRenditions.GetByBookID(ctx, s.Book.ID)
 			if err != nil {
 				return nil, err
@@ -64,7 +67,8 @@ func (h *Handler) BookEpubGet(c *gin.Context, s bookScope) {
 			dto.Stale = h.sourceStale(ctx, s.Book, rendition.State, rendition.SourceContentHash)
 			return dto, nil
 		},
-		epubRenditionDTO{State: "none"})
+		none: epubRenditionDTO{State: "none"},
+	})
 }
 
 // BookEpubGenerate enqueues a render — the shared gate chain with the

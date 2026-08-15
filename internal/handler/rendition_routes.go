@@ -213,26 +213,51 @@ func renditionFileLocation(
 	return f.Location
 }
 
-// renditionStatus is the shared status-handler shape: unavailable →
-// 503, no row → the artifact's "none" answer, otherwise the projector's
-// DTO. The projector owns everything artifact-specific, including the
-// EPUB's ready-but-no-file → none arm.
-func (h *Handler) renditionStatus(
-	c *gin.Context, available bool, unavailableMsg, readOp string,
-	load func(ctx context.Context) (any, error), none any,
-) {
+// renditionStatusSpec is one artifact's status configuration — the
+// third struct spec of the rendition route seam, beside
+// renditionRouteSpec and renditionServeSpec (#339; this was six
+// positional parameters, and the two artifacts whose no-row answer is a
+// 404 copied the ladder instead of calling it).
+type renditionStatusSpec struct {
+	// available gates the whole endpoint; false answers 503 with
+	// unavailableMsg.
+	available      bool
+	unavailableMsg string
+	// readOp labels the server-error log line for a load that failed.
+	readOp string
+	// load returns the artifact's DTO for an existing row. Everything
+	// artifact-specific lives in this projector, including the EPUB's
+	// ready-but-no-file → none arm.
+	load func(ctx context.Context) (any, error)
+	// The artifact's declared no-row answer: none as a 200 body, or nil
+	// none with noneMsg as a 404 — a declared field, not a copied
+	// ladder. Markdown and the EPUB answer 200 {state:"none"} (the
+	// button is "generate one"); the narration and the guide answer 404
+	// (the client reads it as "offer Generate").
+	none    any
+	noneMsg string
+}
+
+// renditionStatus is the shared status-handler chain: unavailable →
+// 503, load, no row → the spec's declared answer, error → 500,
+// otherwise the projector's DTO.
+func (h *Handler) renditionStatus(c *gin.Context, spec renditionStatusSpec) {
 	ctx := c.Request.Context()
-	if !available {
-		writeError(c, http.StatusServiceUnavailable, unavailableMsg)
+	if !spec.available {
+		writeError(c, http.StatusServiceUnavailable, spec.unavailableMsg)
 		return
 	}
-	dto, err := load(ctx)
+	dto, err := spec.load(ctx)
 	if errors.Is(err, repo.ErrNotFound) {
-		c.JSON(http.StatusOK, none)
+		if spec.none != nil {
+			c.JSON(http.StatusOK, spec.none)
+			return
+		}
+		writeError(c, http.StatusNotFound, spec.noneMsg)
 		return
 	}
 	if err != nil {
-		writeServerError(c, readOp, err)
+		writeServerError(c, spec.readOp, err)
 		return
 	}
 	c.JSON(http.StatusOK, dto)

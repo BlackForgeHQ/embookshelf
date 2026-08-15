@@ -55,8 +55,11 @@ type markdownRenditionDTO struct {
 // BookMarkdownGet answers the rendition's state for the book page —
 // the shared status shape with markdown's projector.
 func (h *Handler) BookMarkdownGet(c *gin.Context, s bookScope) {
-	h.renditionStatus(c, h.renditions != nil, "markdown renditions are unavailable", "read markdown rendition",
-		func(ctx context.Context) (any, error) {
+	h.renditionStatus(c, renditionStatusSpec{
+		available:      h.renditions != nil,
+		unavailableMsg: "markdown renditions are unavailable",
+		readOp:         "read markdown rendition",
+		load: func(ctx context.Context) (any, error) {
 			rendition, err := h.renditions.GetByBookID(ctx, s.Book.ID)
 			if err != nil {
 				return nil, err
@@ -71,7 +74,8 @@ func (h *Handler) BookMarkdownGet(c *gin.Context, s bookScope) {
 				Stale:            h.sourceStale(ctx, s.Book, rendition.State, rendition.SourceContentHash),
 			}, nil
 		},
-		markdownRenditionDTO{State: "none"})
+		none: markdownRenditionDTO{State: "none"},
+	})
 }
 
 // sourceStale answers a rendition badge's staleness for both artifact
