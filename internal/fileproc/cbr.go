@@ -44,6 +44,7 @@ type rarComic struct {
 // book keeps its metadata without a cover, which is the same degradation
 // an unreadable cover entry gets. Non-solid archives never drain at all.
 const cbrMaxSolidDrainBytes int64 = 512 << 20
+
 func newRARComic(src storage.Source) (*rarComic, error) {
 	r, err := rarReader(src)
 	if err != nil {

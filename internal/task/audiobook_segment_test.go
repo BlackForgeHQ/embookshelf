@@ -36,14 +36,14 @@ type fakeSegmentRuns struct {
 	// plan is what the run was started with, the rows the planner wrote.
 	// A worker verifies its re-extraction against these, so a test can
 	// move one to stand for a book edited under a live run.
-	plan       []model.AudiobookSegment
-	getErr     error
-	gets       int
-	onGet      func(n int) model.Audiobook
+	plan   []model.AudiobookSegment
+	getErr error
+	gets   int
+	onGet  func(n int) model.Audiobook
 	// onGetErr fails the n-th run read only. The cancel guard re-reads the
 	// run before every engine chunk, so a test proving a mid-run read
 	// failure stops the spend has to break the read partway through.
-	onGetErr func(n int) error
+	onGetErr   func(n int) error
 	claim      bool
 	claimErr   error
 	claims     int

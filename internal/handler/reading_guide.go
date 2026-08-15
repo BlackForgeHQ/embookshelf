@@ -118,7 +118,7 @@ func (h *Handler) BookGuideGenerate(c *gin.Context, s bookScope) {
 		unavailableMsg:  guidesDisabledMsg,
 		unavailableCode: CodeGuidesDisabled,
 		formatGate:      h.guidePreflightConvertible,
-		requestOp: "queue guide generation",
+		requestOp:       "queue guide generation",
 		request: func(ctx context.Context, bookID string) error {
 			// Through the runner's shared request module, so the button
 			// and the bulk run make a request the same way (#336). The

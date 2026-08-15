@@ -72,7 +72,6 @@ func (b bufferingPut) Put(ctx context.Context, key string, r io.Reader, opts ...
 	return b.LocalFS.Put(ctx, key, bytes.NewReader(body), opts...)
 }
 
-
 // bufferEnv selects the buffering backend in the re-executed binary.
 const bufferEnv = "STORAGETEST_BUFFERING_PUT"
 
