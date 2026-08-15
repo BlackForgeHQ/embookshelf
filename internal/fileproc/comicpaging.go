@@ -11,7 +11,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 
@@ -57,6 +56,18 @@ import (
 // conversion they do not need.
 var ErrComicContainer = errors.New(
 	"not a comic archive: pages can be served from .cbz, .cbr and .cb7")
+
+// ErrComicPageNotImage is what a page read answers when an entry's own
+// leading bytes match none of SniffImageMime's formats — the ZIP arm's
+// counterpart to writeCachedPage typing an extracted page from disk.
+//
+// The archive's directory named this entry a page (comicPages only
+// admits five raster extensions), but a name is the file author's claim
+// and #331 is about not taking it: an entry whose bytes disagree is
+// answered as a failure to serve that page, the same shape of refusal
+// ErrComicContainer gives one level up for an archive whose bytes are
+// not one of the containers pages come from.
+var ErrComicPageNotImage = errors.New("page entry is not a recognized image format")
 
 // SourceOpener hands back the comic's bytes. Deferred rather than an
 // already-open Source because a warm cache answers without any: on an
@@ -214,22 +225,18 @@ func (p *ComicPageSet) Len() int {
 	return len(p.names)
 }
 
-// TypedFromBytes reports where this set's page types come from, which
-// decides when the caller may set Content-Type.
+// Page opens page n (0-indexed, natural sort order) for reading, typed
+// from its own leading bytes (SniffImageMime) for every container —
+// including ZIP, which streams the entry rather than holding it. That
+// still costs nothing: the sniff window is a dozen bytes read ahead of
+// the response and replayed in front of the rest, not a buffer of the
+// page (#331).
 //
-// True for the extracted containers: their pages are on disk, so each
-// one is typed from its own leading bytes (SniffImageMime) and the type
-// is known before a byte of the body is written. False for ZIP, which
-// streams the entry without ever holding it — there is nothing to sniff
-// in time, the type comes from the entry's name, and the caller leaves
-// the header unset so net/http types the response from the body it sees.
-// That is what has always decided a .cbz page's content type; #331 is
-// about the name-derived answer this leaves in place for the one case
-// net/http cannot help with, an entry with no bytes at all.
-func (p *ComicPageSet) TypedFromBytes() bool { return p != nil && p.entry != nil }
-
-// Page opens page n (0-indexed, natural sort order) for reading, with
-// the MIME type TypedFromBytes describes.
+// An entry whose bytes are not a recognized image answers
+// ErrComicPageNotImage rather than a mislabelled stream — a name that
+// claims "page" is the archive author's claim, not a fact about the
+// bytes, and #331 is about not taking it on faith for the one container
+// that used to.
 func (p *ComicPageSet) Page(n int) (io.ReadCloser, string, error) {
 	if p == nil || n < 0 || n >= p.Len() {
 		return nil, "", fmt.Errorf("page %d out of range (0..%d)", n, p.Len()-1)
@@ -255,10 +262,46 @@ func (p *ComicPageSet) Page(n int) (io.ReadCloser, string, error) {
 		if err != nil {
 			return nil, "", fmt.Errorf("open page: %w", err)
 		}
-		return rc, mimeFromExt(path.Ext(name)), nil
+		return sniffZIPPage(n, rc)
 	}
 	return nil, "", fmt.Errorf("page %d entry %q vanished", n, name)
 }
+
+// sniffZIPPage reads the sniff window off a freshly opened ZIP entry
+// and hands back a reader that replays it ahead of the rest, so the
+// caller streams the same bytes it always did — SniffImageMime needs at
+// most 12 leading bytes, and those are the only ones ever held in
+// memory.
+//
+// rc is closed here on every path that does not return it: a caller
+// that gets an error has nothing left to Close.
+func sniffZIPPage(n int, rc io.ReadCloser) (io.ReadCloser, string, error) {
+	var head [12]byte
+	hn, err := io.ReadFull(rc, head[:])
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		_ = rc.Close()
+		return nil, "", fmt.Errorf("read page %d: %w", n, err)
+	}
+	mime := SniffImageMime(head[:hn])
+	if mime == "" {
+		_ = rc.Close()
+		return nil, "", fmt.Errorf("page %d: %w", n, ErrComicPageNotImage)
+	}
+	return &sniffWindowReader{
+		Reader: io.MultiReader(bytes.NewReader(head[:hn]), rc),
+		rc:     rc,
+	}, mime, nil
+}
+
+// sniffWindowReader replays a page's sniff window ahead of the entry
+// reader it still owns. Close reaches the entry reader directly rather
+// than through the io.MultiReader wrapping it, which has none.
+type sniffWindowReader struct {
+	io.Reader
+	rc io.ReadCloser
+}
+
+func (s *sniffWindowReader) Close() error { return s.rc.Close() }
 
 // Close releases whatever the set was holding.
 func (p *ComicPageSet) Close() error {

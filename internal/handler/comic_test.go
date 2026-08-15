@@ -32,11 +32,14 @@ import (
 
 // comicPages are the archive entries every fixture below is built from.
 // Out of filename order on purpose: the reader sorts naturally, and the
-// responses are asserted against the sorted result.
+// responses are asserted against the sorted result. Each body carries a
+// real PNG signature (fixturePageBody) rather than a bare label: since
+// #331 a CBZ page is typed and admitted from its own bytes, and a body
+// that did not sniff as an image would be refused rather than served.
 var comicPages = map[string][]byte{
-	"03.png": []byte("three"),
-	"01.png": []byte("one"),
-	"02.png": []byte("two"),
+	"03.png": fixturePageBody("three"),
+	"01.png": fixturePageBody("one"),
+	"02.png": fixturePageBody("two"),
 }
 
 // ---------------------------------------------------------------------------
@@ -223,8 +226,8 @@ func TestComicPagesAndPageOnAnObjectStoreBackedLibrary(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("page status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
-	if got := rec.Body.String(); got != "two" {
-		t.Errorf("page 1 body = %q, want the bytes of 02.png", got)
+	if want := fixturePageBody("two"); !bytes.Equal(rec.Body.Bytes(), want) {
+		t.Errorf("page 1 body = %q, want the bytes of 02.png", rec.Body.Bytes())
 	}
 }
 
@@ -265,19 +268,28 @@ func TestComicPagesAndPageOnALocalLibrary(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("page status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
-	if got := rec.Body.String(); got != "three" {
-		t.Errorf("page 2 body = %q, want the bytes of 03.png", got)
+	if want := fixturePageBody("three"); !bytes.Equal(rec.Body.Bytes(), want) {
+		t.Errorf("page 2 body = %q, want the bytes of 03.png", rec.Body.Bytes())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/png" {
+		t.Errorf("Content-Type = %q, want image/png", got)
 	}
 }
 
 // The CBZ pin. Paging the other two containers (#329) routes RAR and 7z
 // through an extract-once cache; ZIP must not join them — it answers a
 // numbered page with a range read of that entry, which is cheaper than
-// any cache, and both the bytes and the response headers it produces
-// have to come out unchanged. Asserted over a page whose entry name
-// lies about its type, because that is the case where "the extension
-// decides" and "the bytes decide" give different answers and #331 is
-// about which one CBZ picks.
+// any cache, and the bytes it produces have to come out unchanged.
+// Asserted over a page whose entry name lies about its type, because
+// that is the case where "the extension decides" and "the bytes decide"
+// give different answers and #331 is about which one CBZ picks.
+//
+// Before #331: Content-Type was left unset (net/http's own body sniff
+// decided it, invisibly to a ResponseRecorder) and any bytes streamed
+// regardless of what they were. After #331: Content-Type is the sniffed
+// image/png stated up front, and the cache passed to the fixture (nil —
+// no h.comics is wired here) is never touched, because the ZIP arm still
+// never extracts.
 func TestComicPageOnCBZIsByteIdentical(t *testing.T) {
 	// A real PNG signature under a .jpg name.
 	png := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0x42}, 64)...)
@@ -290,21 +302,37 @@ func TestComicPageOnCBZIsByteIdentical(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
+	// Streaming preserved: the body is the entry's bytes verbatim, sniff
+	// window and all — nothing was buffered whole or rewritten.
 	if !bytes.Equal(rec.Body.Bytes(), png) {
 		t.Errorf("body = %d bytes, want the entry's %d bytes verbatim", rec.Body.Len(), len(png))
 	}
-	// The CBZ arm sets no Content-Type of its own: it streams the entry
-	// straight into the response and lets net/http sniff the first bytes
-	// (which is why a .jpg-named PNG reaches the browser as image/png
-	// today, and why #331's extension-typing is latent rather than live).
-	// A recorder does not run that sniff, so the pin is the absent
-	// header — the fact that would change if the CBZ arm started
-	// declaring a type from the entry name.
-	if got := rec.Header().Get("Content-Type"); got != "" {
-		t.Errorf("Content-Type = %q, want it left to net/http's sniff", got)
+	// The wire change: a .jpg-named entry whose bytes are a PNG now
+	// carries image/png, sniffed from those bytes rather than guessed
+	// from the name (which would have said image/jpeg) or left for
+	// net/http to discover.
+	if got := rec.Header().Get("Content-Type"); got != "image/png" {
+		t.Errorf("Content-Type = %q, want image/png (sniffed from the entry's bytes, not its .jpg name)", got)
 	}
 	if got := rec.Header().Get("Cache-Control"); got != "private, max-age=86400, immutable" {
 		t.Errorf("Cache-Control = %q", got)
+	}
+}
+
+// The other half of the wire change: an entry admitted by its extension
+// but whose bytes are not an image now answers an error instead of
+// streaming whatever it is under a claimed image type.
+func TestComicPageOnCBZWithNonImageBytesRefuses(t *testing.T) {
+	store := &objectStore{objects: map[string][]byte{
+		comicLocation: cbzBytes(t, map[string][]byte{
+			"01.png": []byte("this is not an image, whatever its name claims"),
+		}),
+	}}
+	f := newComicFixture(t, store, "")
+
+	rec := comicRequest(t, f, f.h.ComicPage, "/api/v1/books/x/comic/pages/0", "0")
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("status = %d, want 415 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 
@@ -662,15 +690,15 @@ func TestComicPagesFollowAReplacedFile(t *testing.T) {
 
 	// Same book, same location, different bytes — and a files row that
 	// says so, which is what the scan writes when it notices.
-	store.objects[comicLocation] = cbzBytes(t, map[string][]byte{"01.png": []byte("replaced")})
+	store.objects[comicLocation] = cbzBytes(t, map[string][]byte{"01.png": fixturePageBody("replaced")})
 	repointComicFile(t, f, store.objects[comicLocation])
 
 	rec = comicRequest(t, f, f.h.ComicPage, "/api/v1/books/x/comic/pages/0", "0")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("second read status = %d (body %s)", rec.Code, rec.Body.String())
 	}
-	if got := rec.Body.String(); got != "replaced" {
-		t.Errorf("after the file was replaced the reader was served %q", got)
+	if want := fixturePageBody("replaced"); !bytes.Equal(rec.Body.Bytes(), want) {
+		t.Errorf("after the file was replaced the reader was served %q", rec.Body.Bytes())
 	}
 }
 
@@ -706,6 +734,12 @@ func TestComicErrorsMapToStatuses(t *testing.T) {
 			err:  fmt.Errorf("open: %w", fileproc.ErrComicContainer),
 			want: http.StatusUnsupportedMediaType,
 			says: ".cbr",
+		},
+		{
+			name: "page not an image",
+			err:  fmt.Errorf("page 0: %w", fileproc.ErrComicPageNotImage),
+			want: http.StatusUnsupportedMediaType,
+			says: "not a recognized image",
 		},
 		{
 			name: "no bytes stored",
