@@ -16,6 +16,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 mod epub;
+mod pdf;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -84,18 +85,63 @@ async fn convert(body: Bytes) -> Response {
         );
     };
 
-    // anydoc is synchronous CPU work; keep it off the async workers.
-    let result =
-        tokio::task::spawn_blocking(move || anydoc::to_markdown_bytes(&body, format)).await;
+    // anydoc (and the PDF gate's inspection) is synchronous CPU work;
+    // keep it off the async workers.
+    let result = tokio::task::spawn_blocking(move || convert_bytes(&body, format)).await;
 
     match result {
         Ok(Ok(markdown)) => markdown_response(markdown),
-        Ok(Err(err)) => convert_error_response(err),
+        Ok(Err(Reject::Anydoc(err))) => convert_error_response(err),
+        Ok(Err(Reject::Pdf(refusal))) => refusal_response(&refusal),
         Err(join_err) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("conversion task failed: {join_err}"),
         ),
     }
+}
+
+/// Reject separates the two refusal vocabularies: anydoc's own errors
+/// keep their historical status mapping and plain body, the PDF gate's
+/// verdicts carry a machine-readable class (ADR-0036).
+enum Reject {
+    Anydoc(ConvertError),
+    Pdf(pdf::Refusal),
+}
+
+/// convert_bytes is the whole conversion pass: the PDF gate ahead of
+/// anydoc, anydoc, the sparse-output gate behind it (PDF only). The
+/// detection is done once and shared by both gate halves.
+fn convert_bytes(body: &[u8], format: Format) -> Result<String, Reject> {
+    let detection = match format {
+        Format::Pdf => pdf::detect(body),
+        _ => None,
+    };
+    if let Some(d) = &detection {
+        if let Some(refusal) = pdf::refuse_before(d) {
+            return Err(Reject::Pdf(refusal));
+        }
+    }
+    let markdown = anydoc::to_markdown_bytes(body, format).map_err(Reject::Anydoc)?;
+    if let Some(d) = &detection {
+        if let Some(refusal) = pdf::refuse_sparse(d, &markdown) {
+            return Err(Reject::Pdf(refusal));
+        }
+    }
+    Ok(markdown)
+}
+
+/// A gate refusal is always 422: the format is supported and detected —
+/// the *document* cannot give what conversion needs (ADR-0033 §4's
+/// split). The class rides beside the error so a caller can route on it
+/// without parsing prose (ADR-0036 §3).
+fn refusal_response(refusal: &pdf::Refusal) -> Response {
+    let body = serde_json::json!({ "error": refusal.message, "class": refusal.class }).to_string();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    (StatusCode::UNPROCESSABLE_ENTITY, headers, body).into_response()
 }
 
 fn markdown_response(markdown: String) -> Response {

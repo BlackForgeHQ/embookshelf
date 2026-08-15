@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 anydoc = "0.1"
+pdf-inspector = "1"
 axum = "0.8"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 serde = { version = "1.0.229", features = ["derive"] }

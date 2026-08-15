@@ -69,10 +69,37 @@ existing bulk conversion when they want old books re-converted; the
 recorded converter version already tells them which rows predate the
 switch.
 
-## Conditional
+## What the smoke test changed (2026-08-16)
 
-pdf-inspector's converter quality and its Mixed/Scanned line are
-README claims until smoke-tested against 2–3 real PDFs from a live
-library, compared with anydoc's current output. If quality disappoints,
-it stays as the classifier only (decision 4 reverts to anydoc
-conversion; everything else stands).
+The conditional ran and rewrote two decisions. **anydoc's PDF engine
+*is* pdf-inspector** — anydoc 0.1.9 depends on pdf-inspector 1.14.2,
+and their markdown output is byte-identical on every fixture tried. So:
+
+- Decision 4's "pdf-inspector's converter replaces anydoc" is moot:
+  bumping anydoc (the shipped lock held 0.1.7, three majors of
+  pdf-inspector behind) *is* the conversion improvement. anydoc stays
+  the one converter for every format.
+- Decision 5's two-engine fallback is moot for the same reason — there
+  is one engine. The gate instead **never blocks on its own failure**:
+  a PDF the inspector cannot read falls through to anydoc's own error,
+  with the swallow logged.
+- The engine already refuses Scanned and ImageBased PDFs itself — in
+  the shipped anydoc 0.1.7 exactly as in 1.x ("PDF has no extractable
+  text … OCR is required", a prose-only 415). The pre-conversion gate
+  therefore **cannot introduce a refusal**: it re-answers those two
+  verdicts as a classed 422 with the page evidence. That also voids
+  decision 4's Mixed ratio arm: probing showed the classifier's
+  per-page OCR flags are untrustworthy (dense text pages flagged when
+  an image object merely exists in the file), so no ratio computed
+  from them may refuse anything the engine would convert.
+- What the classifier misses, the output proves: the shipped engine
+  served 6 bytes of markdown for a 10-page PDF whose only text was a
+  title page (classified TextBased). Hence the **sparse-output gate**
+  — after conversion, a PDF of ≥5 pages whose markdown lands under a
+  per-page floor is refused, labelled `mixed` when the classifier saw
+  the mixture and `sparse` when it was fooled outright.
+- The refusal classes are therefore `scanned` | `image` | `mixed` |
+  `sparse`. Known limit, recorded in the gate's module docs: a
+  partially-scanned book whose text pages clear the floor converts
+  with its scanned pages silently absent — per-page truth awaits the
+  OCR stage.
