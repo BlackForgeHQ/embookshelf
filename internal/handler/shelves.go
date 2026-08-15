@@ -11,7 +11,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
@@ -193,28 +192,20 @@ type publishShelfReq struct {
 }
 
 // ShelfPublish flips a shelf's is_public flag. Admin-only and
-// owner-only — non-admins are blocked here, non-owners 404 from the
-// repo lookup. A regular shelf publishing flips on; passing
+// owner-only — the admin gate is auth.RequireRole on the route and the
+// user arrives through userScoped, like every other shelf route (#336;
+// this was the one handler hand-rolling both checks). Non-owners 404
+// from the repo lookup. A regular shelf publishing flips on; passing
 // `public:false` un-publishes (the canonical un-publish path).
 //
-// Smart shelves are rejected at the repo layer (CHECK constraint on
-// Postgres, application-side check on SQLite).
-func (h *Handler) ShelfPublish(c *gin.Context) {
-	u := auth.UserFromContext(c.Request.Context())
-	if u == nil {
-		writeError(c, http.StatusUnauthorized, "authentication required")
-		return
-	}
-	if u.Role != model.RoleAdmin {
-		writeError(c, http.StatusForbidden, service.ErrShelfPublishForbidden.Error())
-		return
-	}
+// Smart shelves are rejected at the repo layer (CHECK constraint).
+func (h *Handler) ShelfPublish(c *gin.Context, userID string) {
 	slug, _ := service.SplitPublicSlug(c.Param("slug"))
 	var body publishShelfReq
 	if !bindJSON(c, &body) {
 		return
 	}
-	updated, err := h.shelf.SetPublic(c.Request.Context(), u.ID, slug, body.Public)
+	updated, err := h.shelf.SetPublic(c.Request.Context(), userID, slug, body.Public)
 	if err != nil {
 		switch {
 		case errors.Is(err, repo.ErrNotFound):

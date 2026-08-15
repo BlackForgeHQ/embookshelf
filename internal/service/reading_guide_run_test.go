@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/blackforge/embookshelf/internal/jobs"
@@ -200,5 +201,40 @@ func TestEstimateCarriesLibraryCoverage(t *testing.T) {
 	}
 	if est.TotalBooks != 10 || est.BooksWithGuide != 9 {
 		t.Fatalf("coverage = %d/%d, want 9/10", est.BooksWithGuide, est.TotalBooks)
+	}
+}
+
+// --- the per-book request ---------------------------------------------
+
+// RequestOne rides the same nil-rows RenditionRequests instance Start
+// does: a request for the guide — the artifact with no tracking row —
+// is exactly the enqueue, and both entry points make it the same way
+// (#336). This is also the pin on the nil-rows arms of One themselves,
+// which used to be documented but never driven.
+func TestRequestOneEnqueuesThroughTheSharedInstance(t *testing.T) {
+	r, disp := runHarness()
+
+	if err := r.RequestOne(context.Background(), "b9"); err != nil {
+		t.Fatalf("RequestOne: %v", err)
+	}
+	if len(disp.ids) != 1 || disp.ids[0] != "b9" {
+		t.Fatalf("enqueued %v, want [b9]", disp.ids)
+	}
+}
+
+// A refused enqueue surfaces as the caller's error and nothing else
+// happens: there is no row to compensate on, and the nil-rows arm must
+// not invent one — or panic reaching for it.
+func TestRequestOneSurfacesARefusedEnqueue(t *testing.T) {
+	r, disp := runHarness()
+	disp.err = fmt.Errorf("queue is down")
+
+	err := r.RequestOne(context.Background(), "b9")
+
+	if err == nil || !strings.Contains(err.Error(), "queue is down") {
+		t.Fatalf("err = %v, want the queue refusal", err)
+	}
+	if len(disp.ids) != 0 {
+		t.Fatalf("enqueued %v for a refused request", disp.ids)
 	}
 }

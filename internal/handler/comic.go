@@ -27,7 +27,7 @@ import (
 // Response: {"count": 142}
 func (h *Handler) ComicPagesIndex(c *gin.Context, s bookScope) {
 	book := s.Book
-	if book.Format != "CBZ" {
+	if !comicFormat(book.Format) {
 		writeError(c, http.StatusUnsupportedMediaType, "not a comic book")
 		return
 	}
@@ -52,7 +52,7 @@ func (h *Handler) ComicPage(c *gin.Context, s bookScope) {
 		return
 	}
 	book := s.Book
-	if book.Format != "CBZ" {
+	if !comicFormat(book.Format) {
 		writeError(c, http.StatusUnsupportedMediaType, "not a comic book")
 		return
 	}
@@ -97,6 +97,15 @@ func (h *Handler) ComicPage(c *gin.Context, s bookScope) {
 		writeServerError(c, "stream comic page", cerr)
 		return
 	}
+}
+
+// comicFormat is the gate's rule stated as the table's, not as a
+// literal: any format the table maps to the comic reader pages here.
+// The literal `!= "CBZ"` it replaces silently 415'd rows an older
+// release stamped CBR — a format the table names and the download path
+// already handles (#336).
+func comicFormat(format string) bool {
+	return model.ReaderForFormat(format) == model.ReaderComic
 }
 
 // openComicPages resolves a book to its pages, through the page cache.

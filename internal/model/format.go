@@ -135,8 +135,12 @@ var FormatSpecs = []FormatSpec{
 	// Legacy tags no ingest path produces — .cbr stamps CBZ above, and
 	// nothing stamps TXT — but which the download path met on rows
 	// written by older releases, and named correctly. No IngestExts:
-	// the extension belongs to the row that stamps it.
-	{Format: "CBR", Ext: ".cbr"},
+	// the extension belongs to the row that stamps it. CBR keeps a
+	// reader: its bytes are a RAR archive the comic reader pages since
+	// #329 (the paging path classifies by bytes), and the handler gate
+	// derives from this column rather than from a `!= "CBZ"` literal
+	// that silently 415'd these rows (#336).
+	{Format: "CBR", Ext: ".cbr", MIME: "application/vnd.comicbook-rar", Reader: ReaderComic},
 	{Format: "TXT", Ext: ".txt"},
 }
 

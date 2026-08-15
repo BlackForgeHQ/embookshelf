@@ -115,7 +115,8 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.POST("/shelves", h.userScoped(h.ShelfCreate))
 			authed.PATCH("/shelves/:slug", h.userScoped(h.ShelfUpdate))
 			authed.DELETE("/shelves/:slug", h.userScoped(h.ShelfDelete))
-			authed.PUT("/shelves/:slug/publish", h.ShelfPublish)
+			authed.PUT("/shelves/:slug/publish",
+				auth.RequireRole(model.RoleAdmin), h.userScoped(h.ShelfPublish))
 
 			// BookDrop ingest queue
 			authed.GET("/bookdrop", h.userScoped(h.BookDropList))

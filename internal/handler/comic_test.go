@@ -778,3 +778,18 @@ func TestComicErrorsMapToStatuses(t *testing.T) {
 		})
 	}
 }
+
+// The comic gate is the format table's reader column, not a literal: a
+// row an older release stamped CBR opens the comic reader like the CBZ
+// rows the same bytes get today (#336). TXT and the text formats stay
+// refused.
+func TestComicFormatGateDerivesFromTheTable(t *testing.T) {
+	for format, want := range map[string]bool{
+		"CBZ": true, "CBR": true,
+		"EPUB": false, "PDF": false, "TXT": false, "MP3": false, "": false,
+	} {
+		if got := comicFormat(format); got != want {
+			t.Errorf("comicFormat(%q) = %v, want %v", format, got, want)
+		}
+	}
+}
