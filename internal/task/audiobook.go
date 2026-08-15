@@ -53,6 +53,8 @@ var errCanceled = errors.New("audiobook run canceled")
 func canceled(ctx context.Context, bookID string, deps SegmentDeps) (bool, error) {
 	run, err := deps.Runs.GetByBookID(ctx, bookID)
 	if err != nil {
+		slog.Warn("audiobook: cancel check could not read the run; stopping the spend",
+			"book", bookID, "err", err)
 		return false, fmt.Errorf("audiobook cancel check: %w", err)
 	}
 	return run.State == model.AudiobookCanceled, nil

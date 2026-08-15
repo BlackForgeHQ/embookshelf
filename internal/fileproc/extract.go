@@ -92,14 +92,21 @@ func ExtractBook(
 	meta = normalizeCover(meta)
 
 	meta.Format = format
-	// Audio takes a different ingest path: duration and narrator come from
-	// tag metadata rather than a text extractor, and are meaningless on a
-	// format that has no tags to read.
+	return gateAudioFields(meta, format), nil
+}
+
+// gateAudioFields zeroes the audio-only fields for a non-audio format.
+// Audio takes a different ingest path: duration and narrator come from
+// tag metadata rather than a text extractor, and are meaningless on a
+// format that has no tags to read — including the drift case where a
+// row claims a non-audio format over bytes that dispatched to the audio
+// extractor by their key (#335).
+func gateAudioFields(m Metadata, format string) Metadata {
 	if !IsAudioFormat(format) {
-		meta.DurationSeconds = nil
-		meta.Narrator = ""
+		m.DurationSeconds = nil
+		m.Narrator = ""
 	}
-	return meta, nil
+	return m
 }
 
 // dispatchKeyOrFormat resolves a Processor from the storage key's

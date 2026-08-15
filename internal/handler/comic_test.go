@@ -772,3 +772,28 @@ func TestComicFormatGateDerivesFromTheTable(t *testing.T) {
 		}
 	}
 }
+
+// A legacy row an older release stamped CBR pages through the same
+// endpoints: the gate is the format table's reader column, not a
+// literal, and the paging path classifies the bytes itself (#336). The
+// literal `!= "CBZ"` this replaced answered exactly this book 415.
+func TestComicPagesServeALegacyCBRRow(t *testing.T) {
+	store := &objectStore{objects: map[string][]byte{
+		comicLocation: readComicFixture(t, comicFixtureSolidCBR),
+	}}
+	f := newComicFixture(t, store, "")
+	f.book.Format = "CBR"
+	f.h.comics = fileproc.NewPageCache(t.TempDir(), 1<<20)
+
+	rec := comicRequest(t, f, f.h.ComicPagesIndex, "/api/v1/books/x/comic/pages", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pages index status = %d, want 200 for a CBR-stamped row (body %s)", rec.Code, rec.Body.String())
+	}
+	rec = comicRequest(t, f, f.h.ComicPage, "/api/v1/books/x/comic/pages/0", "0")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("page status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !bytes.Equal(rec.Body.Bytes(), fixturePageBody("page-two")) {
+		t.Errorf("page 0 body = %q, want the fixture's first page", rec.Body.Bytes())
+	}
+}

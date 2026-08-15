@@ -161,7 +161,7 @@ Admin-only housekeeping op that recursively removes every file under `BOOKDROP_P
 
 ### Pending orphan
 
-A storage key whose Book is no longer referenced by `files.location` (or sidecar/cover at `{folder_path}/`) and which is queued for deletion after a grace window. Materialised as a row in `pending_orphans` (library_id, key, eligible_at, reason, book_id). Created on every S3 edit-time folder rename: old keys go in with full grace; new keys from a half-failed rename go in with a short grace. A background sweeper deletes keys past `eligible_at`. Local backends do not produce pending orphans — their `MovePrefix` is one atomic `rename(2)`, so it returns an empty `Reclaim` and there is nothing to queue.
+A storage key whose Book is no longer referenced by `files.location` (or sidecar/cover at `{folder_path}/`) and which is queued for deletion after a grace window. Materialised as a row in `pending_orphans` (library_id, key, eligible_at, reason, book_id). Created on every S3 edit-time folder rename: old keys go in with full grace; new keys from a half-failed rename go in with a short grace. A background sweeper deletes keys past `eligible_at`. Local backends do not produce pending orphans — their `MovePrefix` is one atomic `rename(2)`, so nothing survives at the source and there is nothing to queue; the `Reclaim` report is the `storage.PrefixMover` extension's, which local backends do not implement (#345).
 
 ---
 
@@ -174,6 +174,14 @@ The `internal/storage.Storage` interface; backend-agnostic read/write of book by
 ### Backend
 
 A concrete `Storage` rooted somewhere (a directory, a bucket+prefix). Identified by `storage_backends.id` in the DB.
+
+### Storage extension
+
+An interface a Backend satisfies beyond `storage.Storage`, reached by type assertion at the call site that wants the extra behaviour, declared in `storage` beside the adapters so conformance is a compile-time assertion (#345 — `Presigner` used to live in the service tier, satisfied by an adapter that could not see it; drift was silent because the failed assertion fell through to streaming and read as a perf regression). Two today: `Presigner` (CapPresign; a URL the browser fetches directly) and `PrefixMover` (`MovePrefixDetailed` — the `MoveResult{Written, Reclaim}` report a copy-based move owes the [[Folder renamer]]'s transaction; an atomic backend implements only the shared `MovePrefix`, which returns a bare error). The shared interface itself was shrunk by the deletion test in #342: the range/conditional/versioning capability bits, their option families and `Copy` had zero production readers and are gone.
+
+### Source read contract
+
+Stated on `storage.Source` (#343): `ReadAt` carries no context, so every remote implementation bounds a single read itself — a stalled endpoint surfaces as an error, never a hung caller (#332). The S3 dial is `s3.Config.ReadTimeout` (default `DefaultReadTimeout`, 3 min); `storagetest.RunSourceReadBound` is the conformance arm. The local adapter carries no deadline — a known, stated gap for network-filesystem roots.
 
 ### Resolver
 
@@ -191,6 +199,10 @@ Library deletion: `?purge=true` query param deletes the on-disk folder (local) o
 ### LibraryStore
 
 `service.LibraryStore`; the deep seam that turns a `libraryID` into a `LibraryHandle{Library, Storage, Placer}` plus delivery glue (`BookSource`, `Open`) and the operations that answer for the library's own rooting — `Walk`, `PlaceAt`, `StorageKey`. Those three share one private `keyRoot()`: an object store from the top of its own prefix, a local library from its root under the `/`-rooted backend, with the unconfigured-local case named per caller (`ErrNoWalkRoot`, `ErrNoPlaceRoot`) so it can never read as an empty result. `Relativize` is gone — it matched the library root as a spelled string while the backend cleans its prefix before listing, so a root with one redundant separator made a scan flag every row missing. Composes `LibraryRepo` + `Resolver` + `PlacerBuilder` behind one `For(ctx, libraryID)` method. Stateless — each call does a fresh PK lookup. Used by `BookDropService.Approve`, the file-serve handler, library scan, and files backfill. Replaces the scattered `lib, _ := libs.GetByID(); resolver.Resolve(*lib.BackendID); ...` chain that appeared at every callsite. (Bookdrop ingest still calls `Resolver` directly because it has no library_id at ingest time.)
+
+### servicetest
+
+`internal/service/servicetest`; the service tier's sibling of `storagetest` and `repotest` (#338): in-memory `Libraries` and `Files` adapters plus `NewStore`, which builds the **real** `service.NewLibraryStore` over them — so a handler, task or recovery test gets a `LibraryHandle` with production behaviour, absence policies included, without a Postgres schema. Exists because `LibraryStoreDeps` used to take the concrete repos, and the only escape hatch was a bare `&LibraryHandle{}` whose nil files axis silently answered "no files" to every question. `Deps.Libs`/`Deps.Files` are the narrow interfaces (`LibraryByIDReader`, `BookFileLister`) since #338; two adapters make the seam real.
 
 ### Book patch
 
@@ -407,6 +419,18 @@ The worker pipeline that takes a staged file path, computes its hash, dispatches
 
 `fileproc.Processor`; per-format metadata extractor. `Extract(ctx, src Source) (Metadata, error)`. One implementation per format (EPUB, PDF, CBZ, MP3, M4B).
 
+### openComic
+
+`fileproc.openComic(src) (comicFile, error)`; the one classification of a comic's bytes, shared by ingest and paging (#344). The magic decides — the same key-beats-slug rule [[DispatchFormat]] states — so a `.cbz` that is really a RAR ingests and pages as the RAR it is instead of failing one pass and sailing through the other. `comicFile` is `comicArchive` (listing + bounded buffered read) plus `comicPageWalker` (one-pass stream into a sink) plus `kind()`; each container's `read` is `walkerRead` over its own `stream`, so the entry cap, the encryption sentinels and the RAR solid-drain rule have exactly one home per container — #310's bug was that rule's placement, and it used to have two. All three comic extensions dispatch to the one `ComicProcessor`. The page contract is one sentence for every container (#334): every page handed out is a recognised image, or `ErrComicPageNotImage` — the extracted arm records the refusal at fill time instead of inventing `application/octet-stream`.
+
+### Staleness
+
+`service.Staleness` / `NewStaleness(hash)`; the badge composition stated once (#340): the artifact state's `CanBeStale` gate, then `model.Stale` over the current-hash lookup. Consumed by the handler badge (`sourceStale`), the audiobook preflight and the markdown feed — it used to be composed three times across two tiers, each with its own nil-policy comment. The one nil policy: a nil lookup (an install with no library store) reads as never stale, the same reads-as-fresh degrade `model.Stale` gives an empty hash; the warn on an unresolvable library stays upstream in [[Primary hash]].
+
+### Rendition finishing tail
+
+`task.renditionFinish`; the tail every converter worker ends with, the way [[Rendition prelude]] owns the head (#341): the staged file's lifetime (`cleanup`), the rejection verdict (`convert` — a `ConvertRejectedError` is the document itself refusing, so it is permanent), and the read-source-hash-before-Record ordering (`finish`), which used to be an invariant enforced by the same comment in both workers and is structural now. A worker declares only its converter call and its seal; the two `MarkReady` signatures differ per artifact and the seal closure absorbs it. The status side got the same treatment in #339: `renditionStatusSpec` is the third struct spec of the rendition route seam, declaring each artifact's no-row answer (markdown and the EPUB answer 200 `{state:"none"}`, the narration and the guide 404) instead of the ladder the 404 pair used to copy.
+
 ### BookSource
 
 `service.BookSource`; a *delivery decision* for the file-serve handler: `{Kind: "local", Path}` (stream via `c.File()`) or `{Kind: "presign", URL, TTL}` (302 redirect). Built by `LibraryHandle.BookSource(ctx, book)`. **Distinct from `storage.Source`** — that's a byte-access primitive; this is a routing answer. **Distinct from `OpenBook`** — only the file-serve handler wants a routing answer; every other caller wants bytes.
@@ -517,7 +541,7 @@ The highest-priority supported file inside a LeafBook (EPUB > PDF > CBZ > AZW3 >
 
 `service.FolderRenamer` (`service/folder_renamer.go`); the module that moves a Book's bytes so its location matches its metadata. One entry point — `Relocate(ctx, book, handle, oldFolder, newFolder) RenameOutcome` — and its own dependencies (`RenameStore`, `RenameFileStore`, the [[Pending orphan]] queue, the grace window), so the write pipeline calls it across the `Renamer` seam without reaching into shared internals (#256). Invoked by `MetadataWriter` after the DB → in-file → sidecar steps, when `Author` or `Title` change via a `manual_edit` or `apply_enrichment` trigger. The move itself is `Storage.MovePrefix(oldPrefix, newPrefix)` — one operation, two adapters: local renames the directory atomically, S3 copies each key and leaves the sources for the [[Pending orphan]] sweeper. `auto_enrichment` and scan re-extract never rename — DB drifts from disk, accepted.
 
-The adapter owns the mechanics, the renamer owns the transaction and the policy. `MovePrefix` returns a `MoveResult{Written, Reclaim}` rather than compensating for itself, because rollback here means a DB transaction and the adapter has none: `Written` is what it created (reclaim these if your transaction fails), `Reclaim` is what still exists at the source (schedule these once it commits). Collision probing, the fails-closed refusal when there is no orphan queue, and the grace windows all stay with the renamer rather than with the adapter.
+The adapter owns the mechanics, the renamer owns the transaction and the policy. The `MoveResult{Written, Reclaim}` report crosses the `storage.PrefixMover` extension (`MovePrefixDetailed`), not the shared interface — only a copy-based backend has one to give, and only this caller has a use for it (#345); the shared `MovePrefix` returns a bare error. The report exists rather than adapter-side compensation because rollback here means a DB transaction and the adapter has none: `Written` is what it created (reclaim these if your transaction fails), `Reclaim` is what still exists at the source (schedule these once it commits). Collision probing, the fails-closed refusals — no orphan queue, or a backend on this path without the extension — and the grace windows all stay with the renamer rather than with the adapter.
 
 Moving a flat-layout Book into the layout for the first time is **not** a rename: a rename moves a folder that exists, the migration builds a Book its first folder out of files sitting loose at the library root beside other Books' files — which is why it moves file rows one at a time and cannot be a prefix move. The two shared a function and the word "rename" and nothing else (#212). Which one a Book gets is `Relocate`'s dispatch — an empty `oldFolder` is a flat-layout Book — and that ordering decision is stated there and nowhere else.
 
@@ -531,7 +555,7 @@ Existing libraries keep their current shape. Place-time uses the new layout for 
 
 ### Extract
 
-`fileproc.ExtractBook(ctx, store, src, format, key) ExtractResult`; shared extraction primitive returning format metadata + cover bytes + audio fields + sidecar overlay. Sole consumer is the bookdrop ingest path — under ADR-0018, scan never extracts.
+`fileproc.ExtractBook(ctx, store, src, format, key) Metadata`; shared extraction primitive returning format metadata + cover bytes + audio fields + sidecar overlay. Sole consumer is the bookdrop ingest path — under ADR-0018, scan never extracts. It used to return its own `ExtractResult`, a 12-field structural copy of `Metadata` with one consumer; the copy was deleted and the audio-field gate (zeroed for non-audio formats) moved inside (#335).
 
 Lived in its own `internal/extractor/` package until it had one caller and no second consumer: ADR-0018 made BookDrop the only ingest path, and a one-adapter seam is a hypothetical one. Its cost was visible in `formatToPath`, which synthesized fake filenames (`"x.epub"`) so it could feed an extension-keyed dispatcher a format slug — a module converting its own input backwards to satisfy the interface it wrapped. Folding it into `fileproc` puts it where format dispatch already lives and replaces that inverse mapping with [[DispatchFormat]].
 
