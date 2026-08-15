@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -58,6 +59,11 @@ type Backend struct {
 	prefix string // normalized: no leading slash, single trailing slash if non-empty
 	psign  *s3.PresignClient
 	capab  storage.Capability
+
+	// readTimeout, when non-zero, overrides s3ReadTimeout for every
+	// s3Source this Backend opens. Test-only: nothing outside the s3
+	// package's own tests sets this.
+	readTimeout time.Duration
 }
 
 // New constructs a Backend. Validates bucket versioning + SSE unless
