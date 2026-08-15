@@ -39,7 +39,7 @@ func (s *deleteRecordingStorage) Capabilities() storage.Capability {
 	return 0
 }
 
-func (d *deleteRecordingStorage) Delete(_ context.Context, key string, _ ...storage.DeleteOption) error {
+func (d *deleteRecordingStorage) Delete(_ context.Context, key string) error {
 	if d.rowGone != nil {
 		d.sawRowGone = append(d.sawRowGone, d.rowGone())
 	}

@@ -55,7 +55,7 @@ type objectStore struct {
 }
 
 func (s *objectStore) Capabilities() storage.Capability {
-	return storage.CapObjectStore | storage.CapRange
+	return storage.CapObjectStore
 }
 
 func (s *objectStore) Open(_ context.Context, key string) (storage.Source, error) {

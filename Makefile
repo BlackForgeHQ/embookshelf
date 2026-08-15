@@ -238,17 +238,12 @@ TEST_S3_SK       ?= embookshelf
 # *and* the streaming measurements next to it, and CI runs `go test ./...`
 # with these variables set, so anything narrower here is a local gate that
 # checks less than the remote one — the drift #227 set out to close.
-#
-# STORAGETEST_VERSIONED_STORE says the bucket s3-up just provisioned keeps
-# versions, which is what makes the suite's versioning row assert
-# something a version-id-dropping backend can fail.
 .PHONY: test-s3
-test-s3: s3-up ## Run the storage suite against S3 (starts the dev MinIO, versioned bucket)
+test-s3: s3-up ## Run the storage suite against S3 (starts the dev MinIO)
 	TEST_S3_ENDPOINT='$(TEST_S3_ENDPOINT)' \
 	TEST_S3_BUCKET='$(TEST_S3_BUCKET)' \
 	TEST_S3_AK='$(TEST_S3_AK)' \
 	TEST_S3_SK='$(TEST_S3_SK)' \
-	STORAGETEST_VERSIONED_STORE=1 \
 	go test -race -count=1 ./internal/storage/...
 
 # Repo tests need a real Postgres — they refuse to skip, because a

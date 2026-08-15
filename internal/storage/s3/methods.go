@@ -53,21 +53,12 @@ func (b *Backend) Head(ctx context.Context, key string) (storage.ObjectInfo, err
 	}, nil
 }
 
-// Get returns a stream for the given key. Supports byte-range reads via
-// WithRange; length <= 0 means "to EOF".
-func (b *Backend) Get(ctx context.Context, key string, opts ...storage.GetOption) (io.ReadCloser, error) {
-	o := storage.ApplyGet(opts)
+// Get returns a stream for the given key. Range reads go through
+// Open's ReaderAt, not here (#342).
+func (b *Backend) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 	in := &s3.GetObjectInput{
 		Bucket: aws.String(b.bucket),
 		Key:    aws.String(b.keyFor(key)),
-	}
-	if o.RangeSet {
-		if o.RangeLength <= 0 {
-			in.Range = aws.String(fmt.Sprintf("bytes=%d-", o.RangeOffset))
-		} else {
-			end := o.RangeOffset + o.RangeLength - 1
-			in.Range = aws.String(fmt.Sprintf("bytes=%d-%d", o.RangeOffset, end))
-		}
 	}
 	out, err := b.cli.GetObject(ctx, in)
 	if err != nil {
@@ -121,12 +112,6 @@ const putHeadStart = 32 << 10
 // than a content MD5 — the interface already documents ETag as an opaque
 // change token that is never a content hash, and Head reports the same
 // value back, so If-Match round-trips unchanged.
-//
-// Conditional options (WithIfMatch / WithIfNoneMatch) use S3's native
-// IfMatch / IfNoneMatch request fields — on the PutObject for a small
-// body, on the CompleteMultipartUpload for a streamed one, which is the
-// point at which the object becomes visible either way — and surface
-// ErrPreconditionFailed on 412 responses.
 func (b *Backend) Put(ctx context.Context, key string, r io.Reader, opts ...storage.PutOption) (storage.PutResult, error) {
 	o := storage.ApplyPut(opts)
 
@@ -181,16 +166,10 @@ func (b *Backend) putSingle(ctx context.Context, key string, body []byte, o stor
 	if o.ContentType != "" {
 		in.ContentType = aws.String(o.ContentType)
 	}
-	if o.IfMatchSet {
-		in.IfMatch = aws.String(o.IfMatch)
-	}
-	if o.IfNoneMatchSet {
-		in.IfNoneMatch = aws.String(o.IfNoneMatch)
-	}
 
 	out, err := b.cli.PutObject(ctx, in)
 	if err != nil {
-		return storage.PutResult{}, mapPreconditionErr(err)
+		return storage.PutResult{}, err
 	}
 	return storage.PutResult{
 		ETag:      strings.Trim(strValue(out.ETag), "\""),
@@ -292,21 +271,10 @@ func (b *Backend) putMultipart(ctx context.Context, key string, first []byte, r 
 		UploadId:        uploadID,
 		MultipartUpload: &types.CompletedMultipartUpload{Parts: parts},
 	}
-	// The preconditions belong here rather than on CreateMultipartUpload:
-	// this is the request that makes the object visible, so evaluating
-	// them any earlier would leave a window in which the condition held
-	// at check time and not at write time.
-	if o.IfMatchSet {
-		completeIn.IfMatch = aws.String(o.IfMatch)
-	}
-	if o.IfNoneMatchSet {
-		completeIn.IfNoneMatch = aws.String(o.IfNoneMatch)
-	}
-
 	out, err := b.cli.CompleteMultipartUpload(ctx, completeIn)
 	if err != nil {
 		abort()
-		return storage.PutResult{}, mapPreconditionErr(err)
+		return storage.PutResult{}, err
 	}
 	return storage.PutResult{
 		ETag:      strings.Trim(strValue(out.ETag), "\""),
@@ -314,25 +282,11 @@ func (b *Backend) putMultipart(ctx context.Context, key string, first []byte, r 
 	}, nil
 }
 
-// mapPreconditionErr turns a 412 into the interface's sentinel so
-// callers can match on it without knowing about HTTP.
-func mapPreconditionErr(err error) error {
-	var re *smithyhttp.ResponseError
-	if errors.As(err, &re) && re.HTTPStatusCode() == http.StatusPreconditionFailed {
-		return errors.Join(storage.ErrPreconditionFailed, err)
-	}
-	return err
-}
-
 // Delete removes a key. A missing key is not an error.
-func (b *Backend) Delete(ctx context.Context, key string, opts ...storage.DeleteOption) error {
-	o := storage.ApplyDelete(opts)
+func (b *Backend) Delete(ctx context.Context, key string) error {
 	in := &s3.DeleteObjectInput{
 		Bucket: aws.String(b.bucket),
 		Key:    aws.String(b.keyFor(key)),
-	}
-	if o.VersionID != "" {
-		in.VersionId = aws.String(o.VersionID)
 	}
 	_, err := b.cli.DeleteObject(ctx, in)
 	if err != nil {
@@ -345,10 +299,12 @@ func (b *Backend) Delete(ctx context.Context, key string, opts ...storage.Delete
 	return nil
 }
 
-// Copy duplicates srcKey to dstKey via a server-side copy.
-func (b *Backend) Copy(ctx context.Context, srcKey, dstKey string) (storage.CopyResult, error) {
+// copyObject duplicates srcKey to dstKey via a server-side copy —
+// MovePrefix's building block, off the shared interface since #342
+// (no production caller ever wanted a bare copy).
+func (b *Backend) copyObject(ctx context.Context, srcKey, dstKey string) error {
 	copySource := b.bucket + "/" + b.keyFor(srcKey)
-	out, err := b.cli.CopyObject(ctx, &s3.CopyObjectInput{
+	_, err := b.cli.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     aws.String(b.bucket),
 		CopySource: aws.String(copySource),
 		Key:        aws.String(b.keyFor(dstKey)),
@@ -356,17 +312,13 @@ func (b *Backend) Copy(ctx context.Context, srcKey, dstKey string) (storage.Copy
 	if err != nil {
 		var nk *types.NoSuchKey
 		if errors.As(err, &nk) {
-			return storage.CopyResult{}, errors.Join(storage.ErrNotFound, err)
+			return errors.Join(storage.ErrNotFound, err)
 		}
 		var nf *types.NotFound
 		if errors.As(err, &nf) {
-			return storage.CopyResult{}, errors.Join(storage.ErrNotFound, err)
+			return errors.Join(storage.ErrNotFound, err)
 		}
-		return storage.CopyResult{}, err
+		return err
 	}
-	etag := ""
-	if out.CopyObjectResult != nil {
-		etag = strings.Trim(strValue(out.CopyObjectResult.ETag), "\"")
-	}
-	return storage.CopyResult{ETag: etag}, nil
+	return nil
 }

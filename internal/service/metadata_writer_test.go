@@ -838,7 +838,13 @@ func (c copyingBackend) MovePrefix(ctx context.Context, oldPrefix, newPrefix str
 	var res storage.MoveResult
 	for _, k := range srcKeys {
 		dstKey := dst + strings.TrimPrefix(k, src)
-		if _, cerr := c.Copy(ctx, k, dstKey); cerr != nil {
+		rc, cerr := c.Get(ctx, k)
+		if cerr != nil {
+			return res, cerr
+		}
+		_, cerr = c.Put(ctx, dstKey, rc)
+		_ = rc.Close()
+		if cerr != nil {
 			return res, cerr
 		}
 		res.Written = append(res.Written, dstKey)

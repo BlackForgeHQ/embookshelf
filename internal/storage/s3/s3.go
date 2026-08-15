@@ -96,8 +96,7 @@ func New(ctx context.Context, cfg Config) (*Backend, error) {
 		cli:    cli,
 		bucket: cfg.Bucket,
 		prefix: normalizePrefix(cfg.Prefix),
-		capab: storage.CapConditional | storage.CapVersioning |
-			storage.CapPresign | storage.CapRange | storage.CapObjectStore,
+		capab: storage.CapPresign | storage.CapObjectStore,
 	}
 	b.psign = s3.NewPresignClient(cli)
 

@@ -337,7 +337,7 @@ type countingObjectStore struct {
 }
 
 func (s *countingObjectStore) Capabilities() storage.Capability {
-	return storage.CapObjectStore | storage.CapRange
+	return storage.CapObjectStore
 }
 
 func (s *countingObjectStore) Open(_ context.Context, key string) (storage.Source, error) {

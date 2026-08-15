@@ -32,13 +32,13 @@ func (f *fakeStore) List(context.Context, string) (storage.Iterator, error) {
 func (f *fakeStore) Head(context.Context, string) (storage.ObjectInfo, error) {
 	return storage.ObjectInfo{}, errors.New("not implemented")
 }
-func (f *fakeStore) Get(context.Context, string, ...storage.GetOption) (io.ReadCloser, error) {
+func (f *fakeStore) Get(context.Context, string) (io.ReadCloser, error) {
 	return nil, errors.New("not implemented")
 }
 func (f *fakeStore) Put(context.Context, string, io.Reader, ...storage.PutOption) (storage.PutResult, error) {
 	return storage.PutResult{}, errors.New("not implemented")
 }
-func (f *fakeStore) Delete(_ context.Context, key string, _ ...storage.DeleteOption) error {
+func (f *fakeStore) Delete(_ context.Context, key string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err, ok := f.errOn[key]; ok {
@@ -46,9 +46,6 @@ func (f *fakeStore) Delete(_ context.Context, key string, _ ...storage.DeleteOpt
 	}
 	f.deleted = append(f.deleted, key)
 	return nil
-}
-func (f *fakeStore) Copy(context.Context, string, string) (storage.CopyResult, error) {
-	return storage.CopyResult{}, errors.New("not implemented")
 }
 func (f *fakeStore) MovePrefix(context.Context, string, string) (storage.MoveResult, error) {
 	return storage.MoveResult{}, errors.New("not implemented")

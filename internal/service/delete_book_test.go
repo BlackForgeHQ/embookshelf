@@ -91,7 +91,7 @@ func (s *probingStorage) Capabilities() storage.Capability {
 	return 0
 }
 
-func (s *probingStorage) Delete(_ context.Context, key string, _ ...storage.DeleteOption) error {
+func (s *probingStorage) Delete(_ context.Context, key string) error {
 	s.rowSeen = append(s.rowSeen, s.probe.rowPresent())
 	if s.failKey != "" && key == s.failKey {
 		return s.failWith

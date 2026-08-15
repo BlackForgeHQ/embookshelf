@@ -21,7 +21,6 @@ package s3_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -163,58 +162,13 @@ func TestPutPartBoundaries(t *testing.T) {
 			if got, want := readDigest(t, b, key), patternDigest(size); got != want {
 				t.Errorf("digest = %s, want %s", got, want)
 			}
-			// Head has to keep agreeing with Put about the ETag, because
-			// that round trip is what makes WithIfMatch usable — and the
-			// multipart form is where the two could drift apart.
+			// Head has to keep agreeing with Put about the ETag — the
+			// multipart form is where the two could drift apart, and the
+			// interface documents ETag as a stable change token.
 			if info.ETag != res.ETag {
 				t.Errorf("Head ETag %q != Put ETag %q", info.ETag, res.ETag)
 			}
 		})
-	}
-}
-
-// TestPutConditionalOnLargeObject pins that the conditional contract
-// survives whatever path a large body takes. The conformance suite only
-// ever exercises it on a few bytes, so a multipart branch could drop
-// If-None-Match without any existing test noticing.
-func TestPutConditionalOnLargeObject(t *testing.T) {
-	b, cleanup := newStreamBackend(t)
-	defer cleanup()
-
-	const key = "narration/conditional.m4b"
-	// Just over one part, so the object is guaranteed to take whichever
-	// path a large body takes rather than the small-object shortcut.
-	const size = 12 << 20
-
-	if _, err := b.Put(t.Context(), key, newPattern(size),
-		storage.WithIfNoneMatch("*")); err != nil {
-		t.Fatalf("Put(WithIfNoneMatch(*)) on an absent key = %v, want success", err)
-	}
-
-	_, err := b.Put(t.Context(), key, newPattern(size), storage.WithIfNoneMatch("*"))
-	if !errors.Is(err, storage.ErrPreconditionFailed) {
-		t.Fatalf("Put(WithIfNoneMatch(*)) over an existing large object = %v, "+
-			"want ErrPreconditionFailed", err)
-	}
-	if got, want := readDigest(t, b, key), patternDigest(size); got != want {
-		t.Errorf("a refused If-None-Match put changed the object: digest %s, want %s", got, want)
-	}
-
-	info, err := b.Head(t.Context(), key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := b.Put(t.Context(), key, newPattern(size),
-		storage.WithIfMatch(info.ETag)); err != nil {
-		t.Fatalf("Put(WithIfMatch(%q)) with the current ETag = %v, want success",
-			info.ETag, err)
-	}
-
-	_, err = b.Put(t.Context(), key, newPattern(size),
-		storage.WithIfMatch("00000000000000000000000000000000"))
-	if !errors.Is(err, storage.ErrPreconditionFailed) {
-		t.Fatalf("Put(WithIfMatch(stale)) on a large object = %v, want "+
-			"ErrPreconditionFailed", err)
 	}
 }
 

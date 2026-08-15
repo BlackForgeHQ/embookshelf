@@ -55,17 +55,6 @@ type Capability uint32
 const (
 	// CapPresign indicates the backend can issue presigned URLs.
 	CapPresign Capability = 1 << iota
-	// CapStorageClass indicates objects can be tagged with a storage
-	// class (S3 standard / IA / glacier).
-	CapStorageClass
-	// CapVersioning indicates the backend stores prior versions of
-	// overwritten objects.
-	CapVersioning
-	// CapNotify indicates the backend can stream change events.
-	CapNotify
-	// CapConditional indicates the backend supports If-Match /
-	// If-None-Match preconditions on Put.
-	CapConditional
 	// CapObjectStore indicates the backend is a remote object store
 	// rather than a local filesystem.
 	//
@@ -81,19 +70,20 @@ const (
 	// kind=local backend row, so that column says "a backend row exists",
 	// which is not the same question (#202).
 	CapObjectStore
-	// CapRange indicates the backend supports byte-range reads on Get.
-	CapRange
 )
+
+// The bitset once carried five more bits — storage class, versioning,
+// change notification, conditional writes and range reads — plus the
+// option families and conformance arms behind them, with zero
+// production readers between them. One adapter is a hypothetical seam;
+// those had none, and they were deleted rather than kept warm (#342).
+// The one real range need (http.ServeContent) goes through Open's
+// ReaderAt, not Get.
 
 // PutResult is returned by Storage.Put.
 type PutResult struct {
 	ETag      string
 	VersionID string
-}
-
-// CopyResult is returned by Storage.Copy.
-type CopyResult struct {
-	ETag string
 }
 
 // MoveResult is returned by Storage.MovePrefix. It is the adapter's
@@ -141,23 +131,15 @@ type Storage interface {
 
 	// Get returns a stream for the given key. The returned ReadCloser
 	// must be Closed by the caller. Returns ErrNotFound when missing.
-	Get(ctx context.Context, key string, opts ...GetOption) (io.ReadCloser, error)
+	Get(ctx context.Context, key string) (io.ReadCloser, error)
 
 	// Put writes r to key. The reader is consumed in full (no length
-	// hint required). Conditional options (WithIfMatch / WithIfNoneMatch)
-	// return ErrPreconditionFailed when the precondition is not met,
-	// or ErrUnsupportedOption when the backend lacks CapConditional.
+	// hint required). WithContentType is the one option: LocalFS ignores
+	// it, S3 persists it.
 	Put(ctx context.Context, key string, r io.Reader, opts ...PutOption) (PutResult, error)
 
 	// Delete removes a key. Removing a missing key is not an error.
-	Delete(ctx context.Context, key string, opts ...DeleteOption) error
-
-	// Copy duplicates srcKey to dstKey. The source survives on every
-	// backend: LocalFS writes the destination through a temp file and
-	// never unlinks the source, S3 issues a server-side copy. A caller
-	// that wants the source gone follows with Delete, or uses MovePrefix
-	// for a whole folder.
-	Copy(ctx context.Context, srcKey, dstKey string) (CopyResult, error)
+	Delete(ctx context.Context, key string) error
 
 	// MovePrefix relocates every object under oldPrefix to newPrefix.
 	// Returns ErrNotFound, having written nothing, when no object lives
@@ -186,8 +168,6 @@ type Storage interface {
 // Sentinel errors. Backends wrap their underlying error with
 // errors.Join(ErrXxx, original) so callers can use errors.Is.
 var (
-	ErrNotFound           = errors.New("storage: not found")
-	ErrPreconditionFailed = errors.New("storage: precondition failed")
-	ErrUnsupportedOption  = errors.New("storage: unsupported option for this backend")
-	ErrInvalidKey         = errors.New("storage: invalid key")
+	ErrNotFound   = errors.New("storage: not found")
+	ErrInvalidKey = errors.New("storage: invalid key")
 )

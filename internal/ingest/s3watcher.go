@@ -20,7 +20,7 @@ import (
 type dropStore interface {
 	List(ctx context.Context, prefix string) (storage.Iterator, error)
 	Open(ctx context.Context, key string) (storage.Source, error)
-	Delete(ctx context.Context, key string, opts ...storage.DeleteOption) error
+	Delete(ctx context.Context, key string) error
 }
 
 // S3Watcher polls an S3 prefix and pulls supported objects through the

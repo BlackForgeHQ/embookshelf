@@ -133,7 +133,7 @@ func (b *Backend) copyWithRetry(ctx context.Context, src, dst string) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		_, err := b.Copy(ctx, src, dst)
+		err := b.copyObject(ctx, src, dst)
 		if err == nil {
 			return nil
 		}

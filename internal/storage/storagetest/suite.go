@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -272,20 +271,16 @@ func (r rebased) Head(ctx context.Context, key string) (storage.ObjectInfo, erro
 	return info, err
 }
 
-func (r rebased) Get(ctx context.Context, key string, opts ...storage.GetOption) (io.ReadCloser, error) {
-	return r.inner.Get(ctx, r.out(key), opts...)
+func (r rebased) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	return r.inner.Get(ctx, r.out(key))
 }
 
 func (r rebased) Put(ctx context.Context, key string, body io.Reader, opts ...storage.PutOption) (storage.PutResult, error) {
 	return r.inner.Put(ctx, r.out(key), body, opts...)
 }
 
-func (r rebased) Delete(ctx context.Context, key string, opts ...storage.DeleteOption) error {
-	return r.inner.Delete(ctx, r.out(key), opts...)
-}
-
-func (r rebased) Copy(ctx context.Context, srcKey, dstKey string) (storage.CopyResult, error) {
-	return r.inner.Copy(ctx, r.out(srcKey), r.out(dstKey))
+func (r rebased) Delete(ctx context.Context, key string) error {
+	return r.inner.Delete(ctx, r.out(key))
 }
 
 func (r rebased) MovePrefix(ctx context.Context, oldPrefix, newPrefix string) (storage.MoveResult, error) {
@@ -390,14 +385,12 @@ func runContract(t *testing.T, make MakeBackend) {
 	t.Run("GetMissingNotFound", func(t *testing.T) { testGetMissingNotFound(t, make) })
 	t.Run("DeleteRemovesObject", func(t *testing.T) { testDeleteRemovesObject(t, make) })
 	t.Run("DeleteMissingIsNoError", func(t *testing.T) { testDeleteMissingIsNoError(t, make) })
-	t.Run("CopyDuplicates", func(t *testing.T) { testCopyDuplicates(t, make) })
 	t.Run("MovePrefixRelocatesEveryKey", func(t *testing.T) { testMovePrefixRelocatesEveryKey(t, make) })
 	t.Run("MovePrefixMissingIsNotFound", func(t *testing.T) { testMovePrefixMissingIsNotFound(t, make) })
 	t.Run("ListYieldsAllKeys", func(t *testing.T) { testListYieldsAllKeys(t, make) })
 	t.Run("ListPrefixFilters", func(t *testing.T) { testListPrefixFilters(t, make) })
 	t.Run("ListEmptyOnMissingPrefix", func(t *testing.T) { testListEmptyOnMissingPrefix(t, make) })
 	t.Run("CapabilitiesIsStable", func(t *testing.T) { testCapabilitiesIsStable(t, make) })
-	t.Run("CapabilityGatesItsOption", func(t *testing.T) { testCapabilityGatesItsOption(t, make) })
 	t.Run("PutDoesNotBufferTheWholeObject", func(t *testing.T) { testPutDoesNotBufferTheWholeObject(t, make) })
 	t.Run("OpenReadsBytesAtRandomOffsets", func(t *testing.T) { testOpenRandomAccess(t, make) })
 }
@@ -464,26 +457,6 @@ func testDeleteMissingIsNoError(t *testing.T, mk MakeBackend) {
 	}
 }
 
-func testCopyDuplicates(t *testing.T, mk MakeBackend) {
-	s, cleanup := mk(t)
-	defer cleanup()
-	ctx := context.Background()
-	_, _ = s.Put(ctx, "src", strings.NewReader("data"))
-	if _, err := s.Copy(ctx, "src", "dst"); err != nil {
-		t.Fatal(err)
-	}
-	if got := mustRead(t, s, "dst"); got != "data" {
-		t.Fatalf("got %q, want %q", got, "data")
-	}
-	// Copy duplicates: the source survives. The interface comment used
-	// to say LocalFS did rename(2)-with-fallback here, which no
-	// implementation has ever done and no caller could have relied on —
-	// both backends leave the source alone, and the comment now says so.
-	if _, err := s.Head(ctx, "src"); err != nil {
-		t.Fatalf("after Copy, Head(src) = %v; Copy must not unlink the source", err)
-	}
-}
-
 // movePrefixFixture is the multi-key tree the MovePrefix tests move.
 // Deliberately more than one key and more than one level: a rename has
 // to carry the book, its sidecar and anything nested alongside them.
@@ -504,9 +477,9 @@ func putFixture(t *testing.T, s storage.Storage, files map[string]string) {
 	}
 }
 
-func mustRead(t *testing.T, s storage.Storage, key string, opts ...storage.GetOption) string {
+func mustRead(t *testing.T, s storage.Storage, key string) string {
 	t.Helper()
-	rc, err := s.Get(context.Background(), key, opts...)
+	rc, err := s.Get(context.Background(), key)
 	if err != nil {
 		t.Fatalf("Get(%q): %v", key, err)
 	}
@@ -687,292 +660,6 @@ func testCapabilitiesIsStable(t *testing.T, mk MakeBackend) {
 	c2 := s.Capabilities()
 	if c1 != c2 {
 		t.Fatalf("Capabilities() unstable: %v vs %v", c1, c2)
-	}
-}
-
-// capContract is one row of the capability table: a bit, and both halves
-// of what advertising it promises.
-//
-// The bits and the option-refusal errors were declared independently and
-// nothing joined them, so a bit meant whatever its backend's doc comment
-// said. Here it means one thing: the option works iff the bit is set.
-// Every row is run against every backend — the suite reads
-// Capabilities() and picks the half that backend signed up for, so a
-// backend never chooses which half it is graded on.
-//
-// Only the three capabilities that gate an option on the Storage
-// interface itself appear here. CapPresign, CapStorageClass and
-// CapNotify gate methods on backend-specific types reached by type
-// assertion, and CapObjectStore answers a question about keys rather
-// than about a call (ADR-0030 §1); none of them has an option this table
-// could pass or a refusal it could catch. That omission is deliberate,
-// not an oversight to be filled in by inventing options.
-type capContract struct {
-	name string
-	bit  storage.Capability
-	// refuse exercises the option against a backend that does NOT
-	// advertise bit. It returns the error the call produced — including
-	// nil, which fails: a backend that silently accepts an option it
-	// never advertised leaves every caller that gates on Capabilities()
-	// believing a request it made was honoured.
-	refuse func(t *testing.T, s storage.Storage) error
-	// honour exercises the option against a backend that DOES advertise
-	// bit, and asserts the option actually did what it claims — not
-	// merely that the call came back without ErrUnsupportedOption.
-	honour func(t *testing.T, s storage.Storage)
-}
-
-var capContracts = []capContract{
-	{
-		name:   "Range",
-		bit:    storage.CapRange,
-		refuse: refuseRange,
-		honour: honourRange,
-	},
-	{
-		name:   "Conditional",
-		bit:    storage.CapConditional,
-		refuse: refuseConditional,
-		honour: honourConditional,
-	},
-	{
-		name:   "Versioning",
-		bit:    storage.CapVersioning,
-		refuse: refuseVersioning,
-		honour: honourVersioning,
-	},
-}
-
-func testCapabilityGatesItsOption(t *testing.T, mk MakeBackend) {
-	for _, c := range capContracts {
-		t.Run(c.name, func(t *testing.T) {
-			s, cleanup := mk(t)
-			defer cleanup()
-			if s.Capabilities()&c.bit != 0 {
-				c.honour(t, s)
-				return
-			}
-			err := c.refuse(t, s)
-			if !errors.Is(err, storage.ErrUnsupportedOption) {
-				t.Fatalf("backend does not advertise %s, so its option must "+
-					"return ErrUnsupportedOption; got %v", c.name, err)
-			}
-		})
-	}
-}
-
-// refuseRange asks for a range a backend with CapRange would serve, so
-// the only thing that can come back other than the refusal is the
-// backend having quietly ignored the option.
-func refuseRange(_ *testing.T, s storage.Storage) error {
-	ctx := context.Background()
-	if _, err := s.Put(ctx, "cap/range", strings.NewReader("ABCDEFGHIJ")); err != nil {
-		return err
-	}
-	rc, err := s.Get(ctx, "cap/range", storage.WithRange(2, 3))
-	if err == nil {
-		_ = rc.Close()
-	}
-	return err
-}
-
-func honourRange(t *testing.T, s storage.Storage) {
-	t.Helper()
-	ctx := context.Background()
-	if _, err := s.Put(ctx, "cap/range", strings.NewReader("ABCDEFGHIJ")); err != nil {
-		t.Fatal(err)
-	}
-	if got := mustRead(t, s, "cap/range", storage.WithRange(2, 3)); got != "CDE" {
-		t.Errorf("WithRange(2, 3) = %q, want %q", got, "CDE")
-	}
-	// Length -1 is the documented "to EOF" form and is the one the
-	// reader shell uses; a backend that only handles closed ranges
-	// half-honours the bit.
-	if got := mustRead(t, s, "cap/range", storage.WithRange(5, -1)); got != "FGHIJ" {
-		t.Errorf("WithRange(5, -1) = %q, want %q", got, "FGHIJ")
-	}
-}
-
-func refuseConditional(_ *testing.T, s storage.Storage) error {
-	ctx := context.Background()
-	_, err := s.Put(ctx, "cap/cond", strings.NewReader("x"), storage.WithIfNoneMatch("*"))
-	if !errors.Is(err, storage.ErrUnsupportedOption) {
-		return err
-	}
-	// Both conditional options are gated by the one bit, so both must
-	// refuse; a backend that rejects If-None-Match and swallows If-Match
-	// is still lying about half of CapConditional.
-	_, err = s.Put(ctx, "cap/cond", strings.NewReader("x"), storage.WithIfMatch("deadbeef"))
-	return err
-}
-
-// honourConditional walks the whole conditional contract: the option
-// writes when the precondition holds, and comes back as
-// ErrPreconditionFailed — not as some backend-specific 412 the caller
-// cannot match on — when it does not. The refused writes must also have
-// left the bytes alone, which is the reason a caller reaches for a
-// conditional Put in the first place.
-//
-// If this case ever fails on a real store with an ETag that looks
-// correct, start with the quoting: the S3 adapter strips the surrounding
-// quotes from the ETag it reports but forwards a caller's value verbatim
-// as If-Match, so the round trip below — read the reported ETag, pass it
-// straight back — hands the store an unquoted value where RFC 9110 says
-// an entity-tag is quoted. MinIO accepts it, which is why no test here
-// reaches it, and a stricter store would refuse a legitimate conditional
-// write (#228, #270). The fix belongs in the adapter, not in a caller
-// that re-quotes by hand.
-func honourConditional(t *testing.T, s storage.Storage) {
-	t.Helper()
-	ctx := context.Background()
-	const key = "cap/cond"
-
-	first, err := s.Put(ctx, key, strings.NewReader("first"), storage.WithIfNoneMatch("*"))
-	if err != nil {
-		t.Fatalf("Put(WithIfNoneMatch(*)) on an absent key = %v, want success", err)
-	}
-	if got := mustRead(t, s, key); got != "first" {
-		t.Fatalf("after the conditional write, %q = %q, want %q", key, got, "first")
-	}
-
-	_, err = s.Put(ctx, key, strings.NewReader("second"), storage.WithIfNoneMatch("*"))
-	if !errors.Is(err, storage.ErrPreconditionFailed) {
-		t.Fatalf("Put(WithIfNoneMatch(*)) over an existing key = %v, want "+
-			"ErrPreconditionFailed", err)
-	}
-	if got := mustRead(t, s, key); got != "first" {
-		t.Errorf("a refused If-None-Match Put still wrote: %q = %q, want %q", key, got, "first")
-	}
-
-	// The ETag the backend reports is the only handle a caller has on
-	// the current version, so If-Match has to accept it in the form the
-	// interface hands it back.
-	etag := first.ETag
-	if etag == "" {
-		info, err := s.Head(ctx, key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		etag = info.ETag
-	}
-	if etag == "" {
-		t.Fatalf("backend advertises CapConditional but reports no ETag from " +
-			"Put or Head, leaving a caller nothing to pass to WithIfMatch")
-	}
-
-	if _, err := s.Put(ctx, key, strings.NewReader("third"), storage.WithIfMatch(etag)); err != nil {
-		t.Fatalf("Put(WithIfMatch(%q)) with the current ETag = %v, want success", etag, err)
-	}
-	if got := mustRead(t, s, key); got != "third" {
-		t.Fatalf("after the If-Match write, %q = %q, want %q", key, got, "third")
-	}
-
-	_, err = s.Put(ctx, key, strings.NewReader("fourth"), storage.WithIfMatch("00000000000000000000000000000000"))
-	if !errors.Is(err, storage.ErrPreconditionFailed) {
-		t.Fatalf("Put(WithIfMatch(stale)) = %v, want ErrPreconditionFailed", err)
-	}
-	if got := mustRead(t, s, key); got != "third" {
-		t.Errorf("a refused If-Match Put still wrote: %q = %q, want %q", key, got, "third")
-	}
-}
-
-func refuseVersioning(_ *testing.T, s storage.Storage) error {
-	ctx := context.Background()
-	if _, err := s.Put(ctx, "cap/version", strings.NewReader("v1")); err != nil {
-		return err
-	}
-	return s.Delete(ctx, "cap/version", storage.WithVersionID("some-version-id"))
-}
-
-// versionedStoreEnv, when set to anything non-empty, declares that the
-// store this run is pointed at is configured to keep versions. It is what
-// turns the conditional half of honourVersioning from a hope into a gate.
-//
-// A declaration is needed because the suite cannot tell the two failures
-// apart from the outside: a bucket with versioning switched off and a
-// backend that keeps versions but drops the id on the floor both look
-// like "no distinct version ids came back", and the second is a defect
-// that reaches every caller of WithVersionID. Before this, the versioning
-// row asserted only that a versioned Delete was not refused, and CI's
-// bucket was not versioned — so the deeper assertion never ran anywhere
-// and the row could not fail (#270).
-//
-// Whoever provisions the store sets it: `make test-s3` and the CI
-// workflow both enable versioning on the bucket and then set this, so the
-// gate holds in the run a developer makes before pushing and in the run
-// that guards main.
-const versionedStoreEnv = "STORAGETEST_VERSIONED_STORE"
-
-// honourVersioning pins the part of CapVersioning the adapter owns —
-// that a versioned Delete is accepted rather than refused — and then the
-// part it can only demonstrate where the store really is keeping
-// versions.
-//
-// The split is deliberate. The S3 backend advertises the bit from its
-// own code, while whether the bucket has versioning switched on is a
-// deployment fact it only warns about (s3.validateBucket). Against a
-// bucket with versioning off there is no second version to target and no
-// version id to name it with, so the deeper assertion would be testing
-// the bucket, not the backend. What still holds everywhere is that the
-// option must not come back as ErrUnsupportedOption.
-//
-// versionedStoreEnv is how a run says which side of that split it is on.
-// Set, the conditional branch stops being optional: the store keeps
-// versions, so a backend that hands back no distinct ids is dropping
-// them, and that is a failure rather than a note in the log.
-func honourVersioning(t *testing.T, s storage.Storage) {
-	t.Helper()
-	ctx := context.Background()
-	const key = "cap/version"
-
-	first, err := s.Put(ctx, key, strings.NewReader("v1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := s.Put(ctx, key, strings.NewReader("v2"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	versioned := first.VersionID != "" && second.VersionID != "" &&
-		first.VersionID != second.VersionID
-	if declared := os.Getenv(versionedStoreEnv) != ""; declared && !versioned {
-		t.Fatalf("%s is set, so the store under test keeps versions, but two "+
-			"Puts to %q reported version ids %q and %q. A backend that "+
-			"advertises CapVersioning must hand back a distinct id per "+
-			"version — without one a caller has nothing to pass to "+
-			"WithVersionID, and every versioned Delete it issues targets "+
-			"whatever is current.",
-			versionedStoreEnv, key, first.VersionID, second.VersionID)
-	}
-	target := first.VersionID
-	if target == "" {
-		// The id both AWS and S3-compatible stores report for the sole
-		// version of an object in a bucket that is not versioning.
-		target = "null"
-	}
-
-	err = s.Delete(ctx, key, storage.WithVersionID(target))
-	if errors.Is(err, storage.ErrUnsupportedOption) {
-		t.Fatalf("backend advertises CapVersioning but Delete refused "+
-			"WithVersionID: %v", err)
-	}
-	if !versioned {
-		if err != nil {
-			t.Logf("versioned Delete returned %v; the store handed back no "+
-				"distinct version ids, so this deployment is not keeping "+
-				"versions and only the refusal check above applies. Point "+
-				"the run at a versioned store and set %s to gate on the rest.",
-				err, versionedStoreEnv)
-		}
-		return
-	}
-	if err != nil {
-		t.Fatalf("Delete(WithVersionID(%q)) = %v, want success", target, err)
-	}
-	// Deleting a superseded version must not disturb the current one.
-	if got := mustRead(t, s, key); got != "v2" {
-		t.Errorf("after deleting the older version, %q = %q, want %q", key, got, "v2")
 	}
 }
 
