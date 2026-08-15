@@ -861,6 +861,10 @@ The set `{epub, pdf}`; the formats Send-to-Kindle accepts. Defined as a constant
 
 The Rust sidecar in `extensions/converter` (axum over the anydoc library) that turns document bytes into GitHub-Flavored Markdown. `POST /convert` takes raw file bytes and answers raw markdown; `GET /healthz` answers reachability. An **extension**: a separately deployed, optional process — embookshelf works without it, and features that need it say so instead of degrading silently. Configured by the `CONVERTER` `Setting[T]` row (URL + Enabled) in the settings registry. **Distinct** from a Processor (`fileproc`, in-binary metadata extraction) and from a metadata provider (enrichment).
 
+### PDF class
+
+What a PDF's content streams say it is: **TextBased**, **Scanned**, **ImageBased** or **Mixed** — pdf-inspector's four-way answer, sampled from text vs image operators before any conversion runs (ADR-0036). TextBased converts; Mixed converts above a constant text-page ratio; Scanned and ImageBased are refused with the per-page evidence in the sentence — loudly, because a scanned PDF has no text layer and converting it anyway is how a near-empty markdown silently fed the guide and the generated EPUB. The class travels machine-readably in the refusal (`class` beside `error`), which is the seam a future OCR stage routes on. **Distinct** from [[Convertible format]]: that set says which *formats* route to the converter at all; the class says what this *file's bytes* can give once it arrives.
+
 ### Markdown rendition
 
 The markdown produced from a book's file by the [[Converter extension]] — a derived artifact in the sense of [[Rendition]], stored as a file through `storage.Storage` beside the book, tracked by a DB row carrying the source [[Content hash]] and converter version. When the recorded hash no longer matches the book's current file, the rendition is stale, labelled, never silently reused as current. Consumed by AI features (reading guides, tagging, future retrieval); the planned markdown → EPUB stage reads it too.
