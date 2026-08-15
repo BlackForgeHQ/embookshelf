@@ -266,7 +266,7 @@ func TestComicExtract_CoverContentTypeIsSniffedNotTakenFromTheEntryName(t *testi
 	src := memSourceFromBytes(raw)
 	defer func() { _ = src.Close() }()
 
-	meta, err := CBZProcessor{}.Extract(context.Background(), src)
+	meta, err := ComicProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v, want best-effort success", err)
 	}

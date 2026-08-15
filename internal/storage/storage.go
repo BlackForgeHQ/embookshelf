@@ -26,6 +26,16 @@ import (
 //
 // Size is the total object size in bytes. Implementations must return
 // the same value for repeated calls.
+//
+// The read contract (#343): ReadAt carries no context — io.ReaderAt has
+// none — so a remote implementation must bound every single read
+// itself; a stalled endpoint has to surface as an error, never as a
+// caller hung forever (#332, the S3 adapter; storagetest's
+// RunSourceReadBound is the conformance arm). The local adapter returns
+// a bare *os.File and carries no deadline: over a network filesystem
+// (NFS/SMB as a library root) a read can hang exactly as an unbounded
+// S3 read did — a known gap, stated here rather than silently assumed
+// away, because the fix belongs to whoever mounts such a root.
 type Source interface {
 	io.ReaderAt
 	io.Closer
@@ -55,17 +65,6 @@ type Capability uint32
 const (
 	// CapPresign indicates the backend can issue presigned URLs.
 	CapPresign Capability = 1 << iota
-	// CapStorageClass indicates objects can be tagged with a storage
-	// class (S3 standard / IA / glacier).
-	CapStorageClass
-	// CapVersioning indicates the backend stores prior versions of
-	// overwritten objects.
-	CapVersioning
-	// CapNotify indicates the backend can stream change events.
-	CapNotify
-	// CapConditional indicates the backend supports If-Match /
-	// If-None-Match preconditions on Put.
-	CapConditional
 	// CapObjectStore indicates the backend is a remote object store
 	// rather than a local filesystem.
 	//
@@ -81,9 +80,15 @@ const (
 	// kind=local backend row, so that column says "a backend row exists",
 	// which is not the same question (#202).
 	CapObjectStore
-	// CapRange indicates the backend supports byte-range reads on Get.
-	CapRange
 )
+
+// The bitset once carried five more bits — storage class, versioning,
+// change notification, conditional writes and range reads — plus the
+// option families and conformance arms behind them, with zero
+// production readers between them. One adapter is a hypothetical seam;
+// those had none, and they were deleted rather than kept warm (#342).
+// The one real range need (http.ServeContent) goes through Open's
+// ReaderAt, not Get.
 
 // PutResult is returned by Storage.Put.
 type PutResult struct {
@@ -91,13 +96,8 @@ type PutResult struct {
 	VersionID string
 }
 
-// CopyResult is returned by Storage.Copy.
-type CopyResult struct {
-	ETag string
-}
-
-// MoveResult is returned by Storage.MovePrefix. It is the adapter's
-// report of what the move left for its caller to finish.
+// MoveResult is returned by PrefixMover.MovePrefixDetailed. It is the
+// adapter's report of what the move left for its caller to finish.
 //
 // The split is deliberate: the adapter owns the mechanics of relocating
 // bytes, but it cannot own rollback, because only the caller has a
@@ -141,42 +141,30 @@ type Storage interface {
 
 	// Get returns a stream for the given key. The returned ReadCloser
 	// must be Closed by the caller. Returns ErrNotFound when missing.
-	Get(ctx context.Context, key string, opts ...GetOption) (io.ReadCloser, error)
+	Get(ctx context.Context, key string) (io.ReadCloser, error)
 
 	// Put writes r to key. The reader is consumed in full (no length
-	// hint required). Conditional options (WithIfMatch / WithIfNoneMatch)
-	// return ErrPreconditionFailed when the precondition is not met,
-	// or ErrUnsupportedOption when the backend lacks CapConditional.
+	// hint required). WithContentType is the one option: LocalFS ignores
+	// it, S3 persists it.
 	Put(ctx context.Context, key string, r io.Reader, opts ...PutOption) (PutResult, error)
 
 	// Delete removes a key. Removing a missing key is not an error.
-	Delete(ctx context.Context, key string, opts ...DeleteOption) error
-
-	// Copy duplicates srcKey to dstKey. The source survives on every
-	// backend: LocalFS writes the destination through a temp file and
-	// never unlinks the source, S3 issues a server-side copy. A caller
-	// that wants the source gone follows with Delete, or uses MovePrefix
-	// for a whole folder.
-	Copy(ctx context.Context, srcKey, dstKey string) (CopyResult, error)
+	Delete(ctx context.Context, key string) error
 
 	// MovePrefix relocates every object under oldPrefix to newPrefix.
 	// Returns ErrNotFound, having written nothing, when no object lives
 	// under oldPrefix.
 	//
-	// Backends disagree about whether the sources survive, and MoveResult
-	// is where they say so rather than where the caller guesses: an
-	// atomic backend (LocalFS renames the directory) returns both lists
-	// empty, a copy-based backend (S3 has no rename) returns the
-	// destinations it created in Written and the still-live sources in
-	// Reclaim. No backend deletes the sources itself — only the caller
-	// knows when its transaction committed, and on S3 an inflight
-	// presigned URL for a source key must stay valid until it has
-	// (ADR-0005).
-	//
-	// On failure the error comes back alongside a MoveResult whose
-	// Written holds whatever was created before the failure, so the
-	// caller can reclaim a partial write.
-	MovePrefix(ctx context.Context, oldPrefix, newPrefix string) (MoveResult, error)
+	// Backends disagree about whether the sources survive. An atomic
+	// backend (LocalFS renames the directory) leaves nothing behind and
+	// this method is its whole story; a copy-based backend (S3 has no
+	// rename) leaves the sources live and reports the details — what it
+	// wrote, what still exists — through the PrefixMover extension,
+	// which a caller with a transaction to compensate asserts for
+	// (ADR-0005; the Written/Reclaim shape moved off this interface in
+	// #345, since only one adapter and one caller ever had anything to
+	// say through it).
+	MovePrefix(ctx context.Context, oldPrefix, newPrefix string) error
 
 	// Open returns a random-access view of the object at key. Returns
 	// ErrNotFound when missing. Callers must Close the returned Source.
@@ -186,8 +174,6 @@ type Storage interface {
 // Sentinel errors. Backends wrap their underlying error with
 // errors.Join(ErrXxx, original) so callers can use errors.Is.
 var (
-	ErrNotFound           = errors.New("storage: not found")
-	ErrPreconditionFailed = errors.New("storage: precondition failed")
-	ErrUnsupportedOption  = errors.New("storage: unsupported option for this backend")
-	ErrInvalidKey         = errors.New("storage: invalid key")
+	ErrNotFound   = errors.New("storage: not found")
+	ErrInvalidKey = errors.New("storage: invalid key")
 )

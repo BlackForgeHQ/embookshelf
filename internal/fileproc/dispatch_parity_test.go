@@ -147,6 +147,35 @@ func TestDispatchFormatAgreesWithDispatch(t *testing.T) {
 	}
 }
 
+// TestDispatchEmbedderDerivesFromTheTable — the embed axis is the
+// table's Embed column exactly, and every declared target has a writer
+// wired: a format that gains Embed without an embedders entry fails
+// here, not silently as a sidecar-only write it never asked for (#335 —
+// this used to be an off-table switch nothing checked).
+func TestDispatchEmbedderDerivesFromTheTable(t *testing.T) {
+	for _, s := range model.FormatSpecs {
+		e, err := DispatchEmbedder(s.Format)
+		if s.Embed {
+			if err != nil || e == nil {
+				t.Errorf("DispatchEmbedder(%q): e=%v err=%v — the table declares an in-file target", s.Format, e, err)
+			}
+			if _, wired := embedders[s.Format]; !wired {
+				t.Errorf("format %q declares Embed but has no embedders entry", s.Format)
+			}
+		} else if !errors.Is(err, ErrUnsupportedEmbed) {
+			t.Errorf("DispatchEmbedder(%q) err = %v, want ErrUnsupportedEmbed", s.Format, err)
+		}
+	}
+	// And the converse: a writer for a format the table does not declare
+	// is a wiring the table cannot see.
+	for format := range embedders {
+		s, ok := model.LookupFormat(format)
+		if !ok || !s.Embed {
+			t.Errorf("embedders holds %q but the table does not declare Embed for it", format)
+		}
+	}
+}
+
 // TestIsAudioFormatDerivesFromTheTable — the predicate is the table's
 // Audio column, exactly, and stays case-sensitive: books.format stores
 // the upper-case form, and a lower-case value reaching this predicate

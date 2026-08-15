@@ -63,16 +63,16 @@ var ErrUnsupportedFormat = errors.New("unsupported file format")
 // else — which extensions are admitted, what format they stamp, which
 // formats are audio — derives from the table (#308). Keyed by extension
 // rather than format because the alias and the canonical form need not
-// share an implementation: the three comic extensions all stamp CBZ and
-// all read the same pages, but a .cbr is a RAR and a .cb7 a 7z, which the
-// zip processor cannot open — so each has its own entry here and they
-// meet again in comic.go, above the container (#310).
+// share an implementation. The three comic extensions share one on
+// purpose: openComic classifies the bytes itself, so a .cbz that is
+// really a RAR ingests as the RAR it is instead of failing the zip
+// parser its name chose (#344).
 var processors = map[string]func() Processor{
 	".epub": func() Processor { return &EPUBProcessor{} },
 	".pdf":  func() Processor { return &PDFProcessor{} },
-	".cbz":  func() Processor { return &CBZProcessor{} },
-	".cbr":  func() Processor { return &CBRProcessor{} },
-	".cb7":  func() Processor { return &CB7Processor{} },
+	".cbz":  func() Processor { return &ComicProcessor{} },
+	".cbr":  func() Processor { return &ComicProcessor{} },
+	".cb7":  func() Processor { return &ComicProcessor{} },
 	".mp3":  func() Processor { return &AudioProcessor{} },
 	".m4a":  func() Processor { return &AudioProcessor{} },
 	".m4b":  func() Processor { return &AudioProcessor{} },

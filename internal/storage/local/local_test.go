@@ -105,17 +105,6 @@ func TestGet_MissingReturnsErrNotFound(t *testing.T) {
 	}
 }
 
-func TestGet_RangeReturnsErrUnsupported(t *testing.T) {
-	root := t.TempDir()
-	fs, _ := New(root)
-	ctx := context.Background()
-	_, _ = fs.Put(ctx, "f", strings.NewReader("hello"))
-	_, err := fs.Get(ctx, "f", storage.WithRange(0, 3))
-	if !errors.Is(err, storage.ErrUnsupportedOption) {
-		t.Fatalf("got %v, want ErrUnsupportedOption", err)
-	}
-}
-
 func TestHead_ReturnsSizeAndMtime(t *testing.T) {
 	root := t.TempDir()
 	fs, _ := New(root)
@@ -153,25 +142,6 @@ func TestDelete_MissingIsNoError(t *testing.T) {
 	fs, _ := New(t.TempDir())
 	if err := fs.Delete(context.Background(), "nope"); err != nil {
 		t.Fatalf("delete missing: %v", err)
-	}
-}
-
-func TestCopy_DuplicatesContent(t *testing.T) {
-	root := t.TempDir()
-	fs, _ := New(root)
-	ctx := context.Background()
-	_, _ = fs.Put(ctx, "src", strings.NewReader("payload"))
-	if _, err := fs.Copy(ctx, "src", "dst/sub/copy"); err != nil {
-		t.Fatal(err)
-	}
-	rc, err := fs.Get(ctx, "dst/sub/copy")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rc.Close()
-	got, _ := io.ReadAll(rc)
-	if string(got) != "payload" {
-		t.Fatalf("got %q, want %q", got, "payload")
 	}
 }
 
@@ -245,27 +215,6 @@ func TestList_MissingPrefixReturnsEmpty(t *testing.T) {
 	_, err = it.Next(context.Background())
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("got %v, want io.EOF", err)
-	}
-}
-
-func TestPut_ConditionalOptionsReturnErrUnsupported(t *testing.T) {
-	fs, _ := New(t.TempDir())
-	ctx := context.Background()
-	_, err := fs.Put(ctx, "f", strings.NewReader("x"), storage.WithIfMatch("abc"))
-	if !errors.Is(err, storage.ErrUnsupportedOption) {
-		t.Fatalf("WithIfMatch: got %v, want ErrUnsupportedOption", err)
-	}
-	_, err = fs.Put(ctx, "f", strings.NewReader("x"), storage.WithIfNoneMatch("*"))
-	if !errors.Is(err, storage.ErrUnsupportedOption) {
-		t.Fatalf("WithIfNoneMatch: got %v, want ErrUnsupportedOption", err)
-	}
-}
-
-func TestDelete_WithVersionIDReturnsErrUnsupported(t *testing.T) {
-	fs, _ := New(t.TempDir())
-	err := fs.Delete(context.Background(), "any", storage.WithVersionID("v1"))
-	if !errors.Is(err, storage.ErrUnsupportedOption) {
-		t.Fatalf("got %v, want ErrUnsupportedOption", err)
 	}
 }
 

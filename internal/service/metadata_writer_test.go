@@ -813,7 +813,12 @@ type copyingBackend struct {
 // no longer does (#202).
 func (copyingBackend) Capabilities() storage.Capability { return storage.CapObjectStore }
 
-func (c copyingBackend) MovePrefix(ctx context.Context, oldPrefix, newPrefix string) (storage.MoveResult, error) {
+func (c copyingBackend) MovePrefix(ctx context.Context, oldPrefix, newPrefix string) error {
+	_, err := c.MovePrefixDetailed(ctx, oldPrefix, newPrefix)
+	return err
+}
+
+func (c copyingBackend) MovePrefixDetailed(ctx context.Context, oldPrefix, newPrefix string) (storage.MoveResult, error) {
 	src := strings.Trim(oldPrefix, "/") + "/"
 	dst := strings.Trim(newPrefix, "/") + "/"
 	it, err := c.List(ctx, src)
@@ -838,7 +843,13 @@ func (c copyingBackend) MovePrefix(ctx context.Context, oldPrefix, newPrefix str
 	var res storage.MoveResult
 	for _, k := range srcKeys {
 		dstKey := dst + strings.TrimPrefix(k, src)
-		if _, cerr := c.Copy(ctx, k, dstKey); cerr != nil {
+		rc, cerr := c.Get(ctx, k)
+		if cerr != nil {
+			return res, cerr
+		}
+		_, cerr = c.Put(ctx, dstKey, rc)
+		_ = rc.Close()
+		if cerr != nil {
 			return res, cerr
 		}
 		res.Written = append(res.Written, dstKey)

@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
@@ -53,15 +52,7 @@ type EpubRenderDeps struct {
 // loud-failure choreography, and a pending markdown rendition is a
 // plain error so River's retry becomes the wait.
 func EpubRender(ctx context.Context, a jobs.EpubRenderArgs, deps EpubRenderDeps) error {
-	var (
-		markdown string
-		result   service.ConvertResult
-	)
-	defer func() {
-		if result.Path != "" {
-			_ = os.Remove(result.Path)
-		}
-	}()
+	var markdown string
 
 	book, cfg, err := renditionJob{
 		Rows:   deps.Renditions,
@@ -80,6 +71,12 @@ func EpubRender(ctx context.Context, a jobs.EpubRenderArgs, deps EpubRenderDeps)
 	if err != nil {
 		return err
 	}
+
+	// The shared finishing tail (#341): staged-file lifetime, rejection
+	// verdict and hash-before-Record ordering live there, not here. The
+	// source hash is the PDF's; the artifact's own hash is Record's job.
+	fin := &renditionFinish{book: book, sourceHash: deps.SourceHash, record: deps.Record}
+	defer fin.cleanup()
 
 	return renditionRun(ctx, deps.Renditions, a.BookID,
 		// The chained stage (ADR-0034 §5): the same feed the guide
@@ -104,34 +101,16 @@ func EpubRender(ctx context.Context, a jobs.EpubRenderArgs, deps EpubRenderDeps)
 				return "read markdown rendition: " + err.Error(), false, err
 			}
 		},
-		func(ctx context.Context) (string, bool, error) {
-			var err error
-			result, err = deps.Render(ctx, cfg.BaseURL, service.EpubRenderRequest{
+		fin.convert(func(ctx context.Context) (service.ConvertResult, error) {
+			return deps.Render(ctx, cfg.BaseURL, service.EpubRenderRequest{
 				Markdown: markdown,
 				Title:    book.Title,
 				Author:   book.Author,
 				Language: "en",
 			})
-			if err != nil {
-				var rejected *service.ConvertRejectedError
-				return err.Error(), errors.As(err, &rejected), err
-			}
-			return "", false, nil
-		},
-		func(ctx context.Context) (string, bool, error) {
-			// The source hash (the PDF's) is read before Record consumes
-			// the staged file; the artifact's own hash is Record's job.
-			sourceHash := deps.SourceHash(ctx, book)
-
-			rec, err := deps.Record(ctx, book, result.Path)
-			if err != nil {
-				return "record epub: " + err.Error(), false, fmt.Errorf("record epub for %s: %w", a.BookID, err)
-			}
-
-			if err := deps.Renditions.MarkReady(ctx, a.BookID, rec.FileID, sourceHash, result.Version); err != nil {
-				return "", false, fmt.Errorf("mark ready: %w", err)
-			}
-			return "", false, nil
-		},
+		}),
+		fin.finish("record epub", func(ctx context.Context, rec service.DerivedRecord, sourceHash []byte, version string) error {
+			return deps.Renditions.MarkReady(ctx, a.BookID, rec.FileID, sourceHash, version)
+		}),
 	)
 }

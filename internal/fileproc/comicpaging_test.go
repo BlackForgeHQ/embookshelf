@@ -235,6 +235,10 @@ func TestComicPagingServesA7zComicFromTheCache(t *testing.T) {
 // gave it. The extension chose which entries are pages; it does not get
 // to decide what is served back as a Content-Type, the same rule the
 // cover pass makes one tier down (#330).
+//
+// And an entry whose bytes are no image at all is refused with the same
+// sentinel the ZIP arm answers — not served as an opaque download. One
+// contract for "page n", whatever the container (#334).
 func TestComicPagingTypesPagesFromTheirOwnBytes(t *testing.T) {
 	jpeg := append([]byte{0xFF, 0xD8, 0xFF, 0xE0}, bytes.Repeat([]byte{0x11}, 32)...)
 	o := &openCounter{raw: rarArchive(
@@ -242,14 +246,34 @@ func TestComicPagingTypesPagesFromTheirOwnBytes(t *testing.T) {
 		// all under a .jpg one.
 		rarEntry{name: "01.png", data: jpeg},
 		rarEntry{name: "02.jpg", data: []byte("<html><script>alert(1)</script>")},
+		rarEntry{name: "03.png", data: comicPage("three")},
 	)}
 	cache := NewPageCache(t.TempDir(), 1<<20)
 
 	if _, mime := readPage(t, cache, "k", o, 0); mime != "image/jpeg" {
 		t.Errorf("page 0 mime = %q, want image/jpeg — the name was believed", mime)
 	}
-	if _, mime := readPage(t, cache, "k", o, 1); mime != "application/octet-stream" {
-		t.Errorf("page 1 mime = %q, want application/octet-stream — a non-image was typed as one", mime)
+
+	set, err := OpenComicPages(context.Background(), cache, "k", o.open)
+	if err != nil {
+		t.Fatalf("OpenComicPages: %v", err)
+	}
+	defer func() { _ = set.Close() }()
+	if _, _, perr := set.Page(1); !errors.Is(perr, ErrComicPageNotImage) {
+		t.Errorf("Page(1) err = %v, want ErrComicPageNotImage — the extracted arm served a non-image", perr)
+	}
+	// The refusal is one slot's, not the comic's: its neighbours still
+	// serve, and the bad entry keeps its place in the numbering.
+	if set.Len() != 3 {
+		t.Errorf("Len() = %d, want 3 — the refused page lost its slot", set.Len())
+	}
+	rc, mime, perr := set.Page(2)
+	if perr != nil {
+		t.Fatalf("Page(2): %v", perr)
+	}
+	defer func() { _ = rc.Close() }()
+	if mime != "image/png" {
+		t.Errorf("page 2 mime = %q, want image/png", mime)
 	}
 }
 

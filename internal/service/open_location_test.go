@@ -12,14 +12,14 @@ import (
 	"github.com/blackforge/embookshelf/internal/storage/local"
 )
 
-// TestOpenMarkdownResolvesThePlacedKey — the rendition row stores the
-// library-relative location PlaceDerived returned; OpenMarkdown must
+// TestOpenResolvesThePlacedKey — the rendition row stores the
+// library-relative location PlaceDerived returned; LibraryHandle.Open must
 // find those bytes again on both backend shapes. The local arm is the
 // regression: the local backend is "/"-rooted (ADR-0030), so opening
 // the bare location instead of StorageKey(location) reads relative to
 // nowhere and misses — which is exactly what the guide feed's first
 // wiring did.
-func TestOpenMarkdownResolvesThePlacedKey(t *testing.T) {
+func TestOpenResolvesThePlacedKey(t *testing.T) {
 	t.Parallel()
 
 	book := model.Book{ID: "b1", Title: "Dune", Author: "Frank Herbert", Format: "PDF"}
@@ -43,9 +43,9 @@ func TestOpenMarkdownResolvesThePlacedKey(t *testing.T) {
 			t.Fatalf("PlaceDerived: %v", err)
 		}
 
-		src, err := h.OpenMarkdown(context.Background(), placed.Location)
+		src, err := h.Open(context.Background(), placed.Location)
 		if err != nil {
-			t.Fatalf("OpenMarkdown: %v", err)
+			t.Fatalf("Open: %v", err)
 		}
 		defer func() { _ = src.Close() }()
 		got, err := io.ReadAll(io.NewSectionReader(src, 0, src.Size()))
@@ -79,9 +79,9 @@ func TestOpenMarkdownResolvesThePlacedKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("PlaceDerived: %v", err)
 		}
-		src, err := h.OpenMarkdown(context.Background(), placed.Location)
+		src, err := h.Open(context.Background(), placed.Location)
 		if err != nil {
-			t.Fatalf("OpenMarkdown: %v", err)
+			t.Fatalf("Open: %v", err)
 		}
 		defer func() { _ = src.Close() }()
 		got, err := io.ReadAll(io.NewSectionReader(src, 0, src.Size()))

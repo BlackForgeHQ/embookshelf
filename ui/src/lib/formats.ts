@@ -57,6 +57,7 @@ export const FORMAT_READERS: Record<string, ReaderKind> = {
   EPUB: "text",
   PDF: "text",
   CBZ: "comic",
+  CBR: "comic",
   MP3: "audio",
   M4B: "audio",
 }

@@ -50,9 +50,24 @@ type Config struct {
 	// SkipValidation, when true, skips the bucket-versioning + SSE
 	// checks at construction. Test-only.
 	SkipValidation bool
+	// ReadTimeout bounds one Source.ReadAt end to end (the range GET
+	// plus draining its body). Zero means DefaultReadTimeout. The dial
+	// on the storage.Source read contract (#343) — raise it for a truly
+	// slow link, never disable it.
+	ReadTimeout time.Duration
 }
 
 // Backend is the storage.Storage implementation for S3.
+// The extensions the backend satisfies beyond storage.Storage, asserted
+// so drift is a compile error rather than a silently missed type
+// assertion — presign quietly stopping was a performance regression
+// nothing reported (#345).
+var (
+	_ storage.Storage     = (*Backend)(nil)
+	_ storage.Presigner   = (*Backend)(nil)
+	_ storage.PrefixMover = (*Backend)(nil)
+)
+
 type Backend struct {
 	cli    *s3.Client
 	bucket string
@@ -60,9 +75,8 @@ type Backend struct {
 	psign  *s3.PresignClient
 	capab  storage.Capability
 
-	// readTimeout, when non-zero, overrides s3ReadTimeout for every
-	// s3Source this Backend opens. Test-only: nothing outside the s3
-	// package's own tests sets this.
+	// readTimeout is Config.ReadTimeout resolved against the default,
+	// stamped onto every s3Source this Backend opens.
 	readTimeout time.Duration
 }
 
@@ -92,12 +106,16 @@ func New(ctx context.Context, cfg Config) (*Backend, error) {
 		o.UsePathStyle = cfg.ForcePathStyle
 	})
 
+	readTimeout := cfg.ReadTimeout
+	if readTimeout <= 0 {
+		readTimeout = DefaultReadTimeout
+	}
 	b := &Backend{
-		cli:    cli,
-		bucket: cfg.Bucket,
-		prefix: normalizePrefix(cfg.Prefix),
-		capab: storage.CapConditional | storage.CapVersioning |
-			storage.CapPresign | storage.CapRange | storage.CapObjectStore,
+		cli:         cli,
+		bucket:      cfg.Bucket,
+		prefix:      normalizePrefix(cfg.Prefix),
+		capab:       storage.CapPresign | storage.CapObjectStore,
+		readTimeout: readTimeout,
 	}
 	b.psign = s3.NewPresignClient(cli)
 

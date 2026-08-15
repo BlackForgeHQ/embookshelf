@@ -58,8 +58,12 @@ var ErrComicContainer = errors.New(
 	"not a comic archive: pages can be served from .cbz, .cbr and .cb7")
 
 // ErrComicPageNotImage is what a page read answers when an entry's own
-// leading bytes match none of SniffImageMime's formats — the ZIP arm's
-// counterpart to writeCachedPage typing an extracted page from disk.
+// leading bytes match none of SniffImageMime's formats — whatever the
+// container. The ZIP arm answers it at serve time from the sniff window;
+// the extracted arm records the refusal on the page at fill time and
+// Page replays it, so a caller cannot tell the containers apart by their
+// error modes (#334; the extracted arm used to serve the same bytes as a
+// 200 application/octet-stream).
 //
 // The archive's directory named this entry a page (comicPages only
 // admits five raster extensions), but a name is the file author's claim
@@ -157,18 +161,19 @@ func OpenComicPages(
 	if err != nil {
 		return nil, err
 	}
-	kind := sniffComicContainer(src)
+	// The one classification, shared with ingest: the bytes say which
+	// container this is and the container answers for itself (#344).
+	cf, err := openComic(src)
+	if err != nil {
+		_ = src.Close()
+		return nil, err
+	}
 
-	if kind == containerZIP {
-		zr, zerr := zip.NewReader(src, src.Size())
-		if zerr != nil {
-			_ = src.Close()
-			return nil, fmt.Errorf("open cbz: %w", zerr)
-		}
+	if zc, ok := cf.(*zipComic); ok {
 		return &ComicPageSet{
 			src:   src,
-			zr:    zr,
-			names: comicPages((&zipComic{zr: zr}).entries()),
+			zr:    zc.zr,
+			names: comicPages(zc.entries()),
 		}, nil
 	}
 
@@ -185,26 +190,8 @@ func OpenComicPages(
 	if cache != nil {
 		budget = cache.archiveBudget
 	}
-	var fill pageExtractor
-	switch kind {
-	case containerRAR:
-		fill = func(ctx context.Context, dir string) ([]cachedPage, int64, error) {
-			a, aerr := newRARComic(src)
-			if aerr != nil {
-				return nil, 0, aerr
-			}
-			return extractComicPages(ctx, "cbr", a, dir, budget)
-		}
-	case container7z:
-		fill = func(ctx context.Context, dir string) ([]cachedPage, int64, error) {
-			a, aerr := newSevenzipComic(src)
-			if aerr != nil {
-				return nil, 0, aerr
-			}
-			return extractComicPages(ctx, "cb7", a, dir, budget)
-		}
-	default:
-		return nil, ErrComicContainer
+	fill := func(ctx context.Context, dir string) ([]cachedPage, int64, error) {
+		return extractComicPages(ctx, cf.kind(), cf, dir, budget)
 	}
 
 	e, err := cache.acquire(ctx, key, fill)
@@ -243,6 +230,9 @@ func (p *ComicPageSet) Page(n int) (io.ReadCloser, string, error) {
 	}
 	if p.entry != nil {
 		pg := p.entry.pages[n]
+		if pg.notImage {
+			return nil, "", fmt.Errorf("page %d (%s): %w", n, pg.name, ErrComicPageNotImage)
+		}
 		if pg.file == "" {
 			return nil, "", fmt.Errorf("page %d (%s) could not be extracted: %s", n, pg.name, pg.fail)
 		}
@@ -389,6 +379,10 @@ func extractComicPages(
 		}
 		if werr != nil {
 			pages[i].fail = werr.Error()
+			// The refusal survives as itself, not as prose: Page answers
+			// the same sentinel the ZIP arm does, so the two arms have one
+			// error mode for the same bad bytes (#334).
+			pages[i].notImage = errors.Is(werr, ErrComicPageNotImage)
 			slog.Warn("comic page unreadable, dropped",
 				"container", kind, "entry", name, "err", werr)
 			return nil
@@ -403,7 +397,8 @@ func extractComicPages(
 
 	for i, n := range names {
 		if owner := first[n]; owner != i {
-			pages[i].file, pages[i].mime, pages[i].fail = pages[owner].file, pages[owner].mime, pages[owner].fail
+			pages[i].file, pages[i].mime = pages[owner].file, pages[owner].mime
+			pages[i].fail, pages[i].notImage = pages[owner].fail, pages[owner].notImage
 		}
 	}
 	return pages, total, nil
@@ -463,12 +458,6 @@ func writeCachedPage(
 		return 0, "", herr
 	}
 	mime = SniffImageMime(head[:hn])
-	if mime == "" {
-		// The entry's name said it was an image; its bytes disagree, and
-		// the bytes decide. Served as an opaque download rather than as
-		// whatever type the name claimed.
-		mime = "application/octet-stream"
-	}
 	if _, werr := f.Write(head[:hn]); werr != nil {
 		return 0, "", werr
 	}
@@ -482,6 +471,16 @@ func writeCachedPage(
 			return 0, "", errPageBudget
 		}
 		return 0, "", fmt.Errorf("page expands past the %d byte cap", pageMax)
+	}
+	if mime == "" {
+		// The entry's name said it was an image; its bytes disagree, and
+		// the bytes decide. Refused, not served under an invented type:
+		// this is the one contract Page promises for every container, and
+		// the ZIP arm already answers the same sentinel (#334). After the
+		// bounds, deliberately — a decompression bomb is refused as a
+		// bomb, whatever its bytes claim to be. The defer removes the
+		// file.
+		return 0, "", ErrComicPageNotImage
 	}
 	return n, mime, nil
 }

@@ -21,20 +21,17 @@ func (s *stubStorage) List(_ context.Context, _ string) (storage.Iterator, error
 func (s *stubStorage) Head(_ context.Context, _ string) (storage.ObjectInfo, error) {
 	return storage.ObjectInfo{}, nil
 }
-func (s *stubStorage) Get(_ context.Context, _ string, _ ...storage.GetOption) (io.ReadCloser, error) {
+func (s *stubStorage) Get(_ context.Context, _ string) (io.ReadCloser, error) {
 	return nil, nil
 }
 func (s *stubStorage) Put(_ context.Context, _ string, _ io.Reader, _ ...storage.PutOption) (storage.PutResult, error) {
 	return storage.PutResult{}, nil
 }
-func (s *stubStorage) Delete(_ context.Context, _ string, _ ...storage.DeleteOption) error {
+func (s *stubStorage) Delete(_ context.Context, _ string) error {
 	return nil
 }
-func (s *stubStorage) Copy(_ context.Context, _, _ string) (storage.CopyResult, error) {
-	return storage.CopyResult{}, nil
-}
-func (s *stubStorage) MovePrefix(_ context.Context, _, _ string) (storage.MoveResult, error) {
-	return storage.MoveResult{}, nil
+func (s *stubStorage) MovePrefix(_ context.Context, _, _ string) error {
+	return nil
 }
 func (s *stubStorage) Open(_ context.Context, _ string) (storage.Source, error) {
 	return nil, storage.ErrNotFound

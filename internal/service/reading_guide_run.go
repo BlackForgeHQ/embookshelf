@@ -48,18 +48,46 @@ const metadataPromptTokens = 400
 // spend cents or hundreds of dollars.
 const charsPerToken = 4
 
-// GuideRunner starts and sizes bulk guide generation (ADR-0024 §4).
+// GuideRunner starts and sizes bulk guide generation (ADR-0024 §4). It
+// also owns the guide's one RenditionRequests instance: the guide is
+// the artifact with no tracking row, so its request degrades to a plain
+// enqueue (nil RenditionRequestRows) — and both the per-book button and
+// the bulk run ask this instance, so there is one request vocabulary,
+// not a module for bulk and a hand enqueue beside it (#336).
 type GuideRunner struct {
 	candidates guideCandidateLister
-	enq        jobs.Enqueuer
 	textCap    int64
+	requests   *RenditionRequests
 }
 
 func NewGuideRunner(c guideCandidateLister, enq jobs.Enqueuer, textCap int64) *GuideRunner {
 	if textCap <= 0 {
 		textCap = DefaultGuideTextCap
 	}
-	return &GuideRunner{candidates: c, enq: enq, textCap: textCap}
+	r := &GuideRunner{candidates: c, textCap: textCap}
+	r.requests = &RenditionRequests{
+		enq:  enq,
+		args: func(bookID string) jobs.Args { return jobs.ReadingGuideArgs{BookID: bookID} },
+		candidates: func(ctx context.Context) ([]string, error) {
+			rows, err := c.ListGuideCandidates(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("list guide candidates: %w", err)
+			}
+			ids := make([]string, 0, len(rows))
+			for _, row := range rows {
+				ids = append(ids, row.BookID)
+			}
+			return ids, nil
+		},
+	}
+	return r
+}
+
+// RequestOne queues one book's guide through the shared request module —
+// the same instance Start drives, so the button and the bulk run cannot
+// drift apart in how a request is made.
+func (r *GuideRunner) RequestOne(ctx context.Context, bookID string) error {
+	return r.requests.One(ctx, bookID)
 }
 
 // Estimate sizes a run without reading a single book.
@@ -93,24 +121,8 @@ func (r *GuideRunner) Estimate(ctx context.Context) (GuideEstimate, error) {
 }
 
 // Start queues one job per candidate through the shared request module
-// — the guide is the artifact with no tracking row, so its request is
-// just the enqueue (nil RenditionRequestRows) and the partial-count
-// contract lives on Bulk rather than being restated here (#317).
+// — the partial-count contract lives on Bulk rather than being restated
+// here (#317).
 func (r *GuideRunner) Start(ctx context.Context) (int, error) {
-	requests := &RenditionRequests{
-		enq:  r.enq,
-		args: func(bookID string) jobs.Args { return jobs.ReadingGuideArgs{BookID: bookID} },
-		candidates: func(ctx context.Context) ([]string, error) {
-			rows, err := r.candidates.ListGuideCandidates(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("list guide candidates: %w", err)
-			}
-			ids := make([]string, 0, len(rows))
-			for _, c := range rows {
-				ids = append(ids, c.BookID)
-			}
-			return ids, nil
-		},
-	}
-	return requests.Bulk(ctx)
+	return r.requests.Bulk(ctx)
 }

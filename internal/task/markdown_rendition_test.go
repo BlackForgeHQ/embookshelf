@@ -190,3 +190,36 @@ func TestMarkdownRenditionFailureArms(t *testing.T) {
 		})
 	}
 }
+
+// The finishing tail's ordering invariant is structural now, and this
+// pins it: the source hash is read strictly before Record consumes the
+// staged file (#341). A Record that removes the staged bytes — which
+// the real one does — must not be able to starve the hash read.
+func TestMarkdownRenditionReadsTheSourceHashBeforeRecordConsumesTheFile(t *testing.T) {
+	store := &fakeRenditionStore{}
+	deps := renditionDeps(store, repo.ConverterConfig{Enabled: true, BaseURL: "http://c"})
+
+	var order []string
+	deps.SourceHash = func(context.Context, model.Book) []byte {
+		order = append(order, "hash")
+		return []byte{0xcd}
+	}
+	record := deps.Record
+	deps.Record = func(ctx context.Context, b model.Book, src string) (service.DerivedRecord, error) {
+		order = append(order, "record")
+		rec, err := record(ctx, b, src)
+		// The real Record consumes the staged file (placement moves it).
+		_ = os.Remove(src)
+		return rec, err
+	}
+
+	if err := MarkdownRendition(context.Background(), jobs.MarkdownRenditionArgs{BookID: "b1"}, deps); err != nil {
+		t.Fatalf("MarkdownRendition: %v", err)
+	}
+	if len(order) != 2 || order[0] != "hash" || order[1] != "record" {
+		t.Fatalf("order = %v, want the hash read before Record", order)
+	}
+	if !bytes.Equal(store.hash, []byte{0xcd}) {
+		t.Fatalf("hash = %x, want the one read before the file was consumed", store.hash)
+	}
+}

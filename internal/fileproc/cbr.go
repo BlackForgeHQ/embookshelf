@@ -14,29 +14,28 @@ import (
 	"github.com/blackforge/embookshelf/internal/storage"
 )
 
-// CBRProcessor extracts metadata and the cover from a RAR-packed comic
-// (.cbr) — the same pages and the same optional ComicInfo.xml a .cbz
-// holds, in the container WinRAR writes (#310).
+// rarComic is the RAR end of comicFile — the container a .cbr names, in
+// the container WinRAR writes (#310). The cover rule, the ComicInfo
+// mapping and the page order are comic.go's; this file answers only the
+// questions the container alone can.
 //
-// The rules are not repeated here: comic.go decides what the cover is and
-// what ComicInfo means, and this file answers only the two questions the
-// container alone can, which is the point of splitting them — a .cbr and
-// a .cbz of the same comic must produce the same row, and they do because
-// they run the same code.
-//
-// The format tag stays CBZ: model.FormatSpecs folds .cbz, .cbr and .cb7
-// onto one row, so books.format says CBZ for all three and .cbr is what
-// the file is called, not what the shelf calls it.
-//
-// RAR is sequential where ZIP is random-access, and that shapes the pass:
-// an entry has no index to seek to, so this walks the archive once for
-// the listing and once for the (at most two) entries it wants. Skipping
-// packed data on a walk is a seek — rardecode uses the underlying reader
-// when it is an io.Seeker, which a SectionReader over a Source is — so
-// the listing costs the headers rather than the archive. Solid archives,
-// where each file continues the previous one's dictionary, are the one
-// case that cannot be skipped past; see rarComic.read.
-type CBRProcessor struct{}
+// RAR is sequential where ZIP is random-access, and that shapes the
+// pass: an entry has no index to seek to, so this walks the archive once
+// for the listing and once per read pass. Skipping packed data on a walk
+// is a seek — rardecode uses the underlying reader when it is an
+// io.Seeker, which a SectionReader over a Source is — so the listing
+// costs the headers rather than the archive. Solid archives, where each
+// file continues the previous one's dictionary, are the one case that
+// cannot be skipped past; see stream, which is the single statement of
+// that rule (#344 — it used to be written twice, and #310's bug was its
+// placement).
+type rarComic struct {
+	src   storage.Source
+	names []string
+	// solid is true when any file in the archive continues the previous
+	// file's dictionary, which decides whether the read walk may skip.
+	solid bool
+}
 
 // cbrMaxSolidDrainBytes bounds what a solid archive may cost. In a solid
 // archive a file's bytes depend on the files before it, so reaching the
@@ -45,24 +44,6 @@ type CBRProcessor struct{}
 // book keeps its metadata without a cover, which is the same degradation
 // an unreadable cover entry gets. Non-solid archives never drain at all.
 const cbrMaxSolidDrainBytes int64 = 512 << 20
-
-func (CBRProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, error) {
-	a, err := newRARComic(src)
-	if err != nil {
-		return Metadata{}, err
-	}
-	return extractComic(ctx, "cbr", a)
-}
-
-// rarComic is the RAR end of comicArchive: a listing taken up front, and
-// a second walk per read.
-type rarComic struct {
-	src   storage.Source
-	names []string
-	// solid is true when any file in the archive continues the previous
-	// file's dictionary, which decides whether the read walk may skip.
-	solid bool
-}
 
 func newRARComic(src storage.Source) (*rarComic, error) {
 	r, err := rarReader(src)
@@ -98,102 +79,30 @@ func newRARComic(src storage.Source) (*rarComic, error) {
 	return c, nil
 }
 
+func (c *rarComic) kind() string { return "cbr" }
+
 func (c *rarComic) entries() []string { return c.names }
 
+// read buffers the wanted entries through the one walk stream owns. A
+// password error mid-entry fails the archive — the first entry of an
+// encrypted block opens and then fails mid-read — which is walkerRead's
+// encrypted arm.
 func (c *rarComic) read(ctx context.Context, want map[string]int64) (map[string][]byte, error) {
-	r, err := rarReader(c.src)
-	if err != nil {
-		return nil, cbrError("open cbr", err)
-	}
-
-	out := make(map[string][]byte, len(want))
-	remaining := len(want)
-	var drained int64
-
-	for remaining > 0 {
-		// Per entry, because a solid archive's walk is the one thing here
-		// that can run long: the drain below decodes whatever the archive
-		// put in front of the cover.
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("cbr: %w", err)
-		}
-
-		h, err := r.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return nil, cbrError("read cbr entries", err)
-		}
-
-		// A duplicate name is read once: the first entry wins, the same
-		// way the listing's first match chose it.
-		max, wanted := want[h.Name]
-		if _, done := out[h.Name]; done {
-			wanted = false
-		}
-
-		if wanted {
-			b, rerr := readCappedEntry(r, h.Name, max)
-			switch {
-			case rerr == nil:
-				out[h.Name] = b
-				remaining--
-			case isRARPasswordError(rerr):
-				return nil, fmt.Errorf("cbr: %w", errEncryptedArchive)
-			default:
-				// An entry that will not decode is one missing field, not a
-				// failed import: comic.go degrades around it. No `continue`
-				// here — the drain below still has to run, because this is
-				// exactly the case that leaves the reader mid-entry.
-				slog.Warn("comic entry unreadable, dropped", "container", "cbr", "entry", h.Name, "err", rerr)
-			}
-		}
-
-		// In a solid archive each file's output continues the previous
-		// file's decoder window (rardecode resets that window only for
-		// non-solid files), so an entry that is stepped over has to be
-		// decoded anyway — and so does the tail of one we stopped short of,
-		// which is why this sits after the read on every path rather than
-		// inside its success branch. Non-solid archives skip by seeking and
-		// never come through here at all.
-		if c.solid && remaining > 0 {
-			n, derr := io.Copy(io.Discard, io.LimitReader(r, cbrMaxSolidDrainBytes-drained))
-			drained += n
-			if derr != nil {
-				// An entry we were only stepping over will not decode, so
-				// nothing behind it can be trusted either. Still a
-				// degradation rather than a failed item — the same answer a
-				// bad entry inside a ZIP gets — so stop and return what was
-				// already read.
-				slog.Warn("comic entry would not decode; stopping the solid walk",
-					"container", "cbr", "entry", h.Name, "err", derr, "missing", remaining)
-				break
-			}
-			if drained >= cbrMaxSolidDrainBytes {
-				slog.Warn("solid cbr exceeded the decode budget; giving up on the remaining entries",
-					"drainedBytes", drained, "capBytes", cbrMaxSolidDrainBytes, "missing", remaining)
-				break
-			}
-		}
-	}
-	return out, nil
+	return walkerRead(ctx, "cbr", c, want, isRARPasswordError)
 }
 
-// stream hands every wanted entry's bytes to the sink in one walk, for
-// the page cache to write out (#329).
-//
-// Sibling of read rather than a use of it: read buffers each entry whole
-// to hand back a []byte, which is right for one cover and wrong for
-// every page of a comic. The walk is the same walk — one pass, the solid
-// drain in the same place and for the same reason — because it is the
-// archive's shape that dictates it, not what the caller wants at the
-// end.
+// stream hands every wanted entry's bytes to the sink in one walk. It is
+// the container's only walk: the paging pass consumes it directly and
+// read buffers through it (walkerRead), so the solid-drain rule below is
+// stated once — #310's bug was this rule's placement, and until #344 it
+// had two homes to be wrong in.
 //
 // Extracting *every* page means the drain almost never runs: consecutive
 // wanted entries continue each other's dictionary as they are read, so
 // only the non-image entries between them (a ComicInfo.xml, a thumbs
-// directory) are stepped over.
+// directory) are stepped over. A sink that stops short of an entry's end
+// leaves the reader mid-entry, which is exactly what the drain's
+// placement — after the sink, on every path — exists for.
 func (c *rarComic) stream(ctx context.Context, want map[string]bool, sink pageSink) error {
 	r, err := rarReader(c.src)
 	if err != nil {

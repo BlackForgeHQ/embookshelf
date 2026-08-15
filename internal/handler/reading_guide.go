@@ -72,20 +72,19 @@ func toReadingGuideDTO(g model.ReadingGuide) readingGuideDTO {
 // BookGuideGet returns a book's reading guide. 404 when none has been
 // generated — distinct from an empty one, which cannot be stored.
 func (h *Handler) BookGuideGet(c *gin.Context, s bookScope) {
-	if h.guides == nil {
-		writeError(c, http.StatusServiceUnavailable, guidesUnavailableMsg)
-		return
-	}
-	g, err := h.guides.GetByBookID(c.Request.Context(), s.Book.ID)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, "no reading guide for this book yet")
-			return
-		}
-		writeServerError(c, "load reading guide", err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"guide": toReadingGuideDTO(g)})
+	h.renditionStatus(c, renditionStatusSpec{
+		available:      h.guides != nil,
+		unavailableMsg: guidesUnavailableMsg,
+		readOp:         "load reading guide",
+		load: func(ctx context.Context) (any, error) {
+			g, err := h.guides.GetByBookID(ctx, s.Book.ID)
+			if err != nil {
+				return nil, err
+			}
+			return gin.H{"guide": toReadingGuideDTO(g)}, nil
+		},
+		noneMsg: "no reading guide for this book yet",
+	})
 }
 
 // guidesDisabledMsg is CodeGuidesDisabled's sentence — answered whether
@@ -121,6 +120,13 @@ func (h *Handler) BookGuideGenerate(c *gin.Context, s bookScope) {
 		formatGate:      h.guidePreflightConvertible,
 		requestOp:       "queue guide generation",
 		request: func(ctx context.Context, bookID string) error {
+			// Through the runner's shared request module, so the button
+			// and the bulk run make a request the same way (#336). The
+			// fallback is the handler.Options rule: a wiring without a
+			// runner still has a queue.
+			if h.guideRunner != nil {
+				return h.guideRunner.RequestOne(ctx, bookID)
+			}
 			return h.queue.Enqueue(ctx, jobs.ReadingGuideArgs{BookID: bookID})
 		},
 	})

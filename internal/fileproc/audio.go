@@ -106,11 +106,7 @@ func applyAudioTags(m *Metadata, t tag.Metadata) {
 	// almost always JPEG, and now they are typed as such only when they
 	// actually are.
 	if pic := t.Picture(); pic != nil && len(pic.Data) > 0 {
-		if mime := SniffImageMime(pic.Data); mime != "" {
-			m.HasCover = true
-			m.CoverBytes = pic.Data
-			m.CoverMime = mime
-		}
+		m.setCover(pic.Data)
 	}
 }
 

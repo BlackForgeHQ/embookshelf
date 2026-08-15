@@ -69,6 +69,12 @@ type FormatSpec struct {
 	// extraction serves it with no sidecar (gap-filler routing, ADR-0033
 	// §2) — and MOBI/AZW3/FB2 are outside anydoc's set.
 	Convertible bool
+	// Embed is whether the format has an in-file metadata write target
+	// (ADR-0001): EPUB (OPF rezip) and PDF (/Info). Everything else gets
+	// the full-mirror sidecar instead. The writer itself lives in
+	// fileproc's embedders map; a parity test holds the two together
+	// (#335).
+	Embed bool
 	// IngestExts are the file extensions intake admits and stamps with
 	// this Format — the ingest axis fileproc's dispatchers derive from
 	// (#308). Distinct from Ext (the one download extension): a format
@@ -94,12 +100,12 @@ type FormatSpec struct {
 var FormatSpecs = []FormatSpec{
 	{
 		Format: "EPUB", Ext: ".epub", MIME: "application/epub+zip", Reader: ReaderText,
-		Narratable: true, KindleEligible: true,
+		Narratable: true, KindleEligible: true, Embed: true,
 		IngestExts: []string{".epub"},
 	},
 	{
 		Format: "PDF", Ext: ".pdf", MIME: "application/pdf", Reader: ReaderText,
-		KindleEligible: true, Convertible: true,
+		KindleEligible: true, Convertible: true, Embed: true,
 		IngestExts: []string{".pdf"},
 	},
 	// The comic aliases fold into CBZ at ingest, the folding FormatForExt
@@ -129,8 +135,12 @@ var FormatSpecs = []FormatSpec{
 	// Legacy tags no ingest path produces — .cbr stamps CBZ above, and
 	// nothing stamps TXT — but which the download path met on rows
 	// written by older releases, and named correctly. No IngestExts:
-	// the extension belongs to the row that stamps it.
-	{Format: "CBR", Ext: ".cbr"},
+	// the extension belongs to the row that stamps it. CBR keeps a
+	// reader: its bytes are a RAR archive the comic reader pages since
+	// #329 (the paging path classifies by bytes), and the handler gate
+	// derives from this column rather than from a `!= "CBZ"` literal
+	// that silently 415'd these rows (#336).
+	{Format: "CBR", Ext: ".cbr", MIME: "application/vnd.comicbook-rar", Reader: ReaderComic},
 	{Format: "TXT", Ext: ".txt"},
 }
 

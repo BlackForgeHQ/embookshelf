@@ -55,8 +55,11 @@ type markdownRenditionDTO struct {
 // BookMarkdownGet answers the rendition's state for the book page —
 // the shared status shape with markdown's projector.
 func (h *Handler) BookMarkdownGet(c *gin.Context, s bookScope) {
-	h.renditionStatus(c, h.renditions != nil, "markdown renditions are unavailable", "read markdown rendition",
-		func(ctx context.Context) (any, error) {
+	h.renditionStatus(c, renditionStatusSpec{
+		available:      h.renditions != nil,
+		unavailableMsg: "markdown renditions are unavailable",
+		readOp:         "read markdown rendition",
+		load: func(ctx context.Context) (any, error) {
 			rendition, err := h.renditions.GetByBookID(ctx, s.Book.ID)
 			if err != nil {
 				return nil, err
@@ -71,29 +74,18 @@ func (h *Handler) BookMarkdownGet(c *gin.Context, s bookScope) {
 				Stale:            h.sourceStale(ctx, s.Book, rendition.State, rendition.SourceContentHash),
 			}, nil
 		},
-		markdownRenditionDTO{State: "none"})
+		none: markdownRenditionDTO{State: "none"},
+	})
 }
 
-// sourceStale answers a rendition badge's staleness for both artifact
-// shapes: state.CanBeStale gates on ready — the same gate the feed and
-// the audiobook preflight's wrappers now share (#322) — and the
-// comparison itself is model.Stale over the shared warn-and-degrade
-// hash lookup.
-//
-// h.primaryHash == nil is kept, and is the one nil-hash-func branch
-// that still holds: it is nil exactly when libStore is nil, a real
-// installs-without-a-library-store state documented on the field
-// itself, not a defensive check against something the Primary hash
-// constructor already degrades. The feed's and the audiobook's own
-// hash funcs carry no such install-time nil case — see their stale
-// methods — so this is the one place the branch earns its keep.
+// sourceStale answers a rendition badge's staleness — the shared
+// service.Staleness composition (#340). The install-with-no-library-
+// store degrade (h.primaryHash nil ⇒ never stale) is the module's one
+// nil policy now, not a branch each caller re-derives.
 func (h *Handler) sourceStale(
 	ctx context.Context, book model.Book, state model.RenditionState, recorded []byte,
 ) bool {
-	if !state.CanBeStale() || h.primaryHash == nil {
-		return false
-	}
-	return model.Stale(h.primaryHash(ctx, book), recorded)
+	return service.NewStaleness(h.primaryHash).Stale(ctx, book, state, recorded)
 }
 
 // newPrimaryHash keeps a missing library store nil across the closure —
@@ -146,7 +138,7 @@ func (h *Handler) BookMarkdownDownload(c *gin.Context, s bookScope) {
 		writeServerError(c, "resolve library", err)
 		return
 	}
-	src, err := handle.OpenMarkdown(ctx, rendition.Location)
+	src, err := handle.Open(ctx, rendition.Location)
 	if err != nil {
 		writeServerError(c, "open markdown rendition", err)
 		return

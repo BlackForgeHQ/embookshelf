@@ -77,20 +77,26 @@ type audiobookGenerateRequest struct {
 // handed the DTO a zero-value Book — so a book we could not load was
 // reported as never stale rather than as missing.
 func (h *Handler) BookAudiobookGet(c *gin.Context, s bookScope) {
-	// Report rather than a repo read: it reconciles the run with its
-	// segments before answering, so this poll is also where a run that
-	// lost its finalize job gets it back, and it derives staleness where
-	// the run's provenance lives (#191).
-	rep, err := h.audiobooks.Report(c.Request.Context(), s.Book)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(c, http.StatusNotFound, noNarrationMsg)
-			return
-		}
-		writeServerError(c, "audiobook get", err)
-		return
-	}
-	c.JSON(http.StatusOK, audiobookDTOFrom(rep))
+	h.renditionStatus(c, renditionStatusSpec{
+		available:      h.audiobooks != nil,
+		unavailableMsg: "audiobook generation is unavailable",
+		readOp:         "audiobook get",
+		// Report rather than a repo read: it reconciles the run with its
+		// segments before answering, so this poll is also where a run
+		// that lost its finalize job gets it back, and it derives
+		// staleness where the run's provenance lives (#191).
+		load: func(ctx context.Context) (any, error) {
+			rep, err := h.audiobooks.Report(ctx, s.Book)
+			if err != nil {
+				return nil, err
+			}
+			return audiobookDTOFrom(rep), nil
+		},
+		// 404, not 200-none: the client reads it as "offer Generate",
+		// and the declared field is what keeps that a choice rather
+		// than a copied ladder (#339).
+		noneMsg: noNarrationMsg,
+	})
 }
 
 // BookAudiobookEstimate reports what a run would cost without starting

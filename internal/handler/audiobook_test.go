@@ -374,7 +374,7 @@ type presigningObjectStore struct {
 }
 
 func (s *presigningObjectStore) Capabilities() storage.Capability {
-	return storage.CapObjectStore | storage.CapRange | storage.CapPresign
+	return storage.CapObjectStore | storage.CapPresign
 }
 
 func (s *presigningObjectStore) PresignGet(_ context.Context, key string, _ time.Duration) (string, error) {

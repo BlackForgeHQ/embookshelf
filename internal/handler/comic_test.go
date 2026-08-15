@@ -23,9 +23,8 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
-	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/repo/repotest"
 	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/service/servicetest"
 	"github.com/blackforge/embookshelf/internal/storage"
 	"github.com/blackforge/embookshelf/internal/storage/local"
 )
@@ -56,7 +55,7 @@ type objectStore struct {
 }
 
 func (s *objectStore) Capabilities() storage.Capability {
-	return storage.CapObjectStore | storage.CapRange
+	return storage.CapObjectStore
 }
 
 func (s *objectStore) Open(_ context.Context, key string) (storage.Source, error) {
@@ -102,15 +101,18 @@ func cbzBytes(t *testing.T, entries map[string][]byte) []byte {
 // comicFixture is a handler wired to one library, with one CBZ book in
 // it, over a real LibraryStore — real enough that the storage key rule
 // and the files-row lookup are the ones production runs, since those are
-// what decide whether the bytes are findable at all.
+// what decide whether the bytes are findable at all. The rows are
+// servicetest's in-memory adapters rather than a Postgres schema: the
+// store is still the production one, only its two reads are faked
+// (#338).
 type comicFixture struct {
 	h    *Handler
 	book model.Book
-	// files and fileID are what a test needs to say "the bytes changed",
-	// which is the only way the page cache's key can be exercised: the
-	// key is the files row's content hash (#329).
-	files  *repo.FileRepo
-	fileID string
+	// files and fileRow are what a test needs to say "the bytes
+	// changed", which is the only way the page cache's key can be
+	// exercised: the key is the files row's content hash (#329).
+	files   *servicetest.Files
+	fileRow model.File
 }
 
 const comicLocation = "Brian K. Vaughan/Saga 1/saga-01.cbz"
@@ -120,29 +122,22 @@ const comicLocation = "Brian K. Vaughan/Saga 1/saga-01.cbz"
 // design has none.
 func newComicFixture(t *testing.T, store storage.Storage, libRoot string) comicFixture {
 	t.Helper()
-	ctx := context.Background()
-	d := repotest.New(t)
-	libRepo := repo.NewLibraryRepo(d)
-	bookRepo := repo.NewBookRepo(d)
-	fileRepo := repo.NewFileRepo(d)
-
-	lib, err := libRepo.CreateLibrary(ctx, "Comics", "comics", libRoot, nil)
-	if err != nil {
-		t.Fatalf("CreateLibrary: %v", err)
+	lib := model.Library{ID: "lib-comics", Name: "Comics"}
+	if libRoot != "" {
+		lib.Root = &libRoot
 	}
 	// No books.path: that column is the legacy single-path field, and an
 	// object-store library has nothing to put in it. The old handler
 	// answered 404 on exactly this before it reached any bytes.
-	book, err := bookRepo.Create(ctx, model.Book{
+	book := model.Book{
+		ID:        "book-saga",
 		LibraryID: lib.ID,
 		Title:     "Saga #1",
 		Author:    "Brian K. Vaughan",
 		Format:    "CBZ",
-	})
-	if err != nil {
-		t.Fatalf("Create book: %v", err)
 	}
-	file, err := fileRepo.Insert(ctx, model.File{
+	row := model.File{
+		ID:          "file-saga-1",
 		LibraryID:   lib.ID,
 		BookID:      book.ID,
 		Location:    comicLocation,
@@ -150,20 +145,17 @@ func newComicFixture(t *testing.T, store storage.Storage, libRoot string) comicF
 		Size:        1024,
 		Mtime:       time.Now(),
 		LastScanned: time.Now(),
-	})
-	if err != nil {
-		t.Fatalf("Insert file: %v", err)
 	}
+	files := servicetest.NewFiles().Add(book.ID, row)
 
 	h := &Handler{
-		books: bookRepo,
-		libStore: service.NewLibraryStore(service.LibraryStoreDeps{
-			Libs:     libRepo,
-			Resolver: storage.ConstantResolver{S: store},
-			Files:    fileRepo,
+		libStore: servicetest.NewStore(servicetest.StoreOptions{
+			Libraries: []model.Library{lib},
+			Storage:   store,
+			Files:     files,
 		}),
 	}
-	return comicFixture{h: h, book: book, files: fileRepo, fileID: file.ID}
+	return comicFixture{h: h, book: book, files: files, fileRow: row}
 }
 
 // repointComicFile records the hash of the bytes now at the book's
@@ -172,11 +164,10 @@ func newComicFixture(t *testing.T, store storage.Storage, libRoot string) comicF
 func repointComicFile(t *testing.T, f comicFixture, raw []byte) {
 	t.Helper()
 	sum := sha256.Sum256(raw)
-	if err := f.files.SetContentHash(
-		context.Background(), f.fileID, sum[:], int64(len(raw)), time.Now(),
-	); err != nil {
-		t.Fatalf("SetContentHash: %v", err)
-	}
+	row := f.fileRow
+	row.ContentHash = sum[:]
+	row.Size = int64(len(raw))
+	f.files.Replace(f.book.ID, row)
 }
 
 // comicRequest drives one comic handler body with a resolved scope, the
@@ -481,17 +472,8 @@ func TestComicResolveFailureDoesNotFallBackToDisk(t *testing.T) {
 // books.path is a stored string, and the sandbox exists because it is
 // not trusted to stay inside a library.
 func TestComicRefusesALegacyPathOutsideTheSandbox(t *testing.T) {
-	ctx := context.Background()
-	d := repotest.New(t)
-	libRepo := repo.NewLibraryRepo(d)
-	bookRepo := repo.NewBookRepo(d)
-	fileRepo := repo.NewFileRepo(d)
-
 	libRoot := t.TempDir()
-	lib, err := libRepo.CreateLibrary(ctx, "Comics", "comics", libRoot, nil)
-	if err != nil {
-		t.Fatalf("CreateLibrary: %v", err)
-	}
+	lib := model.Library{ID: "lib-comics", Name: "Comics", Root: &libRoot}
 
 	// Outside every root, and real, so a missing file cannot be what
 	// makes this pass.
@@ -500,24 +482,21 @@ func TestComicRefusesALegacyPathOutsideTheSandbox(t *testing.T) {
 		t.Fatalf("write outside file: %v", err)
 	}
 
-	book, err := bookRepo.Create(ctx, model.Book{
+	book := model.Book{
+		ID:        "book-escapee",
 		LibraryID: lib.ID,
 		Title:     "Escapee",
 		Author:    "Nobody",
 		Format:    "CBZ",
 		Path:      outside,
-	})
-	if err != nil {
-		t.Fatalf("Create book: %v", err)
 	}
 
 	h := &Handler{
-		books: bookRepo,
-		lib:   nil,
-		libStore: service.NewLibraryStore(service.LibraryStoreDeps{
-			Libs:     libRepo,
-			Resolver: storage.ConstantResolver{S: &objectStore{objects: map[string][]byte{}}},
-			Files:    fileRepo,
+		lib: nil,
+		libStore: servicetest.NewStore(servicetest.StoreOptions{
+			Libraries: []model.Library{lib},
+			Storage:   &objectStore{objects: map[string][]byte{}},
+			Files:     servicetest.NewFiles(),
 		}),
 	}
 	f := comicFixture{h: h, book: book}
@@ -776,5 +755,45 @@ func TestComicErrorsMapToStatuses(t *testing.T) {
 				t.Errorf("Retry-After = %q, want %q", got, tc.retry)
 			}
 		})
+	}
+}
+
+// The comic gate is the format table's reader column, not a literal: a
+// row an older release stamped CBR opens the comic reader like the CBZ
+// rows the same bytes get today (#336). TXT and the text formats stay
+// refused.
+func TestComicFormatGateDerivesFromTheTable(t *testing.T) {
+	for format, want := range map[string]bool{
+		"CBZ": true, "CBR": true,
+		"EPUB": false, "PDF": false, "TXT": false, "MP3": false, "": false,
+	} {
+		if got := comicFormat(format); got != want {
+			t.Errorf("comicFormat(%q) = %v, want %v", format, got, want)
+		}
+	}
+}
+
+// A legacy row an older release stamped CBR pages through the same
+// endpoints: the gate is the format table's reader column, not a
+// literal, and the paging path classifies the bytes itself (#336). The
+// literal `!= "CBZ"` this replaced answered exactly this book 415.
+func TestComicPagesServeALegacyCBRRow(t *testing.T) {
+	store := &objectStore{objects: map[string][]byte{
+		comicLocation: readComicFixture(t, comicFixtureSolidCBR),
+	}}
+	f := newComicFixture(t, store, "")
+	f.book.Format = "CBR"
+	f.h.comics = fileproc.NewPageCache(t.TempDir(), 1<<20)
+
+	rec := comicRequest(t, f, f.h.ComicPagesIndex, "/api/v1/books/x/comic/pages", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pages index status = %d, want 200 for a CBR-stamped row (body %s)", rec.Code, rec.Body.String())
+	}
+	rec = comicRequest(t, f, f.h.ComicPage, "/api/v1/books/x/comic/pages/0", "0")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("page status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !bytes.Equal(rec.Body.Bytes(), fixturePageBody("page-two")) {
+		t.Errorf("page 0 body = %q, want the fixture's first page", rec.Body.Bytes())
 	}
 }

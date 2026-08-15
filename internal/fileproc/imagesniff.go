@@ -31,6 +31,21 @@ func SniffImageMime(b []byte) string {
 	return ""
 }
 
+// setCover records b as the metadata's cover iff its own bytes are a
+// recognised image, typed by SniffImageMime and never by anything the
+// file's author declared. The one spelling of the per-processor cover
+// epilogue — it used to be written out in five processors, each with its
+// own comment re-explaining #330 (#335). Bytes that are no image leave
+// the metadata untouched: the book arrives cover-less, the same
+// degradation every processor already made.
+func (m *Metadata) setCover(b []byte) {
+	mime := SniffImageMime(b)
+	if mime == "" {
+		return
+	}
+	m.HasCover, m.CoverBytes, m.CoverMime = true, b, mime
+}
+
 // normalizeCover re-types a Metadata's cover from its own bytes and
 // drops the cover entirely when those bytes are not an image.
 //

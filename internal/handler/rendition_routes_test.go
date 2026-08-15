@@ -3,7 +3,6 @@
 package handler
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,9 +17,8 @@ import (
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
-	"github.com/blackforge/embookshelf/internal/repo/repotest"
 	"github.com/blackforge/embookshelf/internal/service"
-	"github.com/blackforge/embookshelf/internal/storage"
+	"github.com/blackforge/embookshelf/internal/service/servicetest"
 	"github.com/blackforge/embookshelf/internal/storage/local"
 )
 
@@ -384,7 +382,6 @@ func epubServeCase() renditionServeCase {
 // stored.
 func epubServed(t *testing.T) (*Handler, model.Book) {
 	t.Helper()
-	ctx := context.Background()
 	root := t.TempDir()
 	path := filepath.Join(root, filepath.FromSlash(epubRenditionKey))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -398,28 +395,21 @@ func epubServed(t *testing.T) (*Handler, model.Book) {
 		t.Fatalf("local.New: %v", err)
 	}
 
-	d := repotest.New(t)
-	libRepo := repo.NewLibraryRepo(d)
-	bookRepo := repo.NewBookRepo(d)
-	fileRepo := repo.NewFileRepo(d)
-
-	lib, err := libRepo.CreateLibrary(ctx, "Rendered", "rendered", root, nil)
-	if err != nil {
-		t.Fatalf("CreateLibrary: %v", err)
-	}
-	book, err := bookRepo.Create(ctx, model.Book{
+	lib := model.Library{ID: "lib-rendered", Name: "Rendered", Root: &root}
+	book := model.Book{
+		ID:        "book-rendered",
 		LibraryID: lib.ID,
 		Title:     "Rendered Book",
 		Author:    "Author",
 		Format:    "PDF",
-	})
-	if err != nil {
-		t.Fatalf("Create book: %v", err)
 	}
 	// The generated EPUB is an ordinary files row beside the book's own
 	// file; what makes it the rendition is the tracking row pointing at
-	// it (ADR-0034).
-	rendered, err := fileRepo.Insert(ctx, model.File{
+	// it (ADR-0034). servicetest carries the rows in memory — the store
+	// and the key rule are still production's (#338).
+	renderedID := "file-rendered-epub"
+	files := servicetest.NewFiles().Add(book.ID, model.File{
+		ID:          renderedID,
 		LibraryID:   lib.ID,
 		BookID:      book.ID,
 		Location:    epubRenditionKey,
@@ -428,18 +418,15 @@ func epubServed(t *testing.T) (*Handler, model.Book) {
 		Mtime:       time.Now(),
 		LastScanned: time.Now(),
 	})
-	if err != nil {
-		t.Fatalf("Insert file: %v", err)
-	}
 
 	return &Handler{
 		epubRenditions: &fakeEpubRenditions{row: model.EpubRendition{
-			BookID: book.ID, State: model.RenditionReady, FileID: &rendered.ID,
+			BookID: book.ID, State: model.RenditionReady, FileID: &renderedID,
 		}},
-		libStore: service.NewLibraryStore(service.LibraryStoreDeps{
-			Libs:     libRepo,
-			Resolver: storage.ConstantResolver{S: rootedAtSlash},
-			Files:    fileRepo,
+		libStore: servicetest.NewStore(servicetest.StoreOptions{
+			Libraries: []model.Library{lib},
+			Storage:   rootedAtSlash,
+			Files:     files,
 		}),
 	}, book
 }

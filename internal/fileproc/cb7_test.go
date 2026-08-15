@@ -55,7 +55,7 @@ func TestCB7Extract_CoverAndComicInfo(t *testing.T) {
 	src := memSourceFromFile(t, cb7Fixture)
 	defer func() { _ = src.Close() }()
 
-	meta, err := CB7Processor{}.Extract(context.Background(), src)
+	meta, err := ComicProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestCB7Extract_PasswordProtected(t *testing.T) {
 			src := memSourceFromFile(t, fixture)
 			defer func() { _ = src.Close() }()
 
-			_, err := CB7Processor{}.Extract(context.Background(), src)
+			_, err := ComicProcessor{}.Extract(context.Background(), src)
 			if err == nil {
 				t.Fatal("expected an error for a password-protected archive")
 			}
@@ -108,7 +108,7 @@ func TestCB7Extract_DecompressionBombIsBounded(t *testing.T) {
 	src := memSourceFromFile(t, cb7BombFixture)
 	defer func() { _ = src.Close() }()
 
-	meta, err := CB7Processor{}.Extract(context.Background(), src)
+	meta, err := ComicProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestCB7Extract_CorruptFails(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			src := memSourceFromBytes(raw)
 			defer func() { _ = src.Close() }()
-			meta, err := CB7Processor{}.Extract(context.Background(), src)
+			meta, err := ComicProcessor{}.Extract(context.Background(), src)
 			if err == nil {
 				t.Fatalf("expected an error, got %+v", meta)
 			}

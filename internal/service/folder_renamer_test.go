@@ -278,13 +278,20 @@ func TestRelocateRefusesATargetOutsideTheLibraryInsteadOfWritingItAbsolute(t *te
 	}
 }
 
-// brokenMover fails the move and nothing else.
+// brokenMover fails the move and nothing else. It carries the
+// PrefixMover extension because the backend arm requires one — the
+// compensation the arm exists for is fed by the report (#345).
 type brokenMover struct {
 	storage.Storage
 	err error
 }
 
-func (m brokenMover) MovePrefix(context.Context, string, string) (storage.MoveResult, error) {
+func (m brokenMover) MovePrefix(ctx context.Context, oldPrefix, newPrefix string) error {
+	_, err := m.MovePrefixDetailed(ctx, oldPrefix, newPrefix)
+	return err
+}
+
+func (m brokenMover) MovePrefixDetailed(context.Context, string, string) (storage.MoveResult, error) {
 	return storage.MoveResult{}, m.err
 }
 

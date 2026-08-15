@@ -139,7 +139,7 @@ func (o *BookOps) OpenMarkdown(ctx context.Context, book model.Book, location st
 	// OpenMarkdown, not Open: the row stores the library-relative
 	// location, and the local backend is "/"-rooted (ADR-0030) — the
 	// bare location misses.
-	src, err := handle.OpenMarkdown(ctx, location)
+	src, err := handle.Open(ctx, location)
 	if err != nil {
 		return nil, err
 	}

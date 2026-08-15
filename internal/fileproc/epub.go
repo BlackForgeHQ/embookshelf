@@ -119,11 +119,7 @@ func (EPUBProcessor) Extract(ctx context.Context, src storage.Source) (Metadata,
 	// bytes that are not a recognized image leave the book cover-less.
 	if href := findCover(pkg); href != "" {
 		if b, err := readCover(zr, opfPath, href); err == nil {
-			if mime := SniffImageMime(b); mime != "" {
-				m.HasCover = true
-				m.CoverBytes = b
-				m.CoverMime = mime
-			}
+			m.setCover(b)
 		}
 	}
 

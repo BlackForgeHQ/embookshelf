@@ -45,17 +45,34 @@ type Embedder interface {
 // MP3/M4B in Phase 1).
 var ErrUnsupportedEmbed = errors.New("fileproc: format does not support in-file embed")
 
+// embedders is the embed axis's sibling of the processors map: the one
+// fact the format table cannot hold without inverting the import — which
+// format has an in-file writer. Which formats *declare* an in-file write
+// target is the table's (FormatSpec.Embed); the parity test holds the
+// two together (#335 — this used to be an off-table switch nothing
+// checked).
+var embedders = map[string]func() Embedder{
+	"EPUB": func() Embedder { return EPUBEmbedder{} },
+	"PDF":  func() Embedder { return PDFEmbedder{} },
+}
+
 // DispatchEmbedder picks the right embedder for a books.format value.
-// Returns ErrUnsupportedEmbed for unsupported formats; the caller
-// falls back to sidecar-only write in that case.
+// Returns ErrUnsupportedEmbed for formats the table declares no in-file
+// write target for; the caller falls back to sidecar-only write in that
+// case (ADR-0001).
 func DispatchEmbedder(format string) (Embedder, error) {
-	switch format {
-	case "EPUB":
-		return EPUBEmbedder{}, nil
-	case "PDF":
-		return PDFEmbedder{}, nil
+	s, ok := model.LookupFormat(format)
+	if !ok || !s.Embed {
+		return nil, ErrUnsupportedEmbed
 	}
-	return nil, ErrUnsupportedEmbed
+	e, ok := embedders[s.Format]
+	if !ok {
+		// A declared target with no writer is a wiring bug the parity
+		// test catches at build time; refusing like an undeclared one
+		// keeps the caller's sidecar fallback correct meanwhile.
+		return nil, ErrUnsupportedEmbed
+	}
+	return e(), nil
 }
 
 // EPUBEmbedder rewrites EPUB files. Embed implementation lives in

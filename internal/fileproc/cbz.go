@@ -11,35 +11,36 @@ import (
 	"github.com/blackforge/embookshelf/internal/storage"
 )
 
-// CBZProcessor extracts metadata and cover image from a CBZ comic archive.
+// zipComic is the ZIP end of comicFile — the container a .cbz names,
+// though what a file is called does not decide what opens it (openComic
+// reads the magic). Random access, so both passes are direct lookups:
+// no drain, no decode of anything not asked for.
 //
-// CBZ is a ZIP of page images, sorted by filename. Some scene-released
-// archives also embed a `ComicInfo.xml` with series/issue/year/summary —
-// when present we surface those into the regular metadata fields so the
-// library UI shows useful info without manual enrichment.
-//
-// Cover = the first page after natural sort, OR a file matching `cover.*`
-// at the archive root if present. Those rules, and the ComicInfo mapping,
-// live in comic.go: they are the same for a comic packed as RAR or 7z
-// (#310), and this file is only the ZIP end of them.
-type CBZProcessor struct{}
-
-func (CBZProcessor) Extract(ctx context.Context, src storage.Source) (Metadata, error) {
-	zr, err := zip.NewReader(src, src.Size())
-	if err != nil {
-		return Metadata{}, fmt.Errorf("open cbz: %w", err)
-	}
-	// zr is *zip.Reader (not *zip.ReadCloser); no Close needed.
-	// The caller is responsible for closing the Source.
-
-	return extractComic(ctx, "cbz", &zipComic{zr: zr})
-}
-
-// zipComic is the ZIP end of comicArchive. Random access, so a read is a
-// direct lookup per wanted entry.
+// The cover rule, the ComicInfo mapping and the page order live in
+// comic.go: they are the same for a comic packed as RAR or 7z (#310),
+// and this file is only the ZIP end of them.
 type zipComic struct {
 	zr *zip.Reader
 }
+
+// newZipComic opens a ZIP comic. The entry-count check is the same
+// rejection newSevenzipComic makes and for the same reason: archive/zip
+// has materialised the list by now, so what the cap buys is that the
+// passes above never sort and scan a list that size — and that all
+// three containers refuse the same shape of archive with the same
+// sentence (#344; ZIP used to be the one container without it).
+func newZipComic(src storage.Source) (*zipComic, error) {
+	zr, err := zip.NewReader(src, src.Size())
+	if err != nil {
+		return nil, fmt.Errorf("open cbz: %w", err)
+	}
+	if len(zr.File) > comicMaxEntries {
+		return nil, fmt.Errorf("cbz: archive holds more than %d entries", comicMaxEntries)
+	}
+	return &zipComic{zr: zr}, nil
+}
+
+func (z *zipComic) kind() string { return "cbz" }
 
 func (z *zipComic) entries() []string {
 	names := make([]string, 0, len(z.zr.File))
@@ -52,34 +53,40 @@ func (z *zipComic) entries() []string {
 	return names
 }
 
-func (z *zipComic) read(ctx context.Context, want map[string]int64) (map[string][]byte, error) {
-	out := make(map[string][]byte, len(want))
+// stream hands every wanted entry's bytes to the sink in archive order.
+// One walk like its two siblings, though here each open is a direct
+// lookup — the loop shape is shared so the read and the paging pass ask
+// one implementation, not because ZIP needs the single pass.
+func (z *zipComic) stream(ctx context.Context, want map[string]bool, sink pageSink) error {
+	done := make(map[string]bool, len(want))
 	for _, f := range z.zr.File {
-		max, ok := want[f.Name]
-		if !ok {
+		if !want[f.Name] || done[f.Name] {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("cbz: %w", err)
+			return fmt.Errorf("cbz: %w", err)
 		}
 		rc, err := f.Open()
 		if err != nil {
+			// One entry that will not open is one page or field missing,
+			// not a failed comic. Encrypted ZIPs are not a case archive/zip
+			// can even report at NewReader; a flagged entry surfaces here
+			// and degrades the same way.
 			slog.Warn("comic entry would not open, dropped", "container", "cbz", "entry", f.Name, "err", err)
 			continue
 		}
-		b, err := readCappedEntry(rc, f.Name, max)
+		serr := sink(f.Name, rc)
 		_ = rc.Close()
-		if err != nil {
-			slog.Warn("comic entry unreadable, dropped", "container", "cbz", "entry", f.Name, "err", err)
-			continue
+		if serr != nil {
+			return serr
 		}
-		out[f.Name] = b
+		done[f.Name] = true
 	}
-	// No archive-wide failure mode: a ZIP that opened has a directory,
-	// and a bad entry inside it is the per-entry degradation above.
-	// Encrypted ZIPs are not a case archive/zip can even report — it
-	// refuses them at Open, one level up.
-	return out, nil
+	return nil
+}
+
+func (z *zipComic) read(ctx context.Context, want map[string]int64) (map[string][]byte, error) {
+	return walkerRead(ctx, "cbz", z, want, nil)
 }
 
 // The reader's ZIP paging arm lives in comicpaging.go, which is where

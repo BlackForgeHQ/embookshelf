@@ -19,6 +19,8 @@ import (
 )
 
 // LocalFS is a Storage backed by an OS filesystem.
+var _ storage.Storage = (*LocalFS)(nil)
+
 type LocalFS struct {
 	root string
 }
@@ -155,11 +157,7 @@ func (fs *LocalFS) Head(ctx context.Context, key string) (storage.ObjectInfo, er
 	}, nil
 }
 
-func (fs *LocalFS) Get(ctx context.Context, key string, opts ...storage.GetOption) (io.ReadCloser, error) {
-	o := storage.ApplyGet(opts)
-	if o.RangeSet {
-		return nil, storage.ErrUnsupportedOption
-	}
+func (fs *LocalFS) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 	abs, err := fs.resolve(key)
 	if err != nil {
 		return nil, err
@@ -175,13 +173,8 @@ func (fs *LocalFS) Get(ctx context.Context, key string, opts ...storage.GetOptio
 }
 
 // Put writes r to key atomically using write-temp-then-rename.
-// LocalFS does not support conditional writes (CapConditional is off);
-// passing WithIfMatch or WithIfNoneMatch returns ErrUnsupportedOption.
+// LocalFS ignores WithContentType (no xattr storage).
 func (fs *LocalFS) Put(ctx context.Context, key string, r io.Reader, opts ...storage.PutOption) (storage.PutResult, error) {
-	o := storage.ApplyPut(opts)
-	if o.IfMatchSet || o.IfNoneMatchSet {
-		return storage.PutResult{}, storage.ErrUnsupportedOption
-	}
 	abs, err := fs.resolve(key)
 	if err != nil {
 		return storage.PutResult{}, err
@@ -212,11 +205,7 @@ func (fs *LocalFS) Put(ctx context.Context, key string, r io.Reader, opts ...sto
 	}
 	return storage.PutResult{}, nil
 }
-func (fs *LocalFS) Delete(ctx context.Context, key string, opts ...storage.DeleteOption) error {
-	o := storage.ApplyDelete(opts)
-	if o.VersionID != "" {
-		return errors.Join(storage.ErrUnsupportedOption, fmt.Errorf("local: versioned delete not supported"))
-	}
+func (fs *LocalFS) Delete(ctx context.Context, key string) error {
 	abs, err := fs.resolve(key)
 	if err != nil {
 		return err
@@ -269,72 +258,26 @@ func (fs *LocalFS) Open(ctx context.Context, key string) (storage.Source, error)
 // prefix move never crosses a device; if one somehow did, EXDEV is a
 // real answer the caller should see rather than a reason to silently
 // duplicate a whole book folder.
-func (fs *LocalFS) MovePrefix(ctx context.Context, oldPrefix, newPrefix string) (storage.MoveResult, error) {
+func (fs *LocalFS) MovePrefix(ctx context.Context, oldPrefix, newPrefix string) error {
 	srcAbs, err := fs.resolve(oldPrefix)
 	if err != nil {
-		return storage.MoveResult{}, err
+		return err
 	}
 	dstAbs, err := fs.resolve(newPrefix)
 	if err != nil {
-		return storage.MoveResult{}, err
+		return err
 	}
 	if _, err := os.Stat(srcAbs); err != nil {
 		if os.IsNotExist(err) {
-			return storage.MoveResult{}, errors.Join(storage.ErrNotFound, err)
+			return errors.Join(storage.ErrNotFound, err)
 		}
-		return storage.MoveResult{}, err
+		return err
 	}
 	if srcAbs == dstAbs {
-		return storage.MoveResult{}, nil
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(dstAbs), 0o755); err != nil {
-		return storage.MoveResult{}, err
+		return err
 	}
-	if err := os.Rename(srcAbs, dstAbs); err != nil {
-		return storage.MoveResult{}, err
-	}
-	return storage.MoveResult{}, nil
-}
-
-func (fs *LocalFS) Copy(ctx context.Context, srcKey, dstKey string) (storage.CopyResult, error) {
-	srcAbs, err := fs.resolve(srcKey)
-	if err != nil {
-		return storage.CopyResult{}, err
-	}
-	dstAbs, err := fs.resolve(dstKey)
-	if err != nil {
-		return storage.CopyResult{}, err
-	}
-	src, err := os.Open(srcAbs)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return storage.CopyResult{}, errors.Join(storage.ErrNotFound, err)
-		}
-		return storage.CopyResult{}, err
-	}
-	defer func() { _ = src.Close() }()
-	if err := os.MkdirAll(filepath.Dir(dstAbs), 0o755); err != nil {
-		return storage.CopyResult{}, err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(dstAbs), filepath.Base(dstAbs)+".*.tmp")
-	if err != nil {
-		return storage.CopyResult{}, err
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if _, err := io.Copy(tmp, src); err != nil {
-		_ = tmp.Close()
-		return storage.CopyResult{}, err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return storage.CopyResult{}, err
-	}
-	if err := tmp.Close(); err != nil {
-		return storage.CopyResult{}, err
-	}
-	if err := os.Rename(tmpName, dstAbs); err != nil {
-		return storage.CopyResult{}, err
-	}
-	return storage.CopyResult{}, nil
+	return os.Rename(srcAbs, dstAbs)
 }

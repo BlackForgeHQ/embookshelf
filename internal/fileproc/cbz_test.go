@@ -71,7 +71,7 @@ func writeCBZ(t *testing.T, dir string, entries map[string][]byte) string {
 }
 
 // cbzSource builds a CBZ archive in memory and returns a memSource backed by its bytes.
-// Used by CBZProcessor.Extract tests (no filesystem I/O).
+// Used by ComicProcessor.Extract tests (no filesystem I/O).
 func cbzSource(t *testing.T, entries map[string][]byte) *memSource {
 	t.Helper()
 	var buf bytes.Buffer
@@ -123,7 +123,7 @@ func TestCBZExtract_BasicCover(t *testing.T) {
 		"notes.txt":  []byte("skip"), // non-image, ignored
 	})
 	defer func() { _ = src.Close() }()
-	meta, err := CBZProcessor{}.Extract(context.Background(), src)
+	meta, err := ComicProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestCBZExtract_PreferredCover(t *testing.T) {
 		"cover.png": fakePNG, // should win over 01.png
 	})
 	defer func() { _ = src.Close() }()
-	meta, err := CBZProcessor{}.Extract(context.Background(), src)
+	meta, err := ComicProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestCBZExtract_ComicInfo(t *testing.T) {
 		"ComicInfo.xml": info,
 	})
 	defer func() { _ = src.Close() }()
-	meta, err := CBZProcessor{}.Extract(context.Background(), src)
+	meta, err := ComicProcessor{}.Extract(context.Background(), src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestCBZExtract_NoImagesFails(t *testing.T) {
 		"readme.txt": []byte("nothing here"),
 	})
 	defer func() { _ = src.Close() }()
-	if _, err := (CBZProcessor{}).Extract(context.Background(), src); err == nil {
+	if _, err := (ComicProcessor{}).Extract(context.Background(), src); err == nil {
 		t.Fatal("expected error for image-less archive")
 	}
 }
@@ -337,7 +337,7 @@ type countingObjectStore struct {
 }
 
 func (s *countingObjectStore) Capabilities() storage.Capability {
-	return storage.CapObjectStore | storage.CapRange
+	return storage.CapObjectStore
 }
 
 func (s *countingObjectStore) Open(_ context.Context, key string) (storage.Source, error) {

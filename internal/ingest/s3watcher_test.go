@@ -58,7 +58,7 @@ func (f *fakeDropStore) Open(_ context.Context, key string) (storage.Source, err
 	return memSource{bytes.NewReader(f.objects[key])}, nil
 }
 
-func (f *fakeDropStore) Delete(_ context.Context, key string, _ ...storage.DeleteOption) error {
+func (f *fakeDropStore) Delete(_ context.Context, key string) error {
 	f.deleted = append(f.deleted, key)
 	delete(f.objects, key)
 	return nil
