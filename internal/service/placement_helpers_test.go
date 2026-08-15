@@ -205,7 +205,7 @@ func TestFreeFilePathKeepsTheExtensionWhenItSuffixes(t *testing.T) {
 }
 
 // The object-store counterpart: no root arithmetic, because an object
-// store's keys are already library-relative (keyRoot, ADR-0030 §1), so
+// store's keys are already library-relative (the keys seam, ADR-0030 §1), so
 // only the collision probe survives.
 func TestBackendRootProbesForObjectsUnderThePrefix(t *testing.T) {
 	dir := t.TempDir()

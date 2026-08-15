@@ -568,7 +568,7 @@ func (w *MetadataWriter) stampFileHash(ctx context.Context, b model.Book, out []
 // Outcome.InFileWritten). handle is required (DecideEffects only
 // schedules sidecar when Storage != nil); failures are logged.
 func (w *MetadataWriter) writeSidecar(ctx context.Context, b model.Book, handle *LibraryHandle, mode sidecar.WriteMode) error {
-	// storageKey first: SidecarKey only swaps the filename, so a
+	// StorageKey first: sidecar.KeyFor only swaps the filename, so a
 	// library-relative books.path would have written the sidecar to the
 	// filesystem root on a local install (#168).
 	// sidecar.KeyFor directly: the derivation rule has one home and the

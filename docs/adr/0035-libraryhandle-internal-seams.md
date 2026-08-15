@@ -56,7 +56,9 @@ placement); it stays exported.
 - The nil-orphan-queue degrade on an object-store byte delete is no
   longer silent: `DeleteBookBytes` answers `ErrNoOrphanQueue` (plus a
   warn), riding the bytes-step warning path — the row delete stays
-  authoritative, the leak is on the record.
+  authoritative, the leak is on the record. The unresolved-Storage arm
+  of the same method got the same treatment (`errNoStorage`): a bytes
+  step that touched nothing never again reports bytes cleaned.
 - `SidecarKey` is gone (callers use `sidecar.KeyFor`),
   `PrimaryContentHash` is unexported behind `NewPrimaryHash`,
   `DeleteNarrationAndBytes` lives beside `DeleteBookAndBytes`, and

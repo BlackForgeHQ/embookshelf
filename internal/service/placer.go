@@ -90,7 +90,7 @@ type PlacerBuilder func(model.Library) (Placer, error)
 //
 // So the builder asks LibraryHandle.IsObjectStore, of the adapter and
 // through the handle's own method rather than a second reading of the
-// capability bit: this is the same question keyRoot asks on the walk,
+// capability bit: this is the same question the keys seam asks on the walk,
 // resolve and write paths, and one answer is the property those paths
 // are named for.
 func DefaultPlacerBuilder(resolver storage.Resolver) PlacerBuilder {

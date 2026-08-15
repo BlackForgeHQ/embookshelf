@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/storage"
@@ -49,7 +50,7 @@ func (d bookDelivery) fileSource(ctx context.Context, location string) (BookSour
 		if path := d.keys.localPath(location); path != "" {
 			return BookSource{Kind: BookDeliveryLocal, Path: path}, nil
 		}
-		return BookSource{}, errors.New("file source: library has no storage")
+		return BookSource{}, fmt.Errorf("file source: %w", errNoStorage)
 	}
 
 	key := d.keys.storageKey(location)

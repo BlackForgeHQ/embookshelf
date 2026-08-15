@@ -100,10 +100,6 @@ type narrationBytes interface {
 	) (bytesErr error, err error)
 }
 
-// DeleteNarrationAndBytes removes one of a book's files rows and the bytes
-// it named, in the only order that works, by taking the row delete as its
-// middle step.
-
 // Preflight resolves everything a run needs before it can start: the
 // settings row, the enabled gate, the engine selection, the Narratable
 // format gate, and the provenance hash.

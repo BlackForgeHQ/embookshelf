@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/blackforge/embookshelf/internal/model"
@@ -63,6 +64,18 @@ func (bf bookFiles) byID(ctx context.Context, bookID, fileID string) (model.File
 		}
 	}
 	return model.File{}, false
+}
+
+// primaryRow is primary for the callers that want the pre-backfill
+// state as an error rather than a bool — the byte-open and delivery
+// paths, whose next move is a books.path fallback either way. A nil
+// lister errors like a book with no rows: both mean "nothing to open
+// through the files table".
+func (bf bookFiles) primaryRow(ctx context.Context, book model.Book) (model.File, error) {
+	if bf.lister == nil {
+		return model.File{}, errors.New("files table not wired")
+	}
+	return primaryFile(ctx, bf.lister, book)
 }
 
 // primary returns the book's own files row — the one whose format

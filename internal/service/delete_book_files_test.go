@@ -376,12 +376,17 @@ func TestDeleteBookBytesTreatsMissingObjectsAsDone(t *testing.T) {
 	}
 }
 
-// No storage configured is a degrade, not a crash: the row still goes.
-func TestDeleteBookBytesIsANoOpWithoutStorage(t *testing.T) {
+// No storage configured is a degrade, not a crash — the row still goes
+// — but a *stated* one since #346: the bytes step says the bytes were
+// not cleaned rather than answering nil about objects it never touched.
+// Callers route this through the bytes-step warning beside an
+// authoritative row delete.
+func TestDeleteBookBytesSaysSoWithoutStorage(t *testing.T) {
 	t.Parallel()
 
 	handle := &LibraryHandle{Library: model.Library{ID: "lib1"}}
-	if err := handle.DeleteBookBytes(context.Background(), "b1", []string{"k.epub"}); err != nil {
-		t.Fatalf("DeleteBookBytes without storage: %v", err)
+	err := handle.DeleteBookBytes(context.Background(), "b1", []string{"k.epub"})
+	if !errors.Is(err, errNoStorage) {
+		t.Fatalf("DeleteBookBytes without storage = %v, want the stated errNoStorage degrade", err)
 	}
 }

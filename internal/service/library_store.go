@@ -263,8 +263,8 @@ func (h *LibraryHandle) StorageKey(location string) string {
 //
 // The returned Closer is always non-nil on success and must be closed.
 func (h *LibraryHandle) OpenBook(ctx context.Context, book model.Book) (io.Reader, int64, io.Closer, error) {
-	if h.Storage != nil && h.files != nil {
-		if f, err := primaryFile(ctx, h.files, book); err == nil {
+	if h.Storage != nil {
+		if f, err := h.bookFiles().primaryRow(ctx, book); err == nil {
 			key := h.StorageKey(f.Location)
 			src, oerr := h.Storage.Open(ctx, key)
 			if oerr != nil {
@@ -360,12 +360,12 @@ func (h *LibraryHandle) BookFile(ctx context.Context, bookID, fileID string) (mo
 }
 
 // PrimaryFile returns the book's own files row — the one whose format
-// matches books.format, the same choice PrimaryContentHash makes.
+// matches books.format, the same choice the primary-hash lookup makes.
 //
 // found separates "this book has no files rows at all" — a legacy row
 // carrying only books.path, which callers degrade for — from an error,
 // which is a lookup that broke and must not be read as an absent file.
-// PrimaryContentHash folds both into nil because a hash is advisory
+// The hash lookup folds both into nil because a hash is advisory
 // there; a caller deciding where to read bytes from cannot.
 func (h *LibraryHandle) PrimaryFile(ctx context.Context, book model.Book) (model.File, bool, error) {
 	return h.bookFiles().primary(ctx, book)
@@ -452,7 +452,10 @@ func (h *LibraryHandle) DeleteBookBytes(ctx context.Context, bookID string, loca
 	}
 
 	if h.Storage == nil {
-		return nil
+		// The same stated-degrade rule as the orphan arm: a handle whose
+		// backend did not resolve cannot delete anything, and answering
+		// nil would report bytes cleaned that are still there (#346).
+		return fmt.Errorf("book %s: %w", bookID, errNoStorage)
 	}
 	var failures []error
 	for _, location := range locations {
@@ -471,7 +474,8 @@ func (h *LibraryHandle) DeleteBookBytes(ctx context.Context, bookID string, loca
 
 // DeleteNarrationAndBytes removes one of a book's files rows and the bytes
 // it named, in the only order that works, by taking the row delete as its
-// middle step.//
+// middle step.
+//
 // The narration counterpart to DeleteBookAndBytes, and a separate
 // operation rather than a call to it because the book outlives its
 // narration: DeleteBookAndBytes snapshots every location the book owns,
@@ -769,7 +773,7 @@ func (h *LibraryHandle) BookSource(ctx context.Context, book model.Book) (BookSo
 		return BookSource{Kind: BookDeliveryLocal, Path: book.Path}, nil
 	}
 
-	f, ferr := primaryFile(ctx, h.files, book)
+	f, ferr := h.bookFiles().primaryRow(ctx, book)
 	if ferr == nil {
 		return h.delivery().fileSource(ctx, f.Location)
 	}
