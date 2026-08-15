@@ -156,10 +156,17 @@ func RunArm(t *testing.T, arm Arm) {
 			t.Run(shape.name, func(t *testing.T) {
 				runContract(t, func(t *testing.T) (storage.Storage, func()) {
 					inst := arm.New(t)
-					return rebased{
+					r := rebased{
 						inner: inst.Storage,
 						base:  shape.base(t, inst.Subtree),
-					}, inst.close
+					}
+					// The wrapper must answer a PrefixMover assertion the
+					// same way the backend it wraps does: a method set is
+					// static in Go, so the extension rides a second type.
+					if _, ok := inst.Storage.(storage.PrefixMover); ok {
+						return rebasedMover{r}, inst.close
+					}
+					return r, inst.close
 				})
 			})
 		}
@@ -283,8 +290,18 @@ func (r rebased) Delete(ctx context.Context, key string) error {
 	return r.inner.Delete(ctx, r.out(key))
 }
 
-func (r rebased) MovePrefix(ctx context.Context, oldPrefix, newPrefix string) (storage.MoveResult, error) {
-	res, err := r.inner.MovePrefix(ctx, r.out(oldPrefix), r.out(newPrefix))
+func (r rebased) MovePrefix(ctx context.Context, oldPrefix, newPrefix string) error {
+	return r.inner.MovePrefix(ctx, r.out(oldPrefix), r.out(newPrefix))
+}
+
+// rebasedMover carries the PrefixMover extension for a wrapped backend
+// that has it. Its own type, not a method on rebased, because a method
+// set is static: rebased with the method would advertise the extension
+// for every backend, LocalFS included.
+type rebasedMover struct{ rebased }
+
+func (r rebasedMover) MovePrefixDetailed(ctx context.Context, oldPrefix, newPrefix string) (storage.MoveResult, error) {
+	res, err := r.inner.(storage.PrefixMover).MovePrefixDetailed(ctx, r.out(oldPrefix), r.out(newPrefix))
 	res.Written = r.inAll(res.Written)
 	res.Reclaim = r.inAll(res.Reclaim)
 	return res, err
@@ -508,7 +525,13 @@ func testMovePrefixRelocatesEveryKey(t *testing.T, mk MakeBackend) {
 	ctx := context.Background()
 	putFixture(t, s, movePrefixFixture)
 
-	res, err := s.MovePrefix(ctx, "old", "new/home")
+	var res storage.MoveResult
+	var err error
+	if mover, ok := s.(storage.PrefixMover); ok {
+		res, err = mover.MovePrefixDetailed(ctx, "old", "new/home")
+	} else {
+		err = s.MovePrefix(ctx, "old", "new/home")
+	}
 	if err != nil {
 		t.Fatalf("MovePrefix: %v", err)
 	}
@@ -563,7 +586,13 @@ func testMovePrefixMissingIsNotFound(t *testing.T, mk MakeBackend) {
 		t.Fatal(err)
 	}
 
-	res, err := s.MovePrefix(ctx, "nope", "new")
+	var res storage.MoveResult
+	var err error
+	if mover, ok := s.(storage.PrefixMover); ok {
+		res, err = mover.MovePrefixDetailed(ctx, "nope", "new")
+	} else {
+		err = s.MovePrefix(ctx, "nope", "new")
+	}
 	if !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("MovePrefix on a missing prefix = %v, want ErrNotFound", err)
 	}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // FolderRenamer moves a Book's bytes so its location matches its
@@ -196,11 +197,10 @@ func (r *FolderRenamer) renameLocal(
 
 	// Through the adapter, not os.Rename: a local library's LocalFS is
 	// rooted at "/" (ADR-0030 §1), so these absolute paths are exactly
-	// the keys it answers to. The MoveResult is empty by contract for an
-	// atomic backend — nothing written to reclaim, no source left to
-	// schedule — which is why this arm has no rollback and the backend
-	// one does.
-	if _, err := handle.Storage.MovePrefix(ctx, oldAbs, finalAbs); err != nil {
+	// the keys it answers to. An atomic backend has nothing to report —
+	// nothing written to reclaim, no source left to schedule — which is
+	// why this arm has no rollback and the backend one does (#345).
+	if err := handle.Storage.MovePrefix(ctx, oldAbs, finalAbs); err != nil {
 		slog.Warn("folder renamer: move",
 			"book_id", b.ID, "from", oldAbs, "to", finalAbs, "err", err)
 		return renameBroke(err)
@@ -292,7 +292,17 @@ func (r *FolderRenamer) renameBackend(
 	oldPrefix := oldFolder + "/"
 	newPrefix := finalFolder + "/"
 
-	moved, err := handle.Storage.MovePrefix(ctx, oldPrefix, newPrefix)
+	// The Written/Reclaim report crosses the PrefixMover extension, not
+	// the shared interface (#345): only a copy-based backend has one to
+	// give, and only this caller — the one holding a transaction — has a
+	// use for it. A backend on this path that lacks the extension is a
+	// wiring error, not a mode: the compensation below is the whole
+	// point of the branch.
+	mover, ok := handle.Storage.(storage.PrefixMover)
+	if !ok {
+		return renameDeclined("backend reports no move details; ADR-0005 rename is fail-closed")
+	}
+	moved, err := mover.MovePrefixDetailed(ctx, oldPrefix, newPrefix)
 	if err != nil {
 		slog.Warn("folder renamer: backend move prefix",
 			"book_id", b.ID, "from", oldPrefix, "to", newPrefix, "err", err)

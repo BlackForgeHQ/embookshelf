@@ -19,6 +19,8 @@ import (
 )
 
 // LocalFS is a Storage backed by an OS filesystem.
+var _ storage.Storage = (*LocalFS)(nil)
+
 type LocalFS struct {
 	root string
 }
@@ -256,29 +258,26 @@ func (fs *LocalFS) Open(ctx context.Context, key string) (storage.Source, error)
 // prefix move never crosses a device; if one somehow did, EXDEV is a
 // real answer the caller should see rather than a reason to silently
 // duplicate a whole book folder.
-func (fs *LocalFS) MovePrefix(ctx context.Context, oldPrefix, newPrefix string) (storage.MoveResult, error) {
+func (fs *LocalFS) MovePrefix(ctx context.Context, oldPrefix, newPrefix string) error {
 	srcAbs, err := fs.resolve(oldPrefix)
 	if err != nil {
-		return storage.MoveResult{}, err
+		return err
 	}
 	dstAbs, err := fs.resolve(newPrefix)
 	if err != nil {
-		return storage.MoveResult{}, err
+		return err
 	}
 	if _, err := os.Stat(srcAbs); err != nil {
 		if os.IsNotExist(err) {
-			return storage.MoveResult{}, errors.Join(storage.ErrNotFound, err)
+			return errors.Join(storage.ErrNotFound, err)
 		}
-		return storage.MoveResult{}, err
+		return err
 	}
 	if srcAbs == dstAbs {
-		return storage.MoveResult{}, nil
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(dstAbs), 0o755); err != nil {
-		return storage.MoveResult{}, err
+		return err
 	}
-	if err := os.Rename(srcAbs, dstAbs); err != nil {
-		return storage.MoveResult{}, err
-	}
-	return storage.MoveResult{}, nil
+	return os.Rename(srcAbs, dstAbs)
 }

@@ -30,8 +30,8 @@ func (s *stubStorage) Put(_ context.Context, _ string, _ io.Reader, _ ...storage
 func (s *stubStorage) Delete(_ context.Context, _ string) error {
 	return nil
 }
-func (s *stubStorage) MovePrefix(_ context.Context, _, _ string) (storage.MoveResult, error) {
-	return storage.MoveResult{}, nil
+func (s *stubStorage) MovePrefix(_ context.Context, _, _ string) error {
+	return nil
 }
 func (s *stubStorage) Open(_ context.Context, _ string) (storage.Source, error) {
 	return nil, storage.ErrNotFound

@@ -86,8 +86,8 @@ type PutResult struct {
 	VersionID string
 }
 
-// MoveResult is returned by Storage.MovePrefix. It is the adapter's
-// report of what the move left for its caller to finish.
+// MoveResult is returned by PrefixMover.MovePrefixDetailed. It is the
+// adapter's report of what the move left for its caller to finish.
 //
 // The split is deliberate: the adapter owns the mechanics of relocating
 // bytes, but it cannot own rollback, because only the caller has a
@@ -145,20 +145,16 @@ type Storage interface {
 	// Returns ErrNotFound, having written nothing, when no object lives
 	// under oldPrefix.
 	//
-	// Backends disagree about whether the sources survive, and MoveResult
-	// is where they say so rather than where the caller guesses: an
-	// atomic backend (LocalFS renames the directory) returns both lists
-	// empty, a copy-based backend (S3 has no rename) returns the
-	// destinations it created in Written and the still-live sources in
-	// Reclaim. No backend deletes the sources itself — only the caller
-	// knows when its transaction committed, and on S3 an inflight
-	// presigned URL for a source key must stay valid until it has
-	// (ADR-0005).
-	//
-	// On failure the error comes back alongside a MoveResult whose
-	// Written holds whatever was created before the failure, so the
-	// caller can reclaim a partial write.
-	MovePrefix(ctx context.Context, oldPrefix, newPrefix string) (MoveResult, error)
+	// Backends disagree about whether the sources survive. An atomic
+	// backend (LocalFS renames the directory) leaves nothing behind and
+	// this method is its whole story; a copy-based backend (S3 has no
+	// rename) leaves the sources live and reports the details — what it
+	// wrote, what still exists — through the PrefixMover extension,
+	// which a caller with a transaction to compensate asserts for
+	// (ADR-0005; the Written/Reclaim shape moved off this interface in
+	// #345, since only one adapter and one caller ever had anything to
+	// say through it).
+	MovePrefix(ctx context.Context, oldPrefix, newPrefix string) error
 
 	// Open returns a random-access view of the object at key. Returns
 	// ErrNotFound when missing. Callers must Close the returned Source.

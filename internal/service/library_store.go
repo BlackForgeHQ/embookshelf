@@ -896,12 +896,12 @@ type BookSource struct {
 	Key     string
 }
 
-// Presigner is the capability-gated interface CapPresign-bearing
-// backends satisfy. Backends are probed by type assertion so the
-// storage interface stays minimal.
-type Presigner interface {
-	PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error)
-}
+// Presigner is the storage tier's extension interface, re-exported for
+// the callers that historically found it here. Declared in storage
+// since #345, beside the adapter that satisfies it, with a compile-time
+// assertion — drift used to be silent, because a failed type assertion
+// fell through to streaming and read as a performance regression.
+type Presigner = storage.Presigner
 
 // LibraryStoreDeps groups everything LibraryStore needs to build a
 // LibraryHandle. PresignTTL and PresignFallback feed BookSource; pass

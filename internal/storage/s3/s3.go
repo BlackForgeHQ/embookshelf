@@ -53,6 +53,16 @@ type Config struct {
 }
 
 // Backend is the storage.Storage implementation for S3.
+// The extensions the backend satisfies beyond storage.Storage, asserted
+// so drift is a compile error rather than a silently missed type
+// assertion — presign quietly stopping was a performance regression
+// nothing reported (#345).
+var (
+	_ storage.Storage     = (*Backend)(nil)
+	_ storage.Presigner   = (*Backend)(nil)
+	_ storage.PrefixMover = (*Backend)(nil)
+)
+
 type Backend struct {
 	cli    *s3.Client
 	bucket string

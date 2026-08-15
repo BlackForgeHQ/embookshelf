@@ -47,8 +47,8 @@ func (f *fakeStore) Delete(_ context.Context, key string) error {
 	f.deleted = append(f.deleted, key)
 	return nil
 }
-func (f *fakeStore) MovePrefix(context.Context, string, string) (storage.MoveResult, error) {
-	return storage.MoveResult{}, errors.New("not implemented")
+func (f *fakeStore) MovePrefix(context.Context, string, string) error {
+	return errors.New("not implemented")
 }
 func (f *fakeStore) Open(context.Context, string) (storage.Source, error) {
 	return nil, errors.New("not implemented")

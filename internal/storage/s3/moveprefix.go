@@ -39,8 +39,20 @@ const CopyRetryBaseDelay = 200 * time.Millisecond
 // On a copy failure the error is returned together with the destinations
 // written so far, so the caller can reclaim the partial write rather
 // than leak it.
-func (b *Backend) MovePrefix(ctx context.Context, oldPrefix, newPrefix string) (storage.MoveResult, error) {
+//
+// This is the storage.PrefixMover extension; the interface's own
+// MovePrefix below is the same move with the report discarded, for a
+// caller with no transaction to compensate (#345).
+func (b *Backend) MovePrefixDetailed(ctx context.Context, oldPrefix, newPrefix string) (storage.MoveResult, error) {
 	return movePrefix(ctx, b, oldPrefix, newPrefix, b.copyWithRetry)
+}
+
+// MovePrefix is the shared interface's form. Callers that need the
+// Written/Reclaim report — the folder renamer — assert for
+// storage.PrefixMover instead.
+func (b *Backend) MovePrefix(ctx context.Context, oldPrefix, newPrefix string) error {
+	_, err := b.MovePrefixDetailed(ctx, oldPrefix, newPrefix)
+	return err
 }
 
 // prefixLister is the slice of storage.Storage movePrefix needs. Named
