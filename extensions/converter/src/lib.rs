@@ -135,8 +135,7 @@ fn convert_bytes(body: &[u8], format: Format) -> Result<String, Reject> {
 /// split). The class rides beside the error so a caller can route on it
 /// without parsing prose (ADR-0036 §3).
 fn refusal_response(refusal: &pdf::Refusal) -> Response {
-    let body =
-        serde_json::json!({ "error": refusal.message, "class": refusal.class }).to_string();
+    let body = serde_json::json!({ "error": refusal.message, "class": refusal.class }).to_string();
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,

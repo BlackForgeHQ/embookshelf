@@ -110,7 +110,7 @@ async fn refuses_a_scanned_pdf_with_class_and_evidence() {
     assert_eq!(json["class"], "scanned", "got: {body}");
     let msg = json["error"].as_str().unwrap();
     assert!(
-        msg.contains("3 pages") && msg.contains("OCR"),
+        msg.contains("3 of 3 pages") && msg.contains("OCR"),
         "the sentence must carry the page evidence and name OCR, got: {msg}"
     );
 }
@@ -132,11 +132,32 @@ async fn refuses_a_pdf_whose_conversion_is_effectively_empty() {
     );
 }
 
+// An ImageBased verdict is refused with its class. The engine refuses
+// these bytes on every version — the shipped 0.1.7 answered the same
+// file "no extractable text … OCR is required" as a prose-only 415 —
+// so the gate's contribution here is the class, the evidence and one
+// consistent status, never a rejection anydoc would not have made.
+#[tokio::test]
+async fn refuses_an_image_based_pdf_with_class_and_evidence() {
+    let bytes = include_bytes!("fixtures/image-cover.pdf");
+    let (status, _, body) = post_convert(bytes).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "got: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["class"], "image", "got: {body}");
+    assert!(
+        json["error"].as_str().unwrap().contains("10 pages"),
+        "got: {body}"
+    );
+}
+
 // A text PDF of ordinary prose density sails through both gate halves.
 #[tokio::test]
 async fn converts_a_multipage_text_pdf_through_the_gate() {
     let bytes = include_bytes!("fixtures/prose.pdf");
     let (status, _, body) = post_convert(bytes).await;
     assert_eq!(status, StatusCode::OK, "got: {body}");
-    assert!(body.contains("clocks were striking thirteen"), "got: {body}");
+    assert!(
+        body.contains("clocks were striking thirteen"),
+        "got: {body}"
+    );
 }
