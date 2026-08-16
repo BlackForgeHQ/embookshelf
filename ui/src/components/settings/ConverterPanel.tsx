@@ -12,12 +12,11 @@ import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
 import { pollWhile } from "@/lib/artifactRun"
 import { ProgressBar } from "@/components/ProgressBar"
+import { Panel, SaveRow } from "@/components/settings/Panel"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
 import {
   Card,
   Field,
-  PanelHeader,
-  PanelLoading,
   Toggle,
 } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
@@ -59,18 +58,9 @@ export function ConverterPanel() {
     draft.save()
   }
 
-  if (draft.loading) {
-    return (
-      <>
-        <PanelHeader title="Converter">{INTRO}</PanelHeader>
-        <PanelLoading />
-      </>
-    )
-  }
 
   return (
-    <>
-      <PanelHeader title="Converter">{INTRO}</PanelHeader>
+    <Panel title="Converter" intro={INTRO} loading={draft.loading}>
 
       <form onSubmit={onSave} className="flex flex-col gap-4">
         <Card>
@@ -117,15 +107,11 @@ export function ConverterPanel() {
           </div>
         </Card>
 
-        <div className="flex justify-end">
-          <Button type="submit" disabled={draft.saving || enabledWithoutUrl}>
-            {draft.saving ? "Saving…" : "Save"}
-          </Button>
-        </div>
+        <SaveRow draft={draft} disabled={enabledWithoutUrl} />
       </form>
 
       {form.enabled && <BulkConversionCard />}
-    </>
+    </Panel>
   )
 }
 

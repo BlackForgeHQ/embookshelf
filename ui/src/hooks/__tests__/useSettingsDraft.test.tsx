@@ -404,7 +404,11 @@ it("carries the spec's declared policy through to the query", async () => {
         query: spec,
         initial,
         save: saveSettings,
-        toPayload: (value) => value,
+        toPayload: (value, secrets) => ({
+          ...value,
+          apiKey: secrets.value("apiKey"),
+          keySet: secrets.stillSet("apiKey", value.keySet),
+        }),
       }),
     { wrapper }
   )
@@ -419,7 +423,11 @@ it("carries the spec's declared policy through to the query", async () => {
         query: spec,
         initial,
         save: saveSettings,
-        toPayload: (value) => value,
+        toPayload: (value, secrets) => ({
+          ...value,
+          apiKey: secrets.value("apiKey"),
+          keySet: secrets.stillSet("apiKey", value.keySet),
+        }),
       }),
     { wrapper }
   )

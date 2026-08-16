@@ -7,6 +7,7 @@ import {
   updateEmailSettings,
 } from "@/api/email"
 import { useConnectionTest } from "@/hooks/useConnectionTest"
+import { Panel, SaveRow } from "@/components/settings/Panel"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
 import type { Viewer } from "@/lib/affordance"
 import { messageForCode } from "@/lib/affordance"
@@ -15,8 +16,6 @@ import {
   Card,
   ConnectionTestReport,
   Field,
-  PanelHeader,
-  PanelLoading,
   Select,
   Toggle,
 } from "@/components/SettingsShared"
@@ -119,18 +118,9 @@ export function EmailPanel() {
     draft.save()
   }
 
-  if (draft.loading) {
-    return (
-      <>
-        <PanelHeader title="Email delivery">{INTRO}</PanelHeader>
-        <PanelLoading />
-      </>
-    )
-  }
 
   return (
-    <>
-      <PanelHeader title="Email delivery">{INTRO}</PanelHeader>
+    <Panel title="Email delivery" intro={INTRO} loading={draft.loading}>
 
       <form onSubmit={onSave}>
         <Card>
@@ -238,15 +228,11 @@ export function EmailPanel() {
           </p>
         </Card>
 
-        <div className="mt-2 flex items-center justify-end gap-2">
-          <Button
-            type="submit"
-            size="sm"
-            disabled={draft.saving || publicUrlInvalid}
-          >
-            {draft.saving ? "Saving…" : "Save email settings"}
-          </Button>
-        </div>
+        <SaveRow
+          draft={draft}
+          label="Save email settings"
+          disabled={publicUrlInvalid}
+        />
       </form>
 
       <div className="t-label" style={{ marginTop: 32, marginBottom: 10 }}>
@@ -288,6 +274,6 @@ export function EmailPanel() {
         </form>
         <ConnectionTestReport outcome={test.outcome} />
       </Card>
-    </>
+    </Panel>
   )
 }

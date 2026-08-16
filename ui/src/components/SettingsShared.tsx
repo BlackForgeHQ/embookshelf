@@ -111,11 +111,25 @@ export function Toggle({
 // panel owns the sentence explaining what the section is for.
 export function PanelHeader({
   title,
+  actions,
   children,
 }: {
   title: string
+  /** Right-aligned header content: a New button, a stat strip. */
+  actions?: ReactNode
   children?: ReactNode
 }) {
+  if (actions) {
+    return (
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-6">
+        <div className="min-w-0 max-w-[62ch]">
+          <h2 className="t-h2 mb-2">{title}</h2>
+          {children && <p className="t-small italic">{children}</p>}
+        </div>
+        {actions}
+      </header>
+    )
+  }
   return (
     <>
       <h2 className="t-h2 mb-2">{title}</h2>

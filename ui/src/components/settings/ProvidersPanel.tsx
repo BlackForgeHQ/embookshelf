@@ -15,7 +15,7 @@ import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
 import { useDraft } from "@/hooks/useSettingsDraft"
 import { Icon } from "@/components/Icon"
-import { NotebookEmpty, QuillMark } from "@/components/SettingsShared"
+import { PanelHeader, NotebookEmpty, QuillMark } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -77,26 +77,21 @@ export function ProvidersPanel() {
 
   return (
     <>
-      <header className="mb-8 border-b border-(--color-rule-soft) pb-5">
-        <div className="t-label mb-3">Settings · Enrichment</div>
-        <div className="flex flex-wrap items-end justify-between gap-8">
-          <div className="min-w-0">
-            <h2 className="t-h2">Metadata providers</h2>
-            <p className="t-small mt-2 max-w-[58ch] italic">
-              Enrichment queries fan out across enabled providers. Toggle any
-              row to include or skip it. Priority drives ISBN-lookup chain
-              order; the parallel fan-out on the book editor still sorts by
-              match confidence.
-            </p>
-          </div>
+      <PanelHeader
+        title="Metadata providers"
+        actions={
           <StatStrip
             enabled={enabledCount}
             total={providers.length}
             ranked={rankedCount}
             loading={isLoading}
           />
-        </div>
-      </header>
+        }
+      >
+        Enrichment queries fan out across enabled providers. Toggle any row
+        to include or skip it. Priority drives ISBN-lookup chain order; the
+        parallel fan-out on the book editor still sorts by match confidence.
+      </PanelHeader>
 
       <section
         className="mb-10 border border-(--color-rule-soft) bg-(--color-paper-0)"

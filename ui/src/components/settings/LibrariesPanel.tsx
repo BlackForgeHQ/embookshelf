@@ -12,7 +12,7 @@ import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
 import { ConfirmPhraseDialog } from "@/components/ConfirmPhraseDialog"
 import { Icon } from "@/components/Icon"
-import { NotebookEmpty } from "@/components/SettingsShared"
+import { NotebookEmpty, PanelHeader } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -55,7 +55,24 @@ export function LibrariesPanel() {
 
   return (
     <>
-      <PanelHeader onNew={() => setCreatorOpen(true)} />
+      <PanelHeader
+        title="Libraries"
+        actions={
+          <Button
+            variant="default"
+            onClick={() => setCreatorOpen(true)}
+            className="active:translate-y-[1px]"
+          >
+            <Icon name="plus" size={13} />
+            New library
+          </Button>
+        }
+      >
+        Each library owns one filesystem root or bucket prefix, fixed at
+        creation. Approved books are placed under that root by the
+        library&apos;s naming pattern; on-demand scans reconcile renames and
+        flag missing files.
+      </PanelHeader>
 
       <section
         aria-label="Library list"
@@ -88,37 +105,6 @@ export function LibrariesPanel() {
         onCreated={() => setCreatorOpen(false)}
       />
     </>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Header
-// ---------------------------------------------------------------------------
-
-function PanelHeader({ onNew }: { onNew: () => void }) {
-  return (
-    <header className="grid grid-cols-1 gap-6 pb-7 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:gap-10">
-      <div className="max-w-[60ch]">
-        <h2 className="t-h2">Libraries</h2>
-        <p className="t-small mt-3 text-(--color-ink-3) italic">
-          Each library owns one filesystem root or bucket prefix, fixed at
-          creation. Approved books are placed under that root by the
-          library&apos;s naming pattern; on-demand scans reconcile renames and
-          flag missing files.
-        </p>
-      </div>
-
-      <div className="flex lg:justify-end">
-        <Button
-          variant="default"
-          onClick={onNew}
-          className="active:translate-y-[1px]"
-        >
-          <Icon name="plus" size={13} />
-          New library
-        </Button>
-      </div>
-    </header>
   )
 }
 

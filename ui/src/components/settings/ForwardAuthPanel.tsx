@@ -6,15 +6,13 @@ import {
   forwardAuthSettingsQuery,
   saveForwardAuthSettings,
 } from "@/api/forwardAuth"
+import { Panel, SaveRow } from "@/components/settings/Panel"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
 import {
   Card,
   Field,
-  PanelHeader,
-  PanelLoading,
   Toggle,
 } from "@/components/SettingsShared"
-import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
 // emptyForm seeds the form before the GET completes. Mirrors the
@@ -93,18 +91,9 @@ export function ForwardAuthPanel() {
     draft.save()
   }
 
-  if (draft.loading) {
-    return (
-      <>
-        <PanelHeader title="Forward auth">{INTRO}</PanelHeader>
-        <PanelLoading />
-      </>
-    )
-  }
 
   return (
-    <>
-      <PanelHeader title="Forward auth">{INTRO}</PanelHeader>
+    <Panel title="Forward auth" intro={INTRO} loading={draft.loading}>
 
       <form onSubmit={onSave} className="flex flex-col gap-4">
         <Card>
@@ -205,18 +194,12 @@ export function ForwardAuthPanel() {
           </p>
         </Card>
 
-        <div className="flex justify-end">
-          <Button
-            type="submit"
-            disabled={
-              draft.saving || enabledWithoutCidrs || cidrInvalid.length > 0
-            }
-          >
-            {draft.saving ? "Saving…" : "Save"}
-          </Button>
-        </div>
+        <SaveRow
+          draft={draft}
+          disabled={enabledWithoutCidrs || cidrInvalid.length > 0}
+        />
       </form>
-    </>
+    </Panel>
   )
 }
 

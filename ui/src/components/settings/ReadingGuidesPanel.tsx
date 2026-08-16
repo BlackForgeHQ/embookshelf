@@ -10,13 +10,12 @@ import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
 import { pollWhile } from "@/lib/artifactRun"
 import { useConnectionTest } from "@/hooks/useConnectionTest"
+import { Panel, SaveRow } from "@/components/settings/Panel"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
 import {
   Card,
   ConnectionTestReport,
   Field,
-  PanelHeader,
-  PanelLoading,
   Select,
   Toggle,
 } from "@/components/SettingsShared"
@@ -111,18 +110,9 @@ export function ReadingGuidesPanel() {
     value: ReadingGuideSettings[TKey]
   ) => draft.patch(key, value)
 
-  if (draft.loading) {
-    return (
-      <>
-        <PanelHeader title="Reading guides" />
-        <PanelLoading />
-      </>
-    )
-  }
 
   return (
-    <>
-      <PanelHeader title="Reading guides" />
+    <Panel title="Reading guides" loading={draft.loading}>
 
       <Card>
         <p className="t-small mb-4">
@@ -218,24 +208,22 @@ export function ReadingGuidesPanel() {
           onChange={(v) => update("requestJsonMode", v)}
         />
 
-        <div className="mt-4 flex items-center gap-2">
-          <Button disabled={draft.saving} onClick={draft.save}>
-            {draft.saving ? "Saving…" : "Save"}
-          </Button>
+        <SaveRow draft={draft} onSave={draft.save} align="start">
           <Button
             variant="outline"
+            size="sm"
             disabled={test.running}
             onClick={() => test.run(undefined)}
             title="Sends one short prompt to the endpoint"
           >
             {test.running ? "Testing…" : "Test connection"}
           </Button>
-        </div>
+        </SaveRow>
         <ConnectionTestReport outcome={test.outcome} />
       </Card>
 
       {form.enabled && <GuideRunCard />}
-    </>
+    </Panel>
   )
 }
 
