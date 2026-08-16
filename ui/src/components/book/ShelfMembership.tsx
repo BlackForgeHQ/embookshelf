@@ -26,8 +26,7 @@ import {
 import { shelfGroups } from "@/lib/shelves"
 
 // ShelfMembership renders the book's current shelf memberships and
-// exposes an
-// inline searchable picker. Manual shelves toggle in-place; smart shelves
+// exposes an inline searchable picker. Manual shelves toggle in-place; smart shelves
 // are surfaced read-only with a rule hint so users learn why they can't
 // be edited directly. Out of the route file since #352: this is a
 // self-contained module, and its central rule — which shelves the

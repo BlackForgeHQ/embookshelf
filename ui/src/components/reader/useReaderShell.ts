@@ -11,11 +11,14 @@ import type { Locator } from "@/lib/locator"
 // close-then-toggle panel idiom five times, chromeVisible four ways
 // with three documented inconsistencies. This module is the owner:
 //
-//   - chrome visibility, with ONE restore gesture — the floating
+//   - chrome visibility. The shared restore gesture is the floating
 //     restore button, in every shell including audio (which previously
-//     had no chrome collapse at all). The comic shell keeps its
-//     double-click toggle as an extra: it is the one surface with no
-//     text selection for the gesture to fight.
+//     had no chrome collapse at all). Shells keep renderer-shaped
+//     extras on top: text and PDF restore on a click in the reading
+//     area (an EPUB iframe swallows it, a PDF canvas does not — each
+//     says so in place), and the comic double-click-toggles because a
+//     single click there is already a page turn. The extras differ;
+//     the guaranteed gesture no longer does.
 //   - exclusive panel selection: one panel open at a time, toggling a
 //     panel closes its siblings — the invariant the per-shell
 //     `closePanels()` + toggle pairs re-implemented.

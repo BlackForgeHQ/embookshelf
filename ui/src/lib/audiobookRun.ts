@@ -1,4 +1,5 @@
 import type { Audiobook } from "@/api/audiobooks"
+import { isMovingState } from "@/lib/artifactRun"
 
 /** What phase of its life a run is in, as a reader sees it. */
 export type RunPhase = "running" | "ready" | "stopped"
@@ -31,8 +32,9 @@ export type RunView = {
 export function runView(a: Audiobook): RunView {
   // Pending and running are one phase here. The difference is whether
   // the segment jobs have been picked up, which matters to the queue and
-  // not at all to someone watching a progress bar.
-  const moving = a.state === "pending" || a.state === "running"
+  // not at all to someone watching a progress bar. The set itself is
+  // artifactRun's — one spelling of "moving" across every artifact (#350).
+  const moving = isMovingState(a.state)
   const phase: RunPhase = moving ? "running" : a.state === "ready" ? "ready" : "stopped"
 
   return {
