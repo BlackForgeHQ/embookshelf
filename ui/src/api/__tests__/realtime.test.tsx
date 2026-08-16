@@ -220,3 +220,37 @@ describe("shared-shelf handlers", () => {
     expect(navigateSpy).not.toHaveBeenCalled()
   })
 })
+
+describe("book-scoped artifact events (#349)", () => {
+  // The events must bust the keys the panels actually read. The old
+  // handlers invalidated ["book", id] alone — which the guide and
+  // narration panels never read, so a finished guide or narration
+  // never appeared without a manual refresh, while the guide panel's
+  // comment claimed the opposite.
+  it("guide.updated invalidates the guide query key", () => {
+    renderHook(() => useRealtime(), { wrapper })
+    const es = onlySource()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+
+    act(() => {
+      es.emit("guide.updated", JSON.stringify({ bookId: "b1" }))
+    })
+
+    const keys = spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey))
+    expect(keys).toContain(JSON.stringify(["book-guide", "b1"]))
+  })
+
+  it("audiobook.updated invalidates the narration key and the book detail", () => {
+    renderHook(() => useRealtime(), { wrapper })
+    const es = onlySource()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+
+    act(() => {
+      es.emit("audiobook.updated", JSON.stringify({ bookId: "b1" }))
+    })
+
+    const keys = spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey))
+    expect(keys).toContain(JSON.stringify(["book-audiobook", "b1"]))
+    expect(keys).toContain(JSON.stringify(["book", "b1"]))
+  })
+})

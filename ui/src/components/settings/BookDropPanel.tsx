@@ -15,7 +15,7 @@ import { useApiQuery } from "@/api/query"
 import { formatDateTime } from "@/lib/format"
 import { ConfirmPhraseDialog } from "@/components/ConfirmPhraseDialog"
 import { DefRow } from "@/components/DefRow"
-import { Card, InboxMark, NotebookEmpty } from "@/components/SettingsShared"
+import { PanelHeader, Card, InboxMark, NotebookEmpty } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -59,9 +59,7 @@ export function BookDropPanel() {
 
   return (
     <>
-      <h2 className="t-h2" style={{ marginBottom: 8 }}>
-        BookDrop
-      </h2>
+      <PanelHeader title="BookDrop" />
       <p className="t-small" style={{ marginBottom: 24, fontStyle: "italic" }}>
         Housekeeping for the staging directory. Clear processed history wipes
         terminal-state queue rows. Wipe files removes every file under{" "}

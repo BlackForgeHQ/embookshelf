@@ -136,16 +136,9 @@ func registry(deps Deps) []registration {
 	// otherwise — consumers then behave as before the converter existed.
 	var markdownFeed *service.MarkdownFeed
 	if deps.Renditions != nil && deps.Enqueuer != nil {
-		markdownFeed = &service.MarkdownFeed{
-			Renditions:  deps.Renditions,
-			IsMissing:   func(err error) bool { return errors.Is(err, repo.ErrNotFound) },
-			Open:        bookOps.OpenMarkdown,
-			CurrentHash: bookOps.PrimaryHash,
-			// The request module owns Start-before-Enqueue and records a
-			// refused enqueue on the row (#317) — this closure used to
-			// restate the ordering and skip the compensation.
-			Request: service.NewMarkdownRequests(deps.Renditions, deps.Enqueuer).One,
-		}
+		// The pairings live in service.NewMarkdownFeed (#356); this
+		// site keeps only the degrade gate.
+		markdownFeed = service.NewMarkdownFeed(deps.Renditions, bookOps, deps.Enqueuer)
 	}
 	readingGuide.Markdown = markdownFeed
 
@@ -174,8 +167,10 @@ func registry(deps Deps) []registration {
 		Record:     bookOps.Recorder(service.DerivedEPUB),
 	}
 
-	// publishAudiobook is the SSE side of every audiobook state change —
-	// segment progress and finalize both report on the same topic.
+	// publishAudiobook is the segment worker's SSE side. Finalize
+	// deliberately publishes through AudiobookService instead (its own
+	// file says why), so this closure has exactly one consumer (#356 —
+	// the comment used to claim both).
 	publishAudiobook := func(bookID string) {
 		_ = deps.Hub.Publish(sse.AudiobookUpdated{BookID: bookID})
 	}

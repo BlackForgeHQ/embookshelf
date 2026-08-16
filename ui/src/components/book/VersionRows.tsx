@@ -2,9 +2,10 @@ import type { ApiError } from "@/api/client"
 import { bookEpubQuery, generateBookEpub } from "@/api/epub"
 import { bookMarkdownQuery } from "@/api/markdown"
 import { useApiMutation } from "@/api/mutation"
-import { LIVE_POLL_MS, useApiQuery } from "@/api/query"
+import { useApiQuery } from "@/api/query"
 import { Icon } from "@/components/Icon"
 import { Button } from "@/components/ui/button"
+import { artifactView, pollWhileMoving } from "@/lib/artifactRun"
 import { isConvertibleFormat } from "@/lib/formats"
 import { formatBytes } from "@/lib/format"
 
@@ -28,18 +29,17 @@ export function VersionRows({
   // that exist, not work in flight — pending/failed live on the guide
   // tab and the settings card.
   const markdown = useApiQuery(bookMarkdownQuery(bookId))
-  const md = markdown.data?.state === "ready" ? markdown.data : null
+  const md = artifactView(markdown.data).ready ? markdown.data : null
 
   const convertible = isConvertibleFormat(format)
   // The generated EPUB does show its in-flight and failed states here —
   // unlike the markdown, the button that started the chain lives in
   // this section, so this is where its outcome must land (ADR-0034).
+  // The status vocabulary is lib/artifactRun's (#350): the view and
+  // the poll come from the module, not from raw state comparisons.
   const epub = useApiQuery(bookEpubQuery(bookId), {
     enabled: convertible,
-    refetchInterval: (q) => {
-      const s = q.state.data?.state
-      return s === "pending" || s === "running" ? LIVE_POLL_MS : false
-    },
+    ...pollWhileMoving(),
   })
 
   const generateMut = useApiMutation(generateBookEpub, {
@@ -47,7 +47,7 @@ export function VersionRows({
     errorToast: (err: ApiError) => err.message,
   })
 
-  const epubState = epub.data?.state
+  const epubView = artifactView(epub.data)
   return (
     <>
       <VersionRow
@@ -77,7 +77,7 @@ export function VersionRows({
           }
         />
       )}
-      {epubState === "ready" && (
+      {epubView.ready && (
         <VersionRow
           icon="sparkle"
           name={`${title}.epub`}
@@ -97,22 +97,18 @@ export function VersionRows({
           }
         />
       )}
-      {convertible && (epubState === "pending" || epubState === "running") && (
+      {convertible && epubView.moving && (
         <p className="t-small">Generating EPUB. This can take a moment…</p>
       )}
-      {convertible && epubState === "failed" && (
+      {convertible && epubView.failed && (
         <p
           className="t-small"
           style={{ color: "var(--color-accent-ink)" }}
         >
-          EPUB generation failed: {epub.data?.error ?? "no further detail"}
+          EPUB generation failed: {epubView.error ?? "no further detail"}
         </p>
       )}
-      {isAdmin &&
-        convertible &&
-        (epubState === "none" ||
-          epubState === "failed" ||
-          epub.data?.stale) && (
+      {isAdmin && convertible && epubView.canGenerate && (
           <div>
             <Button
               variant="outline"
@@ -121,7 +117,7 @@ export function VersionRows({
               onClick={() => generateMut.mutate(bookId)}
             >
               <Icon name="sparkle" size={13} />{" "}
-              {epubState === "failed" || epub.data?.stale
+              {epubView.failed || epubView.stale
                 ? "Regenerate EPUB"
                 : "Generate EPUB"}
             </Button>

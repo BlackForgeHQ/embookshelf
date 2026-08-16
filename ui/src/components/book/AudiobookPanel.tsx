@@ -12,12 +12,13 @@ import {
   retryAudiobook,
 } from "@/api/audiobooks"
 import { useApiMutation } from "@/api/mutation"
-import { LIVE_POLL_MS, useApiQuery } from "@/api/query"
+import { useApiQuery } from "@/api/query"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/Icon"
 import { ProgressBar } from "@/components/ProgressBar"
 import type { Viewer } from "@/lib/affordance"
 import { affordanceFor, messageForCode, useViewer } from "@/lib/affordance"
+import { pollWhile } from "@/lib/artifactRun"
 import { isNarratableFormat, narratableFormatList } from "@/lib/formats"
 import { formatCost, formatDuration } from "@/lib/format"
 import { runView } from "@/lib/audiobookRun"
@@ -33,13 +34,13 @@ export function AudiobookPanel({
   const viewer = useViewer()
 
   const audiobook = useApiQuery(bookAudiobookQuery(bookId), {
-    // Polls only while the run is moving and stops on its own. Undefined
-    // is a first fetch still in flight and null is a book with no run at
-    // all; neither is something to poll about.
-    refetchInterval: (q) =>
-      q.state.data && runView(q.state.data).phase === "running"
-        ? LIVE_POLL_MS
-        : false,
+    // Polls only while the run is moving and stops on its own (#350's
+    // shared predicate). Undefined is a first fetch still in flight and
+    // null is a book with no run at all; neither is something to poll
+    // about — pollWhile's undefined-data arm covers both.
+    ...pollWhile<Audiobook | null>(
+      (run) => !!run && runView(run).phase === "running"
+    ),
   })
 
   const [confirming, setConfirming] = useState(false)

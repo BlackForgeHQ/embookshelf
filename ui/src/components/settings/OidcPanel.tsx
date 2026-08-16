@@ -13,13 +13,12 @@ import {
 } from "@/api/oidc"
 import type { SecretField } from "@/hooks/useSettingsDraft"
 import { useConnectionTest } from "@/hooks/useConnectionTest"
+import { Panel, SaveRow } from "@/components/settings/Panel"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
 import {
   Card,
   ConnectionTestReport,
   Field,
-  PanelHeader,
-  PanelLoading,
   Select,
 } from "@/components/SettingsShared"
 import { SecretInput } from "@/components/settings/SecretInput"
@@ -64,8 +63,7 @@ export function OidcPanel() {
   // could not tell an untouched field from an erased one; the module
   // makes that distinction part of the secret itself.
   const draft = useSettingsDraft({
-    queryKey: oidcAdminSettingsQuery.key,
-    queryFn: oidcAdminSettingsQuery.fn,
+    query: oidcAdminSettingsQuery,
     initial: emptyForm,
     save: saveOidcAdminSettings,
     successToast: "OIDC settings saved.",
@@ -91,14 +89,6 @@ export function OidcPanel() {
 
   const form = draft.value
 
-  if (draft.loading) {
-    return (
-      <>
-        <PanelHeader title="OIDC / SSO">{INTRO}</PanelHeader>
-        <PanelLoading />
-      </>
-    )
-  }
 
   // Force-SSO is only safe once at least one provider could actually sign
   // someone in — a stored secret, or one typed but not yet saved.
@@ -118,8 +108,7 @@ export function OidcPanel() {
       form.generic.issuerUri !== "")
 
   return (
-    <>
-      <PanelHeader title="OIDC / SSO">{INTRO}</PanelHeader>
+    <Panel title="OIDC / SSO" intro={INTRO} loading={draft.loading}>
 
       <Card>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -242,12 +231,8 @@ export function OidcPanel() {
         </div>
       </Card>
 
-      <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-        <Button onClick={draft.save} disabled={draft.saving}>
-          {draft.saving ? "Saving…" : "Save all"}
-        </Button>
-      </div>
-    </>
+      <SaveRow draft={draft} onSave={draft.save} label="Save all" align="start" />
+    </Panel>
   )
 }
 

@@ -10,13 +10,12 @@ import {
 import { useApiQuery } from "@/api/query"
 import type { SecretField } from "@/hooks/useSettingsDraft"
 import { useConnectionTest } from "@/hooks/useConnectionTest"
+import { Panel, SaveRow } from "@/components/settings/Panel"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
 import {
   Card,
   ConnectionTestReport,
   Field,
-  PanelHeader,
-  PanelLoading,
   Select,
   Toggle,
 } from "@/components/SettingsShared"
@@ -48,8 +47,7 @@ export function AudiobooksPanel() {
   // its own record of typed keys, and no longer decides what an empty one
   // means — `secrets.value` answers both.
   const draft = useSettingsDraft({
-    queryKey: audiobookSettingsQuery.key,
-    queryFn: audiobookSettingsQuery.fn,
+    query: audiobookSettingsQuery,
     initial: emptyForm,
     save: saveAudiobookSettings,
     successToast: "Audiobook settings saved.",
@@ -81,18 +79,9 @@ export function AudiobooksPanel() {
     }))
   }
 
-  if (draft.loading) {
-    return (
-      <>
-        <PanelHeader title="Audiobooks" />
-        <PanelLoading />
-      </>
-    )
-  }
 
   return (
-    <>
-      <PanelHeader title="Audiobooks" />
+    <Panel title="Audiobooks" loading={draft.loading}>
       <Card>
         <h3 className="t-h3 mb-2">Audiobook narration</h3>
         <p className="t-small mb-4">
@@ -138,19 +127,17 @@ export function AudiobooksPanel() {
       ))}
 
       <Card className="mt-6">
-        <div className="flex items-center gap-2">
-          <Button disabled={draft.saving} onClick={draft.save}>
-            {draft.saving ? "Saving…" : "Save"}
-          </Button>
+        <SaveRow draft={draft} onSave={draft.save} align="start">
           <Button
             variant="outline"
+            size="sm"
             disabled={test.running || !selected?.enabled}
             onClick={() => test.run(undefined)}
             title="Synthesizes one short phrase with the selected engine"
           >
             {test.running ? "Testing…" : "Test connection"}
           </Button>
-        </div>
+        </SaveRow>
         <ConnectionTestReport outcome={test.outcome} />
         {selected && !selected.enabled && (
           <p
@@ -165,7 +152,7 @@ export function AudiobooksPanel() {
       {form.enabled && selected?.enabled && (
         <VoicePicker engineLabel={selected.label} />
       )}
-    </>
+    </Panel>
   )
 }
 

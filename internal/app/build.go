@@ -595,7 +595,7 @@ func buildHTTP(w wiring, r repos, s services, q queue.Client, version, commit st
 			s.audiobook,
 		),
 		handler.NewAccountDeps(s.auth, r.user, s.device, r.appSettings),
-		handler.NewEmailDeps(s.notifier, s.reset, r.invite, r.cipher, s.emailTpl),
+		handler.NewEmailDeps(s.notifier, s.reset, r.invite),
 		handler.Options{
 			LibStore:      s.libStore,
 			OIDC:          s.oidc,

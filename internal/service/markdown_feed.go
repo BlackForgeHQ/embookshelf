@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/repo"
 )
 
 // ErrRenditionPending says the Markdown rendition is not ready yet —
@@ -51,6 +53,31 @@ type MarkdownFeed struct {
 	// Request starts a conversion: upsert the tracking row to pending
 	// and enqueue the markdown.render job.
 	Request func(ctx context.Context, bookID string) error
+}
+
+// markdownFeedRows is the rendition-row slice the feed and its request
+// module share: the state read plus the request half.
+type markdownFeedRows interface {
+	renditionReader
+	markdownRequestRows
+}
+
+// NewMarkdownFeed builds the feed over its production collaborators,
+// deciding every pairing once (#356): the rows, the ErrNotFound =
+// "never requested" binding — a service fact that used to live in the
+// queue tier's hand assembly, untested — the BookOps open/hash pair,
+// and the request module over the same rows and enqueuer, so the five
+// fields cannot be paired wrong at a wiring site. The queue registry
+// keeps only its own degrade gate (a nil feed when the converter
+// pieces are not wired).
+func NewMarkdownFeed(rows markdownFeedRows, ops *BookOps, enq jobs.Enqueuer) *MarkdownFeed {
+	return &MarkdownFeed{
+		Renditions:  rows,
+		IsMissing:   func(err error) bool { return errors.Is(err, repo.ErrNotFound) },
+		Open:        ops.OpenMarkdown,
+		CurrentHash: ops.PrimaryHash,
+		Request:     NewMarkdownRequests(rows, enq).One,
+	}
 }
 
 // Text returns the book's markdown, capped at textCap bytes.

@@ -22,6 +22,7 @@ import { useApiMutation } from "@/api/mutation"
 import { meQuery } from "@/api/auth"
 import { useApiQuery } from "@/api/query"
 import { viewerOf } from "@/lib/affordance"
+import { shelfGroups } from "@/lib/shelves"
 import { useLogout } from "@/hooks/useLogout"
 import { useShelfDraftDialog } from "@/components/ShelfDraftProvider"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -86,22 +87,15 @@ export function AppSidebar() {
   const allShelves = shelves.data?.shelves ?? []
   const unshelvedCount = shelves.data?.unshelvedCount ?? 0
   const { isAdmin } = viewerOf(me.data)
-  // "reading" is promoted into the Browse section as a first-class nav item,
-  // so drop it from the Shelves list to avoid rendering two links to the
-  // same filtered view. Public shelves (own or otherwise) split off into
-  // their own SHARED group below.
-  const ownPrivateShelves = allShelves.filter(
-    (s) => !s.isSmart && !s.isPublic && s.slug !== "reading"
-  )
-  const ownSharedShelves = allShelves.filter(
-    (s) => !s.isSmart && s.isPublic && (s.ownerName ?? "") === ""
-  )
-  const otherSharedShelves = allShelves.filter(
-    (s) => !s.isSmart && s.isPublic && (s.ownerName ?? "") !== ""
-  )
-  const sharedList = [...ownSharedShelves, ...otherSharedShelves]
-  const shelfList = ownPrivateShelves
-  const smartList = allShelves.filter((s) => s.isSmart)
+  // The split is shelfGroups' — one spelling shared with the book
+  // page's picker (#352). What stays here is presentation: "reading" is
+  // promoted into the Browse section as a first-class nav item, so drop
+  // it from the Shelves list to avoid rendering two links to the same
+  // filtered view.
+  const groups = shelfGroups(allShelves)
+  const shelfList = groups.ownPrivate.filter((s) => s.slug !== "reading")
+  const sharedList = groups.shared
+  const smartList = groups.smart
   const totalBooks = libs.reduce((n, lib) => n + lib.bookCount, 0)
 
   const smartMutError = createSmartMut.error ?? updateSmartMut.error

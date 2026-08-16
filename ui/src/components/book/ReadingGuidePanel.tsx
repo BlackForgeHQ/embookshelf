@@ -2,6 +2,7 @@ import { useState } from "react"
 
 import type { ApiError } from "@/api/client"
 import type { ReadingGuide } from "@/api/guides"
+import { artifactView, pollWhileMoving } from "@/lib/artifactRun"
 import { bookGuideQuery, generateBookGuide, saveBookGuide } from "@/api/guides"
 import { bookMarkdownQuery } from "@/api/markdown"
 import { useApiMutation } from "@/api/mutation"
@@ -53,8 +54,12 @@ export function ReadingGuidePanel({
   // queue, and without this the panel would show "no guide yet" forever
   // with the reason sitting unread on the rendition row.
   const convertible = isConvertibleFormat(format)
+  // pollWhileMoving is the fix for the panel that hung forever on
+  // "Converting…": there was no refetchInterval here, so the one
+  // transition this panel exists to observe could never arrive (#350).
   const markdown = useApiQuery(bookMarkdownQuery(bookId), {
     enabled: convertible,
+    ...pollWhileMoving(),
   })
 
   const [editing, setEditing] = useState(false)
@@ -84,13 +89,14 @@ export function ReadingGuidePanel({
 
   const g = guide.data
 
-  if (!g && convertible && markdown.data?.state === "failed") {
+  const mdView = artifactView(markdown.data)
+  if (!g && convertible && mdView.failed) {
     // Verbatim, per the loud-failure rule: the worker's words are the
     // thing the admin has to act on.
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 640 }}>
         <p className="t-small" style={{ color: "var(--color-accent-ink)" }}>
-          Book text conversion failed: {markdown.data.error ?? "no further detail"}
+          Book text conversion failed: {mdView.error ?? "no further detail"}
         </p>
         {viewer.isAdmin && (
           <div>
@@ -108,7 +114,7 @@ export function ReadingGuidePanel({
     )
   }
 
-  if (!g && convertible && (markdown.data?.state === "pending" || markdown.data?.state === "running")) {
+  if (!g && convertible && mdView.moving) {
     return (
       <p className="t-small">
         Converting the book's text for guide generation. This can take a

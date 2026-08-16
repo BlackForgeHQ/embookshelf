@@ -3,8 +3,10 @@ import { useQueryClient } from "@tanstack/react-query"
 import { useNavigate, useRouter } from "@tanstack/react-router"
 import { toast } from "sonner"
 
+import { bookAudiobookQueryKey } from "./audiobooks"
 import { bookdropQueryKey } from "./bookdrop"
 import { bookQueryKey, booksQueryKey, librariesQueryKey, shelvesQueryKey } from "./books"
+import { bookGuideQueryKey } from "./guides"
 import { settingsUsersQueryKey } from "./settings"
 
 // Event names the server publishes. Keep the union narrow so the dispatch
@@ -151,24 +153,20 @@ export function useRealtime() {
         const { error } = parseKindlePayload(raw)
         toast.error(error ? `Send to Kindle failed: ${error}` : "Send to Kindle failed.")
       },
-      // A guide finished generating. Bust that book's cache so an open
-      // detail page fills in; no toast, because a bulk run over a
-      // thousand books would otherwise bury the screen.
+      // A guide finished generating. Bust the keys the panels actually
+      // read — declared in BOOK_EVENT_KEYS below, not guessed here: the
+      // old handlers invalidated ["book", id] alone, which the guide and
+      // narration panels never read, so the events reached nothing
+      // (#349). No toast, because a bulk run over a thousand books
+      // would otherwise bury the screen.
       "guide.updated": (raw) => {
-        const { bookId } = parseGuidePayload(raw)
-        if (bookId) {
-          void queryClient.invalidateQueries({ queryKey: bookQueryKey(bookId) })
-        }
+        invalidateBookEvent(queryClient, "guide.updated", parseGuidePayload(raw).bookId)
       },
-      // A narration reached a terminal state. Bust the book's cache so an
-      // open detail page swaps its progress bar for a player or an error.
-      // No toast: a run takes tens of minutes and the user is rarely
-      // looking at the page it finishes on.
+      // A narration reached a terminal state. No toast: a run takes
+      // tens of minutes and the user is rarely looking at the page it
+      // finishes on.
       "audiobook.updated": (raw) => {
-        const { bookId } = parseGuidePayload(raw)
-        if (bookId) {
-          void queryClient.invalidateQueries({ queryKey: bookQueryKey(bookId) })
-        }
+        invalidateBookEvent(queryClient, "audiobook.updated", parseGuidePayload(raw).bookId)
       },
     }
 
@@ -201,4 +199,33 @@ export function useRealtime() {
       es.close()
     }
   }, [queryClient, navigate, router])
+}
+
+// BOOK_EVENT_KEYS is the one declared mapping from a book-scoped SSE
+// event to the query keys it busts — the SSE twin of defineMutation's
+// `invalidates` (#349). HTTP mutations declare their keys beside the
+// mutation; SSE was the one path that re-guessed them per handler, and
+// the guess had already drifted: the panels read their own keys.
+//
+// audiobook.updated carries the book key too: a finalize lands a new
+// files row (the MP3), so the detail page's formats and chapters
+// change with it. The guide is not embedded in the detail payload, so
+// its event busts only its own key.
+const BOOK_EVENT_KEYS = {
+  "guide.updated": (bookId: string) => [bookGuideQueryKey(bookId)],
+  "audiobook.updated": (bookId: string) => [
+    bookAudiobookQueryKey(bookId),
+    bookQueryKey(bookId),
+  ],
+} as const
+
+function invalidateBookEvent(
+  queryClient: ReturnType<typeof useQueryClient>,
+  event: keyof typeof BOOK_EVENT_KEYS,
+  bookId: string | undefined,
+) {
+  if (!bookId) return
+  for (const key of BOOK_EVENT_KEYS[event](bookId)) {
+    void queryClient.invalidateQueries({ queryKey: key })
+  }
 }

@@ -108,6 +108,67 @@ export function ReaderHeader({ children }: { children: ReactNode }) {
  * navigating rather than relying on the unmount backstop, so the handler
  * stays with the shell that owns the position.
  */
+
+// ReaderShellHeader is the header block three shells used to copy —
+// exit, centred title/author·position, the shell's own toggle buttons,
+// hide-chrome (#351). The position label is the shell's to word (an
+// EPUB has only a percentage, a comic has pages); the frame is not.
+// A shell with no title block (audio) omits `title` and gets the
+// spacer its hand-rolled header had.
+export function ReaderShellHeader({
+  onExit,
+  title,
+  author,
+  positionLabel,
+  onHideChrome,
+  children,
+}: {
+  onExit: () => void
+  title?: string
+  author?: string
+  positionLabel?: string
+  onHideChrome?: () => void
+  children?: ReactNode
+}) {
+  return (
+    <ReaderHeader>
+      <ExitButton onExit={onExit} />
+      {title !== undefined ? (
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 500, fontStyle: "italic" }}>
+            {title}
+          </div>
+          <div className="t-micro" style={{ fontSize: 10 }}>
+            {author}
+            {positionLabel ? ` · ${positionLabel}` : ""}
+          </div>
+        </div>
+      ) : (
+        <div style={{ flex: 1 }} />
+      )}
+      {children}
+      {onHideChrome && (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={onHideChrome}
+          title="Hide chrome"
+          aria-label="Hide chrome"
+        >
+          <Icon name="close" size={14} />
+        </Button>
+      )}
+    </ReaderHeader>
+  )
+}
+
 export function ExitButton({ onExit }: { onExit: () => void }) {
   return (
     <Button variant="ghost" size="sm" onClick={onExit}>
