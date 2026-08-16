@@ -10,6 +10,7 @@ import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
 import { pollWhile } from "@/lib/artifactRun"
 import { useConnectionTest } from "@/hooks/useConnectionTest"
+import { BulkRunCard } from "@/components/settings/BulkRunCard"
 import { Panel, SaveRow } from "@/components/settings/Panel"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
 import {
@@ -22,7 +23,6 @@ import {
 import { SecretInput } from "@/components/settings/SecretInput"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { ProgressBar } from "@/components/ProgressBar"
 
 // Roughly the opening 30-40 pages. A 300-page EPUB extracts to about nine
 // times this, so the cap binds for most books — deliberately, since it is
@@ -232,10 +232,8 @@ export function ReadingGuidesPanel() {
 // sees until the bill arrives does not qualify.
 function GuideRunCard() {
   const estimate = useApiQuery(guideEstimateQuery, {
-    // Poll while books still need a guide. Coverage is two counts on a
-    // query that already runs, so this is cheap; it stops on its own once
-    // nothing is outstanding rather than polling an idle instance
-    // forever. Cadence and predicate shape from lib/artifactRun (#350).
+    // Poll while books still need a guide; stops on its own once
+    // nothing is outstanding. Cadence and predicate from lib/artifactRun.
     ...pollWhile<GuideRunEstimate>((d) => !!d?.books),
   })
 
@@ -247,70 +245,44 @@ function GuideRunCard() {
   })
 
   const est = estimate.data
-
-  if (!est) {
-    return (
-      <Card className="mt-6">
-        <h3 className="t-h3 mb-2">Generate for the whole library</h3>
-        <p className="t-small">Checking what needs a guide…</p>
-      </Card>
-    )
-  }
-
-  const pct =
-    est.totalBooks > 0
-      ? Math.round((est.booksWithGuide / est.totalBooks) * 100)
-      : 0
-  // Something is in flight when the run mutation just fired, or when the
-  // count is still falling between polls. Neither is authoritative — this
-  // is a hint for the label, not a claim about the queue.
-  const working = runMut.isPending || (estimate.isFetching && est.books > 0)
+  // Something is in flight when the run mutation just fired, or when
+  // the count is still falling between polls. Neither is authoritative
+  // — a hint for the label, not a claim about the queue.
+  const working = runMut.isPending || (estimate.isFetching && (est?.books ?? 0) > 0)
 
   return (
-    <Card className="mt-6">
-      <h3 className="t-h3 mb-2">Generate for the whole library</h3>
-
-      {est.totalBooks > 0 && (
-        <div className="mb-4">
-          <div
-            className="mb-1 flex items-baseline justify-between"
-            style={{ gap: 12 }}
-          >
-            <span className="t-small">
-              {est.booksWithGuide.toLocaleString()} of{" "}
-              {est.totalBooks.toLocaleString()} books have a guide
-            </span>
-            <span className="t-small tabular-nums">{pct}%</span>
-          </div>
-          <ProgressBar value={pct / 100} label="Reading guide coverage" />
-        </div>
-      )}
-
-      {est.books === 0 ? (
-        <p className="t-small">Every book already has a guide.</p>
-      ) : (
-        <>
-          <p className="t-small mb-1">
-            {est.books.toLocaleString()} book{est.books === 1 ? "" : "s"} still
-            need{est.books === 1 ? "s" : ""} one,{" "}
-            {est.fullTextBooks.toLocaleString()} of them read in full.
-            {working ? " Generating…" : null}
-          </p>
-          <p className="t-small mb-4">
-            Up to <strong>{est.maxInputTokens.toLocaleString()}</strong> input
-            tokens. This is a ceiling: it assumes every book fills the cap.
-            Books whose guide you edited by hand are skipped.
-          </p>
-          <Button
-            variant="outline"
-            disabled={runMut.isPending}
-            onClick={() => runMut.mutate(undefined)}
-          >
-            Generate {est.books.toLocaleString()} guide
-            {est.books === 1 ? "" : "s"}
-          </Button>
-        </>
-      )}
-    </Card>
+    <BulkRunCard
+      title="Generate for the whole library"
+      checkingText="Checking what needs a guide…"
+      run={runMut}
+      view={
+        est && {
+          total: est.totalBooks,
+          done: est.booksWithGuide,
+          candidates: est.books,
+          working,
+          coverageLabel: `${est.booksWithGuide.toLocaleString()} of ${est.totalBooks.toLocaleString()} books have a guide`,
+          progressLabel: "Reading guide coverage",
+          allDoneText: "Every book already has a guide.",
+          runLabel: `Generate ${est.books.toLocaleString()} guide${est.books === 1 ? "" : "s"}`,
+          notes:
+            est.books > 0 ? (
+              <>
+                <p className="t-small mb-1">
+                  {est.books.toLocaleString()} book{est.books === 1 ? "" : "s"}{" "}
+                  still need{est.books === 1 ? "s" : ""} one,{" "}
+                  {est.fullTextBooks.toLocaleString()} of them read in full.
+                  {working ? " Generating…" : null}
+                </p>
+                <p className="t-small mb-4">
+                  Up to <strong>{est.maxInputTokens.toLocaleString()}</strong>{" "}
+                  input tokens. This is a ceiling: it assumes every book fills
+                  the cap. Books whose guide you edited by hand are skipped.
+                </p>
+              </>
+            ) : null,
+        }
+      }
+    />
   )
 }

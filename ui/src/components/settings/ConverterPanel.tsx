@@ -11,7 +11,7 @@ import {
 import { useApiMutation } from "@/api/mutation"
 import { useApiQuery } from "@/api/query"
 import { pollWhile } from "@/lib/artifactRun"
-import { ProgressBar } from "@/components/ProgressBar"
+import { BulkRunCard } from "@/components/settings/BulkRunCard"
 import { Panel, SaveRow } from "@/components/settings/Panel"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
 import {
@@ -118,7 +118,7 @@ export function ConverterPanel() {
 // BulkConversionCard converts every candidate PDF in one click and
 // shows progress. Coverage serves both the pre-flight count and the
 // progress bar, so the bar survives a reload and a run someone started
-// yesterday — same shape as the guide run card. No token estimate:
+// yesterday — the shared BulkRunCard frame (#355). No token estimate:
 // conversion costs sidecar CPU, not a metered API.
 function BulkConversionCard() {
   const coverage = useApiQuery(converterCoverageQuery, {
@@ -136,66 +136,42 @@ function BulkConversionCard() {
 
   const cov = coverage.data
 
-  if (!cov) {
-    return (
-      <Card className="mt-6">
-        <h3 className="t-h3 mb-2">Convert the whole library</h3>
-        <p className="t-small">Checking what needs conversion…</p>
-      </Card>
-    )
-  }
-
-  const pct = cov.total > 0 ? Math.round((cov.ready / cov.total) * 100) : 0
-
   return (
-    <Card className="mt-6">
-      <h3 className="t-h3 mb-2">Convert the whole library</h3>
-
-      {cov.total > 0 && (
-        <div className="mb-4">
-          <div
-            className="mb-1 flex items-baseline justify-between"
-            style={{ gap: 12 }}
-          >
-            <span className="t-small">
-              {cov.ready.toLocaleString()} of {cov.total.toLocaleString()}{" "}
-              convertible books have a markdown rendition
-            </span>
-            <span className="t-small tabular-nums">{pct}%</span>
-          </div>
-          <ProgressBar value={pct / 100} label="Markdown rendition coverage" />
-        </div>
-      )}
-
-      {cov.converting > 0 && (
-        <p className="t-small mb-1">
-          Converting {cov.converting.toLocaleString()} book
-          {cov.converting === 1 ? "" : "s"}…
-        </p>
-      )}
-      {cov.failed > 0 && (
-        <p className="t-small mb-1 text-destructive">
-          {cov.failed.toLocaleString()} conversion
-          {cov.failed === 1 ? "" : "s"} failed. Each book's guide tab shows
-          the reason verbatim. Running again retries them.
-        </p>
-      )}
-
-      {cov.total === 0 ? (
-        <p className="t-small">No convertible books in the library (PDF only today).</p>
-      ) : cov.candidates === 0 && cov.converting === 0 ? (
-        <p className="t-small">Every convertible book already has a rendition.</p>
-      ) : (
-        <Button
-          variant="outline"
-          disabled={runMut.isPending || cov.candidates === 0}
-          onClick={() => runMut.mutate(undefined)}
-        >
-          Convert {cov.candidates.toLocaleString()} book
-          {cov.candidates === 1 ? "" : "s"}
-        </Button>
-      )}
-    </Card>
+    <BulkRunCard
+      title="Convert the whole library"
+      checkingText="Checking what needs conversion…"
+      run={runMut}
+      view={
+        cov && {
+          total: cov.total,
+          done: cov.ready,
+          candidates: cov.candidates,
+          working: cov.converting > 0 || runMut.isPending,
+          coverageLabel: `${cov.ready.toLocaleString()} of ${cov.total.toLocaleString()} convertible books have a markdown rendition`,
+          progressLabel: "Markdown rendition coverage",
+          allDoneText: "Every convertible book already has a rendition.",
+          emptyText: "No convertible books in the library (PDF only today).",
+          runLabel: `Convert ${cov.candidates.toLocaleString()} book${cov.candidates === 1 ? "" : "s"}`,
+          notes: (
+            <>
+              {cov.converting > 0 && (
+                <p className="t-small mb-1">
+                  Converting {cov.converting.toLocaleString()} book
+                  {cov.converting === 1 ? "" : "s"}…
+                </p>
+              )}
+              {cov.failed > 0 && (
+                <p className="t-small mb-1 text-destructive">
+                  {cov.failed.toLocaleString()} conversion
+                  {cov.failed === 1 ? "" : "s"} failed. Each book's guide tab
+                  shows the reason verbatim. Running again retries them.
+                </p>
+              )}
+            </>
+          ),
+        }
+      }
+    />
   )
 }
 
