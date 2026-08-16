@@ -15,14 +15,21 @@ test.describe('notebook', () => {
   test('fetches annotations and the books list on load', async ({ page }) => {
     // The route fans out two GETs via useQueries — make sure both land
     // successfully so an empty-state render is authentic (not masking an
-    // error that happened to produce the same UI).
-    await page.goto('/notebook');
-    await page.waitForResponse(
+    // error that happened to produce the same UI). Both waiters are
+    // armed before the navigation: registered sequentially after goto,
+    // the books response could land while the annotations wait was
+    // still pending, and the second waiter then listened for a response
+    // that had already gone by — a race that timed out, not a fetch
+    // that failed.
+    const annotations = page.waitForResponse(
       (r) => r.url().endsWith('/api/v1/annotations') && r.ok(),
     );
-    await page.waitForResponse(
+    const books = page.waitForResponse(
       (r) => /\/api\/v1\/books(\?|$)/.test(r.url()) && r.ok(),
     );
+    await page.goto('/notebook');
+    await annotations;
+    await books;
   });
 
   test('a freshly-created annotation surfaces on the notebook page', async ({

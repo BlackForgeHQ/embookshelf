@@ -9,7 +9,7 @@ test.describe('stats', () => {
     await page.goto('/stats');
     await expect(page.getByRole('heading', { name: 'Statistics' })).toBeVisible();
     await expect(
-      page.getByText('A view of your collection — size, shape, and texture.'),
+      page.getByText('A view of your collection: size, shape, and texture.'),
     ).toBeVisible();
   });
 
