@@ -79,10 +79,12 @@ function setup() {
     () => {
       renders++
       return useSettingsDraft({
-        queryKey: ["settings"],
-        queryFn: () => {
-          fetched()
-          return Promise.resolve(served)
+        query: {
+          key: ["settings"],
+          fn: () => {
+            fetched()
+            return Promise.resolve(served)
+          },
         },
         initial,
         save: saveSettings,
@@ -380,4 +382,47 @@ describe("useDraft", () => {
     rerender({ source: { ...stored, model: "theirs" } })
     expect(result.current.value.model).toBe("theirs")
   })
+})
+
+// The interface change #353 exists for: the hook consumes the spec via
+// apiQueryOptions, so policy the spec declares — staleTime here —
+// actually reaches the underlying query. The old key/fn-apart interface
+// rebuilt the options by hand and dropped everything else on the floor.
+it("carries the spec's declared policy through to the query", async () => {
+  let fetches = 0
+  const spec = {
+    key: ["settings-policy"],
+    fn: () => {
+      fetches++
+      return Promise.resolve(served)
+    },
+    staleTime: 60_000,
+  }
+  const first = renderHook(
+    () =>
+      useSettingsDraft({
+        query: spec,
+        initial,
+        save: saveSettings,
+        toPayload: (value) => value,
+      }),
+    { wrapper }
+  )
+  await waitFor(() => expect(fetches).toBe(1))
+  first.unmount()
+
+  // A remount inside staleTime must serve the cached row, not refetch —
+  // which only happens if the spec's staleTime survived the hook.
+  const second = renderHook(
+    () =>
+      useSettingsDraft({
+        query: spec,
+        initial,
+        save: saveSettings,
+        toPayload: (value) => value,
+      }),
+    { wrapper }
+  )
+  await waitFor(() => expect(second.result.current.loading).toBe(false))
+  expect(fetches).toBe(1)
 })

@@ -47,8 +47,7 @@ const INTRO = (
 
 export function ForwardAuthPanel() {
   const draft = useSettingsDraft({
-    queryKey: forwardAuthSettingsQuery.key,
-    queryFn: forwardAuthSettingsQuery.fn,
+    query: forwardAuthSettingsQuery,
     initial: emptyForm,
     save: saveForwardAuthSettings,
     successToast: "Forward auth saved.",

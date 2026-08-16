@@ -49,8 +49,7 @@ const SETTINGS_VIEWER: Viewer = { isAdmin: true }
 
 export function EmailPanel() {
   const draft = useSettingsDraft({
-    queryKey: emailSettingsQuery.key,
-    queryFn: emailSettingsQuery.fn,
+    query: emailSettingsQuery,
     initial: emptyForm,
     save: updateEmailSettings,
     successToast: "Email settings saved.",

@@ -42,8 +42,7 @@ const INTRO = (
 
 export function ConverterPanel() {
   const draft = useSettingsDraft({
-    queryKey: converterSettingsQuery.key,
-    queryFn: converterSettingsQuery.fn,
+    query: converterSettingsQuery,
     initial: emptyForm,
     save: updateConverterSettings,
     successToast: "Converter settings saved.",

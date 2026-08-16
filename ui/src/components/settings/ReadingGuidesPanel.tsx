@@ -81,8 +81,7 @@ const PRESETS: ReadonlyArray<{
 
 export function ReadingGuidesPanel() {
   const draft = useSettingsDraft({
-    queryKey: readingGuideSettingsQuery.key,
-    queryFn: readingGuideSettingsQuery.fn,
+    query: readingGuideSettingsQuery,
     initial: emptyForm,
     save: saveReadingGuideSettings,
     successToast: "Reading guide settings saved.",

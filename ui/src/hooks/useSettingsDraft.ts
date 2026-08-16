@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import type { QueryKey } from "@tanstack/react-query"
 
 import type { ApiError } from "@/api/client"
 import type { ApiMutation } from "@/api/mutation"
 import { useApiMutation } from "@/api/mutation"
+import type { ApiQuery } from "@/api/query"
+import { apiQueryOptions } from "@/api/query"
 
 // The settings-draft module.
 //
@@ -238,8 +239,12 @@ export type SettingsDraft<TData> = Draft<TData> & {
 }
 
 export type SettingsDraftOptions<TData, TPayload, TResult> = {
-  queryKey: QueryKey
-  queryFn: () => Promise<TData>
+  // The settings row's query spec, whole — not key and fn taken apart.
+  // Six panels used to pass `queryKey: xQuery.key, queryFn: xQuery.fn`,
+  // and anything the spec declared beyond the pair (staleTime, retry)
+  // was silently dropped because this hook rebuilt the options by hand
+  // (#353). apiQueryOptions is the one reading of a spec.
+  query: ApiQuery<TData>
   // The shape rendered before the first payload lands. Keep it a module
   // constant; it doubles as the "not configured yet" baseline.
   initial: TData
@@ -264,7 +269,7 @@ export type SettingsDraftOptions<TData, TPayload, TResult> = {
 export function useSettingsDraft<TData, TPayload, TResult>(
   opts: SettingsDraftOptions<TData, TPayload, TResult>
 ): SettingsDraft<TData> {
-  const query = useQuery({ queryKey: opts.queryKey, queryFn: opts.queryFn })
+  const query = useQuery(apiQueryOptions(opts.query))
   const draft = useDraft(query.data, opts.initial)
 
   // The mutation's onSuccess runs long after the render that created it,

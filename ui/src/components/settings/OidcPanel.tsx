@@ -64,8 +64,7 @@ export function OidcPanel() {
   // could not tell an untouched field from an erased one; the module
   // makes that distinction part of the secret itself.
   const draft = useSettingsDraft({
-    queryKey: oidcAdminSettingsQuery.key,
-    queryFn: oidcAdminSettingsQuery.fn,
+    query: oidcAdminSettingsQuery,
     initial: emptyForm,
     save: saveOidcAdminSettings,
     successToast: "OIDC settings saved.",

@@ -48,8 +48,7 @@ export function AudiobooksPanel() {
   // its own record of typed keys, and no longer decides what an empty one
   // means — `secrets.value` answers both.
   const draft = useSettingsDraft({
-    queryKey: audiobookSettingsQuery.key,
-    queryFn: audiobookSettingsQuery.fn,
+    query: audiobookSettingsQuery,
     initial: emptyForm,
     save: saveAudiobookSettings,
     successToast: "Audiobook settings saved.",
