@@ -22,6 +22,7 @@ import {
   CONTINUOUS_DEBOUNCE_MS,
   useReadingPosition,
 } from "@/hooks/useReadingPosition"
+import { useReaderShell } from "@/components/reader/useReaderShell"
 import {
   isNarratableFormat,
   readerKindForFormat,
@@ -32,11 +33,10 @@ import { ProgressBar } from "@/components/ProgressBar"
 import {
   BookmarkButton,
   ChromeRestoreButton,
+  ReaderShellHeader,
   CollapsibleChrome,
-  ExitButton,
   ReaderContainer,
   ReaderFooter,
-  ReaderHeader,
 } from "@/components/reader/Chrome"
 import { decodeLocator, encodeLocator, formatHMS } from "@/lib/locator"
 import { resumeCfi, resumePage, resumeSeconds } from "@/lib/resume"
@@ -44,7 +44,6 @@ import { NotesPanel, TypePanel } from "@/components/reader/Panels"
 import {
   bookAnnotationsQuery,
   createAnnotation,
-  createBookmark,
   deleteAnnotation,
 } from "@/api/annotations"
 import { bookAudiobookQuery, narrationUrl } from "@/api/audiobooks"
@@ -232,10 +231,9 @@ function TextReaderShell({ book }: { book: BookDetail }) {
   // every render.
   const initialCfi = resumeCfi(book)
 
-  const [chromeVisible, setChromeVisible] = useState(true)
-  const [tocOpen, setTocOpen] = useState(false)
-  const [notesOpen, setNotesOpen] = useState(false)
-  const [typePanelOpen, setTypePanelOpen] = useState(false)
+  // Chrome state, panel exclusivity and the bookmark mutation are the
+  // shell module's (#351); what stays here is genuinely this shell's.
+  const shell = useReaderShell(book.id)
   const [toc, setToc] = useState<Array<TocItem>>([])
 
   // epub.js unzips and lays the book out in-browser, which takes long
@@ -278,15 +276,10 @@ function TextReaderShell({ book }: { book: BookDetail }) {
 
   const deleteAnnotationMut = useApiMutation(deleteAnnotation)
 
-  const bookmarkMut = useApiMutation(createBookmark, {
-    successToast: "Bookmark saved",
-    errorToast: (err) => err.message || "Bookmark failed",
-  })
-
   // Null until the reader has reported a position: the shell mounts
   // before the renderer knows where it is, and the paged shells are the
-  // only ones with that gap — hence the only ones whose bookmark button
-  // has a null path to take.
+  // only ones with that gap — the module's bookmark treats null as a
+  // no-op, the guard every shell used to write by hand.
   const bookmarkLocator: Locator | null = cfiState
     ? { kind: "cfi", cfi: cfiState }
     : null
@@ -313,12 +306,6 @@ function TextReaderShell({ book }: { book: BookDetail }) {
     reportPosition(p.percent, { kind: "cfi", cfi: p.cfi })
   }
 
-  const closePanels = () => {
-    setTocOpen(false)
-    setNotesOpen(false)
-    setTypePanelOpen(false)
-  }
-
   // Derived labels. An EPUB has no page count, so how far through it the
   // reader is *is* the position — the footer's right-hand label shows
   // the same percentage without the "not started yet" dash.
@@ -327,77 +314,44 @@ function TextReaderShell({ book }: { book: BookDetail }) {
 
   return (
     <ReaderContainer background="var(--color-paper-0)">
-      <CollapsibleChrome visible={chromeVisible}>
-        <ReaderHeader>
-          <ExitButton onExit={exit} />
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-            }}
-          >
-            <div style={{ fontSize: 13, fontWeight: 500, fontStyle: "italic" }}>
-              {book.title}
-            </div>
-            <div className="t-micro" style={{ fontSize: 10 }}>
-              {book.author} · {positionLabel}
-            </div>
-          </div>
+      <CollapsibleChrome visible={shell.chromeVisible}>
+        <ReaderShellHeader
+          onExit={exit}
+          title={book.title}
+          author={book.author}
+          positionLabel={positionLabel}
+          onHideChrome={shell.hideChrome}
+        >
           <Button
-            variant={tocOpen ? "default" : "ghost"}
+            variant={shell.openPanel === "toc" ? "default" : "ghost"}
             size="icon-sm"
             aria-label="Table of contents"
-            onClick={() => {
-              const next = !tocOpen
-              closePanels()
-              setTocOpen(next)
-            }}
+            onClick={() => shell.togglePanel("toc")}
           >
             <Icon name="contents" size={14} />
           </Button>
           <Button
-            variant={typePanelOpen ? "default" : "ghost"}
+            variant={shell.openPanel === "type" ? "default" : "ghost"}
             size="icon-sm"
             aria-label="Typography settings"
-            onClick={() => {
-              const next = !typePanelOpen
-              closePanels()
-              setTypePanelOpen(next)
-            }}
+            onClick={() => shell.togglePanel("type")}
           >
             <Icon name="aA" size={14} />
           </Button>
           <BookmarkButton
             locator={bookmarkLocator}
-            pending={bookmarkMut.isPending}
-            onBookmark={(locator) =>
-              bookmarkMut.mutate({ bookId: book.id, locator })
-            }
+            pending={shell.bookmarkPending}
+            onBookmark={shell.bookmark}
           />
           <Button
-            variant={notesOpen ? "default" : "ghost"}
+            variant={shell.openPanel === "notes" ? "default" : "ghost"}
             size="icon-sm"
             aria-label="Notes"
-            onClick={() => {
-              const next = !notesOpen
-              closePanels()
-              setNotesOpen(next)
-            }}
+            onClick={() => shell.togglePanel("notes")}
           >
             <Icon name="note" size={14} />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setChromeVisible(false)}
-            title="Hide chrome"
-            aria-label="Hide chrome"
-          >
-            <Icon name="close" size={14} />
-          </Button>
-        </ReaderHeader>
+        </ReaderShellHeader>
       </CollapsibleChrome>
 
       <div
@@ -410,7 +364,7 @@ function TextReaderShell({ book }: { book: BookDetail }) {
       >
         {/* Left TOC. The one panel with no PDF counterpart: pdf.js
             exposes an outline, but nothing here has ever read it. */}
-        {tocOpen && (
+        {shell.openPanel === "toc" && (
           <aside
             className="panel-in-left"
             style={{
@@ -439,7 +393,7 @@ function TextReaderShell({ book }: { book: BookDetail }) {
                 key={`${c.href}-${i}`}
                 onClick={() => {
                   epubRef.current?.goTo(c.href)
-                  setTocOpen(false)
+                  shell.closePanels()
                 }}
                 style={{
                   display: "block",
@@ -469,7 +423,7 @@ function TextReaderShell({ book }: { book: BookDetail }) {
             that swallows it, so only the letterbox margins respond.
             Left as-is — unifying the two is a behaviour change. */}
         <div
-          onClick={() => setChromeVisible(true)}
+          onClick={shell.showChrome}
           style={{
             flex: 1,
             overflow: "hidden",
@@ -590,9 +544,9 @@ function TextReaderShell({ book }: { book: BookDetail }) {
           )}
         </div>
 
-        {typePanelOpen && <TypePanel />}
+        {shell.openPanel === "type" && <TypePanel />}
 
-        {notesOpen && (
+        {shell.openPanel === "notes" && (
           <NotesPanel
             annotations={annotations.data ?? []}
             loading={annotations.isLoading}
@@ -618,11 +572,9 @@ function TextReaderShell({ book }: { book: BookDetail }) {
         )}
       </div>
 
-      {/* Bottom — progress + page controls.
-
-          Pre-existing (ADR-0029 "Consequences"): this sits outside the
-          `chromeVisible` guard, so "hide chrome" hides only the header.
-          Preserved rather than fixed — it is tracked on its own. */}
+      {/* Bottom — progress + page controls. Outside the collapsible
+          chrome by the module's rule (#351): "hide chrome" hides the
+          header, never the reading position. */}
       <ReaderFooter
         onPrev={() => epubRef.current?.prev()}
         onNext={() => epubRef.current?.next()}
@@ -632,8 +584,8 @@ function TextReaderShell({ book }: { book: BookDetail }) {
         <ProgressBar value={percent} label="Reading progress" />
       </ReaderFooter>
 
-      {!chromeVisible && (
-        <ChromeRestoreButton onRestore={() => setChromeVisible(true)} />
+      {!shell.chromeVisible && (
+        <ChromeRestoreButton onRestore={shell.showChrome} />
       )}
     </ReaderContainer>
   )
@@ -652,9 +604,7 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
   // PdfReader then starts at p.1 (`lib/resume`).
   const initialPage = resumePage(book)
 
-  const [chromeVisible, setChromeVisible] = useState(true)
-  const [notesOpen, setNotesOpen] = useState(false)
-  const [typePanelOpen, setTypePanelOpen] = useState(false)
+  const shell = useReaderShell(book.id)
 
   // Progress state mirrors what the reader reports. Used for the bottom
   // scrubber and to compose the token we persist on unmount.
@@ -681,15 +631,8 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
 
   const deleteAnnotationMut = useApiMutation(deleteAnnotation)
 
-  const bookmarkMut = useApiMutation(createBookmark, {
-    successToast: "Bookmark saved",
-    errorToast: (err) => err.message || "Bookmark failed",
-  })
-
-  // Null until the reader has reported a position: the shell mounts
-  // before the renderer knows where it is, and the paged shells are the
-  // only ones with that gap — hence the only ones whose bookmark button
-  // has a null path to take.
+  // Null until the reader has reported a position; the module's
+  // bookmark treats null as a no-op (#351).
   const bookmarkLocator: Locator | null = pageState
     ? { kind: "page", page: pageState.current }
     : null
@@ -700,11 +643,6 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
     reportPosition(p.percent, { kind: "page", page: p.page })
   }
 
-  const closePanels = () => {
-    setNotesOpen(false)
-    setTypePanelOpen(false)
-  }
-
   // Derived labels. Both are empty-ish until the document reports its
   // page count, and the footer falls back to the percentage then.
   const pageLabel = pageState ? `p.${pageState.current}` : "—"
@@ -712,66 +650,36 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
 
   return (
     <ReaderContainer background="var(--color-paper-0)">
-      <CollapsibleChrome visible={chromeVisible}>
-        <ReaderHeader>
-          <ExitButton onExit={exit} />
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-            }}
-          >
-            <div style={{ fontSize: 13, fontWeight: 500, fontStyle: "italic" }}>
-              {book.title}
-            </div>
-            <div className="t-micro" style={{ fontSize: 10 }}>
-              {book.author} · {pageLabel}
-              {totalLabel ? ` / ${totalLabel}` : ""}
-            </div>
-          </div>
+      <CollapsibleChrome visible={shell.chromeVisible}>
+        <ReaderShellHeader
+          onExit={exit}
+          title={book.title}
+          author={book.author}
+          positionLabel={`${pageLabel}${totalLabel ? ` / ${totalLabel}` : ""}`}
+          onHideChrome={shell.hideChrome}
+        >
           <Button
-            variant={typePanelOpen ? "default" : "ghost"}
+            variant={shell.openPanel === "type" ? "default" : "ghost"}
             size="icon-sm"
             aria-label="Typography settings"
-            onClick={() => {
-              const next = !typePanelOpen
-              closePanels()
-              setTypePanelOpen(next)
-            }}
+            onClick={() => shell.togglePanel("type")}
           >
             <Icon name="aA" size={14} />
           </Button>
           <BookmarkButton
             locator={bookmarkLocator}
-            pending={bookmarkMut.isPending}
-            onBookmark={(locator) =>
-              bookmarkMut.mutate({ bookId: book.id, locator })
-            }
+            pending={shell.bookmarkPending}
+            onBookmark={shell.bookmark}
           />
           <Button
-            variant={notesOpen ? "default" : "ghost"}
+            variant={shell.openPanel === "notes" ? "default" : "ghost"}
             size="icon-sm"
             aria-label="Notes"
-            onClick={() => {
-              const next = !notesOpen
-              closePanels()
-              setNotesOpen(next)
-            }}
+            onClick={() => shell.togglePanel("notes")}
           >
             <Icon name="note" size={14} />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setChromeVisible(false)}
-            title="Hide chrome"
-            aria-label="Hide chrome"
-          >
-            <Icon name="close" size={14} />
-          </Button>
-        </ReaderHeader>
+        </ReaderShellHeader>
       </CollapsibleChrome>
 
       <div
@@ -790,7 +698,7 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
             not, so a click anywhere in the page restores chrome here.
             Left as-is — changing it is a behaviour change. */}
         <div
-          onClick={() => setChromeVisible(true)}
+          onClick={shell.showChrome}
           style={{
             flex: 1,
             overflow: "hidden",
@@ -809,9 +717,9 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
           />
         </div>
 
-        {typePanelOpen && <TypePanel />}
+        {shell.openPanel === "type" && <TypePanel />}
 
-        {notesOpen && (
+        {shell.openPanel === "notes" && (
           <NotesPanel
             annotations={annotations.data ?? []}
             loading={annotations.isLoading}
@@ -868,11 +776,8 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
         )}
       </div>
 
-      {/* Bottom — progress + page controls.
-
-          Pre-existing (ADR-0029 "Consequences"): this sits outside the
-          `chromeVisible` guard, so "hide chrome" hides only the header.
-          Preserved rather than fixed — it is tracked on its own. */}
+      {/* Bottom — progress + page controls. Outside the collapsible
+          chrome by the module's rule (#351). */}
       <ReaderFooter
         onPrev={() => pdfRef.current?.prev()}
         onNext={() => pdfRef.current?.next()}
@@ -882,8 +787,8 @@ function PdfReaderShell({ book }: { book: BookDetail }) {
         <ProgressBar value={percent} label="Reading progress" />
       </ReaderFooter>
 
-      {!chromeVisible && (
-        <ChromeRestoreButton onRestore={() => setChromeVisible(true)} />
+      {!shell.chromeVisible && (
+        <ChromeRestoreButton onRestore={shell.showChrome} />
       )}
     </ReaderContainer>
   )
@@ -905,7 +810,7 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
   const humanPage = resumePage(book)
   const initialPage = humanPage === undefined ? 0 : Math.max(0, humanPage - 1)
 
-  const [chromeVisible, setChromeVisible] = useState(true)
+  const shell = useReaderShell(book.id)
   const [fitMode, setFitMode] = useState<ComicFitMode>("page")
   const [page, setPage] = useState<number>(initialPage)
   const [total, setTotal] = useState<number>(0)
@@ -913,11 +818,6 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
 
   const { report: reportPosition, exit } = useReadingPosition({
     bookId: book.id,
-  })
-
-  const bookmarkMut = useApiMutation(createBookmark, {
-    successToast: "Bookmark saved",
-    errorToast: (err) => err.message || "Bookmark failed",
   })
 
   const onComicProgress = (p: ComicProgress) => {
@@ -932,25 +832,14 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
 
   return (
     <ReaderContainer background="var(--color-paper-2)">
-      <CollapsibleChrome visible={chromeVisible}>
-        <ReaderHeader>
-          <ExitButton onExit={exit} />
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-            }}
-          >
-            <div style={{ fontSize: 13, fontWeight: 500, fontStyle: "italic" }}>
-              {book.title}
-            </div>
-            <div className="t-micro" style={{ fontSize: 10 }}>
-              {book.author} · p.{page + 1}
-              {total > 0 ? ` / p.${total}` : ""}
-            </div>
-          </div>
+      <CollapsibleChrome visible={shell.chromeVisible}>
+        <ReaderShellHeader
+          onExit={exit}
+          title={book.title}
+          author={book.author}
+          positionLabel={`p.${page + 1}${total > 0 ? ` / p.${total}` : ""}`}
+          onHideChrome={shell.hideChrome}
+        >
           <div style={{ display: "flex", gap: 4 }}>
             <Button
               variant={fitMode === "page" ? "default" : "ghost"}
@@ -981,29 +870,18 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
             // Never null: the comic shell resumes to a page before it
             // mounts the reader, so there is always a page to point at.
             locator={{ kind: "page", page: page + 1 }}
-            pending={bookmarkMut.isPending}
-            onBookmark={(locator) =>
-              bookmarkMut.mutate({ bookId: book.id, locator })
-            }
+            pending={shell.bookmarkPending}
+            onBookmark={shell.bookmark}
           />
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setChromeVisible(false)}
-            title="Hide chrome"
-            aria-label="Hide chrome"
-          >
-            <Icon name="close" size={14} />
-          </Button>
-        </ReaderHeader>
+        </ReaderShellHeader>
       </CollapsibleChrome>
 
-      {/* Pre-existing: this restores chrome on a *double* click and
-          toggles rather than shows, where the text shell takes a single
-          click and only shows. A single click here is already a page
-          turn. Preserved — unifying them is a behaviour change. */}
+      {/* The one gesture is the module's restore button (#351); the
+          double-click toggle stays as this shell's extra, because a
+          comic has no text selection for it to fight and a single
+          click is already a page turn. */}
       <div
-        onDoubleClick={() => setChromeVisible((v) => !v)}
+        onDoubleClick={shell.toggleChrome}
         style={{ flex: 1, position: "relative", overflow: "hidden" }}
       >
         <ComicReader
@@ -1016,9 +894,7 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
         />
       </div>
 
-      {/* Pre-existing (ADR-0029 "Consequences"): outside the
-          `chromeVisible` guard, same as the text shell — "hide chrome"
-          hides only the header. Preserved; tracked on its own. */}
+      {/* Outside the collapsible chrome by the module's rule (#351). */}
       <ReaderFooter
         onPrev={() => comicRef.current?.prev()}
         onNext={() => comicRef.current?.next()}
@@ -1042,8 +918,8 @@ function ComicReaderShell({ book }: { book: BookDetail }) {
         />
       </ReaderFooter>
 
-      {!chromeVisible && (
-        <ChromeRestoreButton onRestore={() => setChromeVisible(true)} />
+      {!shell.chromeVisible && (
+        <ChromeRestoreButton onRestore={shell.showChrome} />
       )}
     </ReaderContainer>
   )
@@ -1077,7 +953,7 @@ function AudioReaderShell({
   const [playing, setPlaying] = useState(false)
   const [rate, setRate] = useState(1)
   const [chapterIndex, setChapterIndex] = useState(-1)
-  const [chaptersOpen, setChaptersOpen] = useState(false)
+  const shell = useReaderShell(book.id)
   const audioRef = useRef<AudioReaderHandle>(null)
 
   const {
@@ -1087,11 +963,6 @@ function AudioReaderShell({
   } = useReadingPosition({
     bookId: book.id,
     debounceMs: CONTINUOUS_DEBOUNCE_MS,
-  })
-
-  const bookmarkMut = useApiMutation(createBookmark, {
-    successToast: "Bookmark saved",
-    errorToast: (err) => err.message || "Bookmark failed",
   })
 
   const onAudioProgress = (p: AudioProgress) => {
@@ -1109,32 +980,32 @@ function AudioReaderShell({
 
   return (
     <ReaderContainer background="var(--color-paper-1)">
-      {/* Pre-existing: this shell has no `chromeVisible` at all, so its
-          header is unconditional and there is nothing to restore.
-          Preserved — adding the state would be a behaviour change. */}
-      <ReaderHeader>
-        <ExitButton onExit={exit} />
-        <div style={{ flex: 1 }} />
-        <Button
-          variant={chaptersOpen ? "default" : "ghost"}
-          size="icon-sm"
-          disabled={!book.chapters || book.chapters.length === 0}
-          onClick={() => setChaptersOpen((v) => !v)}
-          title="Chapters"
-          aria-label="Chapters"
-        >
-          <Icon name="contents" size={14} />
-        </Button>
-        <BookmarkButton
-          // Never null: playback position starts at the resume offset, so
-          // zero seconds is a real position rather than "not open yet".
-          locator={{ kind: "time", seconds }}
-          pending={bookmarkMut.isPending}
-          onBookmark={(locator) =>
-            bookmarkMut.mutate({ bookId: book.id, locator })
-          }
-        />
-      </ReaderHeader>
+      {/* Audio joins the collapsible chrome (#351): it used to be the
+          one shell with no chrome state at all — the third of the three
+          preserved inconsistencies, resolved by adoption rather than
+          preserved by comment. The transport below stays put; hiding
+          chrome hides only this header, the module's rule. */}
+      <CollapsibleChrome visible={shell.chromeVisible}>
+        <ReaderShellHeader onExit={exit} onHideChrome={shell.hideChrome}>
+          <Button
+            variant={shell.openPanel === "chapters" ? "default" : "ghost"}
+            size="icon-sm"
+            disabled={!book.chapters || book.chapters.length === 0}
+            onClick={() => shell.togglePanel("chapters")}
+            title="Chapters"
+            aria-label="Chapters"
+          >
+            <Icon name="contents" size={14} />
+          </Button>
+          <BookmarkButton
+            // Never null: playback position starts at the resume offset, so
+            // zero seconds is a real position rather than "not open yet".
+            locator={{ kind: "time", seconds }}
+            pending={shell.bookmarkPending}
+            onBookmark={shell.bookmark}
+          />
+        </ReaderShellHeader>
+      </CollapsibleChrome>
 
       <div
         style={{
@@ -1317,7 +1188,7 @@ function AudioReaderShell({
             </span>
           </div>
 
-          {chaptersOpen && book.chapters && book.chapters.length > 0 && (
+          {shell.openPanel === "chapters" && book.chapters && book.chapters.length > 0 && (
             <div
               style={{
                 marginTop: 8,
@@ -1391,6 +1262,10 @@ function AudioReaderShell({
           if (!v) settlePosition()
         }}
       />
+
+      {!shell.chromeVisible && (
+        <ChromeRestoreButton onRestore={shell.showChrome} />
+      )}
     </ReaderContainer>
   )
 }
