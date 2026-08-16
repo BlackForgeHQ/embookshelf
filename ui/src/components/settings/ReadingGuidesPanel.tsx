@@ -1,4 +1,4 @@
-import type { ReadingGuideSettings } from "@/api/guides"
+import type { GuideRunEstimate, ReadingGuideSettings } from "@/api/guides"
 import {
   guideEstimateQuery,
   readingGuideSettingsQuery,
@@ -7,7 +7,8 @@ import {
   testReadingGuide,
 } from "@/api/guides"
 import { useApiMutation } from "@/api/mutation"
-import { LIVE_POLL_MS, useApiQuery } from "@/api/query"
+import { useApiQuery } from "@/api/query"
+import { pollWhile } from "@/lib/artifactRun"
 import { useConnectionTest } from "@/hooks/useConnectionTest"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
 import {
@@ -247,9 +248,8 @@ function GuideRunCard() {
     // Poll while books still need a guide. Coverage is two counts on a
     // query that already runs, so this is cheap; it stops on its own once
     // nothing is outstanding rather than polling an idle instance
-    // forever. Same cadence as the narration panel — the two used to
-    // declare four seconds separately (#197).
-    refetchInterval: (q) => (q.state.data?.books ? LIVE_POLL_MS : false),
+    // forever. Cadence and predicate shape from lib/artifactRun (#350).
+    ...pollWhile<GuideRunEstimate>((d) => !!d?.books),
   })
 
   const runMut = useApiMutation(startGuideRun, {

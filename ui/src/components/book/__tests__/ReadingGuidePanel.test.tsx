@@ -80,3 +80,38 @@ it("never queries markdown status for an EPUB", async () => {
   })
   expect(screen.queryByText(/should not appear/)).toBeNull()
 })
+
+// The hang this panel shipped with (#350): no refetchInterval on the
+// markdown dependency, so "Converting…" could never observe the
+// transition it describes. The poll comes from lib/artifactRun now —
+// this drives it with fake timers: pending on the first fetch, failed
+// on the next, and the panel must move.
+it("polls the conversion and surfaces the transition", async () => {
+  vi.useFakeTimers()
+  try {
+    markdownReply = { state: "pending", stale: false }
+    renderPanel("PDF")
+
+    await vi.waitFor(() => {
+      expect(
+        screen.getByText(/Converting the book's text/i)
+      ).toBeTruthy()
+    })
+
+    markdownReply = {
+      state: "failed",
+      stale: false,
+      error: "scanned PDF: 3 of 3 pages have no text layer",
+    }
+    // Past one poll tick.
+    await vi.advanceTimersByTimeAsync(5000)
+
+    await vi.waitFor(() => {
+      expect(
+        screen.getByText(/Book text conversion failed: scanned PDF/i)
+      ).toBeTruthy()
+    })
+  } finally {
+    vi.useRealTimers()
+  }
+})

@@ -1,6 +1,6 @@
 import type { FormEvent } from "react"
 
-import type { ConverterSettings } from "@/api/converter"
+import type { ConverterCoverage, ConverterSettings } from "@/api/converter"
 import {
   converterCoverageQuery,
   converterHealthQuery,
@@ -9,7 +9,8 @@ import {
   updateConverterSettings,
 } from "@/api/converter"
 import { useApiMutation } from "@/api/mutation"
-import { LIVE_POLL_MS, useApiQuery } from "@/api/query"
+import { useApiQuery } from "@/api/query"
+import { pollWhile } from "@/lib/artifactRun"
 import { ProgressBar } from "@/components/ProgressBar"
 import { useSettingsDraft } from "@/hooks/useSettingsDraft"
 import {
@@ -137,9 +138,8 @@ export function ConverterPanel() {
 function BulkConversionCard() {
   const coverage = useApiQuery(converterCoverageQuery, {
     // Poll only while something is converting; an idle instance is
-    // never polled. Same cadence as the guide and narration panels.
-    refetchInterval: (q) =>
-      (q.state.data?.converting ?? 0) > 0 ? LIVE_POLL_MS : false,
+    // never polled. Cadence and predicate shape from lib/artifactRun.
+    ...pollWhile<ConverterCoverage>((d) => (d?.converting ?? 0) > 0),
   })
 
   const runMut = useApiMutation(startBulkConversion, {
