@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.8](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.7...v0.6.8) (2026-08-16)
+
+
+### Features
+
+* **ui:** lib/artifactRun — one artifact-status vocabulary and its poll predicate; the guide panel stops hanging on Converting ([#350](https://github.com/BlackForgeHQ/embookshelf/issues/350)) ([4e42d9d](https://github.com/BlackForgeHQ/embookshelf/commit/4e42d9df3713f64c4fad1f26b3877b8ae82abeb9))
+
+
+### Bug Fixes
+
+* **e2e:** stats subtitle copy caught up with the design-audit sweep; notebook waiters arm before navigation ([ccdeb11](https://github.com/BlackForgeHQ/embookshelf/commit/ccdeb1108d73233ad257c5bdd5d26fca7f642f72))
+* **ui:** guide/narration SSE events bust the keys the panels read — one declared event→keys table ([#349](https://github.com/BlackForgeHQ/embookshelf/issues/349)) ([21325ff](https://github.com/BlackForgeHQ/embookshelf/commit/21325ff004475f54d32c279cf46c95896be4511a))
+
 ## [0.6.7](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.6...v0.6.7) (2026-08-16)
 
 
