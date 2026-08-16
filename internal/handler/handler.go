@@ -10,8 +10,6 @@ import (
 	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/coverstore"
-	"github.com/blackforge/embookshelf/internal/crypto"
-	"github.com/blackforge/embookshelf/internal/email"
 	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/queue"
@@ -89,8 +87,8 @@ type Handler struct {
 	// state holds whether SMTP is wired. emailEnabled() consults
 	// notifier.Enabled() so admin edits to the EMAIL row hot-reload
 	// without a restart. resets + inviteRepo + users back the token
-	// flows; cipher + emailTpl back the admin "send test email"
-	// endpoint and any handler-side render. ADR-0020.
+	// flows. ADR-0020. (cipher and emailTpl used to ride along here,
+	// carried and asserted but read by nothing — #356.)
 	users *repo.UserRepo
 	// books is the catalog behind the book-scoped seam. Held as the
 	// bookStore interface rather than *repo.BookRepo so a book-scoped
@@ -99,8 +97,6 @@ type Handler struct {
 	notifier   *service.Notifier
 	resets     *service.PasswordResetService
 	inviteRepo *repo.UserInviteRepo
-	cipher     crypto.Cipher
-	emailTpl   *email.Templates
 	// Forward-auth (ADR-0022). fwdAuthHolder carries the runtime
 	// CIDR/header config — atomically swappable so settings saves
 	// hot-reload without a restart. fwdAuth is the resolver invoked
@@ -251,8 +247,6 @@ type EmailDeps struct {
 	notifier   *service.Notifier
 	resets     *service.PasswordResetService
 	inviteRepo *repo.UserInviteRepo
-	cipher     crypto.Cipher
-	emailTpl   *email.Templates
 }
 
 // NewEmail builds the email group.
@@ -260,21 +254,27 @@ func NewEmailDeps(
 	notifier *service.Notifier,
 	resets *service.PasswordResetService,
 	inviteRepo *repo.UserInviteRepo,
-	cipher crypto.Cipher,
-	emailTpl *email.Templates,
 ) EmailDeps {
-	return EmailDeps{notifier: notifier, resets: resets, inviteRepo: inviteRepo, cipher: cipher, emailTpl: emailTpl}
+	return EmailDeps{notifier: notifier, resets: resets, inviteRepo: inviteRepo}
 }
 
-// Options are the seams that may legitimately be absent. Each is
+// Options are the seams a *test literal* may leave absent. Each is
 // nil-guarded where it is used, and nil selects a documented fallback
-// rather than an error.
+// rather than an error — but be honest about who produces the nils:
+// the one composition root (app.Build) fills every field on every
+// install today, and its wiring test asserts so. The nil arms are
+// reachable from handler tests that build partial &Handler{} literals,
+// and they are kept for that: deleting a guard makes the partial-
+// literal style panic, not a production install misbehave (#356 —
+// this doc used to present the nils as product states).
 type Options struct {
 	// LibStore powers the file-serve path's presign-vs-local decision.
-	// nil on installs with no storage backend configured — serveBookFile
-	// falls back to local serving.
+	// The nil fallback (serveBookFile reads book.Path off disk) predates
+	// the storage-v2 backfill giving every install a backend row; no
+	// current build produces it.
 	LibStore service.LibraryStore
-	// OIDC and Identities are nil until an admin configures a provider.
+	// OIDC and Identities are wired unconditionally; whether a provider
+	// is *enabled* is runtime state on the settings rows, not a nil here.
 	OIDC       *service.OIDCService
 	Identities *repo.IdentityRepo
 	// Covers is the pre-approval cover store; nil disables cover serving.
@@ -317,7 +317,6 @@ func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailD
 		appSettings: newAppSettingsStore(a.appSettings),
 
 		notifier: e.notifier, resets: e.resets, inviteRepo: e.inviteRepo,
-		cipher: e.cipher, emailTpl: e.emailTpl,
 
 		libStore: opts.LibStore, primaryHash: newPrimaryHash(opts.LibStore),
 		oidc: opts.OIDC, identities: opts.Identities,

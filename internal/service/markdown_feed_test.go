@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
+	"github.com/blackforge/embookshelf/internal/repo"
 )
 
 var errNoRow = errors.New("no row")
@@ -148,5 +150,67 @@ func TestMarkdownFeedCapsText(t *testing.T) {
 	}
 	if text != "# ma" {
 		t.Fatalf("text = %q, want capped to 4 bytes", text)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NewMarkdownFeed — the pairings, decided once (#356)
+// ---------------------------------------------------------------------------
+
+// feedRowsFake is the constructor's whole row surface: state read,
+// request half, bulk candidates.
+type feedRowsFake struct {
+	getErr  error
+	started []string
+}
+
+func (f *feedRowsFake) GetByBookID(context.Context, string) (model.MarkdownRendition, error) {
+	return model.MarkdownRendition{}, f.getErr
+}
+func (f *feedRowsFake) Start(_ context.Context, bookID string) error {
+	f.started = append(f.started, bookID)
+	return nil
+}
+func (f *feedRowsFake) MarkFailed(context.Context, string, string) error { return nil }
+func (f *feedRowsFake) ListConversionCandidates(context.Context) ([]repo.ConversionCandidate, error) {
+	return nil, nil
+}
+
+type feedEnqFake struct{ kinds []string }
+
+func (e *feedEnqFake) Enqueue(_ context.Context, a jobs.Args) error {
+	e.kinds = append(e.kinds, a.Kind())
+	return nil
+}
+
+// The constructor's bindings, driven end to end: a missing row reads as
+// "never requested" (the repo.ErrNotFound binding that used to live
+// untested in the queue tier), and the request goes through the request
+// module — Start lands on the row before the enqueue.
+func TestNewMarkdownFeedBindsMissingAndRequest(t *testing.T) {
+	rows := &feedRowsFake{getErr: repo.ErrNotFound}
+	enq := &feedEnqFake{}
+	feed := NewMarkdownFeed(rows, NewBookOps(nil, nil), enq)
+
+	_, err := feed.Text(context.Background(), model.Book{ID: "b1", LibraryID: "l1"}, 1000)
+	if !errors.Is(err, ErrRenditionPending) {
+		t.Fatalf("Text on a never-requested book = %v, want ErrRenditionPending", err)
+	}
+	if len(rows.started) != 1 || rows.started[0] != "b1" {
+		t.Fatalf("started = %v — the request must go through the request module's Start-before-Enqueue", rows.started)
+	}
+	if len(enq.kinds) != 1 {
+		t.Fatalf("enqueued %v, want the markdown render job", enq.kinds)
+	}
+
+	// And a row read that fails with anything else is an error, not a
+	// request — the other half of the ErrNotFound binding.
+	rows.getErr = errors.New("db unavailable")
+	rows.started = nil
+	if _, err := feed.Text(context.Background(), model.Book{ID: "b1"}, 1000); errors.Is(err, ErrRenditionPending) || err == nil {
+		t.Fatalf("a broken row read produced %v — must not read as never-requested", err)
+	}
+	if len(rows.started) != 0 {
+		t.Fatalf("a broken read requested a conversion: %v", rows.started)
 	}
 }
