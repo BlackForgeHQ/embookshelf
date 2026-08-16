@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.6.7](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.6...v0.6.7) (2026-08-16)
+
+
+### Features
+
+* **converter:** PDF gate — classify before converting, refuse scanned/mixed/sparse loudly with a machine-readable class ([#347](https://github.com/BlackForgeHQ/embookshelf/issues/347)) ([2684eb6](https://github.com/BlackForgeHQ/embookshelf/commit/2684eb6deb492d1266677e13c0d6cb71f5dc0eeb))
+* **converter:** PDF gate v2 after probing — classed refusals for engine-refused verdicts, measured sparse-output gate ([#347](https://github.com/BlackForgeHQ/embookshelf/issues/347)) ([44b8861](https://github.com/BlackForgeHQ/embookshelf/commit/44b8861f0560847f96106ac977c4428cbe8ca1ea))
+* **fileproc:** CBR/CB7 comic processor ([#310](https://github.com/BlackForgeHQ/embookshelf/issues/310)) ([b7154c3](https://github.com/BlackForgeHQ/embookshelf/commit/b7154c3628ae42cd5740dc7177882645665157c6))
+* **fileproc:** FB2 processor ([#312](https://github.com/BlackForgeHQ/embookshelf/issues/312)) ([265f378](https://github.com/BlackForgeHQ/embookshelf/commit/265f378f987609ac750125b35abd437b9ce12962))
+* **fileproc:** MOBI/AZW3 processor ([#311](https://github.com/BlackForgeHQ/embookshelf/issues/311)) ([0851693](https://github.com/BlackForgeHQ/embookshelf/commit/08516939f7fca217931d94903377f0334f899a0e))
+* **opds:** paging and cross-library aggregation move into the catalog seam ([70b339d](https://github.com/BlackForgeHQ/embookshelf/commit/70b339d3a741986eb23c7c72e04a94c33292928e)), closes [#241](https://github.com/BlackForgeHQ/embookshelf/issues/241)
+* **reader:** page CBR/CB7 comics in the web reader ([#329](https://github.com/BlackForgeHQ/embookshelf/issues/329)) ([d7d424f](https://github.com/BlackForgeHQ/embookshelf/commit/d7d424f6781740c5e169edbb09454d05cbf29027))
+
+
+### Bug Fixes
+
+* **ci:** go-test embeds the real UI bundle — the nosniff sweep fails without one, and has since [#330](https://github.com/BlackForgeHQ/embookshelf/issues/330) ([3fa6d4f](https://github.com/BlackForgeHQ/embookshelf/commit/3fa6d4fc3053476a1b6bccd2e89956f1f8f37dcb))
+* **comics:** one page contract — a non-image page is refused on every container ([#334](https://github.com/BlackForgeHQ/embookshelf/issues/334)) ([7b1df5a](https://github.com/BlackForgeHQ/embookshelf/commit/7b1df5ac82ef4fa355cca7870df2923ca418f06f))
+* **comics:** sniff page MIME when serving comic pages ([#331](https://github.com/BlackForgeHQ/embookshelf/issues/331)) ([8958a0a](https://github.com/BlackForgeHQ/embookshelf/commit/8958a0a552255e5ea74b04d388461f6e237e28a3))
+* **covers:** sniff cover MIME at persist time + nosniff header ([#330](https://github.com/BlackForgeHQ/embookshelf/issues/330)) ([9d9e870](https://github.com/BlackForgeHQ/embookshelf/commit/9d9e87015b6cb188520b63eaccc9351b2b1ab599))
+* **fileproc:** bound FB2 reads and drop genre persistence ([#312](https://github.com/BlackForgeHQ/embookshelf/issues/312) review) ([a12b66a](https://github.com/BlackForgeHQ/embookshelf/commit/a12b66a6460cce262dce854879de6a22588f727c))
+* **fileproc:** drop the EXTH 121 cover fallback ([#311](https://github.com/BlackForgeHQ/embookshelf/issues/311) review) ([1ac1f78](https://github.com/BlackForgeHQ/embookshelf/commit/1ac1f78ab1fcbb14dd63cf2b943ea8820aa19c98))
+* **fileproc:** FB2 charset decoding and cover-type sniffing ([#312](https://github.com/BlackForgeHQ/embookshelf/issues/312) final review) ([99ce800](https://github.com/BlackForgeHQ/embookshelf/commit/99ce8002390318a79563468dcb21d71938638d4a))
+* **fileproc:** solid-RAR drain placement and non-ZIP comic classification ([#310](https://github.com/BlackForgeHQ/embookshelf/issues/310) review) ([52da98d](https://github.com/BlackForgeHQ/embookshelf/commit/52da98df1c54c74852c41bf9a2f9bd6953a6338c))
+* **reader:** keep the comic page cache honest under concurrency ([#329](https://github.com/BlackForgeHQ/embookshelf/issues/329)) ([5ef1e51](https://github.com/BlackForgeHQ/embookshelf/commit/5ef1e51ffbdb7051e99f45f5157e8ba7d5b61e7c))
+* **reader:** survive a panicking comic decoder and keep the cap physical ([#329](https://github.com/BlackForgeHQ/embookshelf/issues/329)) ([efe2770](https://github.com/BlackForgeHQ/embookshelf/commit/efe2770bdd474f9bc961a5989d54d2cac150c600))
+* **scan:** snapshot the files table before the walk, not after ([#318](https://github.com/BlackForgeHQ/embookshelf/issues/318)) ([8397fd5](https://github.com/BlackForgeHQ/embookshelf/commit/8397fd51108400712b7c5bf7f3a6968c6515ab4c))
+* **service:** freeDir excepts the folder asked for, not every candidate ([#323](https://github.com/BlackForgeHQ/embookshelf/issues/323)) ([bb783e2](https://github.com/BlackForgeHQ/embookshelf/commit/bb783e2285a996102dbefc951e7d0138b5023282))
+* **task:** cancel check failure stops the spend instead of reading as "not cancelled" ([#333](https://github.com/BlackForgeHQ/embookshelf/issues/333)) ([225f179](https://github.com/BlackForgeHQ/embookshelf/commit/225f179286a069013bcd0f4589a6b7b1a6de64d6))
+* **ui:** fluid generated covers — hero and grid sizes follow their containers ([d327024](https://github.com/BlackForgeHQ/embookshelf/commit/d327024578b06fd7d143a394fd8cb63c1cf3bca2))
+
+
+### Documentation
+
+* ADR-0036 — PDF inspection before conversion; PDF class joins the glossary ([6c93195](https://github.com/BlackForgeHQ/embookshelf/commit/6c93195bca829a8882f49cfe43b391d768b71ab9))
+* **comments:** sweep stale symbol references after the [#316](https://github.com/BlackForgeHQ/embookshelf/issues/316)/[#321](https://github.com/BlackForgeHQ/embookshelf/issues/321)/[#323](https://github.com/BlackForgeHQ/embookshelf/issues/323) refactors ([d1bd172](https://github.com/BlackForgeHQ/embookshelf/commit/d1bd172715ba1e03d58bbb77e8e69aaf2568f9c5))
+
 ## [0.6.6](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.5...v0.6.6) (2026-08-11)
 
 
