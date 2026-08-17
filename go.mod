@@ -5,11 +5,11 @@ go 1.26.0
 require (
 	github.com/PuerkitoBio/goquery v1.12.0
 	github.com/agnivade/levenshtein v1.2.1
-	github.com/aws/aws-sdk-go-v2 v1.43.4
+	github.com/aws/aws-sdk-go-v2 v1.43.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.35
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.34
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.106.0
-	github.com/aws/smithy-go v1.27.6
+	github.com/aws/smithy-go v1.27.7
 	github.com/bodgit/sevenzip v1.6.5
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/gin-contrib/cors v1.7.7
