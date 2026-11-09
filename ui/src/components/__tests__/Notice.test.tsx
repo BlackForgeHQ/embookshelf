@@ -39,10 +39,9 @@ describe("Notice", () => {
   })
 
   // login.tsx spelled `.flash.error` out as an inline style *and* also
-  // applied the class, and an e2e spec asserts on that selector to check
-  // a wrong password keeps you on /login. The class is the look; the
-  // inline copy was the fourth idiom.
-  it("keeps the .flash.error selector the login spec watches", () => {
+  // applied the class. The class is the look; the inline copy was the
+  // fourth idiom.
+  it("keeps the .flash.error selector", () => {
     const { container } = render(<Notice>Invalid credentials.</Notice>)
 
     expect(container.querySelector(".flash.error")).not.toBeNull()

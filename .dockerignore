@@ -26,7 +26,6 @@ test-results/
 # break Linux builds when they clobber the in-container install.
 node_modules/
 ui/node_modules/
-e2e/node_modules/
 
 # Build outputs — regenerated inside the container
 ui/dist/
@@ -37,12 +36,6 @@ internal/staticfs/dist/*
 
 # Embedded generated code
 internal/repo/generated/
-
-# Local auth / playwright state
-e2e/.auth/
-e2e/test-results/
-e2e/playwright-report/
-e2e/playwright/.cache/
 
 # CI / dev-only config we don't need in the image
 .github/

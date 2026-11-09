@@ -1,6 +1,6 @@
 # ADR-0006: End-to-end testing with Playwright against the built binary
 
-- Status: Accepted (2026-05-03)
+- Status: Superseded (2026-11-07) — the Playwright suite was removed; accepted 2026-05-03
 - Deciders: Bohdan Shaparenko (@shbodya)
 
 ## Context
