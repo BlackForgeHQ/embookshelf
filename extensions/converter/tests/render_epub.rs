@@ -31,7 +31,7 @@ async fn post_render(body: serde_json::Value) -> (StatusCode, Vec<u8>, Option<St
 fn zip_names(bytes: &[u8]) -> Vec<String> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes.to_vec())).expect("valid zip");
     (0..archive.len())
-        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .map(|i| archive.by_index(i).unwrap().name().unwrap().to_string())
         .collect()
 }
 
