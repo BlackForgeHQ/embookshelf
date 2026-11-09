@@ -24,7 +24,7 @@ require (
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.41.1
 	github.com/sony/gobreaker/v2 v2.4.0
 	github.com/wneessen/go-mail v0.8.1
-	go.opentelemetry.io/contrib/bridges/otelslog v0.20.0
+	go.opentelemetry.io/contrib/bridges/otelslog v0.21.0
 	go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin v0.70.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.21.0
