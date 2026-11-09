@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/BlackForgeHQ/embookshelf/compare/embookshelf-converter-v0.1.2...embookshelf-converter-v0.1.3) (2026-11-09)
+
+
+### Bug Fixes
+
+* **deps:** patch go-jose, grpc and zip for open Dependabot alerts ([#380](https://github.com/BlackForgeHQ/embookshelf/issues/380)) ([d6d7dde](https://github.com/BlackForgeHQ/embookshelf/commit/d6d7dde6e46555255a1486d245e49b7164ef3207))
+
 ## [0.1.2](https://github.com/BlackForgeHQ/embookshelf/compare/embookshelf-converter-v0.1.1...embookshelf-converter-v0.1.2) (2026-08-16)
 
 
