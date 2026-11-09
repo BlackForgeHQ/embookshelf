@@ -48,7 +48,9 @@ services:
   # CapVersioning row asserts nothing (#270). `make s3-up` provisions it,
   # and CI calls that target rather than starting this service directly.
   minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    # minio/minio is gone from Docker Hub; pgsty/minio is the community
+    # build of the same server, and it still ships `mc` for s3-up.
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
