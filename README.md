@@ -82,7 +82,6 @@ internal/migrator/         migrations/postgres/ (+ migrations/sqlite/, kept only
 internal/staticfs/dist/    Embedded SPA shell (written by the UI build)
 ui/                        TanStack Start SPA (Vite + React 19 + Tailwind v4 + shadcn/ui)
 docs/                      architecture.md, PRD.md, adr/, spec/, ops/, agents/, research/
-e2e/                       Playwright tests (separate Node project)
 scripts/seed.sql           Dev seed (admin@local / changeme)
 ```
 

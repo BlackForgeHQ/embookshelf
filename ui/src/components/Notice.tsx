@@ -25,8 +25,8 @@ type Props = {
  *
  * The look is `.flash.error` from styles.css, which already described
  * exactly this box and which login.tsx applied *and* duplicated inline.
- * An e2e spec asserts on that selector; keeping it means the CSS has one
- * definition and one reader rather than being quietly orphaned.
+ * Keeping that selector means the CSS has one definition and one reader
+ * rather than being quietly orphaned.
  *
  * This is the inline report — the thing shown next to the control that
  * refused. Failures that should interrupt go to `toast.error` via

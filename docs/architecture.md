@@ -97,9 +97,7 @@ so the session cookie the Go server issues rides along.
 | **Package manager / runner** | [Bun](https://bun.sh) — `bun install` / `bun run dev` / `bun run build` | 1.x |
 | **Browser telemetry** | `@opentelemetry/sdk-trace-web` + `document-load` / `user-interaction` / `fetch` instrumentations, gated on `VITE_OTEL_ENABLED=true` | 2.7 / 0.215 |
 
-Testing stacks: Go `testing` + `testify` for the backend; Playwright
-for end-to-end browser coverage under [e2e/](../e2e/) — see
-[ADR-0006](./adr/0006-playwright-e2e-against-built-binary.md). UI unit tests
+Testing stacks: Go `testing` + `testify` for the backend. UI unit tests
 are wired with **Vitest** + **@testing-library/react** (`bun run test`
 inside `ui/`).
 
@@ -127,7 +125,6 @@ embookshelf/
 │
 ├── internal/                       # Backend packages — tiered below
 ├── ui/                             # TanStack Start SPA (Vite + React 19 + Tailwind 4 + shadcn/ui)
-├── e2e/                            # Playwright tests (separate Node project — see ADR-0006)
 ├── scripts/seed.sql                # Dev seed — admin@local / changeme
 ├── docs/                           # ARCHITECTURE.md + prd.md + adr/ + spec/ + superpowers/
 ├── Dockerfile                      # Multi-stage (bun build ui → go build → distroless)
@@ -1362,7 +1359,6 @@ develop-pipeline.yml
 ├── go vet && staticcheck
 ├── golang-migrate dry-run against throwaway Postgres
 ├── Backend tests (go test ./...)
-├── E2E tests (Playwright against ephemeral server)
 └── Build verification (go build)
 
 master-pipeline.yml

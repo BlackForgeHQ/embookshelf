@@ -22,8 +22,7 @@
       // Off wholesale, deliberately. The ESLint config this replaces carried
       // no jsx-a11y plugin, so Biome's recommended a11y set would import 48
       // findings that predate the migration and have nothing to do with it.
-      // Worth turning on — there is already a library-a11y e2e spec, so the
-      // project cares — but as its own change, where the fixes read as
+      // Worth turning on, but as its own change, where the fixes read as
       // accessibility work rather than as migration noise.
       "a11y": { "recommended": false },
       "correctness": {

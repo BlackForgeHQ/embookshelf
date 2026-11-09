@@ -15,7 +15,6 @@ make ui-typecheck     # tsc --noEmit
 make ui-test          # vitest run
 make migrate          # apply migrations
 go test ./internal/fileproc/ -run TestEPUB   # single Go test
-make e2e              # Playwright (needs `make up`)
 ```
 
 ## Key decisions
