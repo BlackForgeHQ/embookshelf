@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.9](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.8...v0.6.9) (2026-11-16)
+
+
+### Bug Fixes
+
+* **storage:** boot S3 backends with object-scoped credentials ([#392](https://github.com/BlackForgeHQ/embookshelf/issues/392)) ([4ceb195](https://github.com/BlackForgeHQ/embookshelf/commit/4ceb195c4ca8f2327ef405c564c06edab783b257))
+
 ## [0.6.8](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.7...v0.6.8) (2026-11-09)
 
 
