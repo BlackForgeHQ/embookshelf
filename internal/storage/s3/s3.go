@@ -18,10 +18,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 
 	"github.com/blackforge/embookshelf/internal/storage"
 )
@@ -146,10 +148,28 @@ func (b *Backend) Client() *s3.Client { return b.cli }
 // Hard failure is reserved for: probe RPC error (auth/endpoint/region
 // problem the admin needs to see) and bucket-not-found (caller
 // configured the wrong bucket).
+//
+// Object-scoped credentials (e.g. a Cloudflare R2 "Object Read & Write"
+// token) are denied bucket-config calls. On AccessDenied we fall back to
+// a one-key list, which still proves the bucket exists and the
+// credentials can reach it, and only warn that versioning is unknown.
 func (b *Backend) validateBucket(ctx context.Context) error {
 	vrsn, err := b.cli.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{
 		Bucket: &b.bucket,
 	})
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) && apiErr.ErrorCode() == "AccessDenied" {
+		if _, lerr := b.cli.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:  &b.bucket,
+			Prefix:  &b.prefix,
+			MaxKeys: aws.Int32(1),
+		}); lerr != nil {
+			return fmt.Errorf("s3 access probe: %w", lerr)
+		}
+		slog.Warn("s3 credentials cannot read bucket versioning; skipping "+
+			"the versioning check", "bucket", b.bucket)
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("s3 versioning probe: %w", err)
 	}
