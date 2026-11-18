@@ -1,6 +1,5 @@
 import { useEffect } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { useNavigate, useRouter } from "@tanstack/react-router"
 import { toast } from "sonner"
 
 import { bookAudiobookQueryKey } from "./audiobooks"
@@ -8,6 +7,8 @@ import { bookdropQueryKey } from "./bookdrop"
 import { bookQueryKey, booksQueryKey, librariesQueryKey, shelvesQueryKey } from "./books"
 import { bookGuideQueryKey } from "./guides"
 import { settingsUsersQueryKey } from "./settings"
+import { paths } from "@/lib/routes"
+import { useAppRouter } from "@/lib/navigation"
 
 // Event names the server publishes. Keep the union narrow so the dispatch
 // map below is exhaustive — TypeScript will catch a typo before it ships.
@@ -64,18 +65,17 @@ function parseSharedShelfPayload(raw: string): SharedShelfPayload | null {
 // backoff, 3 s default); we only wire up teardown on unmount.
 export function useRealtime() {
   const queryClient = useQueryClient()
-  const navigate = useNavigate()
-  // The router instance, not a slice of its state. Only the two
-  // shared-shelf handlers below need the location, and they need it at
-  // event time — so they read `router.state.location`, a live getter, at
-  // the moment the event arrives. Subscribing to the location instead
-  // (useRouterState) put a value that changes on every navigation into
-  // this effect's dependency array, which tore the EventSource down and
-  // reopened it on each one, costing a reconnect round-trip and
+  // The router instance, not a slice of its state. Only the
+  // shared-shelf handler below needs the location, and it needs it at
+  // event time — so it reads `window.location` at the moment the event
+  // arrives. Subscribing to the location instead (usePathname /
+  // useSearchParams) would put a value that changes on every navigation
+  // into this effect's dependency array, tearing the EventSource down and
+  // reopening it on each one, costing a reconnect round-trip and
   // defeating the single-connection-per-session property in
-  // ARCHITECTURE.md §5.7. `router` and `navigate` both keep one identity
-  // for the life of the app, so the effect now runs exactly once.
-  const router = useRouter()
+  // ARCHITECTURE.md §5.7. `router` keeps one identity for the life of the
+  // app, so the effect runs exactly once.
+  const router = useAppRouter()
 
   useEffect(() => {
     // Dispatch table: event name → list of queryKeys to bust. Bookdrop
@@ -126,15 +126,15 @@ export function useRealtime() {
         const payload = parseSharedShelfPayload(raw)
         // Read at event time: the viewer may have navigated many times
         // since this listener was attached.
-        const location = router.state.location
-        const search = location.search as { shelf?: string }
+        const { pathname, search } = window.location
+        const shelf = new URLSearchParams(search).get("shelf")
         if (
           payload &&
-          location.pathname.startsWith("/library") &&
-          search.shelf === payload.slug
+          pathname.startsWith("/library") &&
+          shelf === payload.slug
         ) {
           toast.info("Shared shelf is no longer available.")
-          void navigate({ to: "/library", search: {} })
+          router.push(paths.library())
         }
         if (payload) {
           queryClient.invalidateQueries({
@@ -187,7 +187,7 @@ export function useRealtime() {
     // automatically so we don't need to rebuild the source. Log-only.
     es.onerror = () => {
       // Mildly noisy during dev reconnects — keep at debug level.
-      if (import.meta.env.DEV) {
+      if (process.env.NODE_ENV !== "production") {
         console.debug("[realtime] EventSource error — browser will retry")
       }
     }
@@ -198,7 +198,7 @@ export function useRealtime() {
       }
       es.close()
     }
-  }, [queryClient, navigate, router])
+  }, [queryClient, router])
 }
 
 // BOOK_EVENT_KEYS is the one declared mapping from a book-scoped SSE

@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
 
 import { login, meQueryKey } from "@/api/auth"
+import { useAppRouter } from "@/lib/navigation"
 
 // useLogin wraps the login API call with the standard side effects:
 // write the returned user into the cached `me` query and redirect to
@@ -9,13 +9,13 @@ import { login, meQueryKey } from "@/api/auth"
 // transition flows through one shape.
 export function useLogin(target: string) {
   const queryClient = useQueryClient()
-  const navigate = useNavigate()
+  const router = useAppRouter()
   return useMutation({
     mutationFn: (creds: { email: string; password: string }) =>
       login(creds.email, creds.password),
     onSuccess: (user) => {
       queryClient.setQueryData(meQueryKey, user)
-      void navigate({ to: target, replace: true })
+      router.replace(target)
     },
   })
 }

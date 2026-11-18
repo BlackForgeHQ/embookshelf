@@ -1,5 +1,6 @@
 import { useState } from "react"
-import { Link, useRouterState } from "@tanstack/react-router"
+import Link from "next/link"
+import { usePathname } from "next/navigation"
 
 import { Icon } from "./Icon"
 import { RuleEditor } from "./RuleEditor"
@@ -41,18 +42,15 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
+import { parseLibrarySearch, paths } from "@/lib/routes"
+import { useRouteSearch } from "@/hooks/useRoute"
 
 // AppSidebar is mounted once inside the authed shell. Every nav target is a
-// real TanStack Router <Link> so browser back/forward, right-click-open, and
-// deep-link all behave correctly.
+// real Next <Link> so browser back/forward, right-click-open, and deep-link
+// all behave correctly.
 export function AppSidebar() {
-  const state = useRouterState()
-  const pathname = state.location.pathname
-  const search = state.location.search as {
-    shelf?: string
-    library?: string
-    unshelved?: string
-  }
+  const pathname = usePathname()
+  const search = useRouteSearch(parseLibrarySearch)
 
   const me = useApiQuery(meQuery)
   const libraries = useApiQuery(librariesQuery)
@@ -126,13 +124,13 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               <NavItem
-                to="/"
+                href={paths.home}
                 icon="home"
                 label="Dashboard"
                 active={pathname === "/"}
               />
               <NavItem
-                to="/library"
+                href={paths.library()}
                 icon="library"
                 label="All Books"
                 count={totalBooks || undefined}
@@ -141,27 +139,26 @@ export function AppSidebar() {
                 }
               />
               <NavItem
-                to="/library"
-                search={{ unshelved: "1" }}
+                href={paths.library({ unshelved: "1" })}
                 icon="inbox"
                 label="Unshelved"
                 count={unshelvedCount || undefined}
                 active={isUnshelved}
               />
               <NavItem
-                to="/notebook"
+                href={paths.notebook}
                 icon="note"
                 label="Notebook"
                 active={pathname === "/notebook"}
               />
               <NavItem
-                to="/stats"
+                href={paths.stats}
                 icon="chart"
                 label="Stats"
                 active={pathname === "/stats"}
               />
               <NavItem
-                to="/bookdrop"
+                href={paths.bookdrop}
                 icon="upload"
                 label="BookDrop"
                 active={pathname === "/bookdrop"}
@@ -177,8 +174,7 @@ export function AppSidebar() {
               {libs.map((lib) => (
                 <NavItem
                   key={lib.id}
-                  to="/library"
-                  search={{ library: lib.slug }}
+                  href={paths.library({ library: lib.slug })}
                   icon="library"
                   label={lib.name}
                   count={lib.bookCount}
@@ -278,7 +274,7 @@ export function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu>
                 <NavItem
-                  to="/settings"
+                  href={paths.settings}
                   icon="settings"
                   label="Settings"
                   active={pathname.startsWith("/settings")}
@@ -357,7 +353,7 @@ function RegularShelfRow({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={shelf.name}>
-        <Link to="/library" search={{ shelf: shelf.slug }}>
+        <Link href={paths.library({ shelf: shelf.slug })}>
           <ShelfIcon name={shelf.icon} size={15} />
           <span>{shelf.name}</span>
         </Link>
@@ -409,7 +405,7 @@ function SharedShelfRow({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={tooltip}>
-        <Link to="/library" search={{ shelf: shelf.slug }}>
+        <Link href={paths.library({ shelf: shelf.slug })}>
           <ShelfIcon
             name={shelf.icon}
             size={15}
@@ -461,7 +457,7 @@ function SmartShelfRow({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={shelf.name}>
-        <Link to="/library" search={{ shelf: shelf.slug }}>
+        <Link href={paths.library({ shelf: shelf.slug })}>
           <ShelfIcon name={shelf.icon} size={13} aria-label="smart shelf" />
           <span>{shelf.name}</span>
         </Link>
@@ -514,16 +510,16 @@ type UserBadgeProps = {
 // button signs the user out. Per-user preferences live on the /account
 // route; admin-wide settings remain at /settings.
 function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
-  // Skip rendering until /me resolves — the beforeLoad guard in _app.tsx
-  // ensures a session exists by the time this component mounts, so the
-  // null window is brief and avoids flashing fake identity details.
+  // Skip rendering until /me resolves — the (app) layout ensures a session
+  // exists by the time this component mounts, so the null window is brief
+  // and avoids flashing fake identity details.
   if (!user) return null
   const { display, email, role, initials } = user
 
   return (
     <div className="flex w-full items-center gap-1 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:gap-1">
       <Link
-        to="/account"
+        href={paths.account()}
         aria-label="My account"
         title="My account"
         className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-2 py-1.5 text-left group-data-[collapsible=icon]:flex-none group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 hover:bg-(--color-paper-3) focus-visible:ring-2 focus-visible:ring-(--color-accent) focus-visible:outline-none"
@@ -555,19 +551,18 @@ function UserBadge({ user, onLogout, loggingOut }: UserBadgeProps) {
 }
 
 type NavItemProps = {
-  to: string
-  search?: Record<string, string | undefined>
+  href: string
   icon?: IconName
   label: string
   count?: number
   active?: boolean
 }
 
-function NavItem({ to, search, icon, label, count, active }: NavItemProps) {
+function NavItem({ href, icon, label, count, active }: NavItemProps) {
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={label}>
-        <Link to={to} search={search}>
+        <Link href={href}>
           {icon && <Icon name={icon} size={15} />}
           <NavLabel>{label}</NavLabel>
         </Link>

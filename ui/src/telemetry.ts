@@ -1,9 +1,8 @@
-/// <reference types="vite/client" />
 // Browser OpenTelemetry wiring: spans for document load, user interactions
 // (clicks), and fetch calls (incl. traceparent propagation to the Go API
 // so browser spans link to backend spans in Grafana/Tempo).
 //
-// Gated by VITE_OTEL_ENABLED so the bundle keeps the SDK tree-shakeable
+// Gated by NEXT_PUBLIC_OTEL_ENABLED so the bundle keeps the SDK tree-shakeable
 // for production builds that don't need it. Call setupTelemetry() once,
 // as early as possible in the client entry.
 
@@ -30,20 +29,20 @@ export function setupTelemetry() {
   if (initialized) return
   if (typeof window === "undefined") return
 
-  const enabled = import.meta.env.VITE_OTEL_ENABLED === "true"
+  const enabled = process.env.NEXT_PUBLIC_OTEL_ENABLED === "true"
   if (!enabled) return
 
-  // Same-origin /v1/traces so Vite (dev) and the Go server (prod) can
-  // forward to the collector without running into CORS. See vite.config.ts
+  // Same-origin /v1/traces so the Next dev server and the Go server (prod) can
+  // forward to the collector without running into CORS. See next.config.ts
   // for the dev proxy target.
-  const endpoint = import.meta.env.VITE_OTEL_OTLP_ENDPOINT || "/v1/traces"
+  const endpoint = process.env.NEXT_PUBLIC_OTEL_OTLP_ENDPOINT || "/v1/traces"
   const serviceName =
-    import.meta.env.VITE_OTEL_SERVICE_NAME || "embookshelf-frontend"
+    process.env.NEXT_PUBLIC_OTEL_SERVICE_NAME || "embookshelf-frontend"
 
   const resource = resourceFromAttributes({
     [ATTR_SERVICE_NAME]: serviceName,
-    [ATTR_SERVICE_VERSION]: import.meta.env.VITE_APP_VERSION || "dev",
-    "deployment.environment": import.meta.env.MODE,
+    [ATTR_SERVICE_VERSION]: process.env.NEXT_PUBLIC_APP_VERSION || "dev",
+    "deployment.environment": process.env.NODE_ENV,
   })
 
   const provider = new WebTracerProvider({

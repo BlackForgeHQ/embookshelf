@@ -4,9 +4,8 @@
 /data/
 /node_modules/
 /ui/node_modules/
-/ui/dist/
-/ui/.output/
-/ui/.tanstack/
+/ui/.next/
+/ui/out/
 /internal/staticfs/dist/
 !/internal/staticfs/dist/.gitkeep
 /internal/repo/generated/

@@ -1,7 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
 
 import { logout as apiLogout, meQueryKey } from "@/api/auth"
+import { paths } from "@/lib/routes"
+import { useAppRouter } from "@/lib/navigation"
 
 /**
  * useLogout wraps the logout API call with the standard side effects:
@@ -15,7 +16,7 @@ import { logout as apiLogout, meQueryKey } from "@/api/auth"
  */
 export function useLogout() {
   const queryClient = useQueryClient()
-  const navigate = useNavigate()
+  const router = useAppRouter()
   return useMutation({
     mutationFn: apiLogout,
     onSuccess: (result) => {
@@ -24,7 +25,7 @@ export function useLogout() {
         window.location.href = result.logoutUrl
         return
       }
-      void navigate({ to: "/login", replace: true })
+      router.replace(paths.login())
     },
   })
 }

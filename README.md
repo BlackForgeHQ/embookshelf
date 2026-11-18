@@ -1,7 +1,7 @@
 # embookshelf
 
-Self-hosted, multi-user digital library — Go backend + React SPA
-(TanStack Start + shadcn/ui) + Postgres, with optional
+Self-hosted, multi-user digital library — Go backend + React UI
+(Next.js static export + shadcn/ui) + Postgres, with optional
 S3-backed storage. EPUB, PDF, comic (CBZ), and audiobook (MP3/M4B)
 readers; full-text search; per-user shelves + smart shelves +
 annotations; metadata enrichment across six providers; live BookDrop
@@ -79,8 +79,8 @@ internal/                  Go backend — 27 packages tiered into Core / IO / Cr
                             auth, config, crypto, db, queue, task, search,
                             sse, opds, provider, staticfs, telemetry, …)
 internal/migrator/         migrations/postgres/ (+ migrations/sqlite/, kept only for import-sqlite)
-internal/staticfs/dist/    Embedded SPA shell (written by the UI build)
-ui/                        TanStack Start SPA (Vite + React 19 + Tailwind v4 + shadcn/ui)
+internal/staticfs/dist/    Embedded UI static export (written by the UI build)
+ui/                        Next.js App Router, static export (React 19 + Tailwind v4 + shadcn/ui)
 docs/                      architecture.md, PRD.md, adr/, spec/, ops/, agents/, research/
 scripts/seed.sql           Dev seed (admin@local / changeme)
 ```
@@ -98,19 +98,19 @@ make ui-install      # bun install inside ui/
 make converter-up    # build + start the sidecar on :6070
 
 # Iteration — one terminal
-make up              # backend (air) + Vite on :6060 and :5173
+make up              # backend (air) + Next.js dev on :6060 and :5173
 ```
 
-Open <http://localhost:5173/>. Vite proxies `/api`, `/opds`, `/events`
+Open <http://localhost:5173/>. The Next.js dev server forwards `/api`, `/opds`, `/events`
 to the Go server on `:6060`, so cookies and SSE keep flowing. `/v1/*`
-is proxied to `:4318` for browser OTLP traces in dev (see
+is forwarded to `:4318` for browser OTLP traces in dev (see
 [compose.dev.yml](compose.dev.yml)).
 
 If you want the processes separated (different panes, logs split):
 
 ```bash
 make dev             # backend only — live-reload via `go tool air`
-make ui-dev          # Vite dev server only (bun run dev)
+make ui-dev          # Next.js dev server only (bun run dev)
 ```
 
 First-run signup creates the admin. With the seed:
@@ -387,7 +387,7 @@ preferences, device sync, sign out).
   presigned URLs don't 404 mid-download.
 - **OpenTelemetry** — server traces / metrics / logs export via OTLP
   when `OTEL_ENABLED=true`; browser SDK gates on
-  `VITE_OTEL_ENABLED=true`.
+  `NEXT_PUBLIC_OTEL_ENABLED=true`.
 - **Backups** — no built-in backup job. Durable state is the Postgres
   database, the book files (whose sidecars carry metadata edits), and
   `EMBOOKSHELF_SECRET_KEY`; everything else is cache. See
@@ -395,9 +395,9 @@ preferences, device sync, sign out).
 
 ## UI stack
 
-- **React 19 + TanStack Start** in SPA mode (no SSR in prod; a
-  prerender pass emits the `_shell.html` entry).
-- **Tailwind v4** via the first-class `@tailwindcss/vite` plugin — no
+- **React 19 + Next.js 16** (App Router) built as a static export and
+  embedded in the Go binary — no Node runtime in prod (ADR-0037).
+- **Tailwind v4** via `@tailwindcss/postcss` — no
   standalone CLI watcher, no separate generated stylesheet. Design
   tokens live in [ui/src/styles.css](ui/src/styles.css) under `@theme`.
 - **[shadcn/ui](https://ui.shadcn.com)** (radix-mira style) provides
@@ -408,39 +408,35 @@ preferences, device sync, sign out).
   tokens in `styles.css`.
 - **Bun** is the package manager + script runner. No `npm`/`node_modules`
   indirection in CI.
-- **TanStack Query** for server state, **TanStack Router** for
+- **TanStack Query** for server state, the **Next.js App Router** for
   file-based routes. `useRealtime` wires the SSE stream into query
   invalidation.
 - **Browser OpenTelemetry** (document-load, user-interaction, fetch
   instrumentations) ships with the app and is gated on
-  `VITE_OTEL_ENABLED=true` — OTLP traces route to
-  [grafana/otel-lgtm](compose.dev.yml) in dev via the `/v1` proxy.
+  `NEXT_PUBLIC_OTEL_ENABLED=true` — OTLP traces route to
+  [grafana/otel-lgtm](compose.dev.yml) in dev via the `/v1` rewrite.
 
-## How the SPA is served
+## How the UI is served
 
-- **Build-time**: TanStack Start is configured in **SPA mode**
-  ([ui/vite.config.ts](ui/vite.config.ts)). `vite build` produces
-  `ui/dist/client/{_shell.html, assets/*}`;
+- **Build-time**: Next.js builds a static export
+  ([ui/next.config.ts](ui/next.config.ts)) into `ui/out/` — one HTML file
+  per route plus the client bundle;
   [ui/scripts/sync-dist.ts](ui/scripts/sync-dist.ts) (run via bun) copies
-  the shell + assets into `internal/staticfs/dist/` and duplicates
-  `_shell.html` as `index.html` so Go's SPA fallback finds it.
-- **Runtime**: Go serves `/api/v1/*`, `/opds/*`, `/events`, and any
-  static file from the embedded FS; anything else returns `index.html`
-  via a `NoRoute` handler
-  ([internal/handler/router.go](internal/handler/router.go)) so the
-  TanStack Router can resolve on hard reloads.
+  it into `internal/staticfs/dist/`.
+- **Runtime**: Go serves `/api/v1/*`, `/opds/*`, `/events`, and resolves
+  anything else against the embedded export via a `NoRoute` handler
+  ([internal/handler/spa.go](internal/handler/spa.go)): `/library` →
+  `library.html`, and any book id → the page prerendered for the `_`
+  placeholder (`/book/42/edit` → `book/_/edit.html`). Unknown paths get
+  `404.html` with a 404.
 
-Worth knowing:
+Worth knowing (ADR-0037):
 
-- **Vite's `outDir` stays inside `ui/`** (`dist/`). Redirecting it
-  outside breaks Node's module resolution during the prerender — the
-  SSR bundle can't resolve `rou3`/`h3` when it lives under `internal/`.
-  The sync script is what moves the final files out.
-- **`@tailwindcss/vite` replaces the old Tailwind CLI watcher.** Earlier
-  iterations of this repo ran `tailwindcss -i styles.css -o generated.css`
-  as a side-process because `@tailwindcss/node` collided with Start's
-  prerender; that's no longer the case under the current Vite plugin +
-  SPA mode combo.
+- **Dynamic routes are prerendered once.** Pages read the real id from
+  the URL with `useRouteId`; `useParams` would report the placeholder.
+- **Nothing browser-only at module scope.** The build prerenders every
+  page in Node; lazy-load libraries that touch `window`/`DOMMatrix` on
+  import (see `ui/src/lib/pdfjs.ts`).
 
 ## Environment
 
@@ -500,7 +496,7 @@ encrypts the LLM and text-to-speech keys you paste into the panels.
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` | `grpc` or `http/protobuf` |
 | `OTEL_EXPORTER_OTLP_INSECURE` | `true` | Disable TLS (local LGTM) |
 | `OTEL_TRACES_SAMPLER_ARG` | `1.0` | Sample ratio (0.0–1.0) |
-| `VITE_OTEL_ENABLED` | `false` | Browser-side SDK opt-in (build-time) |
+| `NEXT_PUBLIC_OTEL_ENABLED` | `false` | Browser-side SDK opt-in (build-time) |
 
 ## What's next
 

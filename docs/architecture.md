@@ -2,13 +2,14 @@
 
 ## 1. High-Level Architecture
 
-Embookshelf is a Go backend + React SPA, shipped as a single binary. The
-UI is a [TanStack Start](https://tanstack.com/start) app compiled in
-**SPA mode** ([Vite 8](https://vite.dev) + React 19 + TypeScript +
-[Tailwind 4](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com)).
-The Go server exposes JSON APIs under `/api/v1/*`, an OPDS 1.2 catalog
-under `/opds/*`, an SSE stream at `/events`, and serves the compiled SPA
-shell embedded in the binary via `//go:embed`. Data lives in PostgreSQL.
+Embookshelf is a Go backend + React UI, shipped as a single binary. The
+UI is a [Next.js](https://nextjs.org) App Router app built as a **static
+export** (Next.js 16 + Turbopack + React 19 + TypeScript +
+[Tailwind 4](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com);
+ADR-0037). The Go server exposes JSON APIs under `/api/v1/*`, an OPDS 1.2
+catalog under `/opds/*`, an SSE stream at `/events`, and serves the
+exported UI embedded in the binary via `//go:embed`. Data lives in
+PostgreSQL.
 
 ```
 ┌───────────────────────────────────────────────────────────┐
@@ -42,11 +43,10 @@ shell embedded in the binary via `//go:embed`. Data lives in PostgreSQL.
     └─────────────┘
 
                     ┌─────────────────────┐
-   Browser ───────► │  React SPA (TanStack│
-   (cookies)        │  Start, SPA mode)   │
+   Browser ───────► │  React UI (Next.js  │
+   (cookies)        │  static export)     │
                     │                     │
-                    │ @tanstack/react-    │
-                    │   router (file-     │
+                    │ App Router (file-   │
                     │   based routes)     │
                     │ @tanstack/react-    │
                     │   query (server-    │
@@ -54,11 +54,13 @@ shell embedded in the binary via `//go:embed`. Data lives in PostgreSQL.
                     └─────────────────────┘
 ```
 
-The browser always loads the embedded `index.html` (TanStack Start's
-`_shell.html` duplicated at that path). Every unmatched GET falls back to
-the shell via Gin's `NoRoute` handler so client-side routing works on
-hard reloads. Data fetches go through `fetch()` with `credentials: 'include'`
-so the session cookie the Go server issues rides along.
+Every route has its own prerendered HTML file in the export
+(`library.html`, `book/_.html`, …). Gin's `NoRoute` handler resolves each
+unmatched GET to its file, mapping any real book id onto the `_`
+placeholder the dynamic routes were prerendered for (§8.3), so deep links
+and hard reloads land on the right page. Data fetches go through
+`fetch()` with `credentials: 'include'` so the session cookie the Go
+server issues rides along.
 
 ---
 
@@ -84,18 +86,18 @@ so the session cookie the Go server issues rides along.
 
 | Layer | Technology | Version |
 |-------|-----------|---------|
-| **Framework** | [TanStack Start](https://tanstack.com/start) (SPA mode) | 1.167+ |
-| **Router** | [@tanstack/react-router](https://tanstack.com/router) (file-based routes) | 1.x |
-| **Server state** | [@tanstack/react-query](https://tanstack.com/query) | 5.59+ |
+| **Framework** | [Next.js](https://nextjs.org) App Router, `output: "export"` (ADR-0037) | 16.4 |
+| **Router** | Next.js App Router (file-based routes under `src/app/`) | 16.4 |
+| **Server state** | [@tanstack/react-query](https://tanstack.com/query) | 5.x |
 | **UI runtime** | React + ReactDOM | 19.2 |
-| **Language** | TypeScript | 5.9 |
-| **Bundler** | [Vite](https://vite.dev) | 8.x |
-| **Styling** | Tailwind CSS 4 via `@tailwindcss/vite` plugin (first-class, no CLI side-process) | 4.2 |
+| **Language** | TypeScript | 7.0 |
+| **Bundler** | Turbopack (via Next.js); Vite only as Vitest's runner | — |
+| **Styling** | Tailwind CSS 4 via `@tailwindcss/postcss` | 4.3 |
 | **Component library** | [shadcn/ui](https://ui.shadcn.com) (radix-mira style) over [radix-ui](https://www.radix-ui.com) primitives | 4.4 |
 | **Icons** | [lucide-react](https://lucide.dev) (shadcn default) + a 46-icon bespoke set (`Icon.tsx`) | 1.8 |
 | **Toasts** | [sonner](https://sonner.emilkowal.ski/) via shadcn wrapper | 2.0 |
 | **Package manager / runner** | [Bun](https://bun.sh) — `bun install` / `bun run dev` / `bun run build` | 1.x |
-| **Browser telemetry** | `@opentelemetry/sdk-trace-web` + `document-load` / `user-interaction` / `fetch` instrumentations, gated on `VITE_OTEL_ENABLED=true` | 2.7 / 0.215 |
+| **Browser telemetry** | `@opentelemetry/sdk-trace-web` + `document-load` / `user-interaction` / `fetch` instrumentations, gated on `NEXT_PUBLIC_OTEL_ENABLED=true` | 2.7 / 0.215 |
 
 Testing stacks: Go `testing` + `testify` for the backend. UI unit tests
 are wired with **Vitest** + **@testing-library/react** (`bun run test`
@@ -124,7 +126,7 @@ embookshelf/
 │   └── migrate/                    # CLI around internal/migrator (up/down/version/force)
 │
 ├── internal/                       # Backend packages — tiered below
-├── ui/                             # TanStack Start SPA (Vite + React 19 + Tailwind 4 + shadcn/ui)
+├── ui/                             # Next.js static export (React 19 + Tailwind 4 + shadcn/ui)
 ├── scripts/seed.sql                # Dev seed — admin@local / changeme
 ├── docs/                           # ARCHITECTURE.md + prd.md + adr/ + spec/ + superpowers/
 ├── Dockerfile                      # Multi-stage (bun build ui → go build → distroless)
@@ -149,7 +151,7 @@ included. Tiered by role:
   from a test — a seam left unassigned fails an assertion instead of
   nil-dereferencing in production (#196).
 - `handler/` — Gin `HandlerFunc`s; one file per resource group, plus
-  `router.go` (route assembly + SPA fallback), `handler.go`
+  `router.go` (route assembly), `spa.go` (UI fallback, §8.3), `handler.go`
   (`Handler` + `Deps`), `errjson.go` (JSON error envelope).
 - `service/` — Business logic. ~20 services (see §4.1).
 - `repo/` — Hand-written SQL via pgx. Single dialect: one Postgres
@@ -248,7 +250,7 @@ included. Tiered by role:
 - `email/` — Transport seam for outbound mail (Send-to-Kindle,
   invites). SMTP via `go-mail`; no provider catalog, and ADR-0020
   records why.
-- `staticfs/` — `//go:embed all:dist` host for the compiled SPA.
+- `staticfs/` — `//go:embed all:dist` host for the UI's static export.
 - `telemetry/` — OTLP exporter wiring. Gated on `OTEL_ENABLED`.
 
 ### `ui/` — frontend layout
@@ -256,32 +258,34 @@ included. Tiered by role:
 ```
 ui/
 ├── src/
-│   ├── routes/                     # File-based; routeTree.gen.ts auto-generated
-│   │   ├── __root.tsx              # html/body shell (HeadContent + Scripts + QueryClient + Toaster)
-│   │   ├── _app.tsx                # Pathless layout: Sidebar + main + status bar
-│   │   ├── _app.index.tsx          # /                  — Dashboard
-│   │   ├── _app.library.tsx        # /library           — LibraryView (shelf|grid|list)
-│   │   ├── _app.book.$id.tsx       # /book/:id          — BookDetail
-│   │   ├── _app.book.$id_.edit.tsx # /book/:id/edit     — MetadataEditor
-│   │   ├── _app.book.$id_.find.tsx # /book/:id/find     — Provider match search
-│   │   ├── _app.notebook.tsx       # /notebook          — cross-book notes
-│   │   ├── _app.bookdrop.tsx       # /bookdrop          — import review queue
-│   │   ├── _app.stats.tsx          # /stats             — library + reading statistics
-│   │   ├── _app.account.tsx        # /account           — account hub (identities, password)
-│   │   ├── _app.settings.tsx       # /settings          — admin hub
-│   │   ├── read.$id.tsx            # /read/:id          — full-screen Reader (no sidebar)
-│   │   ├── login.tsx               # /login             — local + first-run signup + OIDC
-│   │   └── login.pending.tsx       # /login/pending     — awaiting-admin-approval gate
+│   ├── app/                        # App Router; one page.tsx per route
+│   │   ├── layout.tsx              # html/body, metadata, Providers (QueryClient + Toaster), Suspense
+│   │   ├── providers.tsx           # Client providers + telemetry init
+│   │   ├── not-found.tsx           # Exported as 404.html
+│   │   ├── (app)/layout.tsx        # Route group: auth gate + Sidebar + main + status bar
+│   │   ├── (app)/page.tsx          # /                  — Dashboard
+│   │   ├── (app)/library/          # /library           — LibraryView (shelf|grid|list)
+│   │   ├── (app)/book/[id]/        # /book/:id          — BookDetail (layout.tsx: placeholder params)
+│   │   ├── (app)/book/[id]/edit/   # /book/:id/edit     — MetadataEditor
+│   │   ├── (app)/book/[id]/find/   # /book/:id/find     — Provider match search
+│   │   ├── (app)/notebook/         # /notebook          — cross-book notes
+│   │   ├── (app)/bookdrop/         # /bookdrop          — import review queue
+│   │   ├── (app)/stats/            # /stats             — library + reading statistics
+│   │   ├── (app)/account/          # /account           — account hub (identities, password)
+│   │   ├── (app)/settings/         # /settings          — admin hub
+│   │   ├── read/[id]/              # /read/:id          — full-screen Reader (no sidebar)
+│   │   ├── login/                  # /login             — local + first-run signup + OIDC
+│   │   └── login/pending/          # /login/pending     — awaiting-admin-approval gate
 │   ├── components/                 # See §5.4 for grouping
 │   ├── api/                        # Typed clients per resource (auth, account, books, oidc, …)
-│   ├── data/mock.ts                # Reference dataset — types only; live routes hit the API
-│   ├── lib/                        # cn(), readingPreferences, etc.
-│   ├── router.tsx                  # getRouter() — QueryClient + router context
-│   ├── telemetry.ts                # Browser OTel setup (VITE_OTEL_ENABLED)
+│   ├── hooks/                      # useRoute (route id + search), useLogin, useReadingPosition, …
+│   ├── lib/                        # routes (paths + search parsers), navigation (guards), cn(), …
+│   ├── telemetry.ts                # Browser OTel setup (NEXT_PUBLIC_OTEL_ENABLED)
 │   └── styles.css                  # Tailwind entry — @theme tokens + shadcn + editorial layer
-├── scripts/sync-dist.ts            # Copies dist/client → ../internal/staticfs/dist
+├── scripts/sync-dist.ts            # Copies out/ → ../internal/staticfs/dist
 ├── components.json                 # shadcn/ui config (radix-mira, zinc)
-├── vite.config.ts                  # tanstackStart({ spa: { enabled: true } }) + @tailwindcss/vite + dev proxy
+├── next.config.ts                  # export for builds; dev rewrites to the Go backend
+├── vitest.config.ts                # Vitest only — the app does not build with Vite
 ├── tsconfig.json
 ├── bun.lock
 └── package.json
@@ -316,7 +320,7 @@ Handler → Service → Repository → PostgreSQL
      metadata / oidc / users).
   2. `/opds/*` — Atom XML for e-readers, Basic-Auth-protected.
   3. `/events` — Server-Sent Events stream, cookie-authed.
-  4. `/` (fall-through) — serves the embedded React SPA.
+  4. `/` (fall-through) — serves the embedded UI (§8.3).
 
   Dependencies land in a `Deps` struct so `handler.New`'s signature
   stays flat as the app grows (~20 deps today; positional args would be
@@ -553,8 +557,8 @@ unification.
 - **CSRF** — `auth.CSRFGuard` middleware runs globally on every
   non-safe request, asserting `Origin`/`Referer` matches `Host`. Paired
   with `SameSite=Lax` cookies this is sufficient for a same-origin SPA
-  without per-form tokens. Cross-origin dev is handled via the Vite
-  proxy, which rewrites Origin so the check still passes.
+  without per-form tokens. In dev, the Next.js server's rewrites keep
+  the UI and the API on one origin (`:5173`), so the check still passes.
 - **OIDC / SSO** *(built)* — `coreos/go-oidc` discovery +
   `golang.org/x/oauth2` authorization-code flow. Per-provider slugs
   (`google`, `github`, `generic`) with one shared callback at
@@ -662,75 +666,75 @@ battle-tested mini-syntax (quoted phrases, `or`, `-`).
 
 ## 5. UI Architecture
 
-### 5.1 TanStack Start in SPA mode
+### 5.1 Next.js static export
 
-The UI is a [TanStack Start](https://tanstack.com/start) app configured
-in **SPA mode** — no SSR, no Node runtime in production. Why Start over
-vanilla `@tanstack/react-router`? File-based routing, generated typed
-routes, `createFileRoute` with loaders and `validateSearch`, and a clear
-upgrade path if we ever need partial prerendering. SPA mode is opted in
-via the Vite plugin:
+The UI is a [Next.js](https://nextjs.org) App Router app built with
+`output: "export"` — no Node runtime in production; the Go binary serves
+the exported files (ADR-0037). Every page is a client component; the root
+layout is the one server component and holds only metadata and the
+client providers.
 
-```ts
-// ui/vite.config.ts
-tanstackStart({ spa: { enabled: true } })
-```
+Because the export is prerendered in Node, no module may touch
+browser-only globals when it loads. pdf.js is the case that bit: it is
+imported lazily through [`ui/src/lib/pdfjs.ts`](../ui/src/lib/pdfjs.ts).
 
-Start still runs a prerender pass during build to emit `_shell.html`
-(the static entry point); the sync script duplicates that file as
-`index.html` so Go's SPA fallback finds it.
+Dynamic segments are prerendered once, for the placeholder id `_`
+(`PLACEHOLDER_ID` in [`ui/src/lib/routes.ts`](../ui/src/lib/routes.ts)),
+via a `generateStaticParams` in each `[id]/layout.tsx`. The Go server
+maps any real id onto those files, and pages read the actual id with
+`useRouteId` (from the pathname — `useParams` would report `_`).
 
-The route tree is regenerated on every dev change and build —
-`ui/src/routeTree.gen.ts` is git-ignored. TypeScript module augmentation
-in [`ui/src/router.tsx`](../ui/src/router.tsx) teaches the type system
-the shape of our router so `<Link to>`, `useParams`, `useSearch`, and
-`navigate` are all typed end-to-end.
+URLs are built with `paths` and query strings read with the
+`parse*Search` parsers in `lib/routes.ts` through `useRouteSearch`, the
+replacement for TanStack Router's typed `<Link>` and `validateSearch`.
 
 ### 5.2 Route tree
 
-Routes are file-based. A leading underscore makes a **pathless layout
-parent** whose children inherit the layout but not a URL segment; dots
-stand in for nested folders.
+Routes are file-based under `ui/src/app/`. A parenthesised folder is a
+**route group**: its layout wraps its children without adding a URL
+segment.
 
 | File | URL | Component |
 |------|-----|-----------|
-| `__root.tsx` | — | html/body shell, HeadContent, Scripts, QueryClientProvider, sonner `Toaster` |
-| `_app.tsx` | — | Sidebar + `<main>` + status bar layout, `<Outlet />` in the middle. `beforeLoad` enforces auth + approval status. |
-| `_app.index.tsx` | `/` | Dashboard (currently reading, 12-week heatmap, stats, libraries) |
-| `_app.library.tsx` | `/library` | LibraryView — shelf/grid/list, filter, sort; `?shelf=`, `?layout=` in search |
-| `_app.book.$id.tsx` | `/book/:id` | BookDetail — overview / notes / annotations / versions / activity tabs |
-| `_app.book.$id_.edit.tsx` | `/book/:id/edit` | MetadataEditor + EnrichmentPanel + field-lock toggles |
-| `_app.book.$id_.find.tsx` | `/book/:id/find` | Provider-match search workspace (`enrich/stream` SSE) |
-| `_app.notebook.tsx` | `/notebook` | Cross-book notes + highlights |
-| `_app.bookdrop.tsx` | `/bookdrop` | Import review queue (list + detail split + drag-and-drop upload) |
-| `_app.stats.tsx` | `/stats` | Library totals, reading activity heatmap, bar charts |
-| `_app.account.tsx` | `/account` | Account hub — profile, password, linked OIDC identities |
-| `_app.settings.tsx` | `/settings` | Admin hub — instance, libraries, providers, metadata, OIDC, users |
-| `read.$id.tsx` | `/read/:id` | Full-screen Reader — intentionally outside `_app` so the sidebar is hidden. Dispatches to Epub/Pdf/Comic/Audio by `book.format`. |
-| `login.tsx` | `/login` | Local session login + first-run signup + OIDC entrypoints |
-| `login.pending.tsx` | `/login/pending` | Awaiting-admin-approval landing for first-login OIDC users (ADR-0007) |
+| `layout.tsx` | — | html/body, metadata, `Providers` (QueryClientProvider, sonner `Toaster`), a `Suspense` boundary for `useSearchParams` |
+| `(app)/layout.tsx` | — | Sidebar + `<main>` + status bar. Renders nothing until `/me` answers; a signed-out answer redirects to `/login?next=…`. |
+| `(app)/page.tsx` | `/` | Dashboard (currently reading, 12-week heatmap, stats, libraries) |
+| `(app)/library/page.tsx` | `/library` | LibraryView — shelf/grid/list, filter, sort; `?shelf=`, `?layout=` in search |
+| `(app)/book/[id]/page.tsx` | `/book/:id` | BookDetail — overview / notes / annotations / versions / activity tabs |
+| `(app)/book/[id]/edit/page.tsx` | `/book/:id/edit` | MetadataEditor + EnrichmentPanel + field-lock toggles; unsaved-changes guard |
+| `(app)/book/[id]/find/page.tsx` | `/book/:id/find` | Provider-match search workspace (`enrich/stream` SSE) |
+| `(app)/notebook/page.tsx` | `/notebook` | Cross-book notes + highlights |
+| `(app)/bookdrop/page.tsx` | `/bookdrop` | Import review queue (list + detail split + drag-and-drop upload) |
+| `(app)/stats/page.tsx` | `/stats` | Library totals, reading activity heatmap, bar charts |
+| `(app)/account/page.tsx` | `/account` | Account hub — profile, password, linked OIDC identities |
+| `(app)/settings/page.tsx` | `/settings` | Admin hub — instance, libraries, providers, metadata, OIDC, users |
+| `read/[id]/page.tsx` | `/read/:id` | Full-screen Reader — intentionally outside `(app)` so the sidebar is hidden. Dispatches to Epub/Pdf/Comic/Audio by `book.format`. |
+| `login/page.tsx` | `/login` | Local session login + first-run signup + OIDC entrypoints; a signed-in visitor goes straight to `next` |
+| `login/pending/page.tsx` | `/login/pending` | Awaiting-admin-approval landing for first-login OIDC users (ADR-0007) |
 
-The Sidebar uses `useRouterState` to determine the active pathname +
-search params so a shelf/library click navigates via `<Link to="/library" search={{ shelf: 'reading' }}>`
-rather than mutating local state. That's the big behavioral shift from
-the prototype's single-component `setView` state machine.
+The Sidebar reads `usePathname` + the library search params to mark the
+active entry, and every entry is a `<Link href={paths.library({ shelf })}>`
+rather than local state. That's the big behavioral shift from the
+prototype's single-component `setView` state machine.
+
+Navigation goes through `useAppRouter` ([`lib/navigation.ts`](../ui/src/lib/navigation.ts)),
+Next's router with `push`/`replace` refused while a page's
+`useNavigationGuard` says so. The same guards intercept in-app link
+clicks and, where the browser has the Navigation API, back/forward.
 
 ### 5.3 Data flow
 
 - **Server state** — `@tanstack/react-query`, one `QueryClient`
-  instance created inside `getRouter()` and injected via the router
-  context so a loader can call `queryClient.ensureQueryData()` if we
-  ever want route-level prefetching. Default `staleTime: 30_000`,
-  `refetchOnWindowFocus: false`.
+  instance created in [`app/providers.tsx`](../ui/src/app/providers.tsx).
+  Default `staleTime: 30_000`, `refetchOnWindowFocus: false`.
 - **Fetch wrapper** — [`ui/src/api/client.ts`](../ui/src/api/client.ts).
   Always `credentials: 'include'` (the session cookie must ride along),
   JSON-body detection, uniform error shape `{ status, message }`. Empty
   bodies on 202/204/205 are handled (some fire-and-forget endpoints
   return no content).
-- **Search params** — routes that care about URL state declare a
-  `validateSearch` zod-free parser so the types are tight without an
-  extra runtime dep (see
-  [`_app.library.tsx`](../ui/src/routes/_app.library.tsx)).
+- **Search params** — routes that care about URL state have a zod-free
+  parser in [`lib/routes.ts`](../ui/src/lib/routes.ts), read with
+  `useRouteSearch`, so the types are tight without an extra runtime dep.
 - **Typed API modules** — per-resource clients live under
   [ui/src/api/](../ui/src/api/) (`auth`, `books`, `bookdrop`, `devices`,
   `annotations`, `enrich`, `settings`, `stats`, `reading`, `realtime`).
@@ -842,8 +846,9 @@ bindings) that no shadcn preset ships with.
 ### 5.5 Styling: Tailwind 4 + shadcn/ui
 
 Tailwind 4's **CSS-first configuration** drives the design system.
-Tailwind now ships via the first-class [`@tailwindcss/vite`](https://tailwindcss.com/blog/tailwindcss-v4)
-plugin — no standalone CLI watcher, no generated stylesheet side-car.
+Tailwind ships via [`@tailwindcss/postcss`](https://tailwindcss.com/docs/installation/framework-guides/nextjs),
+which Next.js runs as part of its build — no standalone CLI watcher, no
+generated stylesheet side-car.
 
 [`ui/src/styles.css`](../ui/src/styles.css) holds the Google Fonts
 import, Tailwind + shadcn bases, `@theme` tokens, the `:root` / `.dark`
@@ -921,7 +926,7 @@ network dependency on first paint.
 | Reader | Status | Notes |
 |--------|--------|-------|
 | EPUB | **Built** | [`EpubReader`](../ui/src/components/EpubReader.tsx) wraps epub.js with an imperative handle (`next` / `prev` / `goTo`). Paginated flow, `book.locations.generate(1024)` powers the percentage scrubber, `relocated` event reports `{percent, cfi}`. Typography overrides via `rendition.themes.default` so font/size changes survive chapter transitions. TOC tree flattened for the Contents panel. |
-| PDF | **Built** | [`PdfReader`](../ui/src/components/PdfReader.tsx) uses pdfjs-dist 5. Worker URL resolved via `new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url)` so Vite emits a hashed worker. Scroll container with one `<canvas>` per page; only current ± 1 page are rasterized (others cleared) to keep memory flat on large PDFs. |
+| PDF | **Built** | [`PdfReader`](../ui/src/components/PdfReader.tsx) uses pdfjs-dist 5. pdf.js is loaded on first use (`lib/pdfjs.ts`) and its worker URL resolved via `new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url)` so Turbopack emits a hashed worker. Scroll container with one `<canvas>` per page; only current ± 1 page are rasterized (others cleared) to keep memory flat on large PDFs. |
 | Comic / CBZ / CBR / CB7 | **Built** | [`ComicReader`](../ui/src/components/ComicReader.tsx) reads per-page images from `/api/v1/books/:id/pages/:n`. Keyboard nav + double-page spread + manga mode. All three containers page since #329, by two different routes: a **ZIP** page is read ranged, straight out of the archive, with nothing expanded or cached — its entries are independently addressable. **RAR and 7z** are not: a solid RAR's page *n* continues the dictionary of every page before it, and a 7z folder is one stream decoded from its start, so page *n* costs pages 0..*n* and paging naively would be quadratic (and, on an object-store library, one download of the object per page). Those two are expanded once into `fileproc.PageCache` — `${DATA_PATH}/comic-pages/`, keyed by the file's content hash, size-capped with LRU eviction on admission, single-flight so concurrent readers cost one extraction, published by rename so a directory is never half a comic — and every page after the first is a local file read with no touch of the archive at all. Page content types are sniffed from each page's own leading bytes on every route, ZIP included since #331 — a dozen bytes read ahead of the response and replayed in front of the rest, not a buffer of the page — and a page whose bytes are not a recognized image answers 415 rather than a mislabelled stream. A comic in none of the three containers answers 415; a damaged one of a container we do page keeps its own error. |
 | Audiobook (MP3/M4B) | **Built** | [`AudioReader`](../ui/src/components/AudioReader.tsx) over the native `<audio>` element. Server delivers bytes via the same `/files` path (range requests). Duration + narrator pulled by `dhowden/tag` at ingest. Chapter markers from M4B containers TBD. |
 
@@ -1268,8 +1273,8 @@ Three surface areas exist side by side:
   Auth: HTTP Basic (`auth.BasicAuth`). Unchanged through the refactor.
 - **SSE stream** — `/events` streams realtime job / state transitions
   to the browser; see §5.7.
-- **SPA shell** — any unmatched GET falls back to the embedded
-  `index.html` so the client router can resolve.
+- **UI** — any unmatched GET is resolved against the embedded static
+  export (§8.3).
 
 Shared concerns:
 
@@ -1332,11 +1337,11 @@ Basic Auth (`auth.BasicAuth`) under `/opds/*`.
 | GET | `/opds/book/:id/download` | Book file bytes |
 | GET | `/opds/cover/:id` | Book cover image |
 
-### 8.3 SPA fallback
+### 8.3 UI fallback
 
 | Method | Route | Notes |
 |--------|-------|-------|
-| GET | `/`, `/assets/*`, `/<anything>` | Served from the embedded `internal/staticfs/dist/` via a Gin `NoRoute` handler. Matching files go through `http.FileServer`; unmatched paths return `index.html` so TanStack Router can resolve client-side routes on hard reloads. `/api/*` and `/opds/*` are excluded from the fallback to preserve proper 404s. |
+| GET, HEAD | `/`, `/_next/*`, `/<anything>` | Gin `NoRoute` → `serveExport` ([`internal/handler/spa.go`](../internal/handler/spa.go)). `resolveExportPath` walks the embedded export segment by segment: an existing segment is taken as is, a missing one falls back to the directory's `_` placeholder, and the last segment may name a page by its `.html` file (`/library` → `library.html`, `/book/42/edit` → `book/_/edit.html`). A placeholder keeps the extension it replaces, so the router's payload requests resolve too (`/book/42.txt` → `book/_.txt`, `/book/42/__next._tree.txt` → `book/_/__next._tree.txt`). Files are served by `http.ServeFileFS`, typed from their extension. A path with no file gets `404.html` and status 404. |
 
 ---
 
@@ -1344,11 +1349,12 @@ Basic Auth (`auth.BasicAuth`) under `/opds/*`.
 
 ### 9.1 Multi-Stage Docker Build
 
-Three stages: UI (`oven/bun:1` → `bun install --frozen-lockfile` +
-`bun run build` + `sync-dist.ts`) → Go build → distroless runtime. See
-[Dockerfile](../Dockerfile) for the authoritative recipe. The final
-binary embeds the compiled SPA at `internal/staticfs/dist/` via
-`//go:embed all:dist`.
+Three stages: UI (`node:24-slim` with Bun copied in →
+`bun install --frozen-lockfile` + `bun run build`, i.e. `next build` +
+`sync-dist.ts`) → Go build → distroless runtime. Next.js builds on Node;
+`oven/bun`'s `node` is Bun itself. See [Dockerfile](../Dockerfile) for the
+authoritative recipe. The final binary embeds the static export at
+`internal/staticfs/dist/` via `//go:embed all:dist`.
 
 ### 9.2 CI/CD Pipeline (planned)
 
@@ -1383,11 +1389,12 @@ Two processes power local development:
   `**/*.go` + `**/*.sql`; it ignores `ui/` and
   `internal/staticfs/dist/` so a React edit doesn't trigger a Go
   rebuild.
-- **`make ui-dev`** — `cd ui && bun run dev`, i.e. the Vite dev server
-  on `:5173` with the `@tailwindcss/vite` plugin handling CSS inline.
-  Vite proxies `/api`, `/opds`, and `/events` to `:6060` (Go) and
-  `/v1/*` to `:4318` (grafana/otel-lgtm) so session cookies, SSE, and
-  browser OTLP traces all stay same-origin.
+- **`make ui-dev`** — `cd ui && bun run dev`, i.e. `next dev` on
+  `:5173`. Its rewrites forward `/api`, `/opds`, and `/events` to `:6060`
+  (Go) and `/v1/*` to `:4318` (grafana/otel-lgtm) so session cookies,
+  SSE, and browser OTLP traces all stay same-origin. Dev runs as a normal
+  Next.js server (the export applies to `next build` only) with response
+  compression off, which would otherwise buffer the `/events` stream.
 
 `make up` runs both in parallel under one `trap 'kill 0'` so Ctrl-C
 tears them down together. `make up-otlp` additionally enables browser
@@ -1399,24 +1406,19 @@ Schema migrations apply automatically on boot
 
 ### 9.4 UI build quirks
 
-One pragmatic workaround remains around TanStack Start's prerender
-pass; it's documented here so nobody "simplifies" it away.
+Documented here so nobody "simplifies" them away (ADR-0037):
 
-- **Vite's `build.outDir` stays inside `ui/`** (defaults to `dist/`).
-  Redirecting it outside the package breaks Node's module resolution
-  during the prerender — the SSR bundle walks up from `dist/server/`
-  looking for `node_modules` and never reaches `ui/node_modules/`.
-  [`ui/scripts/sync-dist.ts`](../ui/scripts/sync-dist.ts) (a bun script
-  invoked by `bun run build`) is what moves the compiled shell +
-  assets into `internal/staticfs/dist/` after build, duplicating
-  `_shell.html` as `index.html` so Go's SPA fallback finds it.
-
-Historical note: earlier iterations of this repo ran Tailwind via the
-standalone `@tailwindcss/cli` as a side-process because `@tailwindcss/node`'s
-ESM loader collided with Start's prerender on `h3-v2`/`rou3` alias
-resolution. The current `@tailwindcss/vite` plugin + SPA-mode combo no
-longer hits that issue — Tailwind compiles inline and there is no
-generated stylesheet side-car.
+- **One prerendered page per dynamic route.** `[id]` segments export
+  `generateStaticParams` returning only `_`. The Go fallback (§8.3) is
+  what makes every other id work; `useRouteId` is what reads it.
+- **Nothing browser-only at module scope.** `next build` evaluates every
+  page module in Node to prerender it. Lazy-load anything that touches
+  `window`, `DOMMatrix` and the like on import (see `lib/pdfjs.ts`).
+- **`next-env.d.ts` is generated.** `bun run typecheck` runs
+  `next typegen` before `tsc` so a clean checkout typechecks.
+- [`ui/scripts/sync-dist.ts`](../ui/scripts/sync-dist.ts) (a bun script
+  invoked by `bun run build`) copies `ui/out/` into
+  `internal/staticfs/dist/`.
 
 ---
 
@@ -1512,7 +1514,8 @@ logs via OTLP. Standard `OTEL_*` env vars are honored too.
 | `OTEL_EXPORTER_OTLP_INSECURE` | `true` | Disable TLS (for local LGTM) |
 | `OTEL_TRACES_SAMPLER_ARG` | `1.0` | Sample ratio (0.0–1.0) |
 
-The browser SDK uses `VITE_OTEL_ENABLED=true` to opt into
+The browser SDK uses `NEXT_PUBLIC_OTEL_ENABLED=true` (inlined at build
+time) to opt into
 `@opentelemetry/sdk-trace-web` (`document-load` /
 `user-interaction` / `fetch` instrumentations).
 
@@ -1529,13 +1532,13 @@ Settings UI, not via env.
 |----------|-----------|
 | **Monolith over microservices** | Single deployment unit simplifies self-hosting; no inter-service communication overhead. |
 | **Go over JVM** | Lower memory footprint, single static binary, faster cold starts — all meaningful for self-hosters on modest hardware. |
-| **React SPA (TanStack Start, SPA mode) over server-rendered Templ/HTMX** | The original Templ + HTMX stack worked, but porting rich interactions (the reader chrome, the bookdrop approval split-pane, the metadata editor with live provider matches) turned every screen into a pile of per-fragment endpoints. React gives us one component tree that the designer's prototype maps onto 1:1 and `@tanstack/react-query` handles the "stale/refetch" logic that HTMX partial swaps were manually re-implementing. The tradeoff is a client bundle the browser has to parse on first load; tree-shaking + per-route chunking keeps the first-paint cost bounded. |
-| **SPA mode instead of TanStack Start SSR** | The Go binary is already the canonical server. Running a Node SSR runtime alongside it would double operational surface area without paying for itself — SEO isn't a concern for an auth-walled personal library and the first-paint win is small against cached assets. SPA mode emits a static shell + client bundle, keeps file-based routing and `createFileRoute`, and lets Go own request handling. |
-| **TanStack Query over bespoke fetch + cache** | Server-state cache, invalidation, devtools, and a well-worn pattern for SSE-driven cache invalidation (once `/events` is rewired). Free upgrade path to prefetch-on-route-load via loader context. |
+| **React UI over server-rendered Templ/HTMX** | The original Templ + HTMX stack worked, but porting rich interactions (the reader chrome, the bookdrop approval split-pane, the metadata editor with live provider matches) turned every screen into a pile of per-fragment endpoints. React gives us one component tree that the designer's prototype maps onto 1:1 and `@tanstack/react-query` handles the "stale/refetch" logic that HTMX partial swaps were manually re-implementing. The tradeoff is a client bundle the browser has to parse on first load; tree-shaking + per-route chunking keeps the first-paint cost bounded. |
+| **Next.js static export instead of a Next.js server (ADR-0037)** | The Go binary is already the canonical server. Running a Node runtime alongside it would double operational surface area without paying for itself — SEO isn't a concern for an auth-walled personal library and the first-paint win is small against cached assets. The export emits a page per route + client bundle, keeps file-based routing, and lets Go own request handling; dynamic routes are prerendered once under a `_` placeholder the Go fallback maps real ids onto. |
+| **TanStack Query over bespoke fetch + cache** | Server-state cache, invalidation, devtools, and a well-worn pattern for SSE-driven cache invalidation (once `/events` is rewired). |
 | **Tailwind 4 CSS-first config** | Design tokens live in one `@theme` block that both CSS and TSX components reference — no JS config, no PostCSS plugin drift. |
-| **Tailwind via `@tailwindcss/vite`** | First-class Vite integration, no CLI watcher side-process, no generated stylesheet side-car. The earlier standalone-CLI workaround (to avoid the `@tailwindcss/node` loader colliding with Start's prerender on `h3-v2`/`rou3` aliases) is no longer needed under the current plugin + SPA-mode combo. See §9.4. |
+| **Tailwind via `@tailwindcss/postcss`** | The integration Next.js documents: no CLI watcher side-process, no generated stylesheet side-car. |
 | **shadcn/ui (radix-mira) over rolling our own primitives** | Forms, menus, dialogs, tabs, and toasts get battle-tested keyboard nav + ARIA + focus management + dark-mode support for free via [radix-ui](https://www.radix-ui.com) and [sonner](https://sonner.emilkowal.ski/). The editorial "built like a printed book" layer (`.cover`, `.chip`, `.shelf-plank`, Source Serif 4 typography scale) lives alongside the shadcn tokens in `styles.css`, so the custom voice survives the adoption. Components land under `components/ui/` via `bunx shadcn add` and are owned/forkable source. |
-| **Bun over npm + node** | Bun's installer is ~10× faster than npm on a cold cache, it runs TS scripts (`sync-dist.ts`) directly without a compile step, and the Docker build stage is a single `oven/bun:1` image. The production binary has no JS runtime, so bun is a build-time-only dependency. |
+| **Bun over npm + node** | Bun's installer is ~10× faster than npm on a cold cache, it runs TS scripts (`sync-dist.ts`) directly without a compile step, and the UI's Docker build stage only needs its binary copied in beside Node. The production binary has no JS runtime, so bun is a build-time-only dependency. |
 | **PostgreSQL only (ADR-0023)** | SQLite was the zero-dependency default for single-user installs, but every SQL statement had to be written twice and the features that matter — `jsonb`, `tsvector` search, River's transactional queue, concurrent writes — are Postgres-only, so SQLite installs got degraded substitutes of each. Postgres is now required: a `sqlite://` DSN refuses to boot and names the one-shot importer, `embookshelf import-sqlite` (§6.2). The `modernc.org/sqlite` driver registration and the SQLite migration tree survive for the importer alone. |
 | **Hand-written SQL, no ORM (ADR-0023)** | Explicit query surface, no N+1 surprises. The dual-dialect burden was the main argument for adopting a query layer (bun was evaluated); dropping SQLite removes it, so hand-written pgx stays on merit. sqlc remains unstaged — it generates per engine, which suited the old two-dialect world poorly and is unnecessary in a one-dialect one. |
 | **golang-migrate over goose/dbmate** | Paired `.up.sql`/`.down.sql` files are unambiguous; the library is small, pgx-friendly, and can be embedded into the app binary so a single artifact can run its own migrations in any environment. |
@@ -1554,7 +1557,7 @@ Settings UI, not via env.
 | **`user_identities` table for multi-provider OIDC (ADR-0007)** | One user, many linked IdPs. Replaces a single `oidc_subject`/`oidc_issuer` pair on `users`. Account UI gates unlink with a lockout guard so the user can't strand themselves without a credential. |
 | **Cover SHA-256 dedup** | `books.cover_hash` indexes content. Multiple books pointing at the same artwork — common after enrichment fan-out — share one blob in `coverstore` instead of duplicating bytes per-row. |
 | **Format-specific processors** | Strategy pattern allows adding new formats without modifying existing code. |
-| **Server-side sessions over stateless JWT (for the SPA)** | Revocation is free, no refresh-token rotation ceremony, and `SameSite=Lax` cookies flow naturally through both same-origin requests and the Vite dev-proxy. A JWT layer can still be added to `/api/v1/*` later for external API clients without touching the SPA auth. |
+| **Server-side sessions over stateless JWT (for the SPA)** | Revocation is free, no refresh-token rotation ceremony, and `SameSite=Lax` cookies flow naturally through both same-origin requests and the dev server's rewrites. A JWT layer can still be added to `/api/v1/*` later for external API clients without touching the SPA auth. |
 | **Basic Auth for OPDS** | E-reader apps don't carry session cookies; Basic Auth over TLS is the documented pattern and works with every OPDS client out there. |
 | **Client-side EPUB/PDF readers (epub.js / PDF.js)** | Browser-native pagination + typography + `IntersectionObserver`-based lazy rendering beats server-side reflow at the implementation-cost/quality tradeoff point. The server's job stays tight: serve bytes, persist position. |
 | **Path-rooted file-serve sandbox** | Single authoritative list (BOOKDROP + registered library paths) beats per-book ACL for a self-hosted single-tenant instance; adding per-book ACLs later is an additive check, not a replacement. |

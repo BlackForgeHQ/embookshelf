@@ -1,8 +1,9 @@
-import { Link } from "@tanstack/react-router"
+import Link from "next/link"
 
 import { PROVIDER_LABELS } from "@/api/enrich"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { paths } from "@/lib/routes"
 
 export type ProviderStatus = "disabled" | "pending" | "active" | "done" | "error"
 
@@ -39,7 +40,7 @@ export function ProviderStatusChips({
   if (providers.length === 0) {
     return (
       <Link
-        to="/settings"
+        href={paths.settings}
         className="t-small italic text-(--color-accent-ink) underline-offset-2 hover:underline"
       >
         No providers enabled. Open Settings → Metadata providers.

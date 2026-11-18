@@ -188,7 +188,7 @@ describe("sole ownership", () => {
     for (const path of sourceFiles(root)) {
       const rel = path.slice(root.length + 1)
       if (rel.startsWith(`api${"/"}`)) continue
-      if (rel === "router.tsx") continue // the client-wide default
+      if (rel === `app${"/"}providers.tsx`) continue // the client-wide default
       if (/\bstaleTime\s*:/.test(readFileSync(path, "utf8")))
         offenders.push(rel)
     }

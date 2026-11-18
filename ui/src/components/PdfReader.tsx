@@ -6,17 +6,9 @@ import {
   useRef,
   useState,
 } from "react"
-import * as pdfjsLib from "pdfjs-dist"
 import type { PDFDocumentProxy } from "pdfjs-dist"
 
-// Worker URL is computed with `new URL(..., import.meta.url)` so Vite emits
-// the worker file as a hashed asset at build time and returns the resolved
-// URL to the runtime. Doing this once at module load keeps the runtime
-// hot-path clean.
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.min.mjs",
-  import.meta.url
-).toString()
+import { loadPdfjs } from "@/lib/pdfjs"
 
 export type PdfProgress = {
   percent: number // 0..1
@@ -66,6 +58,8 @@ export const PdfReader = forwardRef<PdfReaderHandle, Props>(
 
       ;(async () => {
         try {
+          const pdfjsLib = await loadPdfjs()
+          if (cancelled) return
           const loadingTask = pdfjsLib.getDocument({
             url,
             withCredentials: true,

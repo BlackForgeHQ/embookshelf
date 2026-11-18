@@ -22,8 +22,8 @@ global.ResizeObserver = class ResizeObserver {
 Element.prototype.scrollIntoView = vi.fn()
 
 const navigateMock = vi.fn()
-vi.mock("@tanstack/react-router", () => ({
-  useNavigate: () => navigateMock,
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: navigateMock, replace: navigateMock }),
 }))
 
 const searchSuggestMock = vi.fn()

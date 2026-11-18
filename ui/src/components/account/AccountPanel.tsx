@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { useNavigate, useSearch } from "@tanstack/react-router"
 import { toast } from "sonner"
 
 import {
@@ -25,6 +24,9 @@ import { formatDate } from "@/lib/format"
 import { Avatar, Card, Field } from "@/components/SettingsShared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { parseAccountSearch, paths } from "@/lib/routes"
+import { useRouteSearch } from "@/hooks/useRoute"
+import { useAppRouter } from "@/lib/navigation"
 
 const LINK_ERROR_MESSAGES: Record<string, string> = {
   session_expired:
@@ -36,14 +38,14 @@ const LINK_ERROR_MESSAGES: Record<string, string> = {
 }
 
 export function AccountPanel() {
-  const navigate = useNavigate({ from: "/account" })
+  const router = useAppRouter()
   const queryClient = useQueryClient()
-  const search = useSearch({ from: "/_app/account" })
+  const search = useRouteSearch(parseAccountSearch)
 
   // Toast and clear redirect-back signals from the OIDC link callback.
   // Running once per (linked, error) pair keeps refresh from re-firing
   // the toast.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on the OIDC callback params only; navigate is stable and including it would re-fire the redirect
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on the OIDC callback params only; router is stable and including it would re-fire the redirect
   useEffect(() => {
     if (!search.linked && !search.error) return
     if (search.linked) {
@@ -52,11 +54,9 @@ export function AccountPanel() {
     if (search.error) {
       toast.error(LINK_ERROR_MESSAGES[search.error] ?? "Linking failed.")
     }
-    navigate({
-      to: "/account",
-      search: search.section ? { section: search.section } : {},
-      replace: true,
-    })
+    router.replace(
+      paths.account(search.section ? { section: search.section } : {})
+    )
   }, [search.linked, search.error])
 
   const me = useApiQuery(meQuery)
@@ -95,7 +95,7 @@ export function AccountPanel() {
       setPwNext("")
       setPwConfirm("")
       queryClient.setQueryData(meQueryKey, null)
-      void navigate({ to: "/login", replace: true })
+      router.replace(paths.login())
     },
   })
 
@@ -422,7 +422,7 @@ function SendToKindleSection({
   currentEmail: string
   viewer: Viewer
 }) {
-  const navigate = useNavigate()
+  const router = useAppRouter()
   const cfg = useApiQuery(appConfigQuery)
   const [draft, setDraft] = useState(currentEmail)
 
@@ -475,7 +475,7 @@ function SendToKindleSection({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => void navigate({ to: "/settings" })}
+                onClick={() => router.push(paths.settings)}
               >
                 {refusal.label}
               </Button>

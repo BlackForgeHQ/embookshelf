@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react"
-import { Link } from "@tanstack/react-router"
+import Link from "next/link"
 
 import type { BookDropItem } from "@/api/bookdrop"
 import {
@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { formatBytes } from "@/lib/format"
+import { paths } from "@/lib/routes"
 
 export function BookDropPanel() {
   const queue = useApiQuery(bookdropQuery)
@@ -202,8 +203,7 @@ function ProcessedRow({ item }: { item: BookDropItem }) {
       </div>
       {view.imported && item.bookId ? (
         <Link
-          to="/book/$id"
-          params={{ id: item.bookId }}
+          href={paths.book(item.bookId)}
           className="t-small shrink-0 text-muted-foreground underline hover:text-foreground"
         >
           Open

@@ -1,14 +1,6 @@
-import * as pdfjsLib from "pdfjs-dist"
 import type { PDFDocumentProxy } from "pdfjs-dist"
 
-// Worker URL is computed once at module load — same shape as PdfReader.
-// Vite resolves the URL at build time and emits the worker as a hashed
-// asset, so this is safe to set even when the helper is imported by
-// non-reader pages (e.g. BookDrop preview).
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.min.mjs",
-  import.meta.url
-).toString()
+import { loadPdfjs } from "./pdfjs"
 
 export type RenderCoverOpts = {
   width?: number
@@ -28,6 +20,8 @@ export async function renderPdfPageOneJpeg(
 ): Promise<Blob | null> {
   const targetWidth = opts?.width ?? 1200
   const quality = opts?.quality ?? 0.85
+  const pdfjsLib = await loadPdfjs()
+  if (opts?.signal?.aborted) return null
   const loadingTask = pdfjsLib.getDocument({ url, withCredentials: true })
   const signal = opts?.signal
   const onAbort = () => {
