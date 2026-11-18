@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.11](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.10...v0.6.11) (2026-11-18)
+
+
+### Features
+
+* **deploy:** publish a Helm chart with every release ([#396](https://github.com/BlackForgeHQ/embookshelf/issues/396)) ([3d47fb1](https://github.com/BlackForgeHQ/embookshelf/commit/3d47fb1433af7e5acfd44468c574ac5f6f938780))
+
 ## [0.6.10](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.9...v0.6.10) (2026-11-18)
 
 
