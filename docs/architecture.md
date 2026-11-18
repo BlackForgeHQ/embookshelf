@@ -1356,6 +1356,13 @@ Three stages: UI (`node:24-slim` with Bun copied in →
 authoritative recipe. The final binary embeds the static export at
 `internal/staticfs/dist/` via `//go:embed all:dist`.
 
+Each `v*` release also publishes the Helm chart in
+[`deploy/helm/embookshelf`](../deploy/helm/embookshelf) to
+`oci://ghcr.io/blackforgehq/charts/embookshelf` at the release's version,
+pinning the converter released alongside it. A cluster's Argo CD
+Application follows a version range in GHCR, so a release deploys with
+no commit to the GitOps repository (ADR-0038).
+
 ### 9.2 CI/CD Pipeline (planned)
 
 No GitHub Actions workflows are committed yet. The intended shape:

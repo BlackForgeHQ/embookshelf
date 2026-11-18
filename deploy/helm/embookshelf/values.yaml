@@ -1,0 +1,68 @@
+image:
+  repository: ghcr.io/blackforgehq/embookshelf
+  # Defaults to the chart's appVersion, which is the release version.
+  tag: ""
+
+# Public URL of the instance (APP_URL). Links in emails and OIDC
+# redirects are built from it.
+appUrl: ""
+# ALLOWED_ORIGINS; defaults to appUrl.
+allowedOrigins: ""
+
+# Secret whose keys become environment variables (SESSION_SECRET,
+# EMBOOKSHELF_SECRET_KEY, EMBOOKSHELF_S3_ACCESS_KEY_ID, …).
+envFromSecret: embookshelf
+
+# Where DATABASE_URL comes from. The default is the Secret CloudNativePG
+# creates for a Cluster named embookshelf-db.
+database:
+  secretName: embookshelf-db-app
+  secretKey: uri
+
+# Leave bucket empty to run without S3; set it to enable kind=s3 libraries.
+s3:
+  bucket: ""
+  region: ""
+  endpoint: ""
+  forcePathStyle: false
+  # Objects dropped under this prefix are ingested via BookDrop.
+  bookdropPrefix: ""
+
+# Appended after the chart's own variables.
+extraEnv: []
+
+persistence:
+  # Holds covers and cache under /data, and BookDrop under /bookdrop.
+  size: 10Gi
+  storageClass: ""
+  # Annotates the claim so Argo CD neither prunes it nor deletes it with
+  # the Application. The claim is the library's data; losing it to a
+  # renamed template or a deleted app is not recoverable.
+  keep: true
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
+
+# PDF -> Markdown sidecar (ADR-0033). Plain HTTP, no auth: ClusterIP only,
+# never route it. Enable it in Settings -> Converter with base URL
+# http://<converter.name>:6070.
+converter:
+  enabled: true
+  # Kept as "converter": the base URL above is stored in the database.
+  name: converter
+  image:
+    repository: ghcr.io/blackforgehq/embookshelf-converter
+    # Overwritten at release time with the converter version released
+    # alongside the app (.release-please-manifest.json), so a chart
+    # version always pins the converter it shipped with.
+    tag: "0.1.3"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 1Gi

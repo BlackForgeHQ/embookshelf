@@ -276,6 +276,24 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # The chart is published on every release (image.yml) and deployed
+  # without review in between (ADR-0038), so it is linted and rendered
+  # here, with both the default and the fully populated values.
+  chart:
+    name: chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v4
+
+      - run: helm lint --strict deploy/helm/embookshelf
+
+      - run: helm lint --strict deploy/helm/embookshelf -f deploy/helm/embookshelf/ci/s3-values.yaml
+
+      - run: helm template embookshelf deploy/helm/embookshelf -f deploy/helm/embookshelf/ci/s3-values.yaml
+
   binary-smoke:
     name: binary-smoke
     runs-on: ubuntu-latest

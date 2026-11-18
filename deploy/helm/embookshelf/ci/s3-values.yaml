@@ -1,0 +1,12 @@
+# Rendered in CI (`chart` job) so every optional branch of the templates
+# is exercised; not shipped in the package (.helmignore).
+appUrl: https://books.example.com
+s3:
+  bucket: books
+  region: auto
+  endpoint: https://s3.example.com
+  forcePathStyle: true
+  bookdropPrefix: bookdrop/
+extraEnv:
+  - name: LOG_LEVEL
+    value: debug

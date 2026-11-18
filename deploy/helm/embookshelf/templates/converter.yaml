@@ -1,0 +1,50 @@
+{{- if .Values.converter.enabled }}
+{{- $name := .Values.converter.name -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+        - name: converter
+          image: {{ printf "%s:%s" .Values.converter.image.repository .Values.converter.image.tag }}
+          ports:
+            - containerPort: 6070
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 6070
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 6070
+            initialDelaySeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.converter.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+spec:
+  selector:
+    app: {{ $name }}
+  ports:
+    - port: 6070
+{{- end }}
