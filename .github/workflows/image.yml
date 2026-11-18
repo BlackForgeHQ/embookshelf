@@ -129,6 +129,48 @@ jobs:
               --generate-notes
           fi
 
+  # Every app release also publishes the Helm chart at the release's own
+  # version, so a cluster follows releases from GHCR with no commit
+  # (ADR-0038). The chart pins the converter released alongside the app.
+  chart:
+    name: push-chart
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: write        # push to GHCR
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v4
+
+      - name: Stamp versions
+        id: v
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          converter=$(jq -r '."extensions/converter"' .release-please-manifest.json)
+          yq -i ".converter.image.tag = \"$converter\"" deploy/helm/embookshelf/values.yaml
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "converter=$converter" >> "$GITHUB_OUTPUT"
+
+      - run: helm lint --strict deploy/helm/embookshelf
+
+      - name: Package & push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          VERSION: ${{ steps.v.outputs.version }}
+          CONVERTER: ${{ steps.v.outputs.converter }}
+        run: |
+          set -euo pipefail
+          helm package deploy/helm/embookshelf --version "$VERSION" --app-version "$VERSION"
+          echo "$GH_TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
+          helm push "embookshelf-$VERSION.tgz" oci://ghcr.io/blackforgehq/charts
+          echo "chart oci://ghcr.io/blackforgehq/charts/embookshelf:$VERSION (converter $CONVERTER)" >> "$GITHUB_STEP_SUMMARY"
+
   # The converter extension ships as its own image (ADR-0033): a
   # separately deployed sidecar wants a separately versioned artifact,
   # released by release-please as the embookshelf-converter component

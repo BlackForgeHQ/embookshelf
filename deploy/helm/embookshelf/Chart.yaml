@@ -1,0 +1,12 @@
+apiVersion: v2
+name: embookshelf
+description: Self-hosted, multi-user digital library — the app and its converter sidecar
+type: application
+# Both are stamped at release time (.github/workflows/image.yml): every
+# v* release publishes oci://ghcr.io/blackforgehq/charts/embookshelf at
+# the release's version, running the image of the same version.
+version: 0.0.0
+appVersion: "0.0.0"
+home: https://github.com/BlackForgeHQ/embookshelf
+sources:
+  - https://github.com/BlackForgeHQ/embookshelf

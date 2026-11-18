@@ -1,0 +1,108 @@
+{{- $name := include "embookshelf.fullname" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # RWO volume
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      containers:
+        - name: embookshelf
+          image: {{ include "embookshelf.image" . }}
+          ports:
+            - containerPort: 6060
+          {{- with .Values.envFromSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ . }}
+          {{- end }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.secretName }}
+                  key: {{ .Values.database.secretKey }}
+            - name: EMBOOKSHELF_PORT
+              value: "6060"
+            - name: DATA_PATH
+              value: /data
+            - name: BOOKDROP_PATH
+              value: /bookdrop
+            {{- with .Values.appUrl }}
+            - name: APP_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with (.Values.allowedOrigins | default .Values.appUrl) }}
+            - name: ALLOWED_ORIGINS
+              value: {{ . | quote }}
+            {{- end }}
+            - name: MIGRATE_ON_START
+              value: "true"
+            {{- with .Values.s3 }}
+            {{- if .bucket }}
+            - name: EMBOOKSHELF_S3_BUCKET
+              value: {{ .bucket | quote }}
+            {{- with .region }}
+            - name: EMBOOKSHELF_S3_REGION
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .endpoint }}
+            - name: EMBOOKSHELF_S3_ENDPOINT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .forcePathStyle }}
+            - name: EMBOOKSHELF_S3_FORCE_PATH_STYLE
+              value: "true"
+            {{- end }}
+            {{- with .bookdropPrefix }}
+            - name: EMBOOKSHELF_S3_BOOKDROP_PREFIX
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: data
+              mountPath: /bookdrop
+              subPath: bookdrop
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /api/v1/healthcheck
+              port: 6060
+          livenessProbe:
+            httpGet:
+              path: /api/v1/healthcheck
+              port: 6060
+            initialDelaySeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $name }}-data
+        - name: tmp
+          emptyDir: {}
