@@ -4,6 +4,7 @@ import { useApiQuery } from "@/api/query"
 import { searchQuery } from "@/api/search"
 import { Icon } from "@/components/Icon"
 import {
+  Command,
   CommandDialog,
   CommandEmpty,
   CommandGroup,
@@ -90,133 +91,133 @@ export function CommandPalette({ open, onOpenChange }: Props) {
       // keyboard-summoned dozens of times a day, and any open animation
       // reads as input lag (the Raycast rule).
       className="duration-0 sm:max-w-[640px]"
-      value={selected}
-      onValueChange={setSelected}
     >
-      <CommandInput
-        placeholder="Search books, shelves, or run a command…"
-        value={input}
-        onValueChange={setInput}
-        autoFocus
-      />
-      <CommandList>
-        {enabled && !query.isLoading && !hasSearchResults && (
-          <CommandEmpty>No matches</CommandEmpty>
-        )}
+      <Command value={selected} onValueChange={setSelected}>
+        <CommandInput
+          placeholder="Search books, shelves, or run a command…"
+          value={input}
+          onValueChange={setInput}
+          autoFocus
+        />
+        <CommandList>
+          {enabled && !query.isLoading && !hasSearchResults && (
+            <CommandEmpty>No matches</CommandEmpty>
+          )}
 
-        {enabled && data && data.books.length > 0 && (
-          <CommandGroup heading="Books">
-            {data.books.map((b) => (
-              <CommandItem
-                key={b.id}
-                value={`book ${b.id} ${b.title} ${b.author}`}
-                onSelect={() =>
-                  run(() => { router.push(paths.book(b.id)) })
-                }
-              >
-                <Icon name="book" size={14} />
-                <span>{b.title}</span>
-                <span className="ml-auto text-xs text-(--color-ink-3)">
-                  {b.author}
-                </span>
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
+          {enabled && data && data.books.length > 0 && (
+            <CommandGroup heading="Books">
+              {data.books.map((b) => (
+                <CommandItem
+                  key={b.id}
+                  value={`book ${b.id} ${b.title} ${b.author}`}
+                  onSelect={() =>
+                    run(() => { router.push(paths.book(b.id)) })
+                  }
+                >
+                  <Icon name="book" size={14} />
+                  <span>{b.title}</span>
+                  <span className="ml-auto text-xs text-(--color-ink-3)">
+                    {b.author}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
 
-        {enabled && data && data.shelves.length > 0 && (
-          <CommandGroup heading="Shelves">
-            {data.shelves.map((s) => (
-              <CommandItem
-                key={s.slug}
-                value={`shelf ${s.slug} ${s.name}`}
-                onSelect={() =>
-                  run(() =>
-                    router.push(
-                      paths.library({ ...currentLibrarySearch(), shelf: s.slug })
+          {enabled && data && data.shelves.length > 0 && (
+            <CommandGroup heading="Shelves">
+              {data.shelves.map((s) => (
+                <CommandItem
+                  key={s.slug}
+                  value={`shelf ${s.slug} ${s.name}`}
+                  onSelect={() =>
+                    run(() =>
+                      router.push(
+                        paths.library({ ...currentLibrarySearch(), shelf: s.slug })
+                      )
                     )
-                  )
-                }
-              >
-                <Icon name="shelf" size={14} />
-                {s.name}
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
+                  }
+                >
+                  <Icon name="shelf" size={14} />
+                  {s.name}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
 
-        {enabled && data && data.libraries.length > 0 && (
-          <CommandGroup heading="Libraries">
-            {data.libraries.map((l) => (
-              <CommandItem
-                key={l.id}
-                value={`library ${l.id} ${l.name}`}
-                onSelect={() =>
-                  run(() =>
-                    router.push(
-                      paths.library({ ...currentLibrarySearch(), library: l.slug })
+          {enabled && data && data.libraries.length > 0 && (
+            <CommandGroup heading="Libraries">
+              {data.libraries.map((l) => (
+                <CommandItem
+                  key={l.id}
+                  value={`library ${l.id} ${l.name}`}
+                  onSelect={() =>
+                    run(() =>
+                      router.push(
+                        paths.library({ ...currentLibrarySearch(), library: l.slug })
+                      )
                     )
-                  )
-                }
-              >
-                <Icon name="library" size={14} />
-                {l.name}
-              </CommandItem>
-            ))}
+                  }
+                >
+                  <Icon name="library" size={14} />
+                  {l.name}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+
+          {hasSearchResults && <CommandSeparator />}
+
+          <CommandGroup heading="Navigation">
+            <CommandItem
+              value="library all books"
+              onSelect={() => run(() => { router.push(paths.library()) })}
+            >
+              <Icon name="library" size={14} />
+              Library
+            </CommandItem>
+            <CommandItem
+              value="unshelved books no shelf inbox"
+              onSelect={() =>
+                run(() => {
+                  router.push(paths.library({ unshelved: "1" }))
+                })
+              }
+            >
+              <Icon name="inbox" size={14} />
+              Unshelved
+            </CommandItem>
+            <CommandItem
+              value="bookdrop"
+              onSelect={() => run(() => { router.push(paths.bookdrop) })}
+            >
+              <Icon name="upload" size={14} />
+              Bookdrop
+            </CommandItem>
+            <CommandItem
+              value="notebook annotations highlights"
+              onSelect={() => run(() => { router.push(paths.notebook) })}
+            >
+              <Icon name="note" size={14} />
+              Notebook
+            </CommandItem>
+            <CommandItem
+              value="stats reading"
+              onSelect={() => run(() => { router.push(paths.stats) })}
+            >
+              <Icon name="chart" size={14} />
+              Stats
+            </CommandItem>
+            <CommandItem
+              value="settings"
+              onSelect={() => run(() => { router.push(paths.settings) })}
+            >
+              <Icon name="settings" size={14} />
+              Settings
+            </CommandItem>
           </CommandGroup>
-        )}
-
-        {hasSearchResults && <CommandSeparator />}
-
-        <CommandGroup heading="Navigation">
-          <CommandItem
-            value="library all books"
-            onSelect={() => run(() => { router.push(paths.library()) })}
-          >
-            <Icon name="library" size={14} />
-            Library
-          </CommandItem>
-          <CommandItem
-            value="unshelved books no shelf inbox"
-            onSelect={() =>
-              run(() => {
-                router.push(paths.library({ unshelved: "1" }))
-              })
-            }
-          >
-            <Icon name="inbox" size={14} />
-            Unshelved
-          </CommandItem>
-          <CommandItem
-            value="bookdrop"
-            onSelect={() => run(() => { router.push(paths.bookdrop) })}
-          >
-            <Icon name="upload" size={14} />
-            Bookdrop
-          </CommandItem>
-          <CommandItem
-            value="notebook annotations highlights"
-            onSelect={() => run(() => { router.push(paths.notebook) })}
-          >
-            <Icon name="note" size={14} />
-            Notebook
-          </CommandItem>
-          <CommandItem
-            value="stats reading"
-            onSelect={() => run(() => { router.push(paths.stats) })}
-          >
-            <Icon name="chart" size={14} />
-            Stats
-          </CommandItem>
-          <CommandItem
-            value="settings"
-            onSelect={() => run(() => { router.push(paths.settings) })}
-          >
-            <Icon name="settings" size={14} />
-            Settings
-          </CommandItem>
-        </CommandGroup>
-      </CommandList>
+        </CommandList>
+      </Command>
     </CommandDialog>
   )
 }
