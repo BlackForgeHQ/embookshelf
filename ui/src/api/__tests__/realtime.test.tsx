@@ -8,29 +8,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 // --- Router double -----------------------------------------------------
 //
 // Mirrors the two properties the hook leans on: useRouter hands back one
-// object for the lifetime of the app, and `.state` is a live getter that
-// always reports the current location. Navigation therefore changes what
-// the handlers read without changing any identity React can depend on —
-// so these tests navigate without re-rendering, which is precisely the
-// case a location captured at subscribe time gets wrong.
+// object for the lifetime of the app, and the location is read from
+// `window.location` at event time. Navigation therefore changes what the
+// handlers read without changing any identity React can depend on — so
+// these tests navigate without re-rendering, which is precisely the case a
+// location captured at subscribe time gets wrong.
 const navigateSpy = vi.fn()
 
-let routerState: { location: { pathname: string; search: unknown } } = {
-  location: { pathname: "/", search: {} },
-}
-
-function navigateTo(pathname: string, search: Record<string, unknown> = {}) {
-  routerState = { location: { pathname, search } }
+function navigateTo(pathname: string, search: Record<string, string> = {}) {
+  const qs = new URLSearchParams(search).toString()
+  window.history.pushState(null, "", qs ? `${pathname}?${qs}` : pathname)
 }
 
 const routerDouble = {
-  get state() {
-    return routerState
-  },
+  push: navigateSpy,
+  replace: vi.fn(),
 }
 
-vi.mock("@tanstack/react-router", () => ({
-  useNavigate: () => navigateSpy,
+vi.mock("next/navigation", () => ({
   useRouter: () => routerDouble,
 }))
 
@@ -108,7 +103,7 @@ beforeEach(() => {
   toastInfo.mockReset()
   toastSuccess.mockReset()
   toastError.mockReset()
-  routerState = { location: { pathname: "/", search: {} } }
+  window.history.replaceState(null, "", "/")
   vi.stubGlobal("EventSource", FakeEventSource)
 })
 
@@ -180,7 +175,7 @@ describe("shared-shelf handlers", () => {
     })
 
     expect(toastInfo).toHaveBeenCalledOnce()
-    expect(navigateSpy).toHaveBeenCalledWith({ to: "/library", search: {} })
+    expect(navigateSpy).toHaveBeenCalledWith("/library", undefined)
   })
 
   it("does not redirect a viewer who has navigated away from that shelf", () => {

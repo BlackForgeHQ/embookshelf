@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react"
-import { useNavigate } from "@tanstack/react-router"
 
 import { useApiQuery } from "@/api/query"
 import { searchQuery } from "@/api/search"
@@ -14,6 +13,8 @@ import {
   CommandSeparator,
 } from "@/components/ui/command"
 import { useDebounce } from "@/hooks/useDebounce"
+import { parseLibrarySearch, paths } from "@/lib/routes"
+import { useAppRouter } from "@/lib/navigation"
 
 type Props = {
   open: boolean
@@ -24,7 +25,7 @@ const MIN_QUERY_LENGTH = 2
 const DEBOUNCE_MS = 200
 
 export function CommandPalette({ open, onOpenChange }: Props) {
-  const navigate = useNavigate()
+  const router = useAppRouter()
 
   const [input, setInput] = useState("")
   const [selected, setSelected] = useState("")
@@ -110,7 +111,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
                 key={b.id}
                 value={`book ${b.id} ${b.title} ${b.author}`}
                 onSelect={() =>
-                  run(() => { void navigate({ to: "/book/$id", params: { id: b.id } }) })
+                  run(() => { router.push(paths.book(b.id)) })
                 }
               >
                 <Icon name="book" size={14} />
@@ -131,10 +132,9 @@ export function CommandPalette({ open, onOpenChange }: Props) {
                 value={`shelf ${s.slug} ${s.name}`}
                 onSelect={() =>
                   run(() =>
-                    void navigate({
-                      to: "/library",
-                      search: (prev: Record<string, unknown>) => ({ ...prev, shelf: s.slug }),
-                    })
+                    router.push(
+                      paths.library({ ...currentLibrarySearch(), shelf: s.slug })
+                    )
                   )
                 }
               >
@@ -153,10 +153,9 @@ export function CommandPalette({ open, onOpenChange }: Props) {
                 value={`library ${l.id} ${l.name}`}
                 onSelect={() =>
                   run(() =>
-                    void navigate({
-                      to: "/library",
-                      search: (prev: Record<string, unknown>) => ({ ...prev, library: l.slug }),
-                    })
+                    router.push(
+                      paths.library({ ...currentLibrarySearch(), library: l.slug })
+                    )
                   )
                 }
               >
@@ -172,7 +171,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
         <CommandGroup heading="Navigation">
           <CommandItem
             value="library all books"
-            onSelect={() => run(() => { void navigate({ to: "/library" }) })}
+            onSelect={() => run(() => { router.push(paths.library()) })}
           >
             <Icon name="library" size={14} />
             Library
@@ -181,10 +180,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
             value="unshelved books no shelf inbox"
             onSelect={() =>
               run(() => {
-                void navigate({
-                  to: "/library",
-                  search: { unshelved: "1" },
-                })
+                router.push(paths.library({ unshelved: "1" }))
               })
             }
           >
@@ -193,28 +189,28 @@ export function CommandPalette({ open, onOpenChange }: Props) {
           </CommandItem>
           <CommandItem
             value="bookdrop"
-            onSelect={() => run(() => { void navigate({ to: "/bookdrop" }) })}
+            onSelect={() => run(() => { router.push(paths.bookdrop) })}
           >
             <Icon name="upload" size={14} />
             Bookdrop
           </CommandItem>
           <CommandItem
             value="notebook annotations highlights"
-            onSelect={() => run(() => { void navigate({ to: "/notebook" }) })}
+            onSelect={() => run(() => { router.push(paths.notebook) })}
           >
             <Icon name="note" size={14} />
             Notebook
           </CommandItem>
           <CommandItem
             value="stats reading"
-            onSelect={() => run(() => { void navigate({ to: "/stats" }) })}
+            onSelect={() => run(() => { router.push(paths.stats) })}
           >
             <Icon name="chart" size={14} />
             Stats
           </CommandItem>
           <CommandItem
             value="settings"
-            onSelect={() => run(() => { void navigate({ to: "/settings" }) })}
+            onSelect={() => run(() => { router.push(paths.settings) })}
           >
             <Icon name="settings" size={14} />
             Settings
@@ -223,4 +219,11 @@ export function CommandPalette({ open, onOpenChange }: Props) {
       </CommandList>
     </CommandDialog>
   )
+}
+
+// The library filters already in the URL, so picking a shelf or library
+// from the palette narrows the current view rather than resetting it.
+// Read at selection time; on any other page this is empty.
+function currentLibrarySearch() {
+  return parseLibrarySearch(new URLSearchParams(window.location.search))
 }

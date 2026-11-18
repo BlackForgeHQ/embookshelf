@@ -3,12 +3,6 @@
 package handler
 
 import (
-	"io"
-	"io/fs"
-	"net/http"
-	"path"
-	"strings"
-
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
@@ -325,42 +319,4 @@ func noSniff() gin.HandlerFunc {
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Next()
 	}
-}
-
-// mountSPA serves the compiled React bundle from the embedded filesystem.
-// Static assets are served directly; any unmatched GET under a non-API
-// prefix falls back to index.html so the client-side router can resolve it.
-func (h *Handler) mountSPA(r *gin.Engine) {
-	dist, err := fs.Sub(h.static, "dist")
-	if err != nil {
-		return
-	}
-	fileServer := http.FileServer(http.FS(dist))
-
-	r.NoRoute(func(c *gin.Context) {
-		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
-			c.Status(http.StatusMethodNotAllowed)
-			return
-		}
-		p := strings.TrimPrefix(c.Request.URL.Path, "/")
-		if p == "" {
-			p = "index.html"
-		}
-		if f, err := dist.Open(path.Clean(p)); err == nil {
-			_ = f.Close()
-			fileServer.ServeHTTP(c.Writer, c.Request)
-			return
-		}
-		index, err := dist.Open("index.html")
-		if err != nil {
-			c.String(http.StatusNotFound, "frontend bundle not built — run `npm run build` in web/")
-			return
-		}
-		defer func() { _ = index.Close() }()
-		c.Writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		// Gin seeds NoRoute responses with 404; override to 200 so the SPA
-		// shell is served with a success status on deep links like /login.
-		c.Writer.WriteHeader(http.StatusOK)
-		_, _ = io.Copy(c.Writer, index)
-	})
 }

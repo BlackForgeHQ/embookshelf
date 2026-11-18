@@ -16,11 +16,11 @@ ui-install: ## Install UI deps
 	cd ui && bun install
 
 .PHONY: ui-dev
-ui-dev: ## Vite dev server (proxies /api, /opds → Go)
+ui-dev: ## Next.js dev server on :5173 (proxies /api, /opds, /events → Go)
 	cd ui && bun run dev
 
 .PHONY: ui-build
-ui-build: ## Build UI + sync shell into internal/staticfs/dist/
+ui-build: ## Build the UI static export + sync it into internal/staticfs/dist/
 	cd ui && bun run build
 
 .PHONY: db-up
@@ -98,7 +98,7 @@ seed: ## Load dev seed data (runs psql inside the postgres container)
 		psql -U embookshelf -d embookshelf < scripts/seed.sql
 
 .PHONY: build
-build: ui-build ## Build the server binary (includes embedded SPA)
+build: ui-build ## Build the server binary (includes the embedded UI)
 	go build -o ./tmp/embookshelf ./cmd/embookshelf
 
 .PHONY: release
@@ -154,7 +154,7 @@ docker-run: ## Run the last-built :dev image against the dev Postgres (expects `
 		$(IMAGE_NAME):dev
 
 .PHONY: run
-run: ## Run the server (expects SPA already built)
+run: ## Run the server (expects the UI already built)
 	go run ./cmd/embookshelf
 
 .PHONY: dev
@@ -162,7 +162,7 @@ dev: ## Live-reload backend via `go tool air`
 	go tool air
 
 .PHONY: up
-up: ## Run backend (air) + UI (Vite) together — backend first, UI once :6060 is up
+up: ## Run backend (air) + UI (Next.js dev) together — backend first, UI once :6060 is up
 	@trap 'kill 0' EXIT INT TERM; \
 	$(MAKE) --no-print-directory dev & \
 	backend_pid=$$!; \
@@ -213,8 +213,8 @@ up-otlp: obs-up ## Same as `up` but exports OTLP from backend AND browser to gra
 		printf '\nbackend healthcheck did not respond within 30s — aborting\n'; \
 		exit 1; \
 	fi; \
-	VITE_OTEL_ENABLED=true \
-	VITE_OTEL_SERVICE_NAME=embookshelf-ui \
+	NEXT_PUBLIC_OTEL_ENABLED=true \
+	NEXT_PUBLIC_OTEL_SERVICE_NAME=embookshelf-ui \
 	$(MAKE) --no-print-directory ui-dev & \
 	wait
 

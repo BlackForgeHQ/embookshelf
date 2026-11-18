@@ -1,11 +1,11 @@
 # CLAUDE.md
 
-embookshelf: Go (Gin) + React 19 (TanStack Start) + Postgres, single binary with embedded UI. See `docs/architecture.md` and `docs/PRD.md`.
+embookshelf: Go (Gin) + React 19 (Next.js static export) + Postgres, single binary with embedded UI. See `docs/architecture.md` and `docs/PRD.md`.
 
 ## Commands
 
 ```bash
-make up               # backend (:6060) + Vite (:5173)
+make up               # backend (:6060) + Next.js dev (:5173)
 make build            # ui-build + go build → ./tmp/embookshelf
 make test             # go test ./...
 make ci-local         # all CI checks in parallel
@@ -23,7 +23,7 @@ go test ./internal/fileproc/ -run TestEPUB   # single Go test
 - **Sidecar write-back (ADR-0001)**: metadata edits go to DB + JSON sidecar + (when supported) embedded in the file. `scan/reattach.go` reads sidecars on rescan to preserve user edits across renames.
 - **Pluggable storage**: book bytes always flow through `storage.Storage`. Backends are loaded from `storage_backends` rows at boot by `internal/storageloader`.
 - **Encrypted secrets (ADR-0010)**: provider API keys, cookies, OIDC client secrets use AES-256-GCM when `EMBOOKSHELF_SECRET_KEY` is set.
-- **SPA embed**: Vite → `ui/dist/` → `sync-dist.ts` copies to `internal/staticfs/dist/` → `//go:embed all:dist`. Both `internal/staticfs/dist/` and `ui/src/routeTree.gen.ts` are generated — don't edit by hand.
+- **UI embed (ADR-0037)**: `next build` (`output: "export"`) → `ui/out/` → `sync-dist.ts` copies to `internal/staticfs/dist/` → `//go:embed all:dist`. `internal/staticfs/dist/` and `ui/next-env.d.ts` are generated — don't edit by hand. Dynamic routes are prerendered once for the `_` placeholder; `internal/handler/spa.go` maps real ids onto it, and pages read ids with `useRouteId`, never `useParams`. Build URLs with `paths` (`ui/src/lib/routes.ts`); navigate with `useAppRouter` (`ui/src/lib/navigation.ts`), not `next/navigation`'s `useRouter`. Nothing browser-only at module scope — the export prerenders every page in Node.
 
 ## Agent skills
 

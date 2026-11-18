@@ -1,4 +1,3 @@
-import { useNavigate } from "@tanstack/react-router"
 import { toast } from "sonner"
 
 import { FieldLockButton } from "./FieldLockButton"
@@ -9,11 +8,13 @@ import { useApiMutation } from "@/api/mutation"
 import { Cover } from "@/components/Cover"
 import { Icon } from "@/components/Icon"
 import { Button } from "@/components/ui/button"
+import { paths } from "@/lib/routes"
+import { useAppRouter } from "@/lib/navigation"
 
 const COVER_W = 240
 
 export function CoverPanel({ book }: { book: BookDetail }) {
-  const navigate = useNavigate()
+  const router = useAppRouter()
 
   const removeCoverMut = useApiMutation(removeCover, {
     successToast: "Cover removed.",
@@ -60,9 +61,7 @@ export function CoverPanel({ book }: { book: BookDetail }) {
           variant="outline"
           size="sm"
           className="w-full justify-start"
-          onClick={() =>
-            void navigate({ to: "/book/$id/find", params: { id: book.id } })
-          }
+          onClick={() => router.push(paths.bookFind(book.id))}
         >
           <Icon name="search" size={13} />
           Find covers online

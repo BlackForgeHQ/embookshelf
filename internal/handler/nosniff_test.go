@@ -148,7 +148,8 @@ func TestSPAAssetsAreTypedCorrectlyUnderNosniff(t *testing.T) {
 	h := &Handler{cfg: config.Config{AllowedOrigins: []string{"http://localhost:5173"}}, static: staticfs.FS}
 	engine := h.Engine()
 
-	dist, err := staticfs.FS.ReadDir("dist/assets")
+	const chunks = "dist/_next/static/chunks"
+	dist, err := staticfs.FS.ReadDir(chunks)
 	if err != nil {
 		t.Fatalf("no embedded bundle to check: %v — run `make ui-build`", err)
 	}
@@ -156,19 +157,41 @@ func TestSPAAssetsAreTypedCorrectlyUnderNosniff(t *testing.T) {
 	for _, e := range dist {
 		switch {
 		case js == "" && strings.HasSuffix(e.Name(), ".js"):
-			js = "/assets/" + e.Name()
+			js = strings.TrimPrefix(chunks, "dist") + "/" + e.Name()
 		case css == "" && strings.HasSuffix(e.Name(), ".css"):
-			css = "/assets/" + e.Name()
+			css = strings.TrimPrefix(chunks, "dist") + "/" + e.Name()
 		}
 	}
 	if js == "" || css == "" {
 		t.Fatalf("embedded bundle has no script (%q) or stylesheet (%q) to type-check", js, css)
 	}
+	// The pdf.js worker is loaded as a module script, so it is held to the
+	// same typing as the bundle's own scripts.
+	const media = "dist/_next/static/media"
+	assets, err := staticfs.FS.ReadDir(media)
+	if err != nil {
+		t.Fatalf("no embedded media to check: %v — run `make ui-build`", err)
+	}
+	var worker string
+	for _, e := range assets {
+		if strings.HasSuffix(e.Name(), ".mjs") {
+			worker = strings.TrimPrefix(media, "dist") + "/" + e.Name()
+			break
+		}
+	}
+	if worker == "" {
+		t.Fatal("embedded bundle has no pdf.js worker (.mjs) to type-check")
+	}
 
 	cases := []struct{ target, wantPrefix string }{
 		{"/", "text/html"}, // the shell; /index.html itself 301s to it
+		{"/book/some-book", "text/html"},
 		{js, "text/javascript"},
 		{css, "text/css"},
+		{worker, "text/javascript"},
+		// The router's navigation payloads; the export's client expects
+		// exactly text/plain for them.
+		{"/index.txt", "text/plain"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.target, func(t *testing.T) {

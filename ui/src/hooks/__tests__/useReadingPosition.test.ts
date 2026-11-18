@@ -15,8 +15,10 @@ const navigate = vi.fn()
 vi.mock("@/api/books", () => ({
   updateProgress: (...args: Array<unknown>) => updateProgress(...args),
 }))
-vi.mock("@tanstack/react-router", () => ({
-  useNavigate: () => navigate,
+// One router for the life of the app, as Next hands back.
+const router = { push: navigate, replace: navigate }
+vi.mock("next/navigation", () => ({
+  useRouter: () => router,
 }))
 
 const BOOK = "book-7"
@@ -186,10 +188,7 @@ describe("exit", () => {
   it("returns to the book page", () => {
     const { result } = setup(600)
     act(() => result.current.exit())
-    expect(navigate).toHaveBeenCalledWith({
-      to: "/book/$id",
-      params: { id: BOOK },
-    })
+    expect(navigate).toHaveBeenCalledWith(`/book/${BOOK}`, undefined)
   })
 
   it("navigates even when no position is pending", () => {

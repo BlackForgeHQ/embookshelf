@@ -1,6 +1,7 @@
-# TanStack Start + shadcn/ui
+# embookshelf UI
 
-This is a template for a new TanStack Start project with React, TypeScript, and shadcn/ui.
+Next.js (App Router) + React + TypeScript + shadcn/ui, built as a static export
+and embedded in the Go binary. See `docs/architecture.md`.
 
 ## Adding components
 

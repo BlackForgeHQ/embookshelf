@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef } from "react"
-import { useNavigate } from "@tanstack/react-router"
 
 import type { Locator } from "@/lib/locator"
 import { updateProgress } from "@/api/books"
 import { encodeLocator } from "@/lib/locator"
+import { paths } from "@/lib/routes"
+import { useAppRouter } from "@/lib/navigation"
 
 /**
  * A reading position: how far through the book the user is (0-1) and the
@@ -79,7 +80,7 @@ export function useReadingPosition({
   bookId,
   debounceMs = PAGE_DEBOUNCE_MS,
 }: UseReadingPositionOptions) {
-  const navigate = useNavigate()
+  const router = useAppRouter()
 
   const pendingRef = useRef<PendingPosition | null>(null)
   const timerRef = useRef<number | null>(null)
@@ -159,8 +160,8 @@ export function useReadingPosition({
   /** Leaves the reader for the book page, writing the position first. */
   const exit = useCallback(() => {
     write()
-    void navigate({ to: "/book/$id", params: { id: bookRef.current } })
-  }, [navigate, write])
+    router.push(paths.book(bookRef.current))
+  }, [router, write])
 
   // The exits that are not the shell's to see. Left to callers before,
   // and implemented by none of them, so a mobile listener who swiped the
