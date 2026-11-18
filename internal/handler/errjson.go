@@ -49,6 +49,10 @@ const (
 	// gate, distinct from the Kindle and narration ones for the same
 	// reason those two are distinct from each other.
 	CodeFormatNotConvertible = "FORMAT_NOT_CONVERTIBLE"
+	// CodeMCPDisabled — the admin has not switched the MCP server on, so
+	// /mcp refuses every client and no access token can be minted
+	// (ADR-0039 §4).
+	CodeMCPDisabled = "MCP_DISABLED"
 )
 
 // AllErrorCodes lists every declared code. Kept beside the constants so a
@@ -64,6 +68,7 @@ var AllErrorCodes = []string{
 	CodeFormatNotNarratable,
 	CodeConverterDisabled,
 	CodeFormatNotConvertible,
+	CodeMCPDisabled,
 }
 
 // errorBody is the JSON shape every non-2xx response uses.

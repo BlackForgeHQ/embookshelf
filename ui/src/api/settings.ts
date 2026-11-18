@@ -84,6 +84,7 @@ export const rescanLibrary = defineMutation({
 export type AppConfig = {
   s3Available: boolean
   emailEnabled: boolean
+  mcpEnabled: boolean
 }
 
 export async function fetchAppConfig(): Promise<AppConfig> {

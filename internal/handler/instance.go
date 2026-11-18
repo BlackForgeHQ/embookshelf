@@ -166,6 +166,9 @@ type appConfigDTO struct {
 	// password" and the book detail disables Send-to-Kindle when false.
 	// ADR-0020.
 	EmailEnabled bool `json:"emailEnabled"`
+	// MCPEnabled mirrors MCP.enabled. Account → MCP access shows only a
+	// notice while it is false. ADR-0039.
+	MCPEnabled bool `json:"mcpEnabled"`
 }
 
 // AppConfig returns lightweight feature flags derived from the server
@@ -174,6 +177,7 @@ func (h *Handler) AppConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, appConfigDTO{
 		S3Available:  h.cfg.SharedS3.Configured(),
 		EmailEnabled: h.emailEnabled(),
+		MCPEnabled:   h.mcpEnabled(),
 	})
 }
 

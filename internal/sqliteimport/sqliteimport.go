@@ -78,6 +78,7 @@ var excludedTables = map[string]string{
 	"book_audiobook_segments":  "child of book_audiobooks, excluded for the same reason",
 	"book_markdown_renditions": "added after ADR-0023 froze SQLite, so no source database can contain it; a Markdown rendition is regenerated from the book, not migrated",
 	"book_epub_renditions":     "added after ADR-0023 froze SQLite, so no source database can contain it; a generated EPUB is regenerated from the book, not migrated",
+	"api_tokens":               "added after ADR-0023 froze SQLite, so no source database can contain it; MCP access tokens are minted afresh, not migrated",
 	jobsTable:                  "SQLite-only polling queue; River owns its own tables on Postgres, so queued work cannot transfer",
 	"schema_migrations":        "the migrator's own bookkeeping, rebuilt by migrating the target",
 	"library_paths":            "dropped by migration 000018; libraries.path replaced it",

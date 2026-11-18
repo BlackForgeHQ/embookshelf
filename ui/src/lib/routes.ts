@@ -78,6 +78,7 @@ export const ACCOUNT_SECTIONS = [
   "reading",
   "devices",
   "shelves",
+  "mcp",
 ] as const
 export type AccountSection = (typeof ACCOUNT_SECTIONS)[number]
 

@@ -3,6 +3,7 @@
 
 import { AccountPanel } from "@/components/account/AccountPanel"
 import { DevicesPanel } from "@/components/account/DevicesPanel"
+import { McpAccessPanel } from "@/components/account/McpAccessPanel"
 import { MyShelvesPanel } from "@/components/account/MyShelvesPanel"
 import { ReadingPreferencesPanel } from "@/components/account/ReadingPreferencesPanel"
 import type { SettingsSection } from "@/components/SettingsShared"
@@ -24,6 +25,7 @@ const SECTIONS: ReadonlyArray<SettingsSection<AccountSection>> = [
     render: () => <ReadingPreferencesPanel />,
   },
   { key: "devices", label: "Device sync", render: () => <DevicesPanel /> },
+  { key: "mcp", label: "MCP access", render: () => <McpAccessPanel /> },
 ]
 
 export default function AccountPage() {

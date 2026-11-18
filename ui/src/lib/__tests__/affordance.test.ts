@@ -64,6 +64,7 @@ describe("affordanceFor", () => {
         ["EMAIL_DISABLED", "email"],
         ["GUIDES_DISABLED", "readingGuides"],
         ["AUDIOBOOKS_DISABLED", "audiobooks"],
+        ["MCP_DISABLED", "mcp"],
       ] as const) {
         const got = affordanceFor(code, admin)
 

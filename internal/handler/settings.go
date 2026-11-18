@@ -55,6 +55,9 @@ type appSettingsStore interface {
 	GetConverter(ctx context.Context) (repo.ConverterConfig, error)
 	SetConverter(ctx context.Context, cfg repo.ConverterConfig) error
 
+	GetMCP(ctx context.Context) (repo.MCPConfig, error)
+	SetMCP(ctx context.Context, cfg repo.MCPConfig) error
+
 	GetOIDCAutoProvision(ctx context.Context) (repo.OIDCAutoProvisionDetails, error)
 	GetGoogle(ctx context.Context) (repo.OAuthPresetConfig, error)
 	GetGitHub(ctx context.Context) (repo.OAuthPresetConfig, error)

@@ -37,7 +37,10 @@ func (h *Handler) Engine() *gin.Engine {
 		r.Use(auth.ForwardAuth(h.fwdAuthHolder, h.fwdAuth))
 	}
 
-	r.Use(auth.CSRFGuard(h.cfg.AllowedOrigins))
+	// /mcp is exempt: it takes only a bearer token, never the session
+	// cookie, so there is no ambient credential for a forged request to
+	// ride — and its clients send no Origin. ADR-0039 §3.
+	r.Use(auth.CSRFGuard(h.cfg.AllowedOrigins, mcpPath))
 
 	api := r.Group("/api/v1")
 	{
@@ -82,6 +85,13 @@ func (h *Handler) Engine() *gin.Engine {
 			authed.DELETE("/account/oidc/:provider", h.AccountOIDCUnlink)
 			authed.POST("/account/password/set", h.AccountSetInitialPassword)
 			authed.PUT("/account/kindle-email", h.AccountKindleEmailUpdate)
+
+			// Personal access tokens for MCP clients (ADR-0039). Minting
+			// refuses with 503 MCP_DISABLED while the admin switch is
+			// off; listing and revoking always work.
+			authed.GET("/account/tokens", h.userScoped(h.AccountTokensList))
+			authed.POST("/account/tokens", h.userScoped(h.AccountTokenCreate))
+			authed.DELETE("/account/tokens/:id", h.userScoped(h.AccountTokenRevoke))
 
 			// Cross-entity search powering the global command palette
 			// and the library page combobox.
@@ -241,6 +251,12 @@ func (h *Handler) Engine() *gin.Engine {
 				admin.GET("/forward-auth", h.SettingsForwardAuthGet)
 				admin.PUT("/forward-auth", h.SettingsForwardAuthUpdate)
 
+				// MCP switch + oversight of every user's tokens (ADR-0039).
+				admin.GET("/mcp", h.SettingsMCPGet)
+				admin.PUT("/mcp", h.SettingsMCPUpdate)
+				admin.GET("/mcp/tokens", h.SettingsMCPTokensList)
+				admin.DELETE("/mcp/tokens/:id", h.SettingsMCPTokenRevoke)
+
 				admin.GET("/email", h.SettingsEmailGet)
 				admin.PUT("/email", h.SettingsEmailUpdate)
 				admin.POST("/email/test", h.SettingsEmailTest)
@@ -289,6 +305,18 @@ func (h *Handler) Engine() *gin.Engine {
 		opds.GET("/book/:id/download", h.opdsBookScoped(h.OPDSDownload))
 		opds.GET("/cover/:id", h.opdsBookScoped(h.OPDSCover))
 	}
+
+	// MCP server (ADR-0039). Order is the contract: the switch answers
+	// first, so a disabled instance never touches api_tokens; a present
+	// foreign Origin is refused before any token is looked at; then the
+	// token, and only then the server.
+	mcpGroup := r.Group(mcpPath)
+	mcpGroup.Use(
+		h.requireMCPEnabled,
+		auth.PresentOriginGuard(h.cfg.AllowedOrigins),
+		auth.BearerToken(h.tokenResolver()),
+	)
+	mcpGroup.Any("", h.MCP)
 
 	h.mountSPA(r)
 

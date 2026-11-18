@@ -86,24 +86,27 @@ func RequireRole(roles ...model.Role) gin.HandlerFunc {
 // CORS allowlist so a split dev setup (Vite on :5173 proxying to the Go
 // backend on :6060, with `changeOrigin: true`) passes without loosening
 // the rule in production.
-func CSRFGuard(trustedOrigins []string) gin.HandlerFunc {
-	allowAny := false
-	trusted := make(map[string]struct{}, len(trustedOrigins))
-	for _, o := range trustedOrigins {
-		o = strings.TrimSpace(o)
-		if o == "" {
-			continue
-		}
-		if o == "*" {
-			allowAny = true
-			continue
-		}
-		trusted[strings.ToLower(o)] = struct{}{}
+//
+// exemptPaths names routes that authenticate with a bearer token and
+// never read the session cookie (ADR-0039 §3). CSRF rides an ambient
+// credential; a route with none has nothing for it to ride, and its
+// non-browser clients send no Origin at all. Exact paths only — an
+// exemption that matched a prefix could quietly grow to cover a cookie
+// route.
+func CSRFGuard(trustedOrigins []string, exemptPaths ...string) gin.HandlerFunc {
+	match := newOriginMatcher(trustedOrigins)
+	exempt := make(map[string]struct{}, len(exemptPaths))
+	for _, p := range exemptPaths {
+		exempt[p] = struct{}{}
 	}
 
 	return func(c *gin.Context) {
 		switch c.Request.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			c.Next()
+			return
+		}
+		if _, ok := exempt[c.Request.URL.Path]; ok {
 			c.Next()
 			return
 		}
@@ -125,25 +128,67 @@ func CSRFGuard(trustedOrigins []string) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "missing origin"})
 			return
 		}
+		if msg := match(origin, c.Request.Host); msg != "" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": msg})
+			return
+		}
+		c.Next()
+	}
+}
+
+// PresentOriginGuard refuses a request whose Origin header is present and
+// foreign, and lets one without an Origin through.
+//
+// For the bearer-token surface (ADR-0039 §3): its clients are not
+// browsers and send no Origin, so requiring one would lock them out —
+// but a request that *does* carry one came from a web page, and the MCP
+// spec asks servers to refuse pages from elsewhere (DNS rebinding).
+// Same allowlist and same-host rule as CSRFGuard.
+func PresentOriginGuard(trustedOrigins []string) gin.HandlerFunc {
+	match := newOriginMatcher(trustedOrigins)
+	return func(c *gin.Context) {
+		origin := c.Request.Header.Get("Origin")
+		if origin == "" {
+			c.Next()
+			return
+		}
+		if msg := match(origin, c.Request.Host); msg != "" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": msg})
+			return
+		}
+		c.Next()
+	}
+}
+
+// newOriginMatcher compiles the allowlist once and returns the check
+// both guards apply: "" when origin is the request's own host or a
+// trusted origin, otherwise the refusal's message.
+func newOriginMatcher(trustedOrigins []string) func(origin, host string) string {
+	allowAny := false
+	trusted := make(map[string]struct{}, len(trustedOrigins))
+	for _, o := range trustedOrigins {
+		o = strings.TrimSpace(o)
+		if o == "" {
+			continue
+		}
+		if o == "*" {
+			allowAny = true
+			continue
+		}
+		trusted[strings.ToLower(o)] = struct{}{}
+	}
+	return func(origin, host string) string {
 		u, err := url.Parse(origin)
 		if err != nil || u.Host == "" {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "bad origin"})
-			return
+			return "bad origin"
 		}
-		if strings.EqualFold(u.Host, c.Request.Host) {
-			c.Next()
-			return
+		if strings.EqualFold(u.Host, host) || allowAny {
+			return ""
 		}
-		if allowAny {
-			c.Next()
-			return
+		if _, ok := trusted[strings.ToLower(u.Scheme+"://"+u.Host)]; ok {
+			return ""
 		}
-		key := strings.ToLower(u.Scheme + "://" + u.Host)
-		if _, ok := trusted[key]; ok {
-			c.Next()
-			return
-		}
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "origin mismatch"})
+		return "origin mismatch"
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"math"
 	"path"
 	"strings"
 
@@ -61,21 +62,76 @@ var textualMediaTypes = map[string]bool{
 //
 // Returns ErrNoReadableText when the spine yields nothing.
 func ExtractEPUBText(ctx context.Context, src storage.Source, limit int64) (string, bool, error) {
+	text, truncated, _, err := walkEPUBText(ctx, src, limit)
+	return text, truncated, err
+}
+
+// OutlineEntry is one chapter of a book's table of contents, located in
+// the book's extracted text.
+type OutlineEntry struct {
+	Title string
+	// Offset is where the chapter's text starts in ExtractEPUBText's
+	// output, in bytes — the same coordinates paging uses (ADR-0039 §6).
+	Offset int64
+}
+
+// ExtractEPUBOutline returns the book's chapters in reading order, each
+// with its start offset in ExtractEPUBText's output.
+//
+// Titles come from the table of contents (tocTitles). Granularity is the
+// spine document, like narration's chapters: a TOC row pointing inside a
+// document names the document. Documents the TOC does not name are left
+// out — books routinely split one chapter across several files — unless
+// the TOC names none at all, when every document is listed as "Section N"
+// so a book without a TOC still has a map.
+//
+// Offsets come from the same walk that produces the text, so they cannot
+// disagree with it. Returns ErrNoReadableText when the spine yields
+// nothing.
+func ExtractEPUBOutline(ctx context.Context, src storage.Source) ([]OutlineEntry, error) {
+	_, _, docs, err := walkEPUBText(ctx, src, math.MaxInt64)
+	if err != nil {
+		return nil, err
+	}
+	var titled, all []OutlineEntry
+	for i, d := range docs {
+		all = append(all, OutlineEntry{Title: fmt.Sprintf("Section %d", i+1), Offset: d.start})
+		if d.title != "" {
+			titled = append(titled, OutlineEntry{Title: d.title, Offset: d.start})
+		}
+	}
+	if len(titled) > 0 {
+		return titled, nil
+	}
+	return all, nil
+}
+
+// textDoc is one spine document that contributed text: its TOC title,
+// if any, and where its text starts in the walk's output.
+type textDoc struct {
+	title string
+	start int64
+}
+
+// walkEPUBText is ExtractEPUBText's body, also reporting where each
+// contributing document starts — the one walk both the text and the
+// outline come from.
+func walkEPUBText(ctx context.Context, src storage.Source, limit int64) (string, bool, []textDoc, error) {
 	zr, err := zip.NewReader(src, src.Size())
 	if err != nil {
-		return "", false, fmt.Errorf("open epub: %w", err)
+		return "", false, nil, fmt.Errorf("open epub: %w", err)
 	}
 	opfPath, err := rootfilePath(zr)
 	if err != nil {
-		return "", false, err
+		return "", false, nil, err
 	}
 	raw, err := readZipFile(zr, opfPath)
 	if err != nil {
-		return "", false, fmt.Errorf("read opf: %w", err)
+		return "", false, nil, fmt.Errorf("read opf: %w", err)
 	}
 	var doc opfSpineDoc
 	if err := xml.Unmarshal(raw, &doc); err != nil {
-		return "", false, fmt.Errorf("parse opf: %w", err)
+		return "", false, nil, fmt.Errorf("parse opf: %w", err)
 	}
 
 	byID := make(map[string]opfItem, len(doc.Manifest.Items))
@@ -86,24 +142,40 @@ func ExtractEPUBText(ctx context.Context, src storage.Source, limit int64) (stri
 	// Most EPUBs nest their OPF, so resolving against the root instead
 	// makes every chapter unreadable.
 	base := path.Dir(opfPath)
+	titles := tocTitles(zr, base, doc.Manifest.Items)
 
-	var b strings.Builder
-	truncated := false
+	var (
+		b         strings.Builder
+		docs      []textDoc
+		truncated bool
+	)
 	for _, ref := range doc.Spine.ItemRefs {
 		if err := ctx.Err(); err != nil {
-			return "", false, err
+			return "", false, nil, err
 		}
 		item, ok := byID[ref.IDRef]
 		if !ok || !textualMediaTypes[item.MediaType] {
 			continue
 		}
-		payload, err := readZipFile(zr, path.Join(base, item.Href))
+		docPath := path.Join(base, item.Href)
+		payload, err := readZipFile(zr, docPath)
 		if err != nil {
 			// A spine entry pointing at a missing file is a broken book,
 			// not a broken reader — take what the rest of it gives.
 			continue
 		}
-		if appendDocumentText(&b, payload, limit) {
+		before := int64(b.Len())
+		bound := appendDocumentText(&b, payload, limit)
+		if int64(b.Len()) > before {
+			// The separator, when there is one, belongs before the
+			// document: its text starts after it.
+			start := before
+			if before > 0 {
+				start++
+			}
+			docs = append(docs, textDoc{title: titles[docPath], start: start})
+		}
+		if bound {
 			truncated = true
 			break
 		}
@@ -111,9 +183,9 @@ func ExtractEPUBText(ctx context.Context, src storage.Source, limit int64) (stri
 
 	text := strings.TrimSpace(b.String())
 	if text == "" {
-		return "", false, ErrNoReadableText
+		return "", false, nil, ErrNoReadableText
 	}
-	return text, truncated, nil
+	return text, truncated, docs, nil
 }
 
 // appendDocumentText writes one document's character data into b, skipping
@@ -156,15 +228,23 @@ func appendDocumentText(b *strings.Builder, payload []byte, limit int64) bool {
 			if s == "" {
 				continue
 			}
-			if int64(b.Len())+int64(len(s))+1 > limit {
+			// The separator is written on both paths, so the text a
+			// smaller limit yields is always a prefix of what a larger
+			// one yields — paging by offset (ADR-0039 §6) depends on it.
+			// The fill path used to drop it, gluing two documents
+			// together at the cut and shifting every later offset.
+			if b.Len() > 0 {
+				if int64(b.Len())+1 > limit {
+					return true
+				}
+				b.WriteByte(' ')
+			}
+			if int64(b.Len())+int64(len(s)) > limit {
 				// Fill what remains so the cap binds exactly, then stop.
 				if room := limit - int64(b.Len()); room > 0 {
 					b.WriteString(s[:room])
 				}
 				return true
-			}
-			if b.Len() > 0 {
-				b.WriteByte(' ')
 			}
 			b.WriteString(s)
 		}

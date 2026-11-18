@@ -5,6 +5,7 @@ package handler
 import (
 	"context"
 	"embed"
+	"net/http"
 	"time"
 
 	"github.com/blackforge/embookshelf/internal/auth"
@@ -103,6 +104,14 @@ type Handler struct {
 	// by the middleware on a trusted-IP hit.
 	fwdAuthHolder *auth.ForwardAuthHolder
 	fwdAuth       auth.ForwardAuthResolver
+	// MCP (ADR-0039). mcp is the runtime on/off switch, republished by
+	// the MCP settings save; apiTokens mints, lists and revokes the
+	// personal access tokens MCP clients authenticate with.
+	mcp       *service.MCPSwitch
+	apiTokens apiTokenManager
+	// mcpServer is the /mcp endpoint itself, behind the switch and the
+	// bearer middleware.
+	mcpServer http.Handler
 }
 
 // The Handler's dependencies are split by whether the code actually
@@ -240,6 +249,24 @@ func NewAccountDeps(
 	return AccountDeps{auth: auth, users: users, devices: devices, appSettings: appSettings}
 }
 
+// MCPDeps carries the MCP surface (ADR-0039): the instance switch, the
+// personal access tokens clients authenticate with, and the server
+// mounted at /mcp.
+type MCPDeps struct {
+	mcp       *service.MCPSwitch
+	apiTokens *service.APITokenService
+	server    http.Handler
+}
+
+// NewMCPDeps builds the MCP group.
+func NewMCPDeps(
+	mcp *service.MCPSwitch,
+	apiTokens *service.APITokenService,
+	server http.Handler,
+) MCPDeps {
+	return MCPDeps{mcp: mcp, apiTokens: apiTokens, server: server}
+}
+
 // Email carries the delivery subsystem (ADR-0020). Notifier is always
 // non-nil; whether email is actually on is runtime state it holds, which
 // emailEnabled() consults so admin edits hot-reload without a restart.
@@ -294,10 +321,10 @@ type Options struct {
 	FwdAuth       auth.ForwardAuthResolver
 }
 
-// New assembles the Handler. The five required groups are positional, so
+// New assembles the Handler. The six required groups are positional, so
 // a seam added to any of them fails the build until the composition root
 // supplies it.
-func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailDeps, opts Options) *Handler {
+func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailDeps, m MCPDeps, opts Options) *Handler {
 	return &Handler{
 		cfg: p.cfg, static: p.static, version: p.version, commit: p.commit, hub: p.hub,
 		platform: p.platform, startedAt: time.Now(),
@@ -315,6 +342,8 @@ func New(p PlatformDeps, l LibraryDeps, d DiscoveryDeps, a AccountDeps, e EmailD
 
 		auth: a.auth, users: a.users, devices: a.devices,
 		appSettings: newAppSettingsStore(a.appSettings),
+
+		mcp: m.mcp, apiTokens: newAPITokenManager(m.apiTokens), mcpServer: m.server,
 
 		notifier: e.notifier, resets: e.resets, inviteRepo: e.inviteRepo,
 
@@ -358,6 +387,21 @@ func newOIDCSettingsService(
 		return service.NewOIDCSettingsService(rows, nil)
 	}
 	return service.NewOIDCSettingsService(rows, oidc)
+}
+
+// newAPITokenManager keeps a missing service a nil interface, for the
+// same typed-nil reason newAppSettingsStore spells out.
+func newAPITokenManager(s *service.APITokenService) apiTokenManager {
+	if s == nil {
+		return nil
+	}
+	return s
+}
+
+// mcpEnabled reports whether the admin has switched MCP on. A Handler
+// without the switch (a partial test literal) reads as off.
+func (h *Handler) mcpEnabled() bool {
+	return h.mcp.Enabled()
 }
 
 // emailEnabled reports whether the email subsystem is wired and on.
