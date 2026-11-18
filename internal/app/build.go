@@ -18,6 +18,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/handler"
 	"github.com/blackforge/embookshelf/internal/ingest"
 	"github.com/blackforge/embookshelf/internal/jobs"
+	"github.com/blackforge/embookshelf/internal/mcpserver"
 	"github.com/blackforge/embookshelf/internal/migrator"
 	"github.com/blackforge/embookshelf/internal/provider"
 	"github.com/blackforge/embookshelf/internal/queue"
@@ -193,6 +194,7 @@ type repos struct {
 	identity       *repo.IdentityRepo
 	reset          *repo.PasswordResetTokenRepo
 	invite         *repo.UserInviteRepo
+	apiToken       *repo.APITokenRepo
 	guide          *repo.BookReadingGuideRepo
 	rendition      *repo.BookMarkdownRenditionRepo
 	epubRendition  *repo.BookEpubRenditionRepo
@@ -243,6 +245,7 @@ func buildRepos(p prepared, cfg config.Config) (repos, error) {
 		identity:       repo.NewIdentityRepo(dbh),
 		reset:          repo.NewPasswordResetTokenRepo(dbh),
 		invite:         repo.NewUserInviteRepo(dbh),
+		apiToken:       repo.NewAPITokenRepo(dbh),
 		guide:          repo.NewBookReadingGuideRepo(dbh),
 		rendition:      repo.NewBookMarkdownRenditionRepo(dbh),
 		epubRendition:  repo.NewBookEpubRenditionRepo(dbh),
@@ -272,6 +275,8 @@ type services struct {
 	oidc                 *service.OIDCService
 	fwdAuthHolder        *auth.ForwardAuthHolder
 	fwdAuth              *service.ForwardAuthService
+	mcp                  *service.MCPSwitch
+	apiTokens            *service.APITokenService
 	notifier             *service.Notifier
 	reset                *service.PasswordResetService
 	guideRunner          *service.GuideRunner
@@ -381,6 +386,14 @@ func buildServices(ctx context.Context, w wiring, r repos) (services, error) {
 		)
 	}
 
+	// MCP switch (ADR-0039 §4). Same absent-row reasoning as forward-auth:
+	// unseeded reads back as the disabled default the seed would write.
+	mcpCfg, err := r.appSettings.GetMCP(ctx)
+	if err != nil {
+		return services{}, fmt.Errorf("load mcp settings: %w", err)
+	}
+	mcpSwitch := service.NewMCPSwitch(mcpCfg.Enabled)
+
 	// Email subsystem (ADR-0020). Notifier is always built; its runtime
 	// sender is hot-reloadable via Notifier.Reload so admins can flip
 	// the EMAIL row from the settings UI without restarting the
@@ -474,6 +487,8 @@ func buildServices(ctx context.Context, w wiring, r repos) (services, error) {
 		oidc:          service.NewOIDCService(r.appSettings, r.user, r.session, r.identity, w.cfg.AppURL),
 		fwdAuthHolder: auth.NewForwardAuthHolder(fwdAuthRuntime),
 		fwdAuth:       service.NewForwardAuthService(r.appSettings, r.user, r.identity),
+		mcp:           mcpSwitch,
+		apiTokens:     service.NewAPITokenService(r.apiToken, r.user, mcpSwitch),
 		notifier:      notifier,
 		reset:         service.NewPasswordResetService(r.user, r.reset, r.session, notifier),
 		guideRunner:   service.NewGuideRunner(r.guide, w.enq, guideCfg.TextCap),
@@ -596,6 +611,23 @@ func buildHTTP(w wiring, r repos, s services, q queue.Client, version, commit st
 		),
 		handler.NewAccountDeps(s.auth, r.user, s.device, r.appSettings),
 		handler.NewEmailDeps(s.notifier, s.reset, r.invite),
+		handler.NewMCPDeps(s.mcp, s.apiTokens, mcpserver.Handler(mcpserver.New(mcpserver.Deps{
+			Books:       r.book,
+			Libraries:   s.lib,
+			Shelves:     s.shelf,
+			Search:      s.search,
+			Annotations: s.annotation,
+			Guides:      r.guide,
+			// The same text source reading guides read through, so the
+			// model and a guide never disagree about a book's text
+			// (ADR-0039 §5). A missing or stale PDF rendition is
+			// requested here exactly as a guide would request it.
+			Text: &service.BookText{
+				Books:    service.NewLibraryBookOpener(s.libStore),
+				Markdown: service.NewMarkdownFeed(r.rendition, service.NewBookOps(s.libStore, r.file), w.enq),
+			},
+			Version: version,
+		}))),
 		handler.Options{
 			LibStore:      s.libStore,
 			OIDC:          s.oidc,

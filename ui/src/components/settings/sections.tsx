@@ -8,6 +8,7 @@ import { ForwardAuthPanel } from "@/components/settings/ForwardAuthPanel"
 import { InstancePanel } from "@/components/settings/InstancePanel"
 import { InvitesPanel } from "@/components/settings/InvitesPanel"
 import { LibrariesPanel } from "@/components/settings/LibrariesPanel"
+import { McpPanel } from "@/components/settings/McpPanel"
 import { OidcPanel } from "@/components/settings/OidcPanel"
 import { ProvidersPanel } from "@/components/settings/ProvidersPanel"
 import { ReadingGuidesPanel } from "@/components/settings/ReadingGuidesPanel"
@@ -25,6 +26,7 @@ export type SettingsSectionKey =
   | "users"
   | "oidc"
   | "forwardAuth"
+  | "mcp"
   | "instance"
 
 // The whole of /settings as data: label, gate, panel — one row per
@@ -101,6 +103,12 @@ export const SETTINGS_SECTIONS: ReadonlyArray<
     label: "Forward auth",
     adminOnly: true,
     render: () => <ForwardAuthPanel />,
+  },
+  {
+    key: "mcp",
+    label: "MCP",
+    adminOnly: true,
+    render: () => <McpPanel />,
   },
   {
     key: "instance",

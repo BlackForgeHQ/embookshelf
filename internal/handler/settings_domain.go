@@ -21,8 +21,8 @@ import (
 // admin's 400, and the side effect a saved row triggers (hot-reload,
 // runtime publish, cache invalidation).
 //
-// Six surfaces are declared: email, reading guide, audiobook, forward
-// auth, converter, and OIDC (whose save is the transactional
+// Seven surfaces are declared: email, reading guide, audiobook, forward
+// auth, converter, MCP, and OIDC (whose save is the transactional
 // service.OIDCSettingsService.Apply rather than a store write — the
 // pipeline around it is the same). The metadata surface stays outside
 // deliberately: it is a bare GetBool/SetBool, not a typed row, and has

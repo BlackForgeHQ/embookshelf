@@ -207,6 +207,119 @@ func TestExtractEPUBTextRespectsLimit(t *testing.T) {
 	}
 }
 
+// TestExtractEPUBTextIsPrefixStableAcrossLimits — the text a smaller cap
+// yields must be a prefix of what a larger cap yields, whatever the cap
+// lands on: mid-word, on a document boundary, or on the separator itself.
+// Paging by offset re-extracts with a growing cap, and a one-byte shift
+// at a document boundary would duplicate or drop text between pages.
+func TestExtractEPUBTextIsPrefixStableAcrossLimits(t *testing.T) {
+	src := buildEPUB(t, "content.opf", `<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <manifest>
+    <item id="c1" href="one.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c2" href="two.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="c1"/><itemref idref="c2"/></spine>
+</package>`,
+		epubFile{"one.xhtml", xhtml(`<p>First chapter ends here.</p>`)},
+		epubFile{"two.xhtml", xhtml(`<p>Second chapter begins.</p>`)},
+	)
+	full, _, err := ExtractEPUBText(context.Background(), src, noLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(full, "here. Second") {
+		t.Fatalf("documents not separated: %q", full)
+	}
+	for limit := int64(1); limit <= int64(len(full)); limit++ {
+		got, _, err := ExtractEPUBText(context.Background(), src, limit)
+		if err != nil {
+			t.Fatalf("limit %d: %v", limit, err)
+		}
+		// ExtractEPUBText trims, so a cut that ends on the separator
+		// loses it — still a prefix.
+		if !strings.HasPrefix(full, got) {
+			t.Fatalf("limit %d: %q is not a prefix of %q", limit, got, full)
+		}
+	}
+}
+
+// TestExtractEPUBOutlineLocatesChaptersInTheText — an entry's offset is
+// where that chapter's words begin in ExtractEPUBText's output, the
+// coordinates get_book_text pages in. A document the TOC does not name
+// (the continuation file) contributes text but no entry; one that yields
+// no text (the image page) moves no offset.
+func TestExtractEPUBOutlineLocatesChaptersInTheText(t *testing.T) {
+	src := buildEPUB(t, "OEBPS/content.opf", `<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="img" href="plate.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c1" href="text/one.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c1b" href="text/one-cont.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c2" href="text/two.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="img"/><itemref idref="c1"/><itemref idref="c1b"/><itemref idref="c2"/></spine>
+</package>`,
+		epubFile{"OEBPS/nav.xhtml", xhtml(`<nav><ol>
+			<li><a href="text/one.xhtml">Chapter
+			  One</a></li>
+			<li><a href="text/two.xhtml#start">Chapter Two</a></li>
+		</ol></nav>`)},
+		epubFile{"OEBPS/plate.xhtml", xhtml(`<img src="plate.png"/>`)},
+		epubFile{"OEBPS/text/one.xhtml", xhtml(`<p>It begins in the desert.</p>`)},
+		epubFile{"OEBPS/text/one-cont.xhtml", xhtml(`<p>The desert goes on.</p>`)},
+		epubFile{"OEBPS/text/two.xhtml", xhtml(`<p>Then the sea.</p>`)},
+	)
+
+	text, _, err := ExtractEPUBText(context.Background(), src, noLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outline, err := ExtractEPUBOutline(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outline) != 2 {
+		t.Fatalf("outline = %+v, want the two titled chapters", outline)
+	}
+	for i, want := range []struct{ title, starts string }{
+		{"Chapter One", "It begins in the desert."},
+		{"Chapter Two", "Then the sea."},
+	} {
+		e := outline[i]
+		if e.Title != want.title {
+			t.Errorf("entry %d title = %q, want %q", i, e.Title, want.title)
+		}
+		if !strings.HasPrefix(text[e.Offset:], want.starts) {
+			t.Errorf("entry %d offset %d lands on %q, want %q", i, e.Offset, text[e.Offset:], want.starts)
+		}
+	}
+}
+
+// Without a table of contents every document still gets an entry, so a
+// book with no TOC is not a book with no map.
+func TestExtractEPUBOutlineFallsBackToSections(t *testing.T) {
+	src := buildEPUB(t, "content.opf", `<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <manifest>
+    <item id="a" href="a.xhtml" media-type="application/xhtml+xml"/>
+    <item id="b" href="b.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="a"/><itemref idref="b"/></spine>
+</package>`,
+		epubFile{"a.xhtml", xhtml(`<p>Alpha.</p>`)},
+		epubFile{"b.xhtml", xhtml(`<p>Beta.</p>`)},
+	)
+	outline, err := ExtractEPUBOutline(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outline) != 2 || outline[0].Title != "Section 1" || outline[0].Offset != 0 || outline[1].Offset != int64(len("Alpha. ")) {
+		t.Fatalf("outline = %+v", outline)
+	}
+}
+
 func TestExtractEPUBTextNotTruncatedWhenUnderLimit(t *testing.T) {
 	src := simpleEPUB(t, xhtml(`<p>Short.</p>`))
 

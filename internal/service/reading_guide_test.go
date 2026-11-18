@@ -335,7 +335,7 @@ func TestGuideSurfacesStoreFailure(t *testing.T) {
 // touching the book's own bytes.
 func TestGuideUsesMarkdownRenditionForPDF(t *testing.T) {
 	h := newGuideHarness(t, nil)
-	h.svc.markdown = &MarkdownFeed{
+	h.svc.text.Markdown = &MarkdownFeed{
 		Renditions: &fakeRenditionReader{row: model.MarkdownRendition{
 			State: model.RenditionReady, Location: "A/T/T.md",
 		}},
@@ -367,7 +367,7 @@ func TestGuideUsesMarkdownRenditionForPDF(t *testing.T) {
 // conversion's own message is the error.
 func TestGuideSurfacesRenditionFailureVerbatim(t *testing.T) {
 	h := newGuideHarness(t, nil)
-	h.svc.markdown = &MarkdownFeed{
+	h.svc.text.Markdown = &MarkdownFeed{
 		Renditions: &fakeRenditionReader{row: model.MarkdownRendition{
 			State: model.RenditionFailed,
 			Error: "converter extension is not configured",

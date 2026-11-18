@@ -47,6 +47,9 @@ vi.mock("@/components/settings/OidcPanel", () => ({
 vi.mock("@/components/settings/ForwardAuthPanel", () => ({
   ForwardAuthPanel: probe("ForwardAuthPanel"),
 }))
+vi.mock("@/components/settings/McpPanel", () => ({
+  McpPanel: probe("McpPanel"),
+}))
 vi.mock("@/components/settings/InstancePanel", () => ({
   InstancePanel: probe("InstancePanel"),
 }))
@@ -67,6 +70,7 @@ const EXPECTED_PANEL: Record<SettingsSectionKey, string> = {
   users: "UsersPanel",
   oidc: "OidcPanel",
   forwardAuth: "ForwardAuthPanel",
+  mcp: "McpPanel",
   instance: "InstancePanel",
 }
 

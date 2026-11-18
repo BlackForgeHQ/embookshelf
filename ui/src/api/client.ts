@@ -12,6 +12,7 @@ export type ApiErrorCode =
   | "FORMAT_NOT_NARRATABLE"
   | "CONVERTER_DISABLED"
   | "FORMAT_NOT_CONVERTIBLE"
+  | "MCP_DISABLED"
 
 // The server's error envelope is flat: `error` is always the display
 // message, `code` is present only when the case is one a client is

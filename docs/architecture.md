@@ -7,9 +7,9 @@ UI is a [Next.js](https://nextjs.org) App Router app built as a **static
 export** (Next.js 16 + Turbopack + React 19 + TypeScript +
 [Tailwind 4](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com);
 ADR-0037). The Go server exposes JSON APIs under `/api/v1/*`, an OPDS 1.2
-catalog under `/opds/*`, an SSE stream at `/events`, and serves the
-exported UI embedded in the binary via `//go:embed`. Data lives in
-PostgreSQL.
+catalog under `/opds/*`, an SSE stream at `/events`, an MCP server at
+`/mcp` (ADR-0039), and serves the exported UI embedded in the binary via
+`//go:embed`. Data lives in PostgreSQL.
 
 ```
 ┌───────────────────────────────────────────────────────────┐
@@ -234,6 +234,11 @@ included. Tiered by role:
   `embookshelf import-sqlite`. Deletable when the deprecation window
   closes (ADR-0023).
 - `sse/` — Fan-out hub for the `/events` endpoint.
+- `mcpserver/` — The `/mcp` surface (ADR-0039): read-only MCP tools over
+  the same user-scoped services the HTTP API calls, on the official
+  `modelcontextprotocol/go-sdk`. Each tool takes its user from the SDK's
+  `TokenInfo`, which `Handler` stamps from the user `auth.BearerToken`
+  resolved.
 - `opds/` — Atom/XML feed types + builder.
 - `provider/` — External metadata sources + catalog + resilient
   client + scoring. See §7.1.
@@ -309,7 +314,7 @@ Handler → Service → Repository → PostgreSQL
       External APIs (Google Books, Open Library, Amazon)
 ```
 
-- **Handlers** — Gin `HandlerFunc`s. Four active surfaces:
+- **Handlers** — Gin `HandlerFunc`s. Five active surfaces:
   1. `/api/v1/*` — JSON. Auth + OIDC, me + account + identities,
      libraries, shelves, books (CRUD + cover + file + pages + progress
      + shelf membership + send-to-device), bookdrop (list / upload /
@@ -320,7 +325,11 @@ Handler → Service → Repository → PostgreSQL
      metadata / oidc / users).
   2. `/opds/*` — Atom XML for e-readers, Basic-Auth-protected.
   3. `/events` — Server-Sent Events stream, cookie-authed.
-  4. `/` (fall-through) — serves the embedded UI (§8.3).
+  4. `/mcp` — Model Context Protocol server (stateless Streamable HTTP),
+     personal-access-token authed, off until an admin enables it.
+     Read-only tools, plus each book as a resource
+     (`embookshelf://book/{id}`), in `internal/mcpserver/`. ADR-0039.
+  5. `/` (fall-through) — serves the embedded UI (§8.3).
 
   Dependencies land in a `Deps` struct so `handler.New`'s signature
   stays flat as the app grows (~20 deps today; positional args would be
@@ -578,6 +587,12 @@ unification.
 - **Remote/Forward Auth** *(planned)* — middleware that trusts
   `Remote-User` / `Remote-Email` / `Remote-Groups` reverse-proxy
   headers. Not wired today.
+- **Personal access tokens** *(built, `/mcp` only)* — `ebk_…` tokens a
+  user mints under Account → MCP access, stored as SHA-256 in
+  `api_tokens`, sent as `Authorization: Bearer`. `auth.BearerToken`
+  resolves them on `/mcp` and nowhere else, so a token cannot reach
+  `/api/v1`. `/mcp` is the one route `CSRFGuard` exempts: it never reads
+  the session cookie. ADR-0039.
 - **JWT** *(not planned for the web SPA)* — server-side sessions keep
   revocation free and play well with SameSite cookies. A JWT
   access-token layer can still be added to `/api/v1/*` later for

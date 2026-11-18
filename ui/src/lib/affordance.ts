@@ -28,6 +28,7 @@ export const ALL_ERROR_CODES = [
   "FORMAT_NOT_NARRATABLE",
   "CONVERTER_DISABLED",
   "FORMAT_NOT_CONVERTIBLE",
+  "MCP_DISABLED",
 ] as const satisfies ReadonlyArray<ApiErrorCode>
 
 /** Who is looking, which is what decides what an obstacle looks like. */
@@ -166,6 +167,14 @@ export function affordanceFor(
         adminReason:
           "The converter extension is not configured. Point it at the sidecar to enable Markdown conversion.",
         label: "Configure converter",
+      })
+
+    case "MCP_DISABLED":
+      return instanceWide(viewer, {
+        panel: "mcp",
+        adminReason:
+          "MCP is switched off for this instance. Turn it on to let assistants connect.",
+        label: "Open MCP settings",
       })
 
     case "FORMAT_NOT_CONVERTIBLE":

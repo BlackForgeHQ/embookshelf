@@ -41,6 +41,7 @@ type fakeAppSettings struct {
 	forwardAuth     repo.ForwardAuthConfig
 	converter       repo.ConverterConfig
 	converterErr    error
+	mcp             repo.MCPConfig
 	google          repo.OAuthPresetConfig
 	github          repo.OAuthPresetConfig
 	generic         repo.GenericOIDCConfig
@@ -140,6 +141,15 @@ func (f *fakeAppSettings) SetConverter(_ context.Context, cfg repo.ConverterConf
 		return f.setConverterErr
 	}
 	f.converter = cfg
+	return nil
+}
+
+func (f *fakeAppSettings) GetMCP(context.Context) (repo.MCPConfig, error) {
+	return f.mcp, nil
+}
+
+func (f *fakeAppSettings) SetMCP(_ context.Context, cfg repo.MCPConfig) error {
+	f.mcp = cfg
 	return nil
 }
 

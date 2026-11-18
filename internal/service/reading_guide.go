@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/blackforge/embookshelf/internal/fileproc"
 	"github.com/blackforge/embookshelf/internal/llm"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/storage"
@@ -59,11 +58,10 @@ const DefaultGuideTextCap = 48_000
 // ReadingGuideService writes reading guides (ADR-0024). Single entry
 // point: Generate.
 type ReadingGuideService struct {
-	guides   readingGuideStore
-	books    bookSourceOpener
-	llm      GuideCompleter
-	markdown *MarkdownFeed
-	opts     ReadingGuideOptions
+	guides readingGuideStore
+	text   *BookText
+	llm    GuideCompleter
+	opts   ReadingGuideOptions
 }
 
 // NewReadingGuideService builds the generator. markdown may be nil —
@@ -84,7 +82,10 @@ func NewReadingGuideService(
 		opts.Language = "en"
 	}
 	return &ReadingGuideService{
-		guides: guides, books: books, llm: completer, markdown: markdown, opts: opts,
+		guides: guides,
+		text:   &BookText{Books: books, Markdown: markdown},
+		llm:    completer,
+		opts:   opts,
 	}
 }
 
@@ -138,43 +139,24 @@ func (s *ReadingGuideService) Generate(ctx context.Context, book model.Book) (mo
 // pending while the rendition converts, or the conversion's own message
 // verbatim.
 func (s *ReadingGuideService) readSource(ctx context.Context, book model.Book) (string, model.GuideSource, error) {
-	if strings.EqualFold(book.Format, "EPUB") {
-		return s.readEPUBSource(ctx, book)
-	}
-	if s.markdown != nil && model.Convertible(book.Format) {
-		text, err := s.markdown.Text(ctx, book, s.opts.TextCap)
-		if err != nil {
-			return "", "", err
+	text, truncated, err := s.text.Read(ctx, book, s.opts.TextCap)
+	switch {
+	case err == nil:
+		if truncated {
+			slog.Debug("reading guide: text truncated", "book", book.ID, "cap", s.opts.TextCap)
 		}
 		return text, model.GuideSourceFullText, nil
-	}
-	// Not attempted rather than attempted-and-failed: CBZ would need
-	// OCR, audio transcription; and with no converter wired a PDF is in
-	// the same place it was before ADR-0033. Opening the bytes to
-	// rediscover that would cost a full download per book on an
-	// S3-backed library.
-	return "", model.GuideSourceMetadata, nil
-}
-
-func (s *ReadingGuideService) readEPUBSource(ctx context.Context, book model.Book) (string, model.GuideSource, error) {
-	src, err := s.books.Open(ctx, book)
-	if err != nil {
-		slog.Warn("reading guide: open book", "book", book.ID, "err", err)
+	case errors.Is(err, ErrNoBookText):
 		return "", model.GuideSourceMetadata, nil
-	}
-	defer func() { _ = src.Close() }()
-
-	text, truncated, err := fileproc.ExtractEPUBText(ctx, src, s.opts.TextCap)
-	if err != nil {
-		// Includes ErrNoReadableText — a picture book, or an archive we
-		// cannot parse. Both are metadata guides.
-		slog.Warn("reading guide: extract text", "book", book.ID, "err", err)
+	case strings.EqualFold(book.Format, "EPUB"):
+		// Includes fileproc.ErrNoReadableText — a picture book, or an
+		// archive we cannot parse — and an open that failed. All are
+		// metadata guides.
+		slog.Warn("reading guide: read epub text", "book", book.ID, "err", err)
 		return "", model.GuideSourceMetadata, nil
+	default:
+		return "", "", err
 	}
-	if truncated {
-		slog.Debug("reading guide: text truncated", "book", book.ID, "cap", s.opts.TextCap)
-	}
-	return text, model.GuideSourceFullText, nil
 }
 
 // guideReply is the JSON contract the prompt asks for. Field names are

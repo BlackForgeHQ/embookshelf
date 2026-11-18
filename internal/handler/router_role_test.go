@@ -76,6 +76,27 @@ func TestBookGuideWritesAreAdminOnly(t *testing.T) {
 	}
 }
 
+// The MCP switch and the all-users token list are admin-only (ADR-0039
+// §4); a user's own tokens live under /account.
+func TestMCPSettingsAreAdminOnly(t *testing.T) {
+	cases := []struct {
+		method, target, body string
+	}{
+		{http.MethodGet, "/api/v1/settings/mcp", ""},
+		{http.MethodPut, "/api/v1/settings/mcp", `{"enabled":true}`},
+		{http.MethodGet, "/api/v1/settings/mcp/tokens", ""},
+		{http.MethodDelete, "/api/v1/settings/mcp/tokens/00000000-0000-0000-0000-000000000001", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.method+" "+tc.target, func(t *testing.T) {
+			rec := roleRouterRequest(t, model.RoleUser, tc.method, tc.target, tc.body)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("%s %s as a non-admin = %d, want 403", tc.method, tc.target, rec.Code)
+			}
+		})
+	}
+}
+
 // Control: the harness authenticates a non-admin fine, so the 403s above
 // are the role gate and not a broken request.
 func TestNonAdminReachesAnUngatedRoute(t *testing.T) {
