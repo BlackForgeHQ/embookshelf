@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.10](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.9...v0.6.10) (2026-11-18)
+
+
+### Features
+
+* **ui:** rebuild the UI on Next.js 16 as a static export ([#394](https://github.com/BlackForgeHQ/embookshelf/issues/394)) ([370cef8](https://github.com/BlackForgeHQ/embookshelf/commit/370cef814a88c26f092ee813acef51a56f7c97bd))
+
 ## [0.6.9](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.8...v0.6.9) (2026-11-16)
 
 
