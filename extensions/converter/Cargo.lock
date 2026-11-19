@@ -605,6 +605,7 @@ dependencies = [
  "anydoc",
  "axum",
  "http-body-util",
+ "lopdf",
  "pdf-inspector",
  "pulldown-cmark",
  "serde",

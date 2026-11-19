@@ -45,7 +45,8 @@ func TestMarkdownRenditionArtifactProjection(t *testing.T) {
 		t.Fatalf("MarkRunning: %v", err)
 	}
 	hash := []byte{0xde, 0xad, 0xbe, 0xef}
-	if err := r.MarkReady(ctx, b.ID, "Author/Title/Title.md", 1234, hash, "0.1.0"); err != nil {
+	pages := model.PageCoverage{PageCount: 353, MissingPages: "1,10-15"}
+	if err := r.MarkReady(ctx, b.ID, "Author/Title/Title.md", 1234, pages, hash, "0.1.0"); err != nil {
 		t.Fatalf("MarkReady: %v", err)
 	}
 
@@ -61,6 +62,29 @@ func TestMarkdownRenditionArtifactProjection(t *testing.T) {
 	}
 	if !bytes.Equal(got.SourceContentHash, hash) || got.ConverterVersion != "0.1.0" {
 		t.Fatalf("provenance = %x / %q", got.SourceContentHash, got.ConverterVersion)
+	}
+	if got.Pages != pages {
+		t.Fatalf("Pages = %+v, want %+v", got.Pages, pages)
+	}
+
+	// A regeneration's page record replaces the last one whole: a clean
+	// re-conversion must not inherit the old missing pages.
+	if err := r.Start(ctx, b.ID); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := r.MarkRunning(ctx, b.ID); err != nil {
+		t.Fatalf("MarkRunning: %v", err)
+	}
+	clean := model.PageCoverage{PageCount: 353}
+	if err := r.MarkReady(ctx, b.ID, "Author/Title/Title.md", 1234, clean, hash, "0.2.0"); err != nil {
+		t.Fatalf("MarkReady again: %v", err)
+	}
+	got, err = r.GetByBookID(ctx, b.ID)
+	if err != nil {
+		t.Fatalf("GetByBookID: %v", err)
+	}
+	if got.Pages != clean {
+		t.Fatalf("Pages after regeneration = %+v, want %+v", got.Pages, clean)
 	}
 }
 
@@ -107,7 +131,7 @@ func TestConversionCandidatesAndCoverage(t *testing.T) {
 	if err := r.MarkRunning(ctx, ready); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.MarkReady(ctx, ready, "A/Ready/Ready.md", 10, []byte{1}, "0.1.0"); err != nil {
+	if err := r.MarkReady(ctx, ready, "A/Ready/Ready.md", 10, model.PageCoverage{}, []byte{1}, "0.1.0"); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.Start(ctx, converting); err != nil {

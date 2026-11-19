@@ -7,7 +7,7 @@ import { Icon } from "@/components/Icon"
 import { Button } from "@/components/ui/button"
 import { artifactView, pollWhileMoving } from "@/lib/artifactRun"
 import { isConvertibleFormat } from "@/lib/formats"
-import { formatBytes } from "@/lib/format"
+import { formatBytes, formatMissingPages } from "@/lib/format"
 
 // VersionRows is the Versions tab's file list: every way this book
 // exists as bytes, each row downloadable. Two sources feed it — the
@@ -70,10 +70,17 @@ export function VersionRows({
           href={`/api/v1/books/${bookId}/markdown/file`}
           // Stale is labelled, never hidden and never auto-invalidated —
           // the audiobook rule (ADR-0025 §2) applied to the rendition.
+          // Missing pages are labelled the same way: the conversion went
+          // ahead and says what it could not read (ADR-0040).
           note={
-            md.stale
-              ? "Stale: converted from an older copy of this book."
-              : undefined
+            [
+              md.stale
+                ? "Stale: converted from an older copy of this book."
+                : null,
+              formatMissingPages(md.missingPages, md.pageCount),
+            ]
+              .filter(Boolean)
+              .join(" ") || undefined
           }
         />
       )}

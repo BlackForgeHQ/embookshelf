@@ -87,6 +87,22 @@ it("labels a stale rendition without hiding it", async () => {
   expect(screen.getAllByRole("link", { name: /download/i })).toHaveLength(2)
 })
 
+it("labels the pages a conversion could not read", async () => {
+  markdownReply = {
+    state: "ready",
+    stale: false,
+    sizeBytes: 1,
+    pageCount: 353,
+    missingPages: "1,10-15",
+  }
+  renderRows()
+  await waitFor(() => {
+    expect(
+      screen.getByText("No extractable text on 7 of 353 pages (1, 10–15).")
+    ).toBeTruthy()
+  })
+})
+
 it("hides the markdown row for every non-ready state", async () => {
   markdownReply = { state: "failed", stale: false, error: "boom" }
   renderRows()

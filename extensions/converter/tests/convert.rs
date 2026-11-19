@@ -1,11 +1,17 @@
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::util::ServiceExt;
 
 use embookshelf_converter::app;
 
 async fn post_convert(bytes: &[u8]) -> (StatusCode, Option<String>, String) {
+    let (status, headers, body) = post_convert_full(bytes).await;
+    let version = header(&headers, "x-converter-version");
+    (status, version, body)
+}
+
+async fn post_convert_full(bytes: &[u8]) -> (StatusCode, HeaderMap, String) {
     let response = app()
         .oneshot(
             Request::builder()
@@ -17,12 +23,21 @@ async fn post_convert(bytes: &[u8]) -> (StatusCode, Option<String>, String) {
         .await
         .unwrap();
     let status = response.status();
-    let version = response
-        .headers()
-        .get("x-converter-version")
-        .map(|v| v.to_str().unwrap().to_string());
+    let headers = response.headers().clone();
     let body = response.into_body().collect().await.unwrap().to_bytes();
-    (status, version, String::from_utf8_lossy(&body).into_owned())
+    (status, headers, String::from_utf8_lossy(&body).into_owned())
+}
+
+fn header(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers.get(name).map(|v| v.to_str().unwrap().to_string())
+}
+
+/// The page record a PDF answer carries (ADR-0040).
+fn pages(headers: &HeaderMap) -> (Option<String>, Option<String>) {
+    (
+        header(headers, "x-converter-page-count"),
+        header(headers, "x-converter-missing-pages"),
+    )
 }
 
 #[tokio::test]
@@ -40,12 +55,14 @@ async fn converts_rtf_to_markdown() {
 #[tokio::test]
 async fn converts_docx_to_markdown() {
     let bytes = include_bytes!("fixtures/sample.docx");
-    let (status, _, body) = post_convert(bytes).await;
+    let (status, headers, body) = post_convert_full(bytes).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         body.contains("Hello converter fixture from DOCX"),
         "got: {body}"
     );
+    // Only paged formats carry a page record.
+    assert_eq!(pages(&headers), (None, None));
 }
 
 #[tokio::test]
@@ -95,14 +112,13 @@ async fn healthz_answers_ok() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-// --- the PDF gate (ADR-0036) -----------------------------------------
+// --- PDFs: per-page conversion (ADR-0040) ----------------------------
 
-// A scanned PDF is refused before conversion, with the class a future
-// OCR stage routes on and the per-page evidence in the sentence — never
-// converted into an empty document that silently feeds the guide and
-// the generated EPUB.
+// A PDF with no text on any page is refused with the class a future OCR
+// stage routes on — never converted into an empty document that would
+// silently feed the guide and the generated EPUB.
 #[tokio::test]
-async fn refuses_a_scanned_pdf_with_class_and_evidence() {
+async fn refuses_a_pdf_with_no_text_on_any_page() {
     let bytes = include_bytes!("fixtures/scanned.pdf");
     let (status, _, body) = post_convert(bytes).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "got: {body}");
@@ -110,54 +126,74 @@ async fn refuses_a_scanned_pdf_with_class_and_evidence() {
     assert_eq!(json["class"], "scanned", "got: {body}");
     let msg = json["error"].as_str().unwrap();
     assert!(
-        msg.contains("3 of 3 pages") && msg.contains("OCR"),
-        "the sentence must carry the page evidence and name OCR, got: {msg}"
+        msg.contains("3 pages") && msg.contains("OCR"),
+        "the sentence must carry the page count and name OCR, got: {msg}"
     );
 }
 
-// The sparse-output gate: a typed title page ahead of nine no-text
-// pages reads TextBased to the sampling classifier, and used to convert
-// to a few bytes of markdown — the silent-degrade case the gate exists
-// for. The output is the proof, whatever the classifier said.
+// An image cover ahead of text pages is the ordinary book shape. The
+// whole-document classifier used to call it ImageBased and refuse the
+// book; it converts now, with the cover recorded as missing.
 #[tokio::test]
-async fn refuses_a_pdf_whose_conversion_is_effectively_empty() {
-    let bytes = include_bytes!("fixtures/sparse.pdf");
-    let (status, _, body) = post_convert(bytes).await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "got: {body}");
-    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(json["class"], "sparse", "got: {body}");
-    assert!(
-        json["error"].as_str().unwrap().contains("10 pages"),
-        "got: {body}"
-    );
-}
-
-// An ImageBased verdict is refused with its class. The engine refuses
-// these bytes on every version — the shipped 0.1.7 answered the same
-// file "no extractable text … OCR is required" as a prose-only 415 —
-// so the gate's contribution here is the class, the evidence and one
-// consistent status, never a rejection anydoc would not have made.
-#[tokio::test]
-async fn refuses_an_image_based_pdf_with_class_and_evidence() {
+async fn converts_an_image_cover_book_and_records_the_cover() {
     let bytes = include_bytes!("fixtures/image-cover.pdf");
-    let (status, _, body) = post_convert(bytes).await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "got: {body}");
-    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(json["class"], "image", "got: {body}");
-    assert!(
-        json["error"].as_str().unwrap().contains("10 pages"),
-        "got: {body}"
-    );
-}
-
-// A text PDF of ordinary prose density sails through both gate halves.
-#[tokio::test]
-async fn converts_a_multipage_text_pdf_through_the_gate() {
-    let bytes = include_bytes!("fixtures/prose.pdf");
-    let (status, _, body) = post_convert(bytes).await;
+    let (status, headers, body) = post_convert_full(bytes).await;
     assert_eq!(status, StatusCode::OK, "got: {body}");
     assert!(
         body.contains("clocks were striking thirteen"),
         "got: {body}"
+    );
+    assert_eq!(
+        pages(&headers),
+        (Some("10".to_string()), Some("1".to_string()))
+    );
+}
+
+// A title page ahead of nine text-less pages converts what is there and
+// says exactly what is not — the case ADR-0036 refused as "sparse",
+// recorded instead of refused (ADR-0040 §2).
+#[tokio::test]
+async fn converts_a_mostly_textless_pdf_and_records_the_gaps() {
+    let bytes = include_bytes!("fixtures/sparse.pdf");
+    let (status, headers, body) = post_convert_full(bytes).await;
+    assert_eq!(status, StatusCode::OK, "got: {body}");
+    assert_eq!(
+        pages(&headers),
+        (Some("10".to_string()), Some("2-10".to_string()))
+    );
+}
+
+// A text PDF converts with an empty missing-pages record: the header is
+// present and empty, so "nothing missing" is distinguishable from "not
+// recorded".
+#[tokio::test]
+async fn converts_a_text_pdf_with_nothing_missing() {
+    let bytes = include_bytes!("fixtures/prose.pdf");
+    let (status, headers, body) = post_convert_full(bytes).await;
+    assert_eq!(status, StatusCode::OK, "got: {body}");
+    assert!(
+        body.contains("clocks were striking thirteen"),
+        "got: {body}"
+    );
+    assert_eq!(
+        pages(&headers),
+        (Some("10".to_string()), Some(String::new()))
+    );
+}
+
+// Top-level bookmarks become the chapter headings, at the page each one
+// points to, so the EPUB stage splits on the author's chapters.
+#[tokio::test]
+async fn bookmarks_become_chapter_headings() {
+    let bytes = include_bytes!("fixtures/outlined.pdf");
+    let (status, _, body) = post_convert(bytes).await;
+    assert_eq!(status, StatusCode::OK, "got: {body}");
+    let one = body.find("# Part One").expect("first bookmark heading");
+    let two = body.find("# Part Two").expect("second bookmark heading");
+    let page2 = body.find("second page").expect("page 2 text");
+    let page3 = body.find("lights go out").expect("page 3 text");
+    assert!(
+        one < page2 && page2 < two && two < page3,
+        "headings must sit ahead of the pages they point to, got: {body}"
     );
 }

@@ -36,6 +36,8 @@ var markdownRenditionProjection = projection[model.MarkdownRendition]{
 	{name: "size_bytes", dest: func(m *model.MarkdownRendition) any { return &m.SizeBytes }},
 	{name: "source_content_hash", dest: func(m *model.MarkdownRendition) any { return &m.SourceContentHash }},
 	{name: "converter_version", dest: func(m *model.MarkdownRendition) any { return &m.ConverterVersion }},
+	{name: "page_count", dest: func(m *model.MarkdownRendition) any { return &m.Pages.PageCount }},
+	{name: "missing_pages", dest: func(m *model.MarkdownRendition) any { return &m.Pages.MissingPages }},
 	{name: "created_at", dest: func(m *model.MarkdownRendition) any { return &m.CreatedAt }},
 	{name: "updated_at", dest: func(m *model.MarkdownRendition) any { return &m.UpdatedAt }},
 }
@@ -44,12 +46,17 @@ var markdownRenditionProjection = projection[model.MarkdownRendition]{
 // book_markdown_renditions queries.
 var markdownRenditionCols = markdownRenditionProjection.returningList("book_markdown_renditions")
 
-// MarkReady records a finished conversion: where the bytes landed and
-// the provenance that decides staleness later.
+// MarkReady records a finished conversion: where the bytes landed, the
+// page record (ADR-0040) and the provenance that decides staleness
+// later. The page record is overwritten whole — a regeneration's
+// answer replaces the last one, never merges with it.
 func (r *BookMarkdownRenditionRepo) MarkReady(
-	ctx context.Context, bookID, location string, size int64, sourceHash []byte, version string,
+	ctx context.Context, bookID, location string, size int64, pages model.PageCoverage,
+	sourceHash []byte, version string,
 ) error {
-	return r.markReady(ctx, bookID, sourceHash, version, `location = $5, size_bytes = $6`, location, size)
+	return r.markReady(ctx, bookID, sourceHash, version,
+		`location = $5, size_bytes = $6, page_count = $7, missing_pages = $8`,
+		location, size, pages.PageCount, pages.MissingPages)
 }
 
 // GetByBookID loads the row, ErrNotFound when the book has none.

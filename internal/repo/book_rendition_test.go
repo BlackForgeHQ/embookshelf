@@ -61,7 +61,7 @@ func renditionShapes(t *testing.T, d *db.DB) (string, []renditionShape) {
 			start:       md.Start,
 			markRunning: md.MarkRunning,
 			markReady: func(ctx context.Context, bookID string) error {
-				return md.MarkReady(ctx, bookID, "Author/Title/Title.md", 1234, []byte{0xde, 0xad}, "0.1.0")
+				return md.MarkReady(ctx, bookID, "Author/Title/Title.md", 1234, model.PageCoverage{}, []byte{0xde, 0xad}, "0.1.0")
 			},
 			markFailed: md.MarkFailed,
 			get: func(ctx context.Context, bookID string) (model.RenditionState, string, error) {

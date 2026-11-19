@@ -12,15 +12,21 @@ embookshelf runs fine without it. Every feature that needs it says
 ## What it is
 
 - A Rust service (axum + [anydoc]) in `extensions/converter`, published
-  as its own image: `ghcr.io/blackforgehq/embookshelf-converter`.
+  as its own image: `ghcr.io/blackforgehq/embookshelf-converter`. PDFs
+  go through anydoc's own PDF engine, [pdf-inspector], page by page
+  (ADR-0040).
 - Wire contract: `POST /convert` — raw file bytes in, raw
   `text/markdown` out, converter version in `X-Converter-Version`;
   errors are JSON `{"error": "..."}` (415 undetectable format, 422
-  unparseable document). `GET /healthz` answers reachability.
+  unparseable document). A PDF answer also carries
+  `X-Converter-Page-Count` and `X-Converter-Missing-Pages` — the pages
+  with no extractable text, as `1,10-15`, empty when none.
+  `GET /healthz` answers reachability.
 - **No auth in v1.** It must only be reachable on the compose-internal
   network. Never publish its port to the internet.
 
 [anydoc]: https://github.com/firecrawl/anydoc
+[pdf-inspector]: https://github.com/firecrawl/pdf-inspector
 
 ## Production
 
@@ -62,7 +68,20 @@ or an admin `POST /api/v1/books/:id/markdown` — enqueues a
 storage (local and S3 alike), POSTs the bytes to the sidecar, and
 writes the markdown into the book's own folder as `{Title}.md`. The
 `book_markdown_renditions` row records state, the storage location, the
-source file's content hash and the converter version.
+source file's content hash, the converter version and — for a PDF — the
+page count and the pages that had no extractable text.
+
+A PDF converts even when some pages have no text (an image cover, a
+scanned plate, a garbled font): what could be read is kept, and the
+missing pages are recorded and shown on the book's Versions tab. A
+truly blank page is listed too — from the text alone it looks the same
+as a scanned one. Renditions converted before this record existed show
+nothing until that book is converted again (an admin
+`POST /api/v1/books/:id/markdown`); the bulk run in Settings → Converter
+leaves ready renditions alone.
+
+A PDF's top-level bookmarks, when it has two or more, become the
+markdown's chapter headings, and so the generated EPUB's chapters.
 
 A rendition whose recorded hash no longer matches the book's current
 file is **stale**: labelled and re-converted on the next request, never
@@ -76,8 +95,9 @@ The row's error channel is surfaced word-for-word (ADR-0033 §5):
 | --- | --- | --- |
 | `converter extension is not configured` | CONVERTER row disabled or missing a URL | Enable it in Settings → Converter |
 | `Unreachable: dial tcp …` (settings card) | Sidecar down or wrong URL | Check the container, the URL, the network |
-| `PDF has no extractable text (Scanned, N pages): OCR is required` | anydoc found only images | No fix in v1 — the converter does not OCR |
-| Other 422 messages | Document structurally unusable (encrypted, malformed) | The message names the part; usually the file itself |
+| `PDF has no extractable text on any of its N pages (scanned or image-only); OCR is not available` | No page has a text layer | No fix yet — the converter does not OCR |
+| `PDF is encrypted and needs a password to open` | The PDF needs a password just to open it (publisher PDFs that only restrict copying convert fine) | Remove the password with the tool that set it |
+| Other 422 messages | Document structurally unusable (malformed) | The message names the part; usually the file itself |
 
 Transient failures (network, sidecar restart) are retried by the job
 queue with the error visible on the row in the meantime; document-level

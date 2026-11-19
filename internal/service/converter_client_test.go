@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/blackforge/embookshelf/internal/model"
 )
 
 func TestConverterClientStagesMarkdown(t *testing.T) {
@@ -38,6 +40,48 @@ func TestConverterClientStagesMarkdown(t *testing.T) {
 	}
 	if got.Version != "0.1.0" {
 		t.Fatalf("Version = %q", got.Version)
+	}
+}
+
+// TestConverterClientReadsThePageRecord — a PDF answer's page headers
+// land on the result (ADR-0040); an answer without them, or with a page
+// count that does not parse, is "not recorded" rather than an error.
+func TestConverterClientReadsThePageRecord(t *testing.T) {
+	cases := []struct {
+		name    string
+		headers map[string]string
+		want    model.PageCoverage
+	}{
+		{"pdf with gaps", map[string]string{
+			"X-Converter-Page-Count": "353", "X-Converter-Missing-Pages": "1,10-15",
+		}, model.PageCoverage{PageCount: 353, MissingPages: "1,10-15"}},
+		{"pdf with nothing missing", map[string]string{
+			"X-Converter-Page-Count": "10", "X-Converter-Missing-Pages": "",
+		}, model.PageCoverage{PageCount: 10}},
+		{"no page record", nil, model.PageCoverage{}},
+		{"garbled count", map[string]string{
+			"X-Converter-Page-Count": "lots", "X-Converter-Missing-Pages": "2",
+		}, model.PageCoverage{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				for k, v := range tc.headers {
+					w.Header().Set(k, v)
+				}
+				_, _ = w.Write([]byte("text\n"))
+			}))
+			defer sidecar.Close()
+
+			got, err := (&ConverterClient{}).Convert(context.Background(), sidecar.URL, strings.NewReader("%PDF-"))
+			if err != nil {
+				t.Fatalf("Convert: %v", err)
+			}
+			defer os.Remove(got.Path)
+			if got.Pages != tc.want {
+				t.Fatalf("Pages = %+v, want %+v", got.Pages, tc.want)
+			}
+		})
 	}
 }
 

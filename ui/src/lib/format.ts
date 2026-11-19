@@ -59,6 +59,46 @@ export function formatDuration(seconds: number): string {
 }
 
 /**
+ * A converted PDF's missing pages as a sentence, or null when nothing
+ * is missing (ADR-0040).
+ *
+ * `missing` is the converter's compact record, "1,10-15", 1-based. The
+ * list is shown while it stays short; a long one (a scan with text on
+ * every other page) is summarised by its count, which is the part a
+ * person acts on. A record that does not parse says so instead of
+ * guessing a number.
+ */
+export function formatMissingPages(
+  missing: string | undefined,
+  pageCount: number | undefined
+): string | null {
+  const record = (missing ?? "").trim()
+  if (record === "") return null
+  let count = 0
+  for (const part of record.split(",")) {
+    const bounds = part.split("-").map(Number)
+    const from = bounds[0] ?? Number.NaN
+    const to = bounds[1] ?? from
+    if (
+      bounds.length > 2 ||
+      !Number.isInteger(from) ||
+      !Number.isInteger(to) ||
+      to < from
+    ) {
+      return `Some pages have no extractable text (${record}).`
+    }
+    count += to - from + 1
+  }
+  const of = pageCount && pageCount >= count ? ` of ${pageCount}` : ""
+  const noun = count === 1 && !of ? "page" : "pages"
+  const list =
+    record.length <= 40
+      ? ` (${record.replaceAll("-", "–").replaceAll(",", ", ")})`
+      : ""
+  return `No extractable text on ${count}${of} ${noun}${list}.`
+}
+
+/**
  * A dollar amount, for money about to be spent on a narration run.
  *
  * Two decimals until it rounds to nothing, because "$0.00" for a run

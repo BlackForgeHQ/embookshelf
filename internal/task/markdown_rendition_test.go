@@ -26,6 +26,7 @@ type fakeRenditionStore struct {
 	size       int64
 	hash       []byte
 	version    string
+	pages      model.PageCoverage
 }
 
 func (f *fakeRenditionStore) MarkRunning(context.Context, string) error {
@@ -36,8 +37,10 @@ func (f *fakeRenditionStore) MarkRunning(context.Context, string) error {
 	return nil
 }
 
-func (f *fakeRenditionStore) MarkReady(_ context.Context, _, loc string, size int64, hash []byte, version string) error {
-	f.ready, f.loc, f.size, f.hash, f.version = true, loc, size, hash, version
+func (f *fakeRenditionStore) MarkReady(
+	_ context.Context, _, loc string, size int64, pages model.PageCoverage, hash []byte, version string,
+) error {
+	f.ready, f.loc, f.size, f.pages, f.hash, f.version = true, loc, size, pages, hash, version
 	return nil
 }
 
@@ -72,7 +75,10 @@ func renditionDeps(store *fakeRenditionStore, cfg repo.ConverterConfig) Markdown
 			}
 			_, _ = f.WriteString("# md\n")
 			_ = f.Close()
-			return service.ConvertResult{Path: f.Name(), Version: "0.1.0"}, nil
+			return service.ConvertResult{
+				Path: f.Name(), Version: "0.1.0",
+				Pages: model.PageCoverage{PageCount: 12, MissingPages: "1,4-5"},
+			}, nil
 		},
 		Record: func(_ context.Context, _ model.Book, src string) (service.DerivedRecord, error) {
 			info, err := os.Stat(src)
@@ -99,6 +105,10 @@ func TestMarkdownRenditionHappyPath(t *testing.T) {
 	}
 	if !bytes.Equal(store.hash, []byte{0xab}) {
 		t.Fatalf("hash = %x", store.hash)
+	}
+	// The conversion's page record is sealed with the bytes (ADR-0040).
+	if want := (model.PageCoverage{PageCount: 12, MissingPages: "1,4-5"}); store.pages != want {
+		t.Fatalf("pages = %+v, want %+v", store.pages, want)
 	}
 }
 

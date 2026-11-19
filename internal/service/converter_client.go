@@ -10,15 +10,20 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
+
+	"github.com/blackforge/embookshelf/internal/model"
 )
 
 // ConvertResult is a finished conversion: the artifact staged in a local
-// temp file (the caller owns removing it — normally by placing it), and
-// the sidecar's version for the provenance row.
+// temp file (the caller owns removing it — normally by placing it), the
+// sidecar's version for the provenance row, and — for a paged source —
+// the page record (ADR-0040).
 type ConvertResult struct {
 	Path    string
 	Version string
+	Pages   model.PageCoverage
 }
 
 // ConvertRejectedError is the sidecar refusing the document itself.
@@ -43,8 +48,8 @@ type ConverterClient struct {
 	HTTPClient *http.Client
 }
 
-// convertTimeout bounds one conversion. anydoc converts in milliseconds;
-// a minute of headroom covers a queue of large books ahead of us without
+// convertTimeout bounds one conversion. A 350-page book converts in
+// about a second; a minute of headroom covers a queue of large books ahead of us without
 // letting a hung sidecar pin a worker forever.
 const convertTimeout = 60 * time.Second
 
@@ -176,7 +181,21 @@ func (c *ConverterClient) post(ctx context.Context, spec postSpec) (ConvertResul
 	return ConvertResult{
 		Path:    f.Name(),
 		Version: resp.Header.Get("X-Converter-Version"),
+		Pages:   pageCoverage(resp.Header),
 	}, nil
+}
+
+// pageCoverage reads the page record a PDF answer carries (ADR-0040).
+// An answer without one — a format without pages, or a sidecar older
+// than the record — is the zero value, "not recorded"; a page count that
+// does not parse is treated the same, since the record is informational
+// and must never fail a conversion that succeeded.
+func pageCoverage(h http.Header) model.PageCoverage {
+	count, err := strconv.Atoi(h.Get("X-Converter-Page-Count"))
+	if err != nil || count <= 0 {
+		return model.PageCoverage{}
+	}
+	return model.PageCoverage{PageCount: count, MissingPages: h.Get("X-Converter-Missing-Pages")}
 }
 
 func (c *ConverterClient) client() *http.Client {

@@ -22,6 +22,19 @@ type MarkdownRendition struct {
 	// labelled, never auto-invalidated.
 	SourceContentHash []byte
 	ConverterVersion  string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// Pages is what the conversion could read of a paged source.
+	Pages     PageCoverage
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// PageCoverage is a paged conversion's record of its source (ADR-0040):
+// how many pages the document has and which gave no extractable text.
+// The zero value is "not recorded" — a format without pages, or a
+// rendition converted before the record existed.
+type PageCoverage struct {
+	PageCount int
+	// MissingPages are 1-based page numbers in the converter's compact
+	// form, "1,10-15"; empty when nothing was missing.
+	MissingPages string
 }
