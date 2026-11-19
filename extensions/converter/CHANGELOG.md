@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/BlackForgeHQ/embookshelf/compare/embookshelf-converter-v0.1.3...embookshelf-converter-v0.1.4) (2026-11-19)
+
+
+### Features
+
+* **converter:** convert PDFs page by page and record missing pages ([#401](https://github.com/BlackForgeHQ/embookshelf/issues/401)) ([06a5080](https://github.com/BlackForgeHQ/embookshelf/commit/06a50802688ba57eaf8fdd9b4247449accc37b78))
+
 ## [0.1.3](https://github.com/BlackForgeHQ/embookshelf/compare/embookshelf-converter-v0.1.2...embookshelf-converter-v0.1.3) (2026-11-09)
 
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.12](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.11...v0.6.12) (2026-11-19)
+
+
+### Features
+
+* **converter:** convert PDFs page by page and record missing pages ([#401](https://github.com/BlackForgeHQ/embookshelf/issues/401)) ([06a5080](https://github.com/BlackForgeHQ/embookshelf/commit/06a50802688ba57eaf8fdd9b4247449accc37b78))
+* **mcp:** serve the library to MCP clients ([#400](https://github.com/BlackForgeHQ/embookshelf/issues/400)) ([af3a033](https://github.com/BlackForgeHQ/embookshelf/commit/af3a0339230310d9967510c715514993821c2534))
+* **ui:** clean up template leftovers and update shadcn components ([#398](https://github.com/BlackForgeHQ/embookshelf/issues/398)) ([a11cc1e](https://github.com/BlackForgeHQ/embookshelf/commit/a11cc1e17ade9c8e2fb81ea3bd779a9556eaa917))
+
 ## [0.6.11](https://github.com/BlackForgeHQ/embookshelf/compare/v0.6.10...v0.6.11) (2026-11-18)
 
 
