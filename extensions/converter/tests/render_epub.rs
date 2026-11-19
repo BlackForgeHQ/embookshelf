@@ -82,6 +82,29 @@ async fn renders_a_valid_epub_container() {
     assert!(zip_entry(&bytes, "OEBPS/chapter-2.xhtml").contains("second chapter text"));
 }
 
+// A PDF without bookmarks converts to its title as the only H1 over
+// chapter H2s; splitting on the lone H1 made one chapter of the book.
+#[tokio::test]
+async fn a_single_h1_over_several_h2s_splits_on_the_h2s() {
+    let (status, bytes, _) = post_render(serde_json::json!({
+        "markdown": "# The Book\n\nfront matter\n\n## One\n\nfirst\n\n```\n## not a chapter\n```\n\n## Two\n\nsecond\n",
+        "title": "T",
+        "author": "",
+        "language": "en",
+    }))
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let chapters: Vec<_> = zip_names(&bytes)
+        .into_iter()
+        .filter(|n| n.starts_with("OEBPS/chapter-"))
+        .collect();
+    assert_eq!(chapters.len(), 3, "chapters = {chapters:?}");
+    assert!(zip_entry(&bytes, "OEBPS/chapter-1.xhtml").contains("front matter"));
+    assert!(zip_entry(&bytes, "OEBPS/chapter-2.xhtml").contains("not a chapter"));
+    assert!(zip_entry(&bytes, "OEBPS/chapter-3.xhtml").contains("second"));
+    assert!(zip_entry(&bytes, "OEBPS/nav.xhtml").contains(">Two<"));
+}
+
 #[tokio::test]
 async fn headingless_markdown_becomes_one_chapter() {
     let (status, bytes, _) = post_render(serde_json::json!({

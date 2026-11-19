@@ -3,9 +3,10 @@
 //! An EPUB is a zip of XHTML plus an OPF manifest; pulldown-cmark
 //! renders the markdown and this module hand-builds the container —
 //! the "heavy dependency" ADR-0033 feared for this stage turned out to
-//! be unnecessary. Chapters split on H1 headings (anydoc emits them
-//! from PDF structure), with a single-chapter fallback for headingless
-//! text.
+//! be unnecessary. Chapters split on H1 headings — a PDF's top-level
+//! bookmarks when it has them (ADR-0040) — or on H2s when the text has
+//! a single H1 over several H2s, with a single-chapter fallback for
+//! headingless text.
 
 use std::io::Write;
 
@@ -78,10 +79,11 @@ struct Chapter {
     markdown: String,
 }
 
-/// Split on top-level `# ` headings, keeping each heading with its body.
-/// Fenced code blocks are respected — a `# ` inside one is code, not a
-/// chapter boundary.
+/// Split on the chapter heading level (chapter_marker), keeping each
+/// heading with its body. Fenced code blocks are respected — a `# `
+/// inside one is code, not a chapter boundary.
 fn split_chapters(markdown: &str) -> Vec<Chapter> {
+    let marker = chapter_marker(markdown);
     let mut chapters: Vec<Chapter> = Vec::new();
     let mut current = String::new();
     let mut current_title = String::new();
@@ -92,14 +94,14 @@ fn split_chapters(markdown: &str) -> Vec<Chapter> {
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
             in_fence = !in_fence;
         }
-        if !in_fence && line.starts_with("# ") {
+        if !in_fence && line.starts_with(marker) {
             if !current.trim().is_empty() {
                 chapters.push(Chapter {
                     title: current_title.clone(),
                     markdown: current.clone(),
                 });
             }
-            current_title = line[2..].trim().to_string();
+            current_title = line[marker.len()..].trim().to_string();
             current = String::new();
         }
         current.push_str(line);
@@ -118,6 +120,29 @@ fn split_chapters(markdown: &str) -> Vec<Chapter> {
         });
     }
     chapters
+}
+
+/// chapter_marker picks the heading level chapters split on: `# ` when
+/// the text has two or more H1s, `## ` when it has a single H1 (or none)
+/// over two or more H2s — the shape a PDF without bookmarks converts to,
+/// its title the only H1 and its chapters H2s — else `# `.
+fn chapter_marker(markdown: &str) -> &'static str {
+    let (mut h1, mut h2, mut in_fence) = (0, 0, false);
+    for line in markdown.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+        } else if !in_fence && line.starts_with("# ") {
+            h1 += 1;
+        } else if !in_fence && line.starts_with("## ") {
+            h2 += 1;
+        }
+    }
+    if h1 < 2 && h2 >= 2 {
+        "## "
+    } else {
+        "# "
+    }
 }
 
 fn chapter_xhtml(title: &str, markdown: &str) -> String {

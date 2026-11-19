@@ -17,7 +17,7 @@ import (
 // worker writes through.
 type renditionStore interface {
 	MarkRunning(ctx context.Context, bookID string) error
-	MarkReady(ctx context.Context, bookID, location string, size int64, sourceHash []byte, version string) error
+	MarkReady(ctx context.Context, bookID, location string, size int64, pages model.PageCoverage, sourceHash []byte, version string) error
 	MarkFailed(ctx context.Context, bookID, msg string) error
 }
 
@@ -81,7 +81,9 @@ func MarkdownRendition(ctx context.Context, a jobs.MarkdownRenditionArgs, deps M
 			return deps.Convert(ctx, cfg.BaseURL, body)
 		}),
 		fin.finish("place markdown", func(ctx context.Context, rec service.DerivedRecord, sourceHash []byte, version string) error {
-			return deps.Renditions.MarkReady(ctx, a.BookID, rec.Location, rec.Size, sourceHash, version)
+			// The page record (ADR-0040) is the conversion's own answer,
+			// sealed with the bytes it describes.
+			return deps.Renditions.MarkReady(ctx, a.BookID, rec.Location, rec.Size, fin.result.Pages, sourceHash, version)
 		}),
 	)
 }

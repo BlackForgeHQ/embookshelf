@@ -9,7 +9,9 @@ of conversion and settles what happens to each class.
 
 ## Status
 
-accepted (2026-08-16)
+accepted (2026-08-16); partly superseded by ADR-0040 (2026-11-18): the
+gate's classification and the `image`/`mixed`/`sparse` refusals are
+replaced by per-page conversion that records missing pages.
 
 ## Decisions bundled here
 

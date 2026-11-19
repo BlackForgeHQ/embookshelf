@@ -46,6 +46,11 @@ type markdownRenditionDTO struct {
 	Location         string `json:"location,omitempty"`
 	SizeBytes        int64  `json:"sizeBytes,omitempty"`
 	ConverterVersion string `json:"converterVersion,omitempty"`
+	// PageCount and MissingPages are the page record (ADR-0040): absent
+	// when not recorded, and missingPages absent when nothing was
+	// missing — "1,10-15" otherwise, 1-based.
+	PageCount    int    `json:"pageCount,omitempty"`
+	MissingPages string `json:"missingPages,omitempty"`
 	// Stale — the book's current file no longer matches the hash the
 	// markdown was converted from. Labelled, never auto-invalidated.
 	Stale     bool       `json:"stale"`
@@ -70,6 +75,8 @@ func (h *Handler) BookMarkdownGet(c *gin.Context, s bookScope) {
 				Location:         rendition.Location,
 				SizeBytes:        rendition.SizeBytes,
 				ConverterVersion: rendition.ConverterVersion,
+				PageCount:        rendition.Pages.PageCount,
+				MissingPages:     rendition.Pages.MissingPages,
 				UpdatedAt:        &rendition.UpdatedAt,
 				Stale:            h.sourceStale(ctx, s.Book, rendition.State, rendition.SourceContentHash),
 			}, nil

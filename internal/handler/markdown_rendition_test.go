@@ -98,6 +98,26 @@ func TestBookMarkdownGetSurfacesTheRowVerbatim(t *testing.T) {
 	}
 }
 
+// TestBookMarkdownGetCarriesThePageRecord — a ready rendition's missing
+// pages travel as recorded (ADR-0040).
+func TestBookMarkdownGetCarriesThePageRecord(t *testing.T) {
+	h := &Handler{renditions: &fakeRenditions{row: model.MarkdownRendition{
+		BookID: "b1",
+		State:  model.RenditionReady,
+		Pages:  model.PageCoverage{PageCount: 353, MissingPages: "1,10-15"},
+	}}}
+	c, rec := settingsCtx(t, http.MethodGet, "/api/v1/books/b1/markdown", "")
+	h.BookMarkdownGet(c, pdfScope())
+
+	var got markdownRenditionDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.PageCount != 353 || got.MissingPages != "1,10-15" {
+		t.Fatalf("DTO = %+v", got)
+	}
+}
+
 // TestBookMarkdownGenerateRefusesNonConvertible — EPUB never reaches the
 // queue: gap-filler routing (ADR-0033 §2) enforced at the gate.
 // The generate gate chain (nil store, non-convertible, not-configured,

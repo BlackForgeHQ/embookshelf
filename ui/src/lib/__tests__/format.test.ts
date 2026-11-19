@@ -6,6 +6,7 @@ import {
   formatDate,
   formatDateTime,
   formatDuration,
+  formatMissingPages,
   relativeTime,
 } from "@/lib/format"
 
@@ -147,5 +148,37 @@ describe("relativeTime", () => {
     expect(relativeTime(0)).toBe("—")
     expect(relativeTime(now + 60_000)).toBe("in the future")
     vi.useRealTimers()
+  })
+})
+
+describe("formatMissingPages", () => {
+  it("is null when nothing is missing or nothing was recorded", () => {
+    expect(formatMissingPages("", 353)).toBeNull()
+    expect(formatMissingPages(undefined, undefined)).toBeNull()
+  })
+
+  it("counts ranges and lists them while the list is short", () => {
+    expect(formatMissingPages("1,10-15", 353)).toBe(
+      "No extractable text on 7 of 353 pages (1, 10–15)."
+    )
+    expect(formatMissingPages("1", 10)).toBe(
+      "No extractable text on 1 of 10 pages (1)."
+    )
+    expect(formatMissingPages("4", undefined)).toBe(
+      "No extractable text on 1 page (4)."
+    )
+  })
+
+  it("summarises a long record by its count", () => {
+    const everyOther = Array.from({ length: 40 }, (_, i) => 2 * i + 1).join(",")
+    expect(formatMissingPages(everyOther, 80)).toBe(
+      "No extractable text on 40 of 80 pages."
+    )
+  })
+
+  it("says so rather than guessing when the record does not parse", () => {
+    expect(formatMissingPages("a-b", 10)).toBe(
+      "Some pages have no extractable text (a-b)."
+    )
   })
 })

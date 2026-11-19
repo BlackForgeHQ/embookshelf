@@ -173,7 +173,7 @@ func TestReadingGuideProjection_RendersOneBareForm(t *testing.T) {
 
 func TestMarkdownRenditionProjection_RendersOneBareForm(t *testing.T) {
 	const want = `book_id, state, error, location, size_bytes, ` +
-		`source_content_hash, converter_version, created_at, updated_at`
+		`source_content_hash, converter_version, page_count, missing_pages, created_at, updated_at`
 	if markdownRenditionCols != want {
 		t.Fatalf("markdownRenditionCols =\n%s\nwant\n%s", markdownRenditionCols, want)
 	}

@@ -4,7 +4,9 @@
 //! ADR: `POST /convert` takes raw file bytes and answers a raw `text/markdown`
 //! body with the converter version in `X-Converter-Version`; errors are JSON
 //! `{"error": "..."}` — 415 when the format cannot be detected or converted at
-//! all, 422 when a detected document is structurally unusable.
+//! all, 422 when a detected document is structurally unusable. A PDF answer
+//! also carries `X-Converter-Page-Count` and `X-Converter-Missing-Pages`
+//! (ADR-0040): the pages that gave no text, as "1,10-15", empty when none.
 
 use anydoc::{ConvertError, Format};
 use axum::body::Bytes;
@@ -85,14 +87,16 @@ async fn convert(body: Bytes) -> Response {
         );
     };
 
-    // anydoc (and the PDF gate's inspection) is synchronous CPU work;
-    // keep it off the async workers.
+    // Conversion is synchronous CPU work; keep it off the async workers.
     let result = tokio::task::spawn_blocking(move || convert_bytes(&body, format)).await;
 
     match result {
-        Ok(Ok(markdown)) => markdown_response(markdown),
+        Ok(Ok(converted)) => markdown_response(converted),
         Ok(Err(Reject::Anydoc(err))) => convert_error_response(err),
-        Ok(Err(Reject::Pdf(refusal))) => refusal_response(&refusal),
+        Ok(Err(Reject::Pdf(pdf::Failure::Refused(refusal)))) => refusal_response(&refusal),
+        Ok(Err(Reject::Pdf(pdf::Failure::Unreadable(err)))) => {
+            error_response(StatusCode::UNPROCESSABLE_ENTITY, &unreadable_pdf(&err))
+        }
         Err(join_err) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("conversion task failed: {join_err}"),
@@ -101,39 +105,50 @@ async fn convert(body: Bytes) -> Response {
 }
 
 /// Reject separates the two refusal vocabularies: anydoc's own errors
-/// keep their historical status mapping and plain body, the PDF gate's
-/// verdicts carry a machine-readable class (ADR-0036).
+/// keep their historical status mapping and plain body; a PDF refused
+/// for having no text carries a machine-readable class (ADR-0040).
 enum Reject {
     Anydoc(ConvertError),
-    Pdf(pdf::Refusal),
+    Pdf(pdf::Failure),
 }
 
-/// convert_bytes is the whole conversion pass: the PDF gate ahead of
-/// anydoc, anydoc, the sparse-output gate behind it (PDF only). The
-/// detection is done once and shared by both gate halves.
-fn convert_bytes(body: &[u8], format: Format) -> Result<String, Reject> {
-    let detection = match format {
-        Format::Pdf => pdf::detect(body),
-        _ => None,
-    };
-    if let Some(d) = &detection {
-        if let Some(refusal) = pdf::refuse_before(d) {
-            return Err(Reject::Pdf(refusal));
-        }
+/// Converted is a successful answer: the markdown, plus the page record
+/// for formats that have pages.
+struct Converted {
+    markdown: String,
+    pages: Option<(u32, Vec<u32>)>,
+}
+
+/// convert_bytes routes on the detected format: PDFs through the
+/// per-page pipeline (ADR-0040), everything else through anydoc.
+fn convert_bytes(body: &[u8], format: Format) -> Result<Converted, Reject> {
+    if format == Format::Pdf {
+        let c = pdf::convert(body).map_err(Reject::Pdf)?;
+        return Ok(Converted {
+            markdown: c.markdown,
+            pages: Some((c.page_count, c.missing)),
+        });
     }
     let markdown = anydoc::to_markdown_bytes(body, format).map_err(Reject::Anydoc)?;
-    if let Some(d) = &detection {
-        if let Some(refusal) = pdf::refuse_sparse(d, &markdown) {
-            return Err(Reject::Pdf(refusal));
-        }
-    }
-    Ok(markdown)
+    Ok(Converted {
+        markdown,
+        pages: None,
+    })
 }
 
-/// A gate refusal is always 422: the format is supported and detected —
-/// the *document* cannot give what conversion needs (ADR-0033 §4's
-/// split). The class rides beside the error so a caller can route on it
-/// without parsing prose (ADR-0036 §3).
+fn unreadable_pdf(err: &pdf_inspector::PdfError) -> String {
+    match err {
+        pdf_inspector::PdfError::Encrypted => {
+            "PDF is encrypted and needs a password to open".to_string()
+        }
+        other => format!("unreadable PDF: {other}"),
+    }
+}
+
+/// A refusal is always 422: the format is supported and detected — the
+/// *document* cannot give what conversion needs (ADR-0033 §4's split).
+/// The class rides beside the error so a caller can route on it without
+/// parsing prose (ADR-0036 §3).
 fn refusal_response(refusal: &pdf::Refusal) -> Response {
     let body = serde_json::json!({ "error": refusal.message, "class": refusal.class }).to_string();
     let mut headers = HeaderMap::new();
@@ -144,14 +159,21 @@ fn refusal_response(refusal: &pdf::Refusal) -> Response {
     (StatusCode::UNPROCESSABLE_ENTITY, headers, body).into_response()
 }
 
-fn markdown_response(markdown: String) -> Response {
+fn markdown_response(converted: Converted) -> Response {
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/markdown; charset=utf-8"),
     );
     headers.insert("x-converter-version", HeaderValue::from_static(VERSION));
-    (StatusCode::OK, headers, markdown).into_response()
+    if let Some((page_count, missing)) = &converted.pages {
+        headers.insert("x-converter-page-count", HeaderValue::from(*page_count));
+        // Digits, commas and dashes only: always a valid header value.
+        if let Ok(v) = HeaderValue::from_str(&pdf::page_ranges(missing)) {
+            headers.insert("x-converter-missing-pages", v);
+        }
+    }
+    (StatusCode::OK, headers, converted.markdown).into_response()
 }
 
 fn convert_error_response(err: ConvertError) -> Response {

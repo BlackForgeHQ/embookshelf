@@ -11,6 +11,10 @@ export type MarkdownRenditionStatus = {
   location?: string
   sizeBytes?: number
   converterVersion?: string
+  // The page record (ADR-0040): absent when not recorded; missingPages
+  // is "1,10-15" (1-based) and absent when nothing was missing.
+  pageCount?: number
+  missingPages?: string
   stale: boolean
   updatedAt?: string
 }
