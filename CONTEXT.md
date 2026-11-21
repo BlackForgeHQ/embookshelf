@@ -301,6 +301,10 @@ sha256 of a book file's bytes. Authoritative identity in the new schema.
 
 Opaque change token from a backend (S3 returns one; LocalFS leaves it empty). Use to *detect* whether a single object changed since last observation. **Never** use to compare two objects for equality — multipart uploads make ETag input-dependent.
 
+### Bytes identity
+
+The name `LocateBook` ([[OpenBook]]) gives a book's bytes before opening them, so a cache can tell one version of a book's file from the next. Strongest available form wins: the [[Content hash]] (`sha256:…`); failing that, the [[Files row]]'s own id with the size and mtime the scan tracks (`file:…`), for the window before the boot-time hashing pass reaches a new row; failing that, for a book with only a legacy path, the sandboxed path with its size and mtime (`path:…`). The two weaker forms are weaker and say so in their prefix — they detect a change, they cannot prove two files equal. Its consumer is the comic page cache.
+
 ---
 
 ## Workers
@@ -439,7 +443,9 @@ The worker pipeline that takes a staged file path, computes its hash, dispatches
 
 ### OpenBook
 
-`LibraryHandle.OpenBook(ctx, book) (io.Reader, int64, io.Closer, error)`; the way in-process callers get a book's bytes, wherever they live — storage-backed or legacy on-disk path. Send-to-Kindle and device push both use it, so neither knows the delivery vocabulary and both work identically on local and S3-backed libraries. Deliberately never presigns: a presigned URL answers "what do I tell the browser", which is useless to a caller that needs the bytes. Reaching around it with `os.Open(book.Path)` is what silently broke device push on S3 libraries.
+`LibraryHandle.OpenBook(ctx, book) (storage.Source, error)`; the one way in-process callers get a book's bytes, wherever they live. It is `LocateBook` then `Open`: `LocateBook` does the one files lookup and answers with the bytes' [[Bytes identity]] and a deferred open, so a cache can key on the identity without touching the bytes — a warm comic serves a page with no read of the archive. Four outcomes and no others: a [[Files row]] opens through Storage; no files row opens the legacy path, but only through the [[Book file sandbox]]; neither is *not placed* (`os.ErrNotExist`, a 404 at the edge); a files lookup that **failed** is an error and never degrades into the legacy path, because that would read this machine's disk for a library whose bytes may not be on it. Callers therefore cannot skip the sandbox and do not need to know it exists.
+
+`LibraryBookOpener` adapts it to the `Open(ctx, book) (storage.Source, error)` dependency that book text, reading guides, the audiobook service and the converter workers are built with — resolve the handle, open, return the Source — so none of them hold a [[LibraryStore]], and their tests pass a function instead. Send-to-Kindle and device push read the Source as a stream. Deliberately never presigns: a presigned URL answers "what do I tell the browser", which is useless to a caller that needs the bytes. Reaching around it with `os.Open(book.Path)` is what silently broke device push on S3 libraries, and what let those callers read legacy paths outside the sandbox.
 
 ### Backend-backed
 
@@ -449,7 +455,7 @@ The worker pipeline that takes a staged file path, computes its hash, dispatches
 
 `handler.PlatformDeps` / `LibraryDeps` / `DiscoveryDeps` / `AccountDeps` / `EmailDeps`; the seams a Handler cannot work without, split by surface and supplied through constructors so omitting one is a compile error at the composition root. **Distinct** from the domain Library — `LibraryDeps` is wiring, not a collection of books.
 
-`handler.Options` holds the complement: seams that may legitimately be nil, each nil-guarded at its use site where nil selects a documented fallback (no storage backend → local file serving; no OIDC provider configured; no worker pool; forward-auth disabled → every request falls through to `RequireAuth`).
+`handler.Options` holds the complement: seams that may legitimately be nil, each nil-guarded at its use site where nil selects a documented fallback (no library store → book bytes are not served; no OIDC provider configured; no worker pool; forward-auth disabled → every request falls through to `RequireAuth`).
 
 The split exists because a 31-field `Deps` struct made every seam optional by construction, and one of them — the provider settings surface — shipped unassigned and nil-dereferenced on every request to it. Required-vs-optional was already a real distinction in the code, expressed only as the presence or absence of a nil check; this moves it into the type system.
 
@@ -485,7 +491,7 @@ Callers hand it a book id and whatever their write returned, and it writes the r
 
 ### Book file sandbox
 
-`service.SandboxPath`; the allow-list gate every filesystem read or delete of a book file passes through. A path must resolve inside one of the roots after cleaning. Fails closed — no configured roots admits nothing. Serving (`handler.sandboxPath`) and deleting (`LibraryService.DeleteBook`) share the one implementation so a change to the rule cannot apply to one and miss the other — the reason it lives in `service` rather than in the HTTP layer with its other caller.
+`service.SandboxPath`; the allow-list gate every filesystem read or delete of a book file passes through. A path must resolve inside one of the roots after cleaning. Fails closed — no configured roots admits nothing; a refusal is `ErrPathOutsideRoots`, a 403 at the edge. The gate sits on the library handle ([[LibraryStore]]) and nowhere above it: [[OpenBook]] applies it to a legacy path, [[BookSource]] and `FileSource` to every local delivery answer, and `LibraryService.DeleteBook` to a delete. The store hands each handle the roots (`LibraryStoreDeps.BookDropPath` and `.Libraries`). The HTTP layer holds no copy — it used to, and the handle's open skipped the gate for every in-process reader while the handler was busy applying it. Bytes reached through a [[Files row]] need no gate, since the key is relative to the library root; the roots are computed only on the paths that need them.
 
 The roots are `service.BookFileRoots`: `BOOKDROP_PATH` plus every Library that lives on a filesystem, where "lives on a filesystem" is the same `root`-then-`path` reading [[LibraryStore]] does for keys. Both halves of the gate are single implementations for the same reason — the roots were written twice character-for-character (service tier and HTTP layer) and a third time in the comic reader, and an allow-list computed separately per tier is one edit away from the serve side and the delete side disagreeing. A listing failure degrades to the roots already in hand rather than widening.
 

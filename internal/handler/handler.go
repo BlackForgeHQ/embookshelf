@@ -75,9 +75,10 @@ type Handler struct {
 	// with a chosen instant.
 	startedAt time.Time
 	// libStore powers the file-serve path's BookSource decision
-	// (presign vs. local) and any other library-aware lookup. nil on
-	// installs that haven't configured a storage backend — serveBookFile
-	// falls back to local serving.
+	// (presign vs. local), the comic reader and any other library-aware
+	// lookup. Production always wires it; nil (a test that never reaches
+	// for bytes) makes every byte-serving route refuse rather than read
+	// books.path off disk outside the Book file sandbox.
 	libStore service.LibraryStore
 	// primaryHash is the shared warn-and-degrade lookup behind every
 	// staleness badge (service.NewPrimaryHash). nil exactly when

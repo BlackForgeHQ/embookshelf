@@ -11,6 +11,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 // renditionStore is the narrow slice of BookMarkdownRenditionRepo the
@@ -31,8 +32,8 @@ type MarkdownRenditionDeps struct {
 	Config     func(context.Context) (repo.ConverterConfig, error)
 	Renditions renditionStore
 	Books      bookReader
-	// Open yields the book's bytes as a stream — the converter POST body.
-	Open func(context.Context, model.Book) (io.Reader, int64, io.Closer, error)
+	// Open yields the book's bytes — streamed as the converter POST body.
+	Open func(context.Context, model.Book) (storage.Source, error)
 	// SourceHash is the book's primary file hash, recorded on the row so
 	// staleness is answerable later. Empty is recorded as-is: a book
 	// whose hash backfill has not run yet still converts.
@@ -73,12 +74,12 @@ func MarkdownRendition(ctx context.Context, a jobs.MarkdownRenditionArgs, deps M
 
 	return renditionRun(ctx, deps.Renditions, a.BookID,
 		fin.convert(func(ctx context.Context) (service.ConvertResult, error) {
-			body, _, closer, err := deps.Open(ctx, book)
+			src, err := deps.Open(ctx, book)
 			if err != nil {
 				return service.ConvertResult{}, fmt.Errorf("open book file: %w", err)
 			}
-			defer func() { _ = closer.Close() }()
-			return deps.Convert(ctx, cfg.BaseURL, body)
+			defer func() { _ = src.Close() }()
+			return deps.Convert(ctx, cfg.BaseURL, io.NewSectionReader(src, 0, src.Size()))
 		}),
 		fin.finish("place markdown", func(ctx context.Context, rec service.DerivedRecord, sourceHash []byte, version string) error {
 			// The page record (ADR-0040) is the conversion's own answer,

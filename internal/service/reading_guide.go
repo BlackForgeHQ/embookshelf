@@ -232,9 +232,12 @@ func (s *ReadingGuideService) buildPrompt(book model.Book, text string, kind mod
 }
 
 // LibraryBookOpener is the production bookSourceOpener: it resolves a
-// book's library, then opens its bytes through the handle. Going through
-// LibraryStore rather than os.Open(book.Path) is what keeps the guide
-// generator working on S3-backed libraries.
+// book's library, then opens its bytes through the handle (CONTEXT.md:
+// OpenBook). Going through LibraryStore rather than os.Open(book.Path) is
+// what keeps the guide generator working on S3-backed libraries, and what
+// puts a legacy path through the Book file sandbox. Book text, reading
+// guides, the audiobook service and the converter workers are all built
+// with it, so none of them holds a LibraryStore.
 type LibraryBookOpener struct {
 	store LibraryStore
 }
@@ -251,5 +254,5 @@ func (o *LibraryBookOpener) Open(ctx context.Context, book model.Book) (storage.
 	if err != nil {
 		return nil, fmt.Errorf("resolve library %s: %w", book.LibraryID, err)
 	}
-	return handle.OpenBookSource(ctx, book)
+	return handle.OpenBook(ctx, book)
 }

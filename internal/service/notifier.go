@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"strings"
@@ -268,16 +269,12 @@ func (n *Notifier) SendToKindle(ctx context.Context, book model.Book, user model
 	if err != nil {
 		return fmt.Errorf("library handle: %w", err)
 	}
-	reader, size, closer, err := handle.OpenBook(ctx, book)
+	src, err := handle.OpenBook(ctx, book)
 	if err != nil {
 		return fmt.Errorf("open book: %w", err)
 	}
-	defer func() {
-		if closer != nil {
-			_ = closer.Close()
-		}
-	}()
-	if size > SendToKindleMaxBytes {
+	defer func() { _ = src.Close() }()
+	if src.Size() > SendToKindleMaxBytes {
 		return ErrFileTooLarge
 	}
 
@@ -293,7 +290,7 @@ func (n *Notifier) SendToKindle(ctx context.Context, book model.Book, user model
 		Attachments: []email.Attachment{{
 			Filename:    filename,
 			ContentType: contentType,
-			Reader:      reader,
+			Reader:      io.NewSectionReader(src, 0, src.Size()),
 		}},
 	})
 }

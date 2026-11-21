@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-package handler
+package service
 
 import (
 	"path/filepath"
@@ -13,9 +13,9 @@ func TestSandboxAllowsPathInsideARoot(t *testing.T) {
 	root := t.TempDir()
 	want := filepath.Join(root, "Author", "Title", "book.epub")
 
-	got, err := sandboxPath(want, []string{root})
+	got, err := SandboxPath(want, []string{root})
 	if err != nil {
-		t.Fatalf("sandboxPath: %v", err)
+		t.Fatalf("SandboxPath: %v", err)
 	}
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -26,7 +26,7 @@ func TestSandboxAllowsTheRootItself(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	if _, err := sandboxPath(root, []string{root}); err != nil {
+	if _, err := SandboxPath(root, []string{root}); err != nil {
 		t.Fatalf("root itself must be allowed: %v", err)
 	}
 }
@@ -35,7 +35,7 @@ func TestSandboxRejectsPathOutsideEveryRoot(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	if _, err := sandboxPath(filepath.Join(t.TempDir(), "elsewhere.epub"), []string{root}); err == nil {
+	if _, err := SandboxPath(filepath.Join(t.TempDir(), "elsewhere.epub"), []string{root}); err == nil {
 		t.Fatal("want an error for a path outside every root, got nil")
 	}
 }
@@ -49,7 +49,7 @@ func TestSandboxRejectsPrefixSiblingDirectory(t *testing.T) {
 	root := filepath.Join(base, "lib")
 	sibling := filepath.Join(base, "lib-backup", "book.epub")
 
-	if _, err := sandboxPath(sibling, []string{root}); err == nil {
+	if _, err := SandboxPath(sibling, []string{root}); err == nil {
 		t.Fatal("want an error for a prefix-sibling directory, got nil")
 	}
 }
@@ -60,7 +60,7 @@ func TestSandboxRejectsTraversalEscape(t *testing.T) {
 	root := t.TempDir()
 	escape := filepath.Join(root, "..", "..", "etc", "passwd")
 
-	if _, err := sandboxPath(escape, []string{root}); err == nil {
+	if _, err := SandboxPath(escape, []string{root}); err == nil {
 		t.Fatal("want an error for a traversal escape, got nil")
 	}
 }
@@ -72,9 +72,9 @@ func TestSandboxNormalizesTraversalWithinRoot(t *testing.T) {
 	root := t.TempDir()
 	messy := filepath.Join(root, "a", "..", "b.epub")
 
-	got, err := sandboxPath(messy, []string{root})
+	got, err := SandboxPath(messy, []string{root})
 	if err != nil {
-		t.Fatalf("sandboxPath: %v", err)
+		t.Fatalf("SandboxPath: %v", err)
 	}
 	if want := filepath.Join(root, "b.epub"); got != want {
 		t.Errorf("got %q, want the cleaned %q", got, want)
@@ -86,7 +86,7 @@ func TestSandboxNormalizesTraversalWithinRoot(t *testing.T) {
 func TestSandboxRejectsWhenNoRootsConfigured(t *testing.T) {
 	t.Parallel()
 
-	if _, err := sandboxPath(filepath.Join(t.TempDir(), "x.epub"), nil); err == nil {
+	if _, err := SandboxPath(filepath.Join(t.TempDir(), "x.epub"), nil); err == nil {
 		t.Fatal("want an error when no roots are configured, got nil")
 	}
 }
@@ -97,7 +97,7 @@ func TestSandboxIgnoresEmptyRootEntries(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "book.epub")
 
-	if _, err := sandboxPath(target, []string{"", root, ""}); err != nil {
+	if _, err := SandboxPath(target, []string{"", root, ""}); err != nil {
 		t.Fatalf("empty root entries must be skipped, not fatal: %v", err)
 	}
 }

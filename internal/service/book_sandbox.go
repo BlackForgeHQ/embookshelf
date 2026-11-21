@@ -21,7 +21,8 @@ var ErrPathOutsideRoots = errors.New("path outside allowed roots")
 //
 // Lives here rather than in the HTTP layer because the delete side of
 // the sandbox moved down with book deletion (LibraryService.DeleteBook);
-// the serve side still gates on it from the handler. One implementation,
+// the serve side gates on it in LibraryHandle (LocateBook, BookSource,
+// FileSource), which every reader goes through. One implementation,
 // two callers — the property the sandbox is documented to have.
 func SandboxPath(path string, roots []string) (string, error) {
 	abs, err := filepath.Abs(path)
