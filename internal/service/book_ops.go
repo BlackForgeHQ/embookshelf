@@ -113,16 +113,6 @@ func NewBookOps(store LibraryStore, files DerivedFiles) *BookOps {
 	return &BookOps{store: store, files: files, hash: NewPrimaryHash(store)}
 }
 
-// Open yields the book's bytes as a stream — the converter POST body's
-// shape.
-func (o *BookOps) Open(ctx context.Context, book model.Book) (io.Reader, int64, io.Closer, error) {
-	handle, err := o.store.For(ctx, book.LibraryID)
-	if err != nil {
-		return nil, 0, nil, fmt.Errorf("resolve library: %w", err)
-	}
-	return handle.OpenBook(ctx, book)
-}
-
 // PrimaryHash answers "which bytes is this book, right now" through the
 // shared warn-and-degrade seam (#297).
 func (o *BookOps) PrimaryHash(ctx context.Context, book model.Book) []byte {

@@ -15,6 +15,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/auth"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
+	"github.com/blackforge/embookshelf/internal/service/servicetest"
 )
 
 // The seam is tested once, here, with a substituted book store. Every
@@ -204,9 +205,15 @@ func TestComicPagesIndexRejectsANonComic(t *testing.T) {
 // through the storage seam, so a book with no file may be missing from an
 // object store rather than from a filesystem.
 func TestComicPagesIndexRejectsAComicWithNoFile(t *testing.T) {
-	h := &Handler{books: &fakeBookStore{
-		book: model.Book{ID: "book-1", Format: "CBZ"},
-	}}
+	h := &Handler{
+		books: &fakeBookStore{
+			book: model.Book{ID: "book-1", LibraryID: "lib-1", Format: "CBZ"},
+		},
+		libStore: servicetest.NewStore(servicetest.StoreOptions{
+			Libraries: []model.Library{{ID: "lib-1"}},
+			Files:     servicetest.NewFiles(),
+		}),
+	}
 
 	rec := scopeRequest(t, h.bookScoped(h.ComicPagesIndex), "book-1", true)
 

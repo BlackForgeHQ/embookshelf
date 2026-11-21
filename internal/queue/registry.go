@@ -144,12 +144,13 @@ func registry(deps Deps) []registration {
 
 	// Markdown renditions (ADR-0033). Config per job for the same
 	// hot-reload reason as the guide; the library-touching steps come
-	// from bookOps so the worker holds no LibraryStore.
+	// from bookOps and the shared book opener so the worker holds no
+	// LibraryStore.
 	markdownRendition := task.MarkdownRenditionDeps{
 		Config:     deps.AppSettings.GetConverter,
 		Renditions: deps.Renditions,
 		Books:      deps.Books,
-		Open:       bookOps.Open,
+		Open:       openBook,
 		SourceHash: bookOps.PrimaryHash,
 		Convert:    (&service.ConverterClient{}).Convert,
 		Record:     bookOps.Recorder(service.DerivedMarkdown),

@@ -15,6 +15,7 @@ import (
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
 	"github.com/blackforge/embookshelf/internal/service"
+	"github.com/blackforge/embookshelf/internal/storage"
 )
 
 type fakeRenditionStore struct {
@@ -59,13 +60,18 @@ func pdfBook() model.Book {
 	return model.Book{ID: "b1", Title: "Sample", Author: "A", Format: "PDF"}
 }
 
+// pdfSource is a byte slice as a storage.Source.
+type pdfSource struct{ *bytes.Reader }
+
+func (pdfSource) Close() error { return nil }
+
 func renditionDeps(store *fakeRenditionStore, cfg repo.ConverterConfig) MarkdownRenditionDeps {
 	return MarkdownRenditionDeps{
 		Config:     func(context.Context) (repo.ConverterConfig, error) { return cfg, nil },
 		Renditions: store,
 		Books:      fakeBookReader{book: pdfBook()},
-		Open: func(context.Context, model.Book) (io.Reader, int64, io.Closer, error) {
-			return strings.NewReader("%PDF-"), 5, io.NopCloser(nil), nil
+		Open: func(context.Context, model.Book) (storage.Source, error) {
+			return pdfSource{bytes.NewReader([]byte("%PDF-"))}, nil
 		},
 		SourceHash: func(context.Context, model.Book) []byte { return []byte{0xab} },
 		Convert: func(_ context.Context, _ string, _ io.Reader) (service.ConvertResult, error) {
@@ -170,8 +176,8 @@ func TestMarkdownRenditionFailureArms(t *testing.T) {
 		},
 		"stream open failure is loud and retryable": {
 			mutate: func(d *MarkdownRenditionDeps) {
-				d.Open = func(context.Context, model.Book) (io.Reader, int64, io.Closer, error) {
-					return nil, 0, nil, errors.New("backend timeout")
+				d.Open = func(context.Context, model.Book) (storage.Source, error) {
+					return nil, errors.New("backend timeout")
 				}
 			},
 			wantRow:   "open book file: backend timeout",

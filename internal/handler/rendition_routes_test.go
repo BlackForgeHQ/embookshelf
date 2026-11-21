@@ -13,7 +13,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/blackforge/embookshelf/internal/config"
 	"github.com/blackforge/embookshelf/internal/jobs"
 	"github.com/blackforge/embookshelf/internal/model"
 	"github.com/blackforge/embookshelf/internal/repo"
@@ -500,8 +499,11 @@ func TestBookFileWritesTheOneContentDispositionSentence(t *testing.T) {
 	if err := os.WriteFile(path, []byte("epub-bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	h := &Handler{cfg: config.Config{BookDropPath: root}}
-	book := model.Book{ID: "b1", Title: "Sœur", Author: "Élan", Format: "EPUB", Path: path}
+	h := &Handler{libStore: servicetest.NewStore(servicetest.StoreOptions{
+		Libraries:    []model.Library{{ID: "lib1"}},
+		BookDropPath: root,
+	})}
+	book := model.Book{ID: "b1", LibraryID: "lib1", Title: "Sœur", Author: "Élan", Format: "EPUB", Path: path}
 	scope := bookScope{UserID: "u1", Book: book}
 
 	t.Run("inline until a download is asked for", func(t *testing.T) {

@@ -104,7 +104,7 @@ type narrationFiles interface {
 }
 ```
 
-`Place` is a function rather than a `LibraryStore`, because finalize resolves a handle for exactly one purpose: `PlaceNarration`. Handing it the whole store would let a future edit reach `OpenBookSource` or `Placer`, and the comment at the current call site exists precisely to say the generic `Placer` is wrong here.
+`Place` is a function rather than a `LibraryStore`, because finalize resolves a handle for exactly one purpose: `PlaceNarration`. Handing it the whole store would let a future edit reach `OpenBook` or `Placer`, and the comment at the current call site exists precisely to say the generic `Placer` is wrong here.
 
 `Cover` stays nil-able. A narration without embedded art is still a good narration; that is existing, deliberate behaviour and the nil is the encoding of it.
 

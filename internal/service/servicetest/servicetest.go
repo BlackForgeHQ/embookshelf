@@ -23,7 +23,8 @@ import (
 	"github.com/blackforge/embookshelf/internal/storage"
 )
 
-// Libraries is an in-memory service.LibraryByIDReader.
+// Libraries is an in-memory service.LibraryByIDReader, and the
+// service.LibraryLister the Book file sandbox reads its roots from.
 type Libraries struct {
 	mu   sync.Mutex
 	rows map[string]model.Library
@@ -46,6 +47,16 @@ func (l *Libraries) GetByID(_ context.Context, id string) (model.Library, error)
 		return model.Library{}, repo.ErrNotFound
 	}
 	return lib, nil
+}
+
+func (l *Libraries) List(_ context.Context) ([]model.Library, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]model.Library, 0, len(l.rows))
+	for _, lib := range l.rows {
+		out = append(out, lib)
+	}
+	return out, nil
 }
 
 // Files is an in-memory service.BookFileLister: rows keyed by book id.
@@ -114,12 +125,18 @@ type StoreOptions struct {
 	Orphans         service.PendingOrphansEnqueuer
 	PresignTTL      time.Duration
 	PresignFallback string
+	// BookDropPath is the Book file sandbox's staging root. The
+	// libraries' own roots are always admitted, as in production.
+	BookDropPath string
 }
 
 // NewStore builds a real service.LibraryStore over in-memory adapters.
 func NewStore(opts StoreOptions) service.LibraryStore {
+	libs := NewLibraries(opts.Libraries...)
 	deps := service.LibraryStoreDeps{
-		Libs:            NewLibraries(opts.Libraries...),
+		Libs:            libs,
+		Libraries:       libs,
+		BookDropPath:    opts.BookDropPath,
 		NewPlacer:       opts.NewPlacer,
 		Orphans:         opts.Orphans,
 		PresignTTL:      opts.PresignTTL,

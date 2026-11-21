@@ -5,9 +5,12 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,13 +66,18 @@ func (f *fakeFiles) ListByBook(_ context.Context, bookID string) ([]model.File, 
 	return f.byBook[bookID], nil
 }
 
-func readAll(t *testing.T, r io.Reader) string {
+func readSource(t *testing.T, src storage.Source) string {
 	t.Helper()
-	b, err := io.ReadAll(r)
+	b, err := io.ReadAll(io.NewSectionReader(src, 0, src.Size()))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
 	return string(b)
+}
+
+// rootsOf is a fixed Book file sandbox allow-list.
+func rootsOf(roots ...string) func(context.Context) []string {
+	return func(context.Context) []string { return roots }
 }
 
 // ---------------------------------------------------------------------------
@@ -92,17 +100,17 @@ func TestOpenBookReadsFromStorageForBackendBackedLibrary(t *testing.T) {
 	// No on-disk path — this is the S3 shape that used to fail.
 	book := model.Book{ID: "b1", Format: "epub", Path: ""}
 
-	reader, size, closer, err := handle.OpenBook(context.Background(), book)
+	src, err := handle.OpenBook(context.Background(), book)
 	if err != nil {
 		t.Fatalf("OpenBook: %v", err)
 	}
-	defer func() { _ = closer.Close() }()
+	defer func() { _ = src.Close() }()
 
-	if got := readAll(t, reader); got != "epub-bytes" {
+	if got := readSource(t, src); got != "epub-bytes" {
 		t.Errorf("content = %q, want epub-bytes", got)
 	}
-	if size != int64(len("epub-bytes")) {
-		t.Errorf("size = %d, want %d", size, len("epub-bytes"))
+	if src.Size() != int64(len("epub-bytes")) {
+		t.Errorf("size = %d, want %d", src.Size(), len("epub-bytes"))
 	}
 }
 
@@ -113,19 +121,19 @@ func TestOpenBookReadsFromDiskWhenNoStorage(t *testing.T) {
 	if err := os.WriteFile(path, []byte("local-bytes"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	handle := &LibraryHandle{Library: model.Library{ID: "lib1"}}
+	handle := &LibraryHandle{Library: model.Library{ID: "lib1"}, sandboxRoots: rootsOf(filepath.Dir(path))}
 
-	reader, size, closer, err := handle.OpenBook(context.Background(), model.Book{ID: "b1", Path: path})
+	src, err := handle.OpenBook(context.Background(), model.Book{ID: "b1", Path: path})
 	if err != nil {
 		t.Fatalf("OpenBook: %v", err)
 	}
-	defer func() { _ = closer.Close() }()
+	defer func() { _ = src.Close() }()
 
-	if got := readAll(t, reader); got != "local-bytes" {
+	if got := readSource(t, src); got != "local-bytes" {
 		t.Errorf("content = %q, want local-bytes", got)
 	}
-	if size != int64(len("local-bytes")) {
-		t.Errorf("size = %d, want %d", size, len("local-bytes"))
+	if src.Size() != int64(len("local-bytes")) {
+		t.Errorf("size = %d, want %d", src.Size(), len("local-bytes"))
 	}
 }
 
@@ -147,13 +155,13 @@ func TestOpenBookNeverPresigns(t *testing.T) {
 		presignTTL:      time.Minute,
 	}
 
-	reader, _, closer, err := handle.OpenBook(context.Background(), model.Book{ID: "b1", Format: "epub"})
+	src, err := handle.OpenBook(context.Background(), model.Book{ID: "b1", Format: "epub"})
 	if err != nil {
 		t.Fatalf("OpenBook: %v", err)
 	}
-	defer func() { _ = closer.Close() }()
+	defer func() { _ = src.Close() }()
 
-	if got := readAll(t, reader); got != "real-bytes" {
+	if got := readSource(t, src); got != "real-bytes" {
 		t.Errorf("content = %q, want real-bytes", got)
 	}
 	if store.presigns != 0 {
@@ -171,18 +179,19 @@ func TestOpenBookFallsBackToPathWhenNoFilesRow(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	handle := &LibraryHandle{
-		Library: model.Library{ID: "lib1"},
-		Storage: &fakeStorage{objects: map[string][]byte{}},
-		files:   &fakeFiles{byBook: map[string][]model.File{}},
+		Library:      model.Library{ID: "lib1"},
+		Storage:      &fakeStorage{objects: map[string][]byte{}},
+		files:        &fakeFiles{byBook: map[string][]model.File{}},
+		sandboxRoots: rootsOf(filepath.Dir(path)),
 	}
 
-	reader, _, closer, err := handle.OpenBook(context.Background(), model.Book{ID: "b1", Path: path})
+	src, err := handle.OpenBook(context.Background(), model.Book{ID: "b1", Path: path})
 	if err != nil {
 		t.Fatalf("OpenBook: %v", err)
 	}
-	defer func() { _ = closer.Close() }()
+	defer func() { _ = src.Close() }()
 
-	if got := readAll(t, reader); got != "legacy" {
+	if got := readSource(t, src); got != "legacy" {
 		t.Errorf("content = %q, want legacy", got)
 	}
 }
@@ -191,8 +200,9 @@ func TestOpenBookErrorsWhenNoBytesAvailable(t *testing.T) {
 	t.Parallel()
 
 	handle := &LibraryHandle{Library: model.Library{ID: "lib1"}}
-	if _, _, _, err := handle.OpenBook(context.Background(), model.Book{ID: "b1"}); err == nil {
-		t.Fatal("want an error for a book with no storage and no path, got nil")
+	_, err := handle.OpenBook(context.Background(), model.Book{ID: "b1"})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("err = %v, want os.ErrNotExist — a book with no files row and no path is not placed", err)
 	}
 }
 
@@ -267,13 +277,13 @@ func TestOpenBookResolvesRelativeLocationsOnALocalLibrary(t *testing.T) {
 	// second chance behind this.
 	book := model.Book{ID: "b1", Format: "EPUB", Path: "Kobo Abe/Woman in the Dunes/dunes.epub"}
 
-	reader, _, closer, err := handle.OpenBook(context.Background(), book)
+	src, err := handle.OpenBook(context.Background(), book)
 	if err != nil {
 		t.Fatalf("OpenBook on a local library: %v", err)
 	}
-	defer func() { _ = closer.Close() }()
+	defer func() { _ = src.Close() }()
 
-	if got := readAll(t, reader); got != "epub-bytes" {
+	if got := readSource(t, src); got != "epub-bytes" {
 		t.Errorf("content = %q, want epub-bytes", got)
 	}
 }
@@ -433,7 +443,7 @@ func TestFileSourceFallsBackToTheLocalPathWithoutStorage(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	handle := &LibraryHandle{Library: model.Library{ID: "lib1", Root: &root}}
+	handle := &LibraryHandle{Library: model.Library{ID: "lib1", Root: &root}, sandboxRoots: rootsOf(root)}
 
 	src, err := handle.FileSource(context.Background(), "Author/Title/book.mp3")
 	if err != nil {
@@ -444,5 +454,215 @@ func TestFileSourceFallsBackToTheLocalPathWithoutStorage(t *testing.T) {
 	}
 	if want := filepath.Join(root, "Author/Title/book.mp3"); src.Path != want {
 		t.Errorf("path = %q, want %q", src.Path, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The Book file sandbox, applied by the handle
+// ---------------------------------------------------------------------------
+
+// failingFiles is a files table that cannot be read.
+type failingFiles struct{ err error }
+
+func (f failingFiles) ListByBook(context.Context, string) ([]model.File, error) { return nil, f.err }
+
+// writeBook puts a real file at dir/name, so a refusal cannot be a
+// missing file in disguise.
+func writeBook(t *testing.T, dir, name string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("bytes"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	return path
+}
+
+// books.path is a stored string, and the sandbox exists because it is
+// not trusted to stay inside a library. The handle used to open it with
+// a bare os.Open for every in-process reader — text, guides, Kindle,
+// device push, the converter — while only the HTTP layer gated it.
+func TestOpenBookRefusesALegacyPathOutsideTheSandbox(t *testing.T) {
+	t.Parallel()
+
+	outside := writeBook(t, t.TempDir(), "elsewhere.epub")
+	handle := &LibraryHandle{
+		Library:      model.Library{ID: "lib1"},
+		files:        &fakeFiles{byBook: map[string][]model.File{}},
+		sandboxRoots: rootsOf(t.TempDir()),
+	}
+
+	_, err := handle.OpenBook(context.Background(), model.Book{ID: "b1", Path: outside})
+	if !errors.Is(err, ErrPathOutsideRoots) {
+		t.Fatalf("err = %v, want ErrPathOutsideRoots", err)
+	}
+}
+
+// No roots at all admits nothing: a handle built without them fails
+// closed rather than reading wherever books.path points.
+func TestOpenBookWithNoSandboxRootsRefusesALegacyPath(t *testing.T) {
+	t.Parallel()
+
+	path := writeBook(t, t.TempDir(), "legacy.epub")
+	handle := &LibraryHandle{Library: model.Library{ID: "lib1"}}
+
+	_, err := handle.OpenBook(context.Background(), model.Book{ID: "b1", Path: path})
+	if !errors.Is(err, ErrPathOutsideRoots) {
+		t.Fatalf("err = %v, want ErrPathOutsideRoots", err)
+	}
+}
+
+// A files lookup that failed is not a book with no files row. Reading
+// books.path then would read this machine's disk for a library whose
+// bytes may not be on it — so it is an error, even with a path that the
+// sandbox would admit.
+func TestOpenBookFailedFilesLookupNeverFallsBackToThePath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := writeBook(t, dir, "legacy.epub")
+	handle := &LibraryHandle{
+		Library:      model.Library{ID: "lib1"},
+		Storage:      &fakeStorage{objects: map[string][]byte{}},
+		files:        failingFiles{err: errors.New("connection reset")},
+		sandboxRoots: rootsOf(dir),
+	}
+
+	_, err := handle.OpenBook(context.Background(), model.Book{ID: "b1", Path: path})
+	if err == nil {
+		t.Fatal("OpenBook read the legacy path after the files lookup failed")
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		t.Errorf("err = %v — a broken lookup was reported as a book that is not placed", err)
+	}
+}
+
+// The identity is the strongest the bytes allow, and finding it opens
+// nothing: a warm cache answers from the identity alone.
+func TestLocateBookIdentity(t *testing.T) {
+	t.Parallel()
+
+	mtime := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for name, tc := range map[string]struct {
+		row  model.File
+		want string
+	}{
+		"content hash": {
+			row:  model.File{ID: "f1", Location: "k", Format: "epub", ContentHash: []byte{0xab, 0xcd}},
+			want: "sha256:abcd",
+		},
+		"no hash yet: the row's own facts": {
+			row:  model.File{ID: "f1", Location: "k", Format: "epub", Size: 7, Mtime: mtime},
+			want: "file:f1:7:" + strconv.FormatInt(mtime.UnixNano(), 10),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store := &countingStorage{fakeStorage: &fakeStorage{objects: map[string][]byte{"k": []byte("x")}}}
+			handle := &LibraryHandle{
+				Library: model.Library{ID: "lib1"},
+				Storage: store,
+				files:   &fakeFiles{byBook: map[string][]model.File{"b1": {tc.row}}},
+			}
+
+			located, err := handle.LocateBook(context.Background(), model.Book{ID: "b1", Format: "epub"})
+			if err != nil {
+				t.Fatalf("LocateBook: %v", err)
+			}
+			if located.Identity != tc.want {
+				t.Errorf("identity = %q, want %q", located.Identity, tc.want)
+			}
+			if store.opens != 0 {
+				t.Errorf("LocateBook opened the bytes %d times, want 0", store.opens)
+			}
+		})
+	}
+
+	t.Run("legacy path: the sandboxed path's own facts", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		path := writeBook(t, dir, "legacy.epub")
+		handle := &LibraryHandle{Library: model.Library{ID: "lib1"}, sandboxRoots: rootsOf(dir)}
+
+		located, err := handle.LocateBook(context.Background(), model.Book{ID: "b1", Path: path})
+		if err != nil {
+			t.Fatalf("LocateBook: %v", err)
+		}
+		if !strings.HasPrefix(located.Identity, "path:"+path+":5:") {
+			t.Errorf("identity = %q, want path:%s:5:<mtime>", located.Identity, path)
+		}
+	})
+}
+
+type countingStorage struct {
+	*fakeStorage
+	opens int
+}
+
+func (c *countingStorage) Open(ctx context.Context, key string) (storage.Source, error) {
+	c.opens++
+	return c.fakeStorage.Open(ctx, key)
+}
+
+// A "local" delivery answer leaves the handle already sandboxed: the
+// handler streams the path as given and holds no copy of the gate.
+func TestBookSourceSandboxesALegacyPath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	inside := writeBook(t, dir, "inside.epub")
+	outside := writeBook(t, t.TempDir(), "outside.epub")
+	handle := &LibraryHandle{Library: model.Library{ID: "lib1"}, sandboxRoots: rootsOf(dir)}
+
+	src, err := handle.BookSource(context.Background(), model.Book{ID: "b1", Path: inside})
+	if err != nil {
+		t.Fatalf("BookSource inside the sandbox: %v", err)
+	}
+	if src.Kind != BookDeliveryLocal || src.Path != inside {
+		t.Errorf("source = %+v, want local %q", src, inside)
+	}
+
+	if _, err := handle.BookSource(context.Background(), model.Book{ID: "b1", Path: outside}); !errors.Is(err, ErrPathOutsideRoots) {
+		t.Errorf("BookSource outside the sandbox: err = %v, want ErrPathOutsideRoots", err)
+	}
+}
+
+// rootLibraries is a library catalog for the store's sandbox roots.
+type rootLibraries []model.Library
+
+func (r rootLibraries) GetByID(_ context.Context, id string) (model.Library, error) {
+	for _, lib := range r {
+		if lib.ID == id {
+			return lib, nil
+		}
+	}
+	return model.Library{}, errors.New("not found")
+}
+
+func (r rootLibraries) List(context.Context) ([]model.Library, error) { return r, nil }
+
+// Handles from the store carry the production roots: BookDrop plus every
+// library on a filesystem, the same list deletion is gated by.
+func TestStoreHandlesSandboxToBookDropAndLibraryRoots(t *testing.T) {
+	t.Parallel()
+
+	libRoot, bookDrop := t.TempDir(), t.TempDir()
+	libs := rootLibraries{{ID: "lib1", Root: &libRoot}}
+	store := NewLibraryStore(LibraryStoreDeps{Libs: libs, Libraries: libs, BookDropPath: bookDrop})
+	handle, err := store.For(context.Background(), "lib1")
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+
+	for _, path := range []string{writeBook(t, libRoot, "a.epub"), writeBook(t, bookDrop, "b.epub")} {
+		src, err := handle.OpenBook(context.Background(), model.Book{ID: "b1", Path: path})
+		if err != nil {
+			t.Errorf("OpenBook(%s): %v", path, err)
+			continue
+		}
+		_ = src.Close()
+	}
+	outside := writeBook(t, t.TempDir(), "c.epub")
+	if _, err := handle.OpenBook(context.Background(), model.Book{ID: "b1", Path: outside}); !errors.Is(err, ErrPathOutsideRoots) {
+		t.Errorf("OpenBook outside both roots: err = %v, want ErrPathOutsideRoots", err)
 	}
 }

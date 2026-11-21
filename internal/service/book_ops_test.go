@@ -52,7 +52,10 @@ func TestBookOpsResolveLibraryFailure(t *testing.T) {
 	ctx := context.Background()
 	book := model.Book{ID: "b1", LibraryID: "l1", Title: "T", Author: "A"}
 
-	if _, _, _, err := ops.Open(ctx, book); err == nil || !strings.Contains(err.Error(), "resolve library") {
+	// The book's own bytes come from the shared opener every worker is
+	// built with, not from BookOps; the same arm holds there.
+	opener := service.NewLibraryBookOpener(unresolvableStore{err: errors.New("backend down")})
+	if _, err := opener.Open(ctx, book); err == nil || !strings.Contains(err.Error(), "resolve library") {
 		t.Errorf("Open: err = %v, want a resolve-library failure", err)
 	}
 	if _, err := ops.OpenMarkdown(ctx, book, "A/T/T.md"); err == nil || !strings.Contains(err.Error(), "resolve library") {

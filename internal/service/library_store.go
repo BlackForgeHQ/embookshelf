@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -69,6 +70,10 @@ type LibraryHandle struct {
 	orphans         PendingOrphansEnqueuer
 	presignTTL      time.Duration
 	presignFallback string
+
+	// sandboxRoots yields the Book file sandbox's allow-list. Nil admits
+	// nothing: the sandbox fails closed.
+	sandboxRoots func(context.Context) []string
 }
 
 // BookFileLister is the slice of FileRepo a handle actually needs to
@@ -168,9 +173,9 @@ func libraryLocalRoot(lib model.Library) string {
 }
 
 // LibraryLister is the slice of the library catalog the sandbox roots
-// need. Narrow so the roots are testable without a database, and so both
-// tiers can pass what they already hold — the service its LibraryRepo,
-// the HTTP layer its LibraryService.
+// need. Narrow so the roots are testable without a database; both of
+// its users — the LibraryStore's handles and book deletion — pass the
+// LibraryRepo.
 type LibraryLister interface {
 	List(ctx context.Context) ([]model.Library, error)
 }
@@ -184,10 +189,10 @@ type LibraryLister interface {
 //
 // The counterpart to SandboxPath, and here for the same reason: serving
 // and deleting have to be gated by the same allow-list or a change to one
-// tier silently loosens the other. It was written twice — once here in
-// the service tier, once character-for-character in the HTTP layer — and
-// a third time in the comic reader before CBZ moved onto the storage
-// seam. One implementation is the property the sandbox is named for.
+// silently loosens the other. It was written twice — once here in the
+// service tier, once character-for-character in the HTTP layer — and a
+// third time in the comic reader before CBZ moved onto the storage seam.
+// One implementation is the property the sandbox is named for.
 //
 // Degrades rather than fails: a listing error yields the roots we do
 // have. The sandbox fails closed, so the worst case is a refused read or
@@ -254,39 +259,132 @@ func (h *LibraryHandle) StorageKey(location string) string {
 }
 
 // OpenBook returns the book's bytes, wherever they live. Callers that
-// want content — Send-to-Kindle, device push — use this and never
-// learn the delivery vocabulary; BookSource stays for the file-serve
-// handler, which genuinely needs a routing answer.
+// want content — Send-to-Kindle, device push, the text and narration
+// readers — use this and never learn the delivery vocabulary;
+// BookSource stays for the file-serve handler, which genuinely needs a
+// routing answer.
 //
 // Deliberately never presigns: a presigned URL is an answer for the
 // browser, useless to a caller that needs the bytes in-process.
 //
-// The returned Closer is always non-nil on success and must be closed.
-func (h *LibraryHandle) OpenBook(ctx context.Context, book model.Book) (io.Reader, int64, io.Closer, error) {
-	if h.Storage != nil {
-		if f, err := h.bookFiles().primaryRow(ctx, book); err == nil {
-			key := h.StorageKey(f.Location)
-			src, oerr := h.Storage.Open(ctx, key)
-			if oerr != nil {
-				return nil, 0, nil, fmt.Errorf("open %s: %w", key, oerr)
-			}
-			return io.NewSectionReader(src, 0, src.Size()), src.Size(), src, nil
-		}
+// The returned Source must be closed.
+func (h *LibraryHandle) OpenBook(ctx context.Context, book model.Book) (storage.Source, error) {
+	located, err := h.LocateBook(ctx, book)
+	if err != nil {
+		return nil, err
 	}
+	return located.Open()
+}
 
+// LocatedBook is a book's bytes, found but not yet opened: their
+// Bytes identity (CONTEXT.md) and a way to open them.
+//
+// The two halves are separate because a cache needs the first without
+// the second — a warm comic serves page 400 from the identity alone,
+// which on an object-store library is a network round trip saved per
+// page. Both come out of the one files lookup.
+type LocatedBook struct {
+	Identity string
+	open     func() (storage.Source, error)
+}
+
+// Open opens the located bytes. The returned Source must be closed.
+func (b LocatedBook) Open() (storage.Source, error) { return b.open() }
+
+// LocateBook finds a book's bytes. Four outcomes and no others:
+//
+//   - a files row: the bytes are in Storage, under that row's key;
+//   - no files row but a legacy books.path: the bytes are on disk, but
+//     only inside the Book file sandbox — ErrPathOutsideRoots otherwise;
+//   - neither: not placed, an os.ErrNotExist;
+//   - a files lookup that failed: that error. It never degrades into the
+//     legacy path, which would read this machine's disk for a library
+//     whose bytes may not be on it.
+//
+// The sandbox lives here rather than with each caller because the
+// callers are many and in-process. It used to sit only in the HTTP
+// layer, and this method opened a legacy path for every other reader —
+// text, guides, Kindle, device push, the converter — without it.
+func (h *LibraryHandle) LocateBook(ctx context.Context, book model.Book) (LocatedBook, error) {
+	f, found, err := h.bookFiles().primary(ctx, book)
+	if err != nil {
+		return LocatedBook{}, fmt.Errorf("list book files: %w", err)
+	}
+	if found {
+		if h.Storage == nil {
+			return LocatedBook{}, errNoStorage
+		}
+		key := h.StorageKey(f.Location)
+		return LocatedBook{
+			Identity: fileIdentity(f),
+			open: func() (storage.Source, error) {
+				src, oerr := h.Storage.Open(ctx, key)
+				if oerr != nil {
+					return nil, fmt.Errorf("open %s: %w", key, oerr)
+				}
+				return src, nil
+			},
+		}, nil
+	}
 	if book.Path == "" {
-		return nil, 0, nil, errors.New("book has no stored file to open")
+		return LocatedBook{}, fmt.Errorf("book has no stored file: %w", os.ErrNotExist)
 	}
-	file, err := os.Open(book.Path)
+	abs, err := h.sandbox(ctx, book.Path)
 	if err != nil {
-		return nil, 0, nil, fmt.Errorf("open book file: %w", err)
+		return LocatedBook{}, err
 	}
-	info, err := file.Stat()
+	// A row with no files row has no content hash either, so the
+	// identity is what the filesystem can say about the bytes right now.
+	info, err := os.Stat(abs)
 	if err != nil {
-		_ = file.Close()
-		return nil, 0, nil, err
+		return LocatedBook{}, err
 	}
-	return file, info.Size(), file, nil
+	return LocatedBook{
+		Identity: fmt.Sprintf("path:%s:%d:%d", abs, info.Size(), info.ModTime().UnixNano()),
+		open: func() (storage.Source, error) {
+			file, oerr := os.Open(abs)
+			if oerr != nil {
+				return nil, fmt.Errorf("open book file: %w", oerr)
+			}
+			st, serr := file.Stat()
+			if serr != nil {
+				_ = file.Close()
+				return nil, serr
+			}
+			return readerAtSource{ReaderAt: file, size: st.Size(), closer: file}, nil
+		},
+	}, nil
+}
+
+// fileIdentity is the Bytes identity of a files row.
+//
+// The content hash when there is one, because that is the only identity
+// that cannot be wrong: a replaced file is a different key, so a cache
+// can never hand out its predecessor's pages, and a deleted one takes
+// its key out of circulation.
+//
+// files.content_hash is nil only in the window between a scan finding a
+// file and the boot-time hashing pass reaching it (task.RunFilesBackfill).
+// For that window the identity falls back to the row's own id plus the
+// size and mtime the scan tracks — the same facts every scanner uses to
+// decide a file changed. Weaker, and its prefix says so.
+func fileIdentity(f model.File) string {
+	if len(f.ContentHash) > 0 {
+		return "sha256:" + hex.EncodeToString(f.ContentHash)
+	}
+	return fmt.Sprintf("file:%s:%d:%d", f.ID, f.Size, f.Mtime.UnixNano())
+}
+
+// sandbox is the Book file sandbox, applied by the handle to every
+// filesystem path it hands out or opens. The roots are computed per
+// call and only here, so a book reached through its files row — the
+// common case — never lists the libraries.
+func (h *LibraryHandle) sandbox(ctx context.Context, path string) (string, error) {
+	var roots []string
+	if h.sandboxRoots != nil {
+		roots = h.sandboxRoots(ctx)
+	}
+	return SandboxPath(path, roots)
 }
 
 // errNoStorage is the one spelling of "this handle resolved no
@@ -500,30 +598,6 @@ func (h *LibraryHandle) DeleteNarrationAndBytes(
 			fileID, bookID), nil
 	}
 	return h.DeleteBookBytes(ctx, bookID, []string{f.Location}), nil
-}
-
-// OpenBookSource is OpenBook for callers that need random access — the
-// EPUB text extractor reads a zip central directory and cannot work from
-// a stream. Resolution is not duplicated: it delegates to OpenBook and
-// adapts, so the "never reach around this with os.Open(book.Path)" rule
-// holds here too.
-//
-// The returned Source must be closed.
-func (h *LibraryHandle) OpenBookSource(ctx context.Context, book model.Book) (storage.Source, error) {
-	r, size, closer, err := h.OpenBook(ctx, book)
-	if err != nil {
-		return nil, err
-	}
-	// Backend path: the Closer is the Source OpenBook opened.
-	if src, ok := closer.(storage.Source); ok {
-		return src, nil
-	}
-	// Local path: *os.File is both ReaderAt and Closer.
-	if ra, ok := r.(io.ReaderAt); ok {
-		return readerAtSource{ReaderAt: ra, size: size, closer: closer}, nil
-	}
-	_ = closer.Close()
-	return nil, errors.New("book bytes are not randomly accessible")
 }
 
 // readerAtSource adapts a ReaderAt plus a size into a storage.Source.
@@ -763,23 +837,26 @@ func (h *LibraryHandle) PlaceAt(ctx context.Context, location, srcPath, format s
 //     wired (LocalFS or S3). Avoids the CORS/redirect pitfalls of
 //     presign at the cost of routing bytes through the app.
 //   - "local" — legacy fallback for installs where Storage / files
-//     wiring is missing; the handler streams book.Path off disk.
+//     wiring is missing, or a book with only books.path; the handler
+//     streams the path off disk. Every "local" answer carries a path
+//     that has already passed the Book file sandbox, so the handler
+//     streams it as given.
 func (h *LibraryHandle) BookSource(ctx context.Context, book model.Book) (BookSource, error) {
 	if book.Path == "" && (h.Storage == nil || h.files == nil) {
 		return BookSource{}, errors.New("book has no path and storage/files are unavailable")
 	}
 
 	if h.Storage == nil || h.files == nil {
-		return BookSource{Kind: BookDeliveryLocal, Path: book.Path}, nil
+		return h.sandboxedLocal(ctx, BookSource{Kind: BookDeliveryLocal, Path: book.Path})
 	}
 
 	f, ferr := h.bookFiles().primaryRow(ctx, book)
 	if ferr == nil {
-		return h.delivery().fileSource(ctx, f.Location)
+		return h.FileSource(ctx, f.Location)
 	}
 
 	if book.Path != "" {
-		return BookSource{Kind: BookDeliveryLocal, Path: book.Path}, nil
+		return h.sandboxedLocal(ctx, BookSource{Kind: BookDeliveryLocal, Path: book.Path})
 	}
 	return BookSource{}, fmt.Errorf("book source: %w", ferr)
 }
@@ -790,7 +867,26 @@ func (h *LibraryHandle) BookSource(ctx context.Context, book model.Book) (BookSo
 // presign vs stream vs local, and why one selector must not mean two
 // delivery policies — lives on the delivery seam (book_delivery.go).
 func (h *LibraryHandle) FileSource(ctx context.Context, location string) (BookSource, error) {
-	return h.delivery().fileSource(ctx, location)
+	src, err := h.delivery().fileSource(ctx, location)
+	if err != nil {
+		return BookSource{}, err
+	}
+	return h.sandboxedLocal(ctx, src)
+}
+
+// sandboxedLocal gates a "local" delivery answer through the Book file
+// sandbox; the other kinds name a Storage key, not a filesystem path,
+// and pass through.
+func (h *LibraryHandle) sandboxedLocal(ctx context.Context, src BookSource) (BookSource, error) {
+	if src.Kind != BookDeliveryLocal {
+		return src, nil
+	}
+	abs, err := h.sandbox(ctx, src.Path)
+	if err != nil {
+		return BookSource{}, err
+	}
+	src.Path = abs
+	return src, nil
 }
 
 // BookSource describes how a book file should be delivered.
@@ -833,6 +929,12 @@ type LibraryStoreDeps struct {
 	Orphans         PendingOrphansEnqueuer
 	PresignTTL      time.Duration
 	PresignFallback string
+	// BookDropPath and Libraries are the Book file sandbox's roots
+	// (BookFileRoots), which every handle applies to the filesystem
+	// paths it opens or hands out. Both optional; with neither, the
+	// sandbox admits nothing.
+	BookDropPath string
+	Libraries    LibraryLister
 }
 
 // NewLibraryStore builds the default LibraryStore — stateless,
@@ -892,6 +994,14 @@ func (s *defaultLibraryStore) For(ctx context.Context, libraryID string) (*Libra
 		files = s.deps.Files
 	}
 
+	// Through a nil check for the same reason as files: a nil
+	// *repo.LibraryRepo in the interface is a non-nil interface.
+	var libs LibraryLister
+	if s.deps.Libraries != nil {
+		libs = s.deps.Libraries
+	}
+	bookDrop := s.deps.BookDropPath
+
 	return &LibraryHandle{
 		Library:         lib,
 		Storage:         store,
@@ -901,6 +1011,9 @@ func (s *defaultLibraryStore) For(ctx context.Context, libraryID string) (*Libra
 		orphans:         s.deps.Orphans,
 		presignTTL:      s.deps.PresignTTL,
 		presignFallback: s.deps.PresignFallback,
+		sandboxRoots: func(ctx context.Context) []string {
+			return BookFileRoots(ctx, bookDrop, libs)
+		},
 	}, nil
 }
 

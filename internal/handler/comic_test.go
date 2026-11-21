@@ -466,11 +466,9 @@ func TestComicResolveFailureDoesNotFallBackToDisk(t *testing.T) {
 }
 
 // A book carrying a legacy path and no files row must still pass the
-// allow-list. serveBookFile gates exactly this read; before CBZ moved
-// onto the storage seam the comic handler gated it too, with its own
-// copy. Routing through the seam must not have dropped the gate — a
-// books.path is a stored string, and the sandbox exists because it is
-// not trusted to stay inside a library.
+// allow-list. The gate is the handle's now (LibraryHandle.LocateBook,
+// whose own tests hold the rule); this pins what the comic routes make
+// of a refusal — a 403, the same answer file serving gives.
 func TestComicRefusesALegacyPathOutsideTheSandbox(t *testing.T) {
 	libRoot := t.TempDir()
 	lib := model.Library{ID: "lib-comics", Name: "Comics", Root: &libRoot}
@@ -492,7 +490,6 @@ func TestComicRefusesALegacyPathOutsideTheSandbox(t *testing.T) {
 	}
 
 	h := &Handler{
-		lib: nil,
 		libStore: servicetest.NewStore(servicetest.StoreOptions{
 			Libraries: []model.Library{lib},
 			Storage:   &objectStore{objects: map[string][]byte{}},
@@ -502,8 +499,8 @@ func TestComicRefusesALegacyPathOutsideTheSandbox(t *testing.T) {
 	f := comicFixture{h: h, book: book}
 
 	rec := comicRequest(t, f, f.h.ComicPagesIndex, "/api/v1/books/x/comic/pages", "")
-	if rec.Code == http.StatusOK {
-		t.Fatalf("status = 200 — a path outside every library root was served (body %s)", rec.Body.String())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for a path outside every library root (body %s)", rec.Code, rec.Body.String())
 	}
 }
 

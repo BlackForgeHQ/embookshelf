@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/blackforge/embookshelf/internal/model"
 )
@@ -103,17 +104,17 @@ func (s *DeviceService) Send(ctx context.Context, userID, deviceID, bookID strin
 	if err != nil {
 		return fmt.Errorf("library handle: %w", err)
 	}
-	reader, size, closer, err := handle.OpenBook(ctx, book)
+	src, err := handle.OpenBook(ctx, book)
 	if err != nil {
 		return fmt.Errorf("open book: %w", err)
 	}
-	defer func() { _ = closer.Close() }()
+	defer func() { _ = src.Close() }()
 
-	sendErr := driver.Send(ctx, dev, reader, BookMeta{
+	sendErr := driver.Send(ctx, dev, io.NewSectionReader(src, 0, src.Size()), BookMeta{
 		Title:  book.Title,
 		Author: book.Author,
 		Format: book.Format,
-		Size:   size,
+		Size:   src.Size(),
 	})
 	// Always record the outcome so the UI reflects it even on failure.
 	_ = s.devices.MarkSendResult(ctx, userID, deviceID, sendErr)

@@ -3,8 +3,6 @@
 package handler
 
 import (
-	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -146,130 +144,27 @@ type comicArchiveRef struct {
 // I tell the browser" — a presigned URL is a fine answer to that and a
 // useless one to a reader that has to seek into an archive.
 //
-// The fallback is the one handler.Options documents: an install with no
-// LibraryStore wired has no seam to route through, so the bytes come off
-// disk through the shared sandbox gate, exactly as serveBookFile
-// degrades. It is the same rule, not a second copy of it — the
-// hand-rolled third copy this handler used to carry is gone.
+// LocateBook gives both halves of the reference from one files lookup,
+// and owns every rule this handler used to restate: the Book file sandbox
+// for a legacy path, "not placed" kept apart from a failed lookup, and
+// the Bytes identity the page cache keys on.
 func (h *Handler) comicArchive(c *gin.Context, book model.Book) (comicArchiveRef, error) {
 	ctx := c.Request.Context()
 	if h.libStore == nil {
-		return h.sandboxedComicArchive(c, book.Path)
+		return comicArchiveRef{}, errors.New("comic reader: no library store")
 	}
 	handle, err := h.libStore.For(ctx, book.LibraryID)
 	if err != nil {
-		// Not the documented fallback. That one is "no LibraryStore
-		// wired", which is the nil check above; a resolve that broke
-		// is a failure, and falling through would read this machine's
-		// disk for a library whose bytes may not be on it.
+		// A resolve that broke is a failure, not a reason to read this
+		// machine's disk for a library whose bytes may not be on it.
 		return comicArchiveRef{}, fmt.Errorf("resolve library: %w", err)
 	}
-	// A book with no files row has only its legacy path, and the handle
-	// would open that with a bare os.Open. That read is what the
-	// allow-list exists for — serveBookFile gates it, and this handler
-	// gated it too before CBZ moved onto the seam — so take the
-	// sandboxed route rather than letting the seam skip it. A lookup
-	// that *failed* is not that case and must not degrade into it.
-	file, found, ferr := handle.PrimaryFile(ctx, book)
-	if ferr != nil {
-		return comicArchiveRef{}, fmt.Errorf("list book files: %w", ferr)
-	}
-	if !found {
-		return h.sandboxedComicArchive(c, book.Path)
-	}
-	return comicArchiveRef{
-		key: comicPageCacheKey(file),
-		open: func() (storage.Source, error) {
-			src, oerr := handle.OpenBookSource(ctx, book)
-			if oerr != nil {
-				return nil, notePlacedFile(ctx, handle, book, oerr)
-			}
-			return src, nil
-		},
-	}, nil
-}
-
-// comicPageCacheKey names a comic's bytes for the page cache.
-//
-// The content hash when there is one, because that is the only identity
-// that cannot be wrong: a replaced file is a different key, so a reader
-// can never be handed its predecessor's pages, and a deleted one takes
-// its key out of circulation.
-//
-// files.content_hash is nil only in the window between a scan finding a
-// file and the boot-time hashing pass reaching it (task.RunFilesBackfill).
-// For that window the key falls back to the row's own identity plus the
-// size and mtime the scan tracks — the same facts every scanner uses to
-// decide a file changed. Weaker, and it says so; the alternative was to
-// stop paging RAR and 7z comics for a library that has not been through
-// a restart yet.
-func comicPageCacheKey(f model.File) string {
-	if len(f.ContentHash) > 0 {
-		return "sha256:" + hex.EncodeToString(f.ContentHash)
-	}
-	return fmt.Sprintf("file:%s:%d:%d", f.ID, f.Size, f.Mtime.UnixNano())
-}
-
-// sandboxedComicArchive names and opens a book file by a books.path
-// value, through the sandbox every handler-side filesystem read passes.
-func (h *Handler) sandboxedComicArchive(c *gin.Context, path string) (comicArchiveRef, error) {
-	if path == "" {
-		return comicArchiveRef{}, fmt.Errorf("book has no stored file: %w", os.ErrNotExist)
-	}
-	abs, err := h.sandboxedBookPath(c, path)
+	located, err := handle.LocateBook(ctx, book)
 	if err != nil {
 		return comicArchiveRef{}, err
 	}
-	// A row with no files row has no content hash either, so the key is
-	// what the filesystem can say about the bytes right now.
-	info, err := os.Stat(abs)
-	if err != nil {
-		return comicArchiveRef{}, err
-	}
-	return comicArchiveRef{
-		key: fmt.Sprintf("path:%s:%d:%d", abs, info.Size(), info.ModTime().UnixNano()),
-		open: func() (storage.Source, error) {
-			f, oerr := os.Open(abs)
-			if oerr != nil {
-				return nil, oerr
-			}
-			st, serr := f.Stat()
-			if serr != nil {
-				_ = f.Close()
-				return nil, serr
-			}
-			return fileSource{File: f, size: st.Size()}, nil
-		},
-	}, nil
+	return comicArchiveRef{key: located.Identity, open: located.Open}, nil
 }
-
-// notePlacedFile separates "this book was never placed" from "its bytes
-// would not open", which the seam reports as one error and which are
-// different answers to a reader: 404 for a row with no file, 500 for a
-// backend that would not answer.
-//
-// Asked only when an open has already failed, so the extra lookup is off
-// the success path entirely.
-func notePlacedFile(
-	ctx context.Context, handle *service.LibraryHandle, book model.Book, err error,
-) error {
-	if book.Path != "" {
-		return err
-	}
-	if keys, kerr := handle.BookFileLocations(ctx, book.ID); kerr == nil && len(keys) == 0 {
-		return fmt.Errorf("book has no stored file: %w", os.ErrNotExist)
-	}
-	return err
-}
-
-// fileSource is an open file as a storage.Source. *os.File is already a
-// ReaderAt and a Closer; only the size is missing.
-type fileSource struct {
-	*os.File
-	size int64
-}
-
-func (f fileSource) Size() int64 { return f.size }
 
 // writeComicError renders a failure to get at the comic's pages. "The
 // book has no file", "the backend is unreachable" and "this file is not

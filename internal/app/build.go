@@ -297,6 +297,8 @@ func buildServices(ctx context.Context, w wiring, r repos) (services, error) {
 		Orphans:         r.pendingOrphans,
 		PresignTTL:      w.cfg.PresignTTL,
 		PresignFallback: w.cfg.PresignFallback,
+		BookDropPath:    w.cfg.BookDropPath,
+		Libraries:       r.lib,
 	})
 	// MetadataWriter coordinates the ADR-0001 edit-side pipeline —
 	// DB → in-file embed → sidecar → folder rename — for metadata edits.

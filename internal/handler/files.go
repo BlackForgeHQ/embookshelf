@@ -4,6 +4,7 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -27,21 +28,18 @@ func mimeForFormat(format string) string {
 	return model.MIMEForFormat(format)
 }
 
-// serveBookFile chooses between a presigned redirect and local serve
-// based on the book's backing library. When the library's backend
-// advertises CapPresign and the deployment is not forcing stream, a
-// 302 redirect to a presigned URL is issued. Otherwise the bytes are
-// served via serveLocalBookFile (c.File()).
-//
-// Falls back to local serve when libStore is unwired (single-backend
-// installs that haven't built a LibraryStore).
+// serveBookFile chooses between a presigned redirect, a stream through
+// the app and a local serve, by asking the book's library
+// (LibraryHandle.BookSource). A library that cannot be resolved is an
+// error: falling back to books.path would read this machine's disk for a
+// library whose bytes may not be on it.
 func (h *Handler) serveBookFile(c *gin.Context, book model.Book, mime string) error {
 	if h.libStore == nil {
-		return h.serveLocalBookFile(c, book.Path, mime)
+		return errors.New("file serve: no library store")
 	}
 	handle, err := h.libStore.For(c.Request.Context(), book.LibraryID)
 	if err != nil {
-		return h.serveLocalBookFile(c, book.Path, mime)
+		return fmt.Errorf("resolve library: %w", err)
 	}
 	src, err := handle.BookSource(c.Request.Context(), book)
 	if err != nil {
@@ -142,18 +140,14 @@ func (s *storageSourceSeeker) Seek(offset int64, whence int) (int64, error) {
 	return abs, nil
 }
 
-// serveLocalBookFile validates that path is rooted under either BOOKDROP_PATH
-// or one of the registered library_paths, then serves the bytes with the
-// given content type via c.File() (honors Range headers natively).
+// serveLocalBookFile serves a local delivery answer via c.File() (honors
+// Range headers natively). The path has already passed the Book file
+// sandbox: a "local" BookSource only ever leaves the LibraryHandle that
+// way.
 func (h *Handler) serveLocalBookFile(c *gin.Context, path, mime string) error {
-	absPath, err := h.sandboxedBookPath(c, path)
-	if err != nil {
-		return err
-	}
-
 	c.Header("Content-Type", mime)
 	c.Header("Cache-Control", "private, max-age=3600")
-	c.File(absPath)
+	c.File(path)
 	return nil
 }
 
