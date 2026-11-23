@@ -2,7 +2,7 @@
 # ---------- Stage 1: UI build ----------
 # Next.js builds on Node; oven/bun's `node` is Bun itself. Bun comes along
 # as the package manager the lockfile belongs to.
-FROM node:24-slim AS assets
+FROM node:26-slim AS assets
 COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /app
 COPY ui/package.json ui/bun.lock* ./ui/
